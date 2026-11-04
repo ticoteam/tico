@@ -10,7 +10,7 @@ Nothing was changed on GitHub and nothing has been shared.
 
 ## Needs you
 - **Billing: 3 pull requests waiting for review more than 2 working days** (#412, #418, #421). Owner from
-  areas.md: Priya Nair. Only one reviewer is named for billing. Proposed: a second named reviewer.
+  areas.md: the billing owner. Only one reviewer is named for billing. Proposed: a second named reviewer.
 
 ## Shipped
 - 14 pull requests merged across web-app and api (last week: 11). Release 2.14.0 on 2026-09-24. Source: gh, 2026-09-28.
@@ -19,9 +19,9 @@ Nothing was changed on GitHub and nothing has been shared.
 ## Stuck or waiting
 | PR | Age (working days) | Waiting on | Owner |
 |---|---|---|---|
-| #412 invoice rounding | 4 | first review | Priya Nair |
-| #418 refund webhook | 3 | first review | Priya Nair |
-| #421 plan upgrade copy | 2 | checks failing | Sam Ortiz |
+| #412 invoice rounding | 4 | first review | the billing owner |
+| #418 refund webhook | 3 | first review | the billing owner |
+| #421 plan upgrade copy | 2 | checks failing | the web-app owner |
 
 ## Measures (by repository, not by person)
 - Review wait: median 0.8 days, longest 4 (billing).
@@ -39,7 +39,7 @@ Nothing was changed on GitHub and nothing has been shared.
   report", Mondays 08:00, reporting to me. When the work asks for this hire, I will ask BotOps to set it up.
 
 ## Proposed routing (nothing assigned)
-- "Add SMS opt-out to reminders" (task T-311, no owner): route to Sam Ortiz, who owns reminders. Alternative: Jo Lund.
+- "Add SMS opt-out to reminders" (task T-311, no owner): route to the reminders owner. Alternative: the API owner.
 
 ## Could not read
 - The mobile repository: not in this bot's GitHub list, so its merges are missing.

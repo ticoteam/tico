@@ -18,9 +18,10 @@ const PHONE = {
 };
 const DESKTOP = {viewport: {width: 1440, height: 900}};
 
-// Starts a hub with these seeds (default ['org']). Resolves to {url, seeds, skipped, tokens, stop}: `tokens` maps each
-// teammate id ("ana", "chris", "engineering-lead", ...) to its Bearer token, and `skipped` names seeds that waited
-// for a route the app does not have yet. `stop()` kills the hub process this call started, by its pid.
+// Starts a hub with these seeds (default ['org']). Resolves to {url, seeds, skipped, tokens, runner, stop}: `tokens` maps
+// each teammate id ("ana", "chris", "engineering-lead", ...) to its Bearer token, `runner` is the world's runner token
+// (to claim a bot's run as its computer would), and `skipped` names seeds that waited for a route the app does not
+// have yet. `stop()` kills the hub process this call started, by its pid.
 function startHub({seeds = ['org'], env = {}} = {}) {
   const child = spawn(PYTHON, ['ui/tests/support/real_hub_server.py', '--seed', seeds.join(',')],
     {cwd: ROOT, env: {...process.env, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
@@ -44,18 +45,19 @@ function startHub({seeds = ['org'], env = {}} = {}) {
       let ready;
       try { ready = JSON.parse(line); } catch { return; }
       clearTimeout(timer);
-      resolve({url: ready.url, seeds: ready.seeds, skipped: ready.skipped, tokens: ready.tokens, stop});
+      resolve({url: ready.url, seeds: ready.seeds, skipped: ready.skipped, tokens: ready.tokens, runner: ready.runner, stop});
     });
   });
 }
 
 // A page signed in as `teammate` (a key of hub.tokens), opened at the app's root. The teammate's token goes on every
 // request the page makes, as the API takes it. The caller closes it with page.context().close().
-async function pageAs(browser, hub, teammate, {phone = false} = {}) {
+async function pageAs(browser, hub, teammate, {phone = false, timezone = ''} = {}) {
   const token = hub.tokens[teammate];
   if (!token) throw new Error(`no teammate "${teammate}" on this hub; it has ${Object.keys(hub.tokens).join(', ')}`);
   const context = await browser.newContext({
     ...(phone ? PHONE : DESKTOP),
+    ...(timezone ? {timezoneId: timezone} : {}),   // the viewer's zone, as the browser reports it
     serviceWorkers: 'block',
     extraHTTPHeaders: {Authorization: 'Bearer ' + token},
   });

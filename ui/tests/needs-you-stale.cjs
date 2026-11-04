@@ -8,7 +8,7 @@ const {open} = require('./tasks-page.cjs');
 const row = (id, task, title, action, version) => ({id, task, title, status: 'open', reason: 'Nothing happened on it for 9 days',
   suggest: action === 'done' ? 'Mark done' : 'Check it is still needed', action, version});
 const card = {kind: 'stale', id: 'stale:human:ana', title: 'Stale tickets: 3 suggestions', first_line: '',
-  created: new Date().toISOString(), need: 'decide',
+  created_at: new Date().toISOString(), need: 'decide',
   rows: [row('s-1', 't-1', 'Old chore one', 'done', 4), row('s-2', 't-2', 'Old chore two', null, 2),
     row('s-3', 't-3', 'Old chore three', 'done', 9)]};
 const KEY = 'stale:stale:human:ana';
@@ -120,7 +120,8 @@ async function answered(browser, viewport) {
   }
   // The last answer takes the card away: nothing else waits, so the card says so, and the line leaves the list.
   await page.locator('#need-card .dc-done').waitFor();
-  assert.equal(await page.locator(`[data-need-card="${KEY}"]`).count(), 0);
+  // The card follows v2Refresh; the list redraws after the hub's own refresh (needs-you.js staleDecide), a beat later.
+  await page.waitForFunction(key => !document.querySelector(`[data-need-card="${key}"]`), KEY, {timeout: 10000});
   assert.deepEqual(errors, []);
   await page.close();
 }

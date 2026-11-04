@@ -40,10 +40,12 @@ class ReplayJudge:
     """app.state.judge for the scenarios. Same call shape as backend/tests/test_judge.py:16 FakeJudge, which keeps
     every call. `script` is a list of answer dicts, used first and in order, so a routing check gets the exact
     confidence it scripted; once it is spent, a recording answers. A scripted answer stands in for a model answer, so
-    checks read routing and storage, never the model."""
+    checks read routing and storage, never the model. `recordings` and `rerecord` let another eval (evals/screening)
+    replay its own recordings with the same judge."""
 
-    def __init__(self, script=(), fail=None):
+    def __init__(self, script=(), fail=None, recordings=None, rerecord="python -m evals.redesign.record"):
         self.script, self.fail, self.calls = list(script), fail, []
+        self.recordings, self.rerecord = recordings, rerecord
 
     def __call__(self, state, questions, label=None, level=None):
         level = level or COMPANY_LEVEL
@@ -54,13 +56,13 @@ class ReplayJudge:
             # A passed script wins over a recording: a named scenario needs the exact confidence it scripted.
             return {"model": "scripted", "usage": {"input_tokens": 0, "output_tokens": 0}, "ms": 0,
                     "answers": self.script.pop(0)}
-        path = RECORDINGS / f"{recording_key(state, questions, level)}.json"
+        path = Path(self.recordings or RECORDINGS) / f"{recording_key(state, questions, level)}.json"
         if path.exists():
             saved = json.loads(path.read_text())
             return {name: saved[name] for name in ("model", "usage", "ms", "answers")}
         raise MissingRecording(
             f"no recording recordings/{path.name} and no scripted answer for this call; re-record with "
-            "`python -m evals.redesign.record` (the recorder needs live credentials: HUB_API_URL and HUB_TOKEN, "
+            f"`{self.rerecord}` (the recorder needs live credentials: HUB_API_URL and HUB_TOKEN, "
             "or TYPESAFE_API_KEY)")
 
 

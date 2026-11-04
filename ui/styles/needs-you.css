@@ -8,14 +8,14 @@
 .req>summary::-webkit-details-marker{display:none}
 .req>summary:hover{background:var(--surface2)}
 .req[open]>summary{background:var(--surface2)}
-.req-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base);line-height:1.25}
+.req-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base);line-height:var(--lh-tight)}
 .req-from{font-weight:600}
 .req-meta{color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
-.req-arrow{color:var(--muted);font-size:20px;line-height:1;text-align:right;transition:transform var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.req-arrow{color:var(--muted);font-size:20px;line-height:var(--lh-none);text-align:right}
 .req>summary:hover .req-arrow{color:var(--ink)}
-.req[open] .req-arrow{transform:rotate(90deg)}
+.req[open] .req-arrow{transform:var(--chev-open)}
 .req-body{padding:12px 8px 16px 42px}
-.req-title{font-size:var(--t-md);line-height:1.3;font-weight:600;margin-bottom:6px}
+.req-title{font-size:var(--t-md);line-height:var(--lh-tight);font-weight:600;margin-bottom:6px;letter-spacing:var(--track-snug)}
 .req-context{color:var(--ink);max-width:78ch}
 .req-context .md{max-width:none}
 .req-context .md>:first-child,.req-next .md>:first-child{margin-top:0}

@@ -23,9 +23,9 @@ const shots = process.env.TICO_SHOTS || '';
       computers: [], waiting: [], slow: [], failures: [], checked: new Date().toISOString()};
     const monitor = {state: 'active', on: true, reports_without_asking: true, findings: [
       {key: 'computer_silent:r1', signature: 'hm-aaaaaaaaaaaa', check_id: 'computer_silent', kind: 'setup', severity: 'warn',
-       title: 'Studio Mac has not checked in for 40 minutes', first_seen: iso(5 * 60), last_seen: iso(3), occurrences: 6},
+       title: 'Studio Mac has not checked in for 40 minutes', first_seen_at: iso(5 * 60), last_seen_at: iso(3), occurrences: 6},
       {key: 'server_cpu', signature: 'hm-bbbbbbbbbbbb', check_id: 'server_cpu', kind: 'tico-bug', severity: 'warn',
-       title: 'The server used 55% CPU for an hour while idle', first_seen: iso(120), last_seen: iso(120), occurrences: 1,
+       title: 'The server used 55% CPU for an hour while idle', first_seen_at: iso(120), last_seen_at: iso(120), occurrences: 1,
        ticket_id: 't1', approval_id: null}]};
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
@@ -61,7 +61,7 @@ const shots = process.env.TICO_SHOTS || '';
     const row = key => page.locator(`#hl-page [data-hl-finding="${key}"]`);
     await row('computer_silent:r1').waitFor({timeout: t(5000)});
     const text = async key => (await row(key).innerText()).replace(/\s+/g, ' ').trim();
-    assert.match(await text('computer_silent:r1'), /^Studio Mac has not checked in for 40 minutes BotOps fixes it · since 5h ago · seen 6 times, last 3m ago$/);
+    assert.match(await text('computer_silent:r1'), /^Studio Mac has not checked in for 40 minutes being fixed · since 5h ago · seen 6 times, last 3m ago$/);
     assert.match(await text('server_cpu'), /· seen 1 time, last 2h ago$/);
     assert.match(await page.locator('#hl-page [data-hl-monitor]').innerText(), /seeing a problem again only adds to its count/);
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`health-monitor-seen-${mode}`); }

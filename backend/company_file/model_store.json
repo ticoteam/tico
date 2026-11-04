@@ -33,7 +33,6 @@
   {"team": "sales", "template": "partnerships"},
   {"team": "sales", "template": "account-manager", "title": "Account Manager (wholesale)"},
   {"team": "finance", "template": "finance-lead"},
-  {"team": "finance", "template": "bookkeeping"},
   {"team": "finance", "template": "accounts-payable"},
   {"team": "finance", "template": "ar-followup"},
   {"team": "finance", "template": "tax", "title": "Tax Specialist (sales tax and VAT)"},

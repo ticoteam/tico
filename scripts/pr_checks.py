@@ -19,13 +19,13 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/chat-outline.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
           "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
-CONFORMANCE = "runner/tests/test_conformance.py"
+CONFORMANCE = "runner_support/tests/test_conformance.py"
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
-# runner-rs tests read runner/ (harnesses, fixtures and the Python runner they compare against) and the
-# backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
+# runner-rs tests read runner_support/ and runner/ (the Python helpers they compare against: source_id, the redactor)
+# and the backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
 # contract's recorded answers (runner-rs/src/wire.rs).
 RUST_INPUTS = {"relay-rs": ("relay-rs/",),
-               "runner-rs": ("runner-rs/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
+               "runner-rs": ("runner-rs/", "runner_support/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
                              "contracts/runner/")}
 CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
                      "Remove your CHANGELOG.md changes.")
@@ -531,7 +531,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
     full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
-    runner = bool(rust) or any(p.startswith(("runner/", "runner-rs/", "relay-rs/")) or
+    runner = bool(rust) or any(p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/")) or
                                p in ("backend/harness_actions.py", "backend/runner_versions.py") for p in changed)
     full["rust"] = rust
     if event != "pull_request":
@@ -784,6 +784,32 @@ def receipt(jobs):
     return "\n".join(rows) + "\n"
 
 
+RECEIPT_INCOMPLETE = "The GitHub API returned an error for part of this receipt, so it may be incomplete."
+JOB_FIELDS = ("name", "html_url", "status")
+
+
+def receipt_jobs(text):
+    """The jobs on the pages of `gh api --paginate --slurp` output that are jobs pages, and whether any page was not.
+
+    An error object (GitHub's body for a 502), a page without a list of well-formed jobs, a top level that is not a
+    list, and empty or invalid JSON are pages that were not read. The receipt is cosmetic: it never fails the gate.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return [], True
+    pages = data if isinstance(data, list) else [data]
+    jobs, incomplete = [], False
+    for page in pages:
+        page_jobs = page.get("jobs") if isinstance(page, dict) else None
+        if isinstance(page_jobs, list) and all(isinstance(j, dict) and all(f in j for f in JOB_FIELDS)
+                                               for j in page_jobs):
+            jobs += page_jobs
+        else:
+            incomplete = True
+    return jobs, incomplete
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -808,9 +834,11 @@ def main():
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
     else:
-        data = json.load(sys.stdin)
         # gh --paginate --slurp emits one jobs response per page.
-        print(receipt([j for page in data for j in page["jobs"]]))
+        jobs, incomplete = receipt_jobs(sys.stdin.buffer.read())
+        print(receipt(jobs))
+        if incomplete:
+            print(RECEIPT_INCOMPLETE)
     return 0
 
 

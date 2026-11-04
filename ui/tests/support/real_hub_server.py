@@ -8,7 +8,8 @@ The world is the scenario's: its people, bots and reports_to, the fake clock fro
 heartbeat seeded during setup does not age out during a test), and the fakes it sets up for external services. The app serves ui/ itself, as in
 production (backend/app.py). A browser signs in by sending a teammate's token as the Bearer, the token the API takes.
 
-Prints one JSON line when ready: {"url", "seeds", "skipped", "tokens": {teammate id: token}}. Stops on SIGTERM and
+Prints one JSON line when ready: {"url", "seeds", "skipped", "tokens": {teammate id: token}, "runner": the world's
+runner token, for a test that claims a bot's run as its computer would}. Stops on SIGTERM and
 removes its temporary folder.
 """
 
@@ -75,7 +76,7 @@ def main(argv=None):
         if not server.started:
             raise RuntimeError("the hub did not start")
         print(json.dumps({"url": settings.public_url, "seeds": names, "skipped": skipped,
-                          "tokens": teammate_tokens(world)}), flush=True)
+                          "tokens": teammate_tokens(world), "runner": world.runner["token"]}), flush=True)
         while True:
             time.sleep(1)
     finally:

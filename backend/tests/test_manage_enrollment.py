@@ -23,12 +23,12 @@ def test_enrollment_resolves_the_owner_email_to_the_existing_roster_id(tmp_path,
     out = tmp_path / "enrollment.json"
     manage.main(["enrollment", str(store.settings.db_path), "--owner", "Ana@Acme.Example", "--out", str(out)])
     code = json.loads(out.read_text())
-    assert code["operator"] == "ana"
+    assert code["owner_id"] == "ana"
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
     assert code["code"] not in capsys.readouterr().out
     computer = Execution(store, Auth(store)).enroll(Enrollment(code=code["code"], label="Server computer", platform="linux"))
     with store.read() as c:
-        assert c.execute("SELECT operator FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0] == "ana"
+        assert c.execute("SELECT owner_id FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0] == "ana"
 
 
 def test_hosting_digest_is_bound_to_owner_machine_and_one_runner(tmp_path, monkeypatch):
@@ -56,17 +56,17 @@ def test_hosting_digest_is_bound_to_owner_machine_and_one_runner(tmp_path, monke
     with pytest.raises(Problem):
         execution.enroll(Enrollment(code=code, label='other', platform='linux'))
     with store.read() as c:
-        original_expiry = c.execute('SELECT expires FROM enrollments').fetchone()[0]
+        original_expiry = c.execute('SELECT expires_at FROM enrollments').fetchone()[0]
     now[0] = H.shift(now[0], minutes=16)
     assert enrollment(store, auth, ident, hashed, label, 'ana@acme.example', status=True) == {'online':False}
     with store.read() as c:
-        assert c.execute('SELECT expires FROM enrollments').fetchone()[0] == original_expiry
+        assert c.execute('SELECT expires_at FROM enrollments').fetchone()[0] == original_expiry
     with pytest.raises(Problem, match='expired'):
         execution.enroll(Enrollment(code=code, label=label, platform='linux'))
     # Only an explicit registration retry renews an unused expired code.
     enrollment(store, auth, ident, hashed, label, 'ana@acme.example')
     with store.read() as c:
-        renewed_expiry = c.execute('SELECT expires FROM enrollments').fetchone()[0]
+        renewed_expiry = c.execute('SELECT expires_at FROM enrollments').fetchone()[0]
     assert renewed_expiry == H.shift(now[0], minutes=15) and renewed_expiry > original_expiry
     first = execution.enroll(Enrollment(code=code, label=label, platform='linux'))
     again = execution.enroll(Enrollment(code=code, label=label, platform='linux'))
@@ -75,15 +75,15 @@ def test_hosting_digest_is_bound_to_owner_machine_and_one_runner(tmp_path, monke
     enrollment(store, auth, ident, hashed, label, 'ana@acme.example')
     with store.transaction() as c:
         assert c.execute('SELECT count(*) FROM enrollments').fetchone()[0] == 1
-        assert c.execute('SELECT expires FROM enrollments').fetchone()[0] == renewed_expiry
-        c.execute('UPDATE runners SET last_seen=? WHERE id=?', (H.now(), first['runner_id']))
+        assert c.execute('SELECT expires_at FROM enrollments').fetchone()[0] == renewed_expiry
+        c.execute('UPDATE runner_states SET last_seen_at=? WHERE runner_id=?', (H.now(), first['runner_id']))
     assert enrollment(store, auth, ident, hashed, label, 'ana@acme.example', status=True) == {'online':True}
     now[0] = renewed_expiry
     enrollment(store, auth, ident, hashed, label, 'ana@acme.example')
     with pytest.raises(Problem, match='expired'):
         execution.enroll(Enrollment(code=code, label=label, platform='linux'))
     with store.read() as c:
-        assert c.execute('SELECT count(*) FROM runners').fetchone()[0] == 1
-        assert c.execute('SELECT runner_id,expires FROM enrollments').fetchone()[:] == (
+        assert c.execute('SELECT count(*) FROM runners_with_state').fetchone()[0] == 1
+        assert c.execute('SELECT runner_id,expires_at FROM enrollments').fetchone()[:] == (
             first['runner_id'], renewed_expiry)
     assert code.encode() not in (tmp_path/'hub.sqlite').read_bytes()

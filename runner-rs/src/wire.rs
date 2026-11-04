@@ -25,10 +25,15 @@ pub struct HeartbeatAnswer {
     pub start_places: Option<bool>,
     pub runtime_credential_source: Option<bool>,
     pub subscription_accounts: Option<bool>,
+    /// The server reads a usage window's `origin` and `subscription_id` (backend/model_subscriptions.py `provenance`).
+    pub subscription_usage_sources: Option<bool>,
     pub worktree_record_stamp: Option<bool>,
     pub worktree_actions: Option<Vec<Value>>,
     pub worktree_actions_skipped: Option<u64>,
     pub performance: Option<bool>,
+    /// The computer's owner shares its internet with bots: hold the exit link open.
+    pub browser_exit: Option<bool>,
+    pub browser_exit_bots: Option<Vec<String>>,
     /// Absent or null is automatic: the machine's own capacity is the limit.
     pub turns_at_once: Option<u64>,
     pub restart: Option<bool>,

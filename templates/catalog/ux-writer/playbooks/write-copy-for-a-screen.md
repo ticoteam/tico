@@ -11,7 +11,7 @@ The outcome is a copy table engineers can paste from, with every state covered.
 
 Read the spec's problem, acceptance criteria and edge cases. List every state the screen can be in:
 empty, loading, filled, error (each kind), success, no permission, offline. A state the spec does not
-describe is a question for the Product Manager, not a guess.
+describe is a question for the Product Manager, not a guess. Follow `skills/cover-every-state-of-a-screen/SKILL.md` for the list.
 
 ## 2. Check the words
 
@@ -22,7 +22,7 @@ alternatives, and check `hub doc ask "what do we call <thing>?"` so help article
 
 `copy/<spec-slug>.md`: one row per element and state: screen, element (title, label, helper, button,
 error, empty state, toast, notification), the string, character limit if any, and a note for engineers
-(variables, plural forms). Errors follow `knowledge/error-rules.md`. Offer one alternative only where a
+(variables, plural forms). Errors follow `knowledge/error-rules.md` and `skills/rewrite-an-error-message/SKILL.md`. Offer one alternative only where a
 choice is real.
 
 ## 4. Read it as the user

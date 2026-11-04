@@ -20,3 +20,13 @@ def test_every_icon_in_use_is_in_the_font_manifest():
 def test_every_url_of_the_font_carries_its_hash():
     # A cache that kept the old subset under the same URL would show an icon added since as its name.
     assert not build.stale_font_urls(), "run scripts/build-icon-font.py --stamp"
+
+
+_text_spec = importlib.util.spec_from_file_location("build_text_font", ROOT / "scripts" / "build-text-font.py")
+text_font = importlib.util.module_from_spec(_text_spec)
+_text_spec.loader.exec_module(text_font)
+
+
+def test_every_url_of_the_text_font_carries_its_hash():
+    # The server keeps a versioned font for a year: a new subset under the old URL would never reach a browser.
+    assert not text_font.stale_font_urls(), "run scripts/build-text-font.py --stamp"

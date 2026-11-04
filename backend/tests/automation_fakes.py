@@ -31,6 +31,9 @@ class Services:
     def checkpoint(self, state):
         self.saved.append(len(state["steps"]))
 
+    def on_hold(self):
+        return False
+
     def judge(self, values, questions, label, level):
         if "judge" in self.fail:
             raise RuntimeError("the judge is down")
@@ -42,6 +45,7 @@ class Services:
     def act(self, do, args, ctx):
         self.acted.append((do, args))
         self.keys = [*getattr(self, "keys", []), ctx["key"]]
+        self.producers = [*getattr(self, "producers", []), ctx["producer"]]
         if do in self.fail:
             return {"ok": False, "detail": f"{do} failed"}
         return {"ok": True, "detail": f"{do} done"}
@@ -51,6 +55,8 @@ class Services:
             raise RuntimeError("no such bot")
         if ctx.get("cap") is not None and self.spent_30m() + ctx["cost"] >= ctx["cap"]:
             return None
+        if "held" in self.fail:   # a webhook's screening held the text for a person: no turn is started
+            return {"ref": f"held_{len(self.turns) + 1}", "held": True}
         self.turns.append({"who": who, "prompt": prompt, "wait": wait})
         return {"ref": f"msg_{len(self.turns)}"}
 

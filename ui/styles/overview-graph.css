@@ -1,0 +1,104 @@
+/* ui/styles/overview-graph.css — Overview › Graph (ui/app/overview-graph.js): the team chart in its own pan-and-zoom
+   frame, the Rules | Goals switch above it, and the teammate panel (beside the chart; a bottom sheet on a phone). */
+.og-bar{flex:none;display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;padding:var(--s2) 28px;border-bottom:1px solid var(--line)}
+.og-seg{display:inline-flex;padding:2px;gap:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface2)}
+.og-seg button{padding:3px 12px;border:0;border-radius:4px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.og-seg button[aria-pressed="true"]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--line)}
+.og-seg button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.og-status{min-width:0}
+.og-status[hidden]{display:none}
+.og-line{margin:0;font-size:var(--t-sm)}
+
+.og-wrap{position:relative;flex:1;min-height:0;display:flex}
+.og-frame{position:relative;flex:1;min-width:0;overflow:hidden;background:var(--bg);touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none;overscroll-behavior:contain}
+.og-frame.dragging{cursor:grabbing}
+.og-frame:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.og-cv{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.og-cv.og-anim{transition:transform var(--dur) var(--ease)}
+.og-svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.og-edges{fill:none;stroke:var(--g4);stroke-width:1.5}
+.og-links path{fill:none;stroke-width:2}
+.og-rl{stroke:var(--run);stroke-dasharray:5 4}
+.og-gl{stroke:var(--accent-quiet);stroke-dasharray:4 4;opacity:.8}
+.og-gl.on{stroke:var(--accent);opacity:1;stroke-width:2.5}
+.og-gl.dim{opacity:.25}
+#og-arrow path{fill:var(--accent-quiet)}
+.og-empty{position:absolute;inset:0;display:grid;place-items:center;margin:0}
+.og-empty[hidden]{display:none}
+
+.og-node{position:absolute;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:6px;padding:8px 10px;
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;
+  cursor:pointer;transition:opacity var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
+.og-node:hover{border-color:var(--g5)}
+.og-node:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.og-node.sel{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.og-node.og-who{border-color:var(--run);box-shadow:0 0 0 1px var(--run)}
+.og-node.og-with{border-color:var(--wait);box-shadow:0 0 0 1px var(--wait)}
+.og-node.dim{opacity:.35}
+.og-group{flex-direction:row;align-items:center;justify-content:center;padding:0 10px;border-style:dashed;background:var(--surface2);color:var(--muted);text-decoration:none;font-weight:600;font-size:var(--t-sm)}
+.og-group:hover{color:var(--ink)}
+.og-top{display:flex;align-items:center;gap:8px;min-width:0}
+.og-top>.av,.og-top>svg,.og-top>img{flex:none}
+.og-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.og-meta{display:flex;align-items:center;gap:4px;min-width:0;min-height:18px;font-size:var(--t-xs);color:var(--muted)}
+.og-meta:empty{display:none}
+.og-count b{color:var(--ink);font-weight:600}
+.og-count.none{opacity:.8}
+.og-flag{flex:none;padding:1px 6px;border-radius:999px;font-size:var(--t-2xs);font-weight:600;line-height:var(--lh-tight)}
+.og-flag.block{background:var(--fail-bg);color:var(--fail)}
+.og-flag.escalate{background:var(--wait-bg);color:var(--wait-ink)}
+.og-meta .og-flag{margin-left:auto}
+.og-chip{flex:0 1 auto;min-width:24px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:999px;border:1px solid transparent;
+  font-size:var(--t-2xs);line-height:var(--lh-tight);background:var(--idle-bg);color:var(--muted)}
+.og-chip.green{background:var(--ok-bg);color:var(--ok)}
+.og-chip.yellow{background:var(--wait-bg);color:var(--wait-ink)}
+.og-chip.red{background:var(--fail-bg);color:var(--fail)}
+.og-chip.done{background:var(--surface2);color:var(--muted);text-decoration:line-through}
+.og-chip.none{border-color:var(--line);background:none}
+.og-more{flex:none;color:var(--muted)}
+
+.og-tools{position:absolute;left:var(--s3);bottom:var(--s3);z-index:2;display:flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
+.og-tools button{min-width:28px;height:28px;padding:0 8px}
+.og-pct{min-width:40px;text-align:center;font-size:var(--t-xs);color:var(--muted)}
+
+.og-panel{position:absolute;top:0;right:0;bottom:0;z-index:3;width:min(360px,100%);display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);box-shadow:-8px 0 24px rgba(0,0,0,.16)}
+.og-panel[hidden]{display:none}
+.og-ph{flex:none;display:flex;align-items:center;gap:8px;padding:var(--s2) var(--s3) var(--s2) var(--s4);border-bottom:1px solid var(--line)}
+.og-pn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:var(--t-md);color:var(--ink);text-decoration:none}
+.og-pn:hover{text-decoration:underline}
+.og-ph .spacer,.og-sh .spacer,.og-rule-m .spacer,.og-gl-h .spacer,.og-kpi .spacer{flex:1}
+.og-pb{flex:1;min-height:0;overflow:auto;padding:0 var(--s4) var(--s4);overscroll-behavior:contain}
+.og-sec{padding:var(--s3) 0;border-bottom:1px solid var(--line)}
+.og-sec:last-child{border-bottom:0}
+.og-sh{display:flex;align-items:center;gap:8px;min-height:28px}
+.og-sh h3{margin:0;font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
+.og-sec h4{margin:var(--s2) 0 var(--s1);font-size:var(--t-sm);font-weight:600}
+.og-pl{margin:var(--s1) 0 0;font-size:var(--t-sm)}
+.og-rules,.og-goals{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.og-rule{padding:6px 8px;border:1px solid var(--line);border-radius:var(--r-ctl)}
+.og-rule.on{border-color:var(--run);background:var(--run-bg)}
+.og-rule-t{display:block;width:100%;padding:0;border:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+.og-rule-t:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.og-rule-m,.og-gl-r{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:4px;font-size:var(--t-xs)}
+.og-with-l{color:var(--muted)}
+.og-rule-a{font-size:var(--t-xs);color:var(--link);text-decoration:underline}
+.og-go{padding:1px 6px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-xs);cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.og-go:hover{border-color:var(--g5)}
+.og-go:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.og-goal{padding:6px 8px;border:1px solid var(--line);border-radius:var(--r-ctl)}
+.og-gl-h{display:flex;align-items:center;gap:6px;min-width:0}
+.og-gl-h a{min-width:0;color:var(--ink);font-weight:500}
+.og-gw{flex:none;font-size:var(--t-xs);color:var(--muted)}
+.og-gw.green{color:var(--ok)}.og-gw.yellow{color:var(--wait-ink)}.og-gw.red{color:var(--fail)}
+.og-kpi{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:var(--t-xs);color:var(--muted)}
+.og-kpi .tnum{color:var(--ink)}
+.og-ptitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%}
+.og-gl-a{margin-top:4px;font-size:var(--t-xs)}
+
+@media(max-width:760px){
+  .og-bar{padding:var(--s2) var(--s4)}
+  .og-panel{position:fixed;top:auto;left:0;right:0;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));width:auto;max-height:62dvh;
+    border-left:0;border-top:1px solid var(--line);border-radius:var(--r-pop) var(--r-pop) 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.2)}
+  .og-tools button{min-width:36px;height:36px}
+}
+@media(prefers-reduced-motion:reduce){.og-node{transition:none}}

@@ -18,8 +18,8 @@ pains:
   - "probation periods end without anyone noticing"
 owns:
   - "The review cycle plan: phases, dates, who does what, and the reminders (knowledge/review-cycle.md)"
-  - "A review pack per manager: their direct reports, each person's goals and dated evidence sources, the review questions, the deadlines"
-  - "The calibration sheet: rating spread by team and level, outliers, ratings without evidence, and wording that describes personality instead of work"
+  - "A review pack per manager: direct reports by reference, each person's goals and dated evidence sources, the review questions, the deadlines"
+  - "The calibration sheet: rating spread by team and level (groups under five merged), outliers, ratings without evidence, and wording that describes personality instead of work"
   - "Probation and review due dates, and a guidance note for each conversation a manager asks for help with"
 never:
   - "Rate, rank or recommend a promotion, a raise, a performance plan or a termination for a named person"
@@ -44,7 +44,7 @@ onboarding:
     why: "Becomes the cycle plan with dates and owners, so each phase starts on time."
   - ask: "What rating scale do you use, and what does each point mean? Are there level or role expectations written down?"
     why: "Calibration compares ratings against these definitions, not against my own idea of good."
-  - ask: "How long is probation, and who reviews it? Which people are in probation now (first name and start date)?"
+  - ask: "How long is probation, and who reviews it? Which people are in probation now (a reference the team uses, and the start date)?"
     why: "Sets the probation dates, the most often missed deadline in small teams."
   - ask: "Who is the HR owner who may see individual reviews, and who owns employee relations matters?"
     why: "Sets who packs and calibration sheets go to, and where anything sensitive is handed untouched."
@@ -53,7 +53,7 @@ onboarding:
 first_routine:
   title: "Weekly performance cycle tracker"
   cadence: "Wednesdays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-performance-tracker.md: the current or next cycle phase and its deadlines, submitted and missing counts per manager, probation reviews due in 30 days, calibration flags"
+  output: "reports/YYYY-MM-DD-performance-tracker.md: the current or next cycle phase and its deadlines, submitted and missing counts per manager, probation reviews due in 30 days, team-level calibration flags"
   draft_only: true
 example_output: knowledge/examples/performance-tracker.md
 reasoning_effort: medium

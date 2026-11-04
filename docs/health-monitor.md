@@ -19,8 +19,8 @@ This record does not provide the separate automatic fixer.
 Health's **Stuck bots** check and `hub health check` name the bot, its queue split as `hub pipeline` splits it (jobs
 that can start, jobs behind an interrupted run awaiting review, jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
-Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible tasks
-and links their recovery diagnosis. Settings > Health shows the same summaries.
+Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
+that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
@@ -37,7 +37,7 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | `runner_outdated` | setup | An online computer is on an older release, cannot work with this one, or failed to update; or it holds queued work until its running turns finish so it can update (the finding names that work) |
 | `runner_restarting` | setup | A computer a person pressed Restart for has said it is restarting for over 34 minutes (20 minutes still claiming, then up to 14 for its running turns); the finding names the turns still running and the work it holds |
 | `computer_silent` | setup | A computer has not checked in for 10 minutes or more while work is queued for its bots |
-| `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day (a model's temporary capacity does not count) and it has no fallback model: none of its own, and not the company's either (*Fall back when a plan runs out* is off in **Settings > Computers > Models**, no company provider is on another runtime than the bot's, or the bot turned fallback off or names a fallback tool with no model) |
+| `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day (a model's temporary capacity does not count) and it has no fallback model: none of its own, and not the company's either (*Fall back when a plan runs out* is off in **Settings > Models**, no company provider is on another runtime than the bot's, or the bot turned fallback off or names a fallback tool with no model) |
 | `default_login_limited` | setup | A computer's default login for an AI tool (the one a turn uses with no subscription) is out of quota: in the last day at least two turns on it stopped on a usage limit and none has completed since, and the provider gave no reset time or one still ahead. One finding per computer and tool; it goes away once a turn on that login completes or the reset time passes. Fallback hops and check-model turns count; a turn the provider refused for temporary model capacity does not (a check or task model's either), nor a turn on a subscription, nor one on a tool each bot signs in with its own key (`api_keys = "bot"`: Gemini CLI, pi). While it lasts, a check or review subtask on that login moves to the next check model instead of retrying ([A subtask on a check model](tasks.md#a-subtask-on-a-check-model)) |
 | `check_limited` | setup | A bot's check or review subtask on another model ([A subtask on a check model](tasks.md#a-subtask-on-a-check-model)) has been held by that model's usage limit for 12 hours: its job is still queued and every turn on it since then stopped on the limit, as Tico retries it after each reset. The finding names the bot, the model, since when and the task (a private task is not named). One finding per check task; it goes away once a turn on it ends any other way, it completes, or the task is done, closed or declined |
 | `run_hold` | setup | Tico held a bot after five runs in a row failed within a minute of starting ([Failed runs wait, then stop](how-it-works.md)). The finding names the bot and the kind of error (usage limit, session too large, sign-in, gateway, other); it goes away when the bot is released, or when its next try (Tico runs one on its own at growing intervals, 30 minutes to 8 hours) completes |
@@ -48,7 +48,7 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | `reviewer_holds_tasks` | setup | A bot with the Reviewer profile owns open tasks that are not review or QA requests; a Reviewer does not pull those by itself ([Profiles](how-it-works.md#profiles)). One finding per bot; it goes away when the tasks move or the profile changes |
 | `responder_has_tasks` | setup | A bot with the Responder profile, which takes no tasks, has open tasks. One finding per bot |
 | `doer_idle` | setup | A Doer had at least three runs in the last week and every one wrote nothing to Tico, so its profile may not fit its work. A bot made this week is left out. One finding per bot |
-| `quiet_unworked` | setup | A bot's run was handed a quiet (next-run) task over two hours ago, and the bot has not worked it since or said when to pick it up (`hub task defer`); the finding names the bot and the task ([Leave work for the next run](using-tico.md#leave-work-for-the-next-run)) |
+| `quiet_unworked` | setup | A bot's run was handed a deferred task over two hours ago, and the bot has not worked it since or said when to pick it up (`hub task later`); the finding names the bot and the task ([Leave work for the next run](using-tico.md#leave-work-for-the-next-run)) |
 | `release_approval_wait` | setup | A release's publish approval (a `publish` approval whose payload names the `version` and `commit`) has been ready over 60 minutes with no decision (`TICO_RELEASE_APPROVAL_WAIT_MINUTES` on the server; `0` turns the check off). The finding names the version, how long it has waited and the person whose decision it is. One finding per approval: a re-cut release's new ask is its own, and it goes away once the person decides or the ask is withdrawn. Nothing approves it for them, and who may approve is unchanged |
 | `stuck_setup` | setup | A bot has been in setup over an hour while work waits for it |
 | `worktree_error` | setup | A task worktree failed on its computer |
@@ -82,14 +82,15 @@ Only something the Health Monitor has not been told of starts a run:
 Seeing a finding again only counts: each hourly scan that sees it adds one to its count and moves its last-seen time,
 and nobody is woken. That holds while it stays there and when it goes away and comes back while its task is still
 open; then the task gets a quiet note ("Seen again (N times, last ...)") the Health Monitor reads on its next turn
-there. **Settings > Health** shows each finding as "seen N times, last ..." (`occurrences` and `last_seen` in
+there. **Settings > Health** shows each finding as "seen N times, last ..." (`occurrences` and `last_seen_at` in
 `GET /api/v2/health-monitor`, with its `severity`).
 
 ## What it does with a finding
 
 - **setup**: it gives BotOps a task with the fix. BotOps does it under its own rules. A setup finding is never sent to
   the Tico team: its text names this install's bots and computers, and `report` refuses it (409 `not_a_tico_bug`),
-  with or without the team rule below.
+  with or without the team rule below. It never gives a person a task or a question: the server refuses one
+  (`botops-only`), and BotOps decides who to ask.
 - **tico-bug**: `hub health-monitor report <key>` files a support ticket to the Tico team. The server writes the message
   from the check alone (check, what it means and the fix in fixed words, signature, kind, version, how often) and attaches
   the redacted [diagnostics bundle](support.md). The finding's own text (which names computers and bots), task text,

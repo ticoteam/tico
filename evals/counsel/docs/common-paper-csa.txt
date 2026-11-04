@@ -1,0 +1,1142 @@
+Free Cloud Service Agreement Template for B2B SaaS
+
+ Skip to content
+
+A plain language, highly structured agreement for buying and selling cloud services and SaaS. Use instead of an MSA or SaaS sales contract.
+
+Create your free CSA
+
+ All downloads and formats
+
+Streamline your full contract workflow
+
+Everything you need to get your agreement sent and signed today:
+
+Templates -> Proposals -> Negotiations -> Approvals -> Esignature -> Recordkeeping
+
+ Try it free
+
+Human readable, legal approved
+
+Common Paper agreements help you get on the same page, faster.
+
+Industry-standard terms
+
+Written by a committee of experienced attorneys so you can start negotiations on the same, reasonable terms every time.
+
+Easy to negotiate
+
+Highly-structured format makes dealing with commonly negotiated terms faster and simpler for both parties.
+
+Free and open source
+
+You shouldn’t need to start a new agreement from square one each time. Our CSA is available for anyone to use and modify.
+
+ Using this agreement
+
+The Common Paper CSA consists of a Cover Page, plus the Standard Terms that are hosted online and incorporated by reference. Creating and executing an agreement is easy:
+
+Customize your agreement terms in the Cover Page
+
+Use this document to describe the terms of the products and services being sold in the Order Form section, plus the legal details of the agreement in the Key Terms section.
+
+Send for signature
+
+Once both parties have agreed on the terms, send the Cover Page for signature.
+
+ View the Standard Terms
+
+Getting started with Common Paper
+
+How was this agreement created?
+
+The Common Paper CSA was created by a committee of dozens of attorneys representing technology vendors, procurement teams, boutique firms, and Big Law.
+
+What is the difference between the CSA and a Master Service Agreement?
+
+The CSA was created specifically to help companies sell cloud services and SaaS. It addresses core legal and business terms like indemnification, fees, payment terms, and intellectual property, as well as SaaS-specific topics like customer data usage and privacy. Many Master Service Agreements are built for any type of commercial transaction and include terms that aren’t applicable to cloud services and SaaS (making them harder and slower to customize for your particular transaction). If an MSA can also be used for renting event space or catering, it’s not going to be as relevant to software. While the name of an agreement doesn’t solely determine its applicability, starting with a contract built for SaaS companies speeds up legal review and the sales cycle.
+
+Can I use the CSA with other agreements?
+
+The CSA was built to be extensible via other commonly used agreements such as a Business Associate Agreement, Data Processing Agreement, or Service Level Agreement. You can incorporate these standard agreements or custom agreements and documents that you or your attorney have created.
+
+I see this agreement is hosted online. Does that mean it will change?
+
+The latest version of the CSA is 3.0, and it will remain unchanged and hosted at commonpaper.com/standards/cloud-service-agreement/3.0. We expect future changes to occur infrequently, and they will be posted as a new version when they happen. New versions will not change or otherwise impact agreements that incorporate prior versions, and you can see the full list of all CSA versions here.
+
+How is Version 3 different from previous versions?
+
+CSA v3 is simpler and easier to fill out. Every Variable used in the Standard Terms now appears on the Cover Page, so there are no hidden defaults. Payment terms are consolidated into a single Invoicing & Payment section on the Order Form. Liability exceptions, including the Supercap and Uncapped Claims, are set on the Cover Page. Indemnification is consolidated into one section. The default machine learning clause, Use Limitations, and Additional Warranties have been removed. You can see a summary of changes on the version history page at: commonpaper.com/standards/cloud-service-agreement/versions
+
+Can I still use older versions of this agreement?
+
+Yes, older versions of standards will remain posted under their version number. You can access all prior versions on a standard’s version history page.
+
+How do I use this agreement?
+
+To execute an agreement using the Common Paper CSA, first download a copy of the Cover Page in your preferred format. Then fill out the business terms of your agreement, like fees and subscription period, and the legal terms like the governing law of your contract. Finally, sign your Cover Page with your counterparty via the signing process of your choice. The Cover Page incorporates the Standard Terms by reference, completing the executed agreement.
+
+Do I have to incorporate the Standard Terms by reference?
+
+You can also download the full version of the agreement here and include the Standard Terms in the agreement itself.
+
+Can I leave something out of the Cover Page?
+
+Yes, some concepts in the Cover Page are optional, like whether your agreement includes SLAs. When you download the Cover Page, you’ll see notes explaining which fields are optional. Optional sections are self-contained on the Cover Page, so if you delete one, the Standard Terms don’t need to change.
+
+Can I customize the Cover Page?
+
+Yes, you can feel free to change the Cover Page any way you like. Many companies decide to add their company branding or logo and edit some of the text. The only thing you are required to keep is the license information and link to the Standard Terms.
+
+Can I customize the Standard Terms?
+
+All modifications to the Standard Terms should be made by addendum on the Cover Page. Incorporating the Standard Terms by reference from the Common Paper website gives both sides assurance that all key details and modifications are explicitly called out in the Cover Page.
+
+What license is this agreement released under?
+
+Common Paper agreements are free to use and modify under CC BY 4.0.
+
+Configuration Guide
+
+Available formats
+
+This agreement is free to use or modify under CC BY 4.0. The agreement is available in the following formats.
+
+Configuration guide
+
+Set up this agreement by answering a few questions.
+
+Standard Terms
+
+ Full text: 
+
+ Standard CSA posted at 
+ commonpaper.com/standards/cloud-service-agreement/3.0
+
+ Markdown:
+
+GitHub
+
+Optional info sheet
+
+ PDF
+
+ Word (DOCX)
+
+ With Common Paper SLA included
+
+ Without Common Paper SLA
+
+Cover Page
+
+Word (DOCX)
+
+Google doc
+
+Word (DOCX)
+
+Google doc
+
+Cover Page + 
+
+Standard Terms
+
+Word (DOCX)
+
+Google doc
+
+Word (DOCX)
+
+Google doc
+
+Current version: 3.0
+ See full version history -> 
+
+Streamline your full contract workflow
+
+Everything you need to get your agreement sent and signed today:
+
+Templates -> Proposals -> Negotiations -> Approvals -> Esignature -> Recordkeeping
+
+ Try it free
+
+Cloud Service Agreement
+
+ Order Form
+
+ The key business terms of this Order Form are as follows:
+
+ Framework Terms
+
+ This Order Form incorporates and is governed by
+ the Framework Terms included below. If there is any inconsistency between this Order Form and the
+ Framework Terms, this Order Form will control for this Agreement.
+
+ Cloud Service
+
+ The Cloud Service available under this Order Form is [
+ description of the product ].
+
+ Order Date
+ The date access to the Cloud Service starts
+
+ ( x )
+ Date of last signature on this Order Form
+
+ ( )
+ [ Fill in custom start date ]
+
+ Subscription details
+
+ Pilot
+
+ Customer may access the Cloud Service for a limited [
+ fill in length of pilot/trial, e.g. 3 months ] trial (“Pilot Period“).
+ The Subscription Period will automatically start
+ following the Pilot Period.
+
+ ( ) Fee for Pilot Period: [ fill in $ amount ]
+
+( ) Free trial
+
+ [ ]
+ Modifications to the Agreement that apply only to the Pilot Period:
+ [
+ For example: – Sections 6.3 (Representations & Warranties from Provider), 6.4
+ (Provider Warranty Remedy), and 9 (Indemnification) do not apply
+ during the Pilot Period.
+ – There are no Increased Claims or
+ Uncapped Claims during the Pilot Period.
+ – The General Cap Amount
+ is $1,000 for all claims that arise during the Pilot Period.
+ –
+ Either party may immediately terminate the Agreement during the
+ Pilot Period for any or no reason by giving notice to the other
+ party.
+ ]
+
+ Subscription Period
+
+ [ Fill in length of access, e.g. 12 months ]
+
+ Cloud Service Fees
+
+ [ ] [ fill in $ amount ] per [
+ year, month, Subscription Period, User, gigabyte,
+ etc.
+ ]
+
+ [ ] Other fee structure: [ fill in ]
+
+ [ ] Fees may increase up to [ # ]% per
+ renewal.
+
+ [ ] Fees will increase [ # ]% per renewal.
+
+ [ ] Modifying Section 4.1 of the Standard Terms, Fees are
+ inclusive of taxes.
+
+ Invoicing & Payment
+
+ ( ) Pay by invoice
+
+ Provider will invoice Customer
+ [
+ monthly | quarterly | annually | once per
+ Subscription Period
+ ].
+
+ Customer will pay each invoice within
+ [ # ] days from [
+ Customer’s receipt of invoice | the invoice
+ date
+ ].
+
+ ( ) Automatic payment
+
+ Provider will automatically charge, and
+ Customer authorizes Provider to bill
+ and charge Customer’s payment method on file
+ [
+ monthly | quarterly | annually | once per
+ Subscription Period
+ ]
+ for immediate payment or deduction without further approval.
+ Customer authorizes all such charges.
+ Provider will make a copy of
+ Customer’s bills or transaction history available to
+ Customer.
+
+ Auto-renewal
+
+ ( x )
+ Non-Renewal Notice Date: At least
+ [ fill in number ]
+ days before the end of the current Subscription Period
+
+ ( )
+ Modifying Section 5.1 of the Standard Terms, this Order Form does not
+ automatically renew and will expire at the end of the
+ Subscription Period.
+
+ Technical Support
+
+ [
+ Describe included support and/or how Customer can
+ receive support
+
+ ]
+
+ Additions and Modifications
+
+ SLA
+ Service Level Agreement
+
+ [
+ Provider will use commercially reasonable efforts
+ to provide and maintain the Cloud Service without excessive errors
+ and interruptions. If Provider does not meet the
+ SLA in two consecutive months or over three months in any 12-month
+ period, then Customer may, as its only remedy, terminate this Order
+ Form upon notice and receive a prorated refund of prepaid Fees for
+ the remainder of the Subscription Period.
+ ]
+
+ Professional Services
+
+ [ ]
+ Provider will provide professional services according
+ to the [ attached SOW or reference PSA ].
+
+ [ ]
+ Provider will provide the following professional
+ services: [
+ description of professional services, including any fees that may be
+ assessed
+ ]
+
+ [ ]
+ Payment process for these services: [
+ describe how services fees will be billed, for example “Invoices for
+ these services will be sent monthly.”
+ ]
+
+ Customer will reasonably cooperate with
+ Provider to allow the performance of the services
+ described above, including providing Customer Content as needed.
+ Provider is not responsible for any inability to
+ perform these services if Customer does not cooperate
+ as reasonably requested.
+
+ Other Changes to Standard Terms
+ Changes that apply for this Order Form only
+
+ [
+ Fill in, if any.
+ ]
+
+ By signing this Order Form, each party agrees to enter into this Order
+ Form.
+
+PROVIDER: [official company name]
+
+CUSTOMER: [official company name]
+
+ Signature
+
+ Print Name
+
+ Title
+
+ Notice Address
+ Use email or postal address
+
+ Date
+
+USING THE FRAMEWORK TERMS
+
+ The
+ Framework Terms
+ have 2 parts: (1) the Key Terms below (including any attached or referenced
+ policies and documents) and (2)
+ the Common Paper Cloud Service Standard Terms Version 3.0 posted at
+ commonpaper.com/standards/cloud-service-agreement/3.0, which are
+ incorporated by reference. If there is any inconsistency between the parts of the Framework Terms,
+ the Key Terms will control over the Standard Terms. Capitalized words have
+ the meanings or descriptions given in the Cover Page or Standard Terms.
+ A copy of the Standard Terms is attached for convenience only.
+
+ Key Terms
+
+ The key legal terms of this Agreement are as follows:
+
+ Effective Date
+ The date the Framework Terms start
+
+( x ) Date of last Cover Page signature
+
+ ( ) [ Fill in custom Effective Date ]
+
+ Governing Law
+
+ The laws of [ fill in state, province, and/or country ]
+
+ Chosen Courts
+ Jurisdiction or where disputes are filed
+
+ The courts (whether state, federal, or otherwise) located in [
+ fill in state, province, and/or county ]
+
+ Covered Claims
+ Claims covered by indemnity obligations
+
+ [ x ] Provider Covered Claims:
+ [
+ Any action, proceeding, or claim that the Cloud Service, when used
+ by Customer according to the terms of the Agreement, violates,
+ misappropriates, or otherwise infringes upon anyone else’s
+ intellectual property or other proprietary rights.
+ ]
+
+ [ x ] Customer Covered Claims:
+ [
+ Any action, proceeding, or claim that (1) the Customer Content,
+ when used according to the terms of the Agreement, violates,
+ misappropriates, or otherwise infringes upon anyone else’s
+ intellectual property or other proprietary rights; or (2) results
+ from Customer’s breach or alleged breach of Section
+ 2.1 (Restrictions on Customer).
+ ]
+
+ General Cap Amount
+ Limitation of liability amount for most claims
+
+ [ x ]
+ [ Fill in a number ]x
+ the Fees
+ paid or payable
+ by Customer to Provider in the 12
+ month period immediately before the claim
+
+ [ ]
+ $[ Fill in dollar amount ]
+
+ [ ]
+ The
+ greater
+ of $[ fill in dollar amount ] or [ fill in a number ]x the
+ Fees paid or payable by Customer to
+ Provider in the 12 month period immediately before the
+ claim
+
+ Supercap
+ Higher limitation of liability amount for Increased Claims
+
+ Notwithstanding Section 8.1, each party’s total cumulative liability for
+ all Increased Claims arising out
+ of or relating to this Agreement will not be more than:
+
+ [ x ] [ Fill in a number other than 1 ]x the Fees paid or payable
+ by Customer to Provider in the 12
+ month period immediately before the claim
+
+[ ] $[ Fill in dollar amount ]
+
+ [ ] The greater of $[ fill in dollar amount ] or [
+ fill in a number ]x the Fees paid or payable by
+ Customer to Provider in the 12 month
+ period immediately before the claim
+
+ Increased Claims
+ Specific claims covered by the Supercap
+
+ [ ] The Supercap
+ applies to the following claims:
+
+[ x ] Breach of Section 3 (Privacy & Security)
+
+ [ x ] Breach of Section 10 (Confidentiality) (however, excluding any
+ data or security breaches)
+
+ [ ] An Indemnifying Party’s indemnification obligation
+
+[ ] Other: [ fill in ]
+
+ Uncapped Claims
+ Claims excluded from the General Cap Amount and the Supercap
+
+ [ ] Notwithstanding anything to the contrary, the following
+ claims are not subject to the
+ General Cap Amount or the
+ Supercap:
+
+ [ ] Death, bodily harm, or personal injury
+
+ [ ] An Indemnifying Party’s indemnification obligation
+
+ [ ] Breach of Section 3 (Privacy & Security) resulting from
+ gross negligence or willful misconduct
+
+ [ ]
+ Breach of Section 10 (Confidentiality) resulting from gross negligence
+ or willful misconduct (however, excluding any data or security breaches)
+
+ [ ] Breach of Section 3 (Privacy & Security)
+
+ [ ]
+ Breach of Section 10 (Confidentiality) (however, excluding any data or
+ security breaches)
+
+[ ] Other: [ fill in ]
+
+ Attachments, Supplements & Modifications
+
+ DPA
+ Data Processing Agreement
+
+[ Attach or describe where to find. ]
+
+ Security Policy
+
+ [ x ] Provider will use commercially reasonable efforts to secure the
+ Cloud Service from unauthorized access, alteration, or use and other
+ unlawful tampering.
+
+ [ ] Provider will comply with the Security Policy available
+ at [describe where to find].
+
+ [ ] Provider will maintain annually updated reports or annual
+ certifications of compliance with the following:
+
+[ ] ISO 27001
+
+[ ] SOC 2 Type I
+
+[ ] SOC 2 Type II
+
+[ ] HITRUST
+
+[ ] Other: [fill in]
+
+[ ] Penetration testing
+
+[ ] PCI Level 1
+
+[ ] PCI Level 2
+
+[ ] FedRAMP Authorized
+
+ Insurance Minimums
+
+ During the Subscription Period and for six months
+ after, Provider will carry commercial insurance
+ policies with coverage limits that meet the
+ Insurance Minimums below:
+
+ [ ] Commercial general liability with a minimum limit for
+ each occurrence of at least $[ dollar amount ] and at least $[
+ dollar amount ] in the aggregate
+
+ [ ] Workers’ compensation or employers’ liability insurance
+ as required by Applicable Laws
+
+ [ ] Errors and omissions or professional liability with a
+ minimum limit for each occurrence of at least $[ dollar amount ]
+ and at least $[ dollar amount ] in the aggregate
+
+ [ ] Cyber liability insurance with a minimum limit for each
+ occurrence of at least $[ dollar amount ] and at least $[
+ dollar amount ] in the aggregate
+
+ Upon request, Provider will give
+ Customer a certificate of insurance evidencing its
+ insurance policies that meet the Insurance Minimums.
+ Provider’s insurance policies will not be considered as
+ evidence of Provider’s liability.
+
+ [ ] The following of Provider’s policies will cover Customer
+ as additional insured:
+
+[ ] Commercial general liability
+
+ [ ] Errors and omissions or professional liability
+
+[ ] Cyber liability
+
+ Other Changes to Standard Terms
+ List specific changes to the Standard Terms
+
+[ Fill in, if any. ]
+
+ Provider and Customer have not changed
+ the Standard Terms except for the details in the Key Terms above. By
+ signing this Cover Page, each party agrees to enter into the Framework
+ Terms.
+
+PROVIDER: [official company name]
+
+CUSTOMER: [official company name]
+
+ Signature
+
+ Print Name
+
+ Title
+
+ Notice Address
+ Use email or postal address
+
+ Date
+
+Standard Terms
+
+Service 
+Access and Use. During the Subscription Period and subject to the terms of this Agreement, Customer may (a) access and use the Cloud Service; and (b) copy and use the included Software and Documentation only as needed to access and use the Cloud Service, in each case, for its internal business purposes. If a Customer Affiliate enters a separate Order Form with Provider, the Customer’s Affiliate creates a separate agreement between Provider and that Affiliate, where Provider’s responsibility to the Affiliate is individual and separate from Customer and Customer is not responsible for its Affiliates’ agreement.
+
+Support. During the Subscription Period, Provider will provide Technical Support as described in the Order Form.
+
+User Accounts. Customer is responsible for all actions on Users’ accounts and for all Users’ compliance with this Agreement. Customer and Users must protect the confidentiality of their passwords and login credentials. Customer will promptly notify Provider if it suspects or knows of any fraudulent activity with its accounts, passwords, or credentials, or if they become compromised.
+
+Feedback and Usage Data. Customer may, but is not required to, give Provider Feedback, in which case Customer gives Feedback “AS IS”. Provider may use all Feedback freely without any restriction or obligation. In addition, Provider may collect and analyze Usage Data, and Provider may freely use Usage Data to maintain, improve, enhance, and promote Provider’s products and services without restriction or obligation. However, Provider may only disclose Usage Data to others if the Usage Data is aggregated and does not identify Customer or Users.
+
+Customer Content. Provider may copy, display, modify, and use Customer Content only as needed to provide and maintain the Product and related offerings. Customer is responsible for the accuracy and content of Customer Content.
+
+Restrictions & Obligations 
+Restrictions on Customer. 
+Except as expressly permitted by this Agreement, Customer will not (and will not allow anyone else to): (i) reverse engineer, decompile, or attempt to discover any source code or underlying ideas or algorithms of the Product (except to the extent Applicable Laws prohibit this restriction); (ii) provide, sell, transfer, sublicense, lend, distribute, rent, or otherwise allow others to access or use the Product; (iii) remove any proprietary notices or labels; (iv) copy, modify, or create derivative works of the Product; (v) conduct security or vulnerability tests on, interfere with the operation of, cause performance degradation of, or circumvent access restrictions of the Product; (vi) access accounts, information, data, or portions of the Product to which Customer does not have explicit authorization; (vii) use the Product to develop a competing service or product; (viii) use the Product with any High Risk Activities or with any activity prohibited by Applicable Laws; (ix) use the Product to obtain unauthorized access to anyone else’s networks or equipment; or (x) upload, submit, or otherwise make available to the Product any Customer Content to which Customer and Users do not have the proper rights.
+
+Use of the Product must comply with all Documentation.
+
+Suspension. If Customer (a) has an outstanding, undisputed balance on its account for more than 30 days; (b) breaches Section 2.1 (Restrictions on Customer); or (c) uses the Product in violation of the Agreement or in a way that materially and negatively impacts the Product or others, then Provider may temporarily suspend Customer’s access to the Product with or without notice. However, Provider will try to inform Customer before suspending Customer’s account when practical. Provider will reinstate Customer’s access to the Product only if Customer resolves the underlying issue.
+
+Privacy & Security 
+Personal Data. Before submitting Personal Data governed by GDPR, Customer must enter into a data processing agreement with Provider. If the parties have a DPA, each party will comply with its obligations in the DPA, the terms of the DPA will control each party’s rights and obligations as to Personal Data, and the terms of the DPA will control in the event of any conflict with this Agreement.
+
+Prohibited Data. Customer will not (and will not allow anyone else to) submit Prohibited Data to the Product unless authorized by the Order Form or Key Terms.
+
+Payment & Taxes 
+Fees. Unless the Order Form specifies a different currency, all Fees are in U.S. Dollars and are exclusive of taxes. Except for the prorated refund of prepaid Fees allowed with specific termination rights given in the Agreement, Fees are non-refundable.
+
+Taxes. Customer is responsible for all duties, taxes, and levies that apply to Fees, including sales, use, VAT, GST, or withholding, that Provider itemizes and includes in an invoice. However, Customer is not responsible for Provider’s income taxes.
+
+Payment. Customer will pay Provider Fees and taxes in U.S. Dollars, unless the Order Form specifies a different currency, according to the payment terms in the Order Form.
+
+Payment Dispute. If Customer has a good-faith disagreement about the Fees charged or invoiced, Customer must notify Provider about the dispute before payment is due, or within 30 days of an automatic payment, and must pay all undisputed amounts on time. The parties will work together to resolve the dispute within 15 days. If no resolution is agreed, each party may pursue any remedies available under the Agreement or Applicable Laws.
+
+Term & Termination 
+Order Form and Agreement. For each Order Form, the Agreement will start on the Order Date, continue through the Subscription Period, and automatically renew for additional Subscription Periods unless one party gives notice of non-renewal to the other party before the Non-Renewal Notice Date.
+
+Framework Terms. These Framework Terms will start on the Effective Date and continue for the longer of one year or until all Order Forms governed by the Framework Terms have ended.
+
+Termination. Either party may terminate the Framework Terms or an Order Form immediately: 
+if the other party fails to cure a material breach of the Framework Terms or an Order Form following 30 days notice;
+
+upon notice if the other party (i) materially breaches the Framework Terms or an Order Form in a manner that cannot be cured; (ii) dissolves or stops conducting business without a successor; (iii) makes an assignment for the benefit of creditors; or (iv) becomes the debtor in insolvency, receivership, or bankruptcy proceedings that continue for more than 60 days.
+
+Force Majeure. Either party may terminate an affected Order Form upon notice if a Force Majeure Event prevents the Product from materially operating for 30 or more consecutive days. Provider will pay to Customer a prorated refund of any prepaid Fees for the remainder of the Subscription Period. A Force Majeure Event does not excuse Customer’s obligation to pay Fees accrued prior to termination.
+
+Effect of Termination. Termination of the Framework Terms will automatically terminate all Order Forms governed by the Framework Terms. Upon any expiration or termination: 
+Customer will no longer have any right to use the Product.
+
+Upon Customer’s request, Provider will delete Customer Content within 60 days.
+
+Each Recipient will return or destroy Discloser’s Confidential Information in its possession or control.
+
+Provider will submit a final bill or invoice for all outstanding Fees accrued before termination and Customer will pay the invoice according to Section 4 (Payment & Taxes).
+
+Survival. 
+The following sections will survive expiration or termination of the Agreement: Section 1.4 (Feedback and Usage Data), Section 2.1 (Restrictions on Customer), Section 4 (Payment & Taxes) for Fees accrued or payable before expiration or termination, Section 5.5 (Effect of Termination), Section 5.6 (Survival), Section 6 (Representations & Warranties), Section 7 (Disclaimer of Warranties), Section 8 (Limitation of Liability), Section 9 (Indemnification), Section 10 (Confidentiality), Section 11 (Reservation of Rights), Section 12 (General Terms), Section 13 (Definitions), and the portions of a Cover Page referenced by these sections.
+
+Each Recipient may retain Discloser’s Confidential Information in accordance with its standard backup or record retention policies maintained in the ordinary course of business or as required by Applicable Laws, in which case Section 3 (Privacy & Security) and Section 10 (Confidentiality) will continue to apply to retained Confidential Information.
+
+Representations & Warranties 
+Mutual. Each party represents and warrants to the other that: (a) it has the legal power and authority to enter into this Agreement; (b) it is duly organized, validly existing, and in good standing under the Applicable Laws of the jurisdiction of its origin; and (c) it will comply with all Applicable Laws in performing its obligations or exercising its rights in this Agreement.
+
+From Customer. Customer represents and warrants that it, all Users, and anyone submitting Customer Content each have and will continue to have all rights necessary to submit or make available Customer Content to the Product and to allow the use of Customer Content as described in the Agreement.
+
+From Provider. Provider represents and warrants to Customer that it will not materially reduce the general functionality of the Cloud Service during the Subscription Period.
+
+Provider Warranty Remedy. If Provider breaches the warranty in Section 6.3 (Representations & Warranties from Provider), Customer must give Provider notice (with enough detail for Provider to understand or replicate the issue) within 45 days of discovering the issue. Within 45 days of receiving sufficient details of the warranty issue, Provider will attempt to restore the general functionality of the Cloud Service. If Provider cannot resolve the issue, Customer may terminate the affected Order Form and Provider will pay to Customer a prorated refund of prepaid Fees for the remainder of the Subscription Period. Provider’s restoration obligation, and Customer’s termination right, are Customer’s only remedies if Provider does not meet the warranty in Section 6.3 (Representations & Warranties from Provider).
+
+Disclaimer of Warranties 
+Provider makes no guarantees that the Product will always be safe, secure, or error-free, or that it will function without disruptions, delays, or imperfections. The warranties in Section 6 (Representations & Warranties) do not apply to any misuse or unauthorized modification of the Product, nor to any product or service provided by anyone other than Provider. Except for the warranties in Section 6 (Representations & Warranties), Provider and Customer each disclaim all other warranties and conditions, whether express or implied, including the implied warranties and conditions of merchantability, fitness for a particular purpose, title, and non-infringement. These disclaimers apply to the maximum extent permitted by Applicable Laws.
+
+Limitation of Liability 
+Liability Cap. Except as provided in the Cover Page, each party’s total cumulative liability for all claims arising out of or relating to this Agreement will not be more than the General Cap Amount.
+
+Indirect Damages Waiver. Except for a breach of Section 10 (Confidentiality) and as provided in the Cover Page, under no circumstances will either party be liable to the other for lost profits or revenues (whether direct or indirect), or for consequential, special, indirect, exemplary, punitive, or incidental damages relating to this Agreement, even if the party is informed of the possibility of this type of damage in advance.
+
+Applicability. The limitations and waivers contained in Sections 8.1 (Liability Cap) and 8.2 (Indirect Damages Waiver) apply to all liability, whether in tort (including negligence), contract, breach of statutory duty, or otherwise.
+
+Exceptions. Nothing in this Agreement will limit, exclude, or restrict a party’s liability (a) to the extent prohibited by Applicable Laws, or (b) for its gross negligence, willful misconduct, or fraud.
+
+Indemnification 
+Indemnifying Party Obligations. 
+Provider will indemnify, defend, and hold harmless Customer from and against all Provider Covered Claims made by someone other than Customer, Customer’s Affiliates, or Users, and all out-of-pocket damages, awards, settlements, costs, and expenses, including reasonable attorneys’ fees and other legal expenses, that arise from the Provider Covered Claims.
+
+Customer will indemnify, defend, and hold harmless Provider from and against all Customer Covered Claims made by someone other than Provider or its Affiliates, and all out-of-pocket damages, awards, settlements, costs, and expenses, including reasonable attorneys’ fees and other legal expenses, that arise from the Customer Covered Claims.
+
+Notwithstanding the above, if the Order Form and the governing Framework Terms omit or do not define any Provider Covered Claims or Customer Covered Claims, then the corresponding party does not have any obligations hereunder as an Indemnifying Party.
+
+Procedure. The Indemnifying Party’s obligations in this section are contingent upon the Protected Party: (a) promptly notifying the Indemnifying Party of each Covered Claim for which it seeks protection; (b) providing reasonable assistance to the Indemnifying Party at the Indemnifying Party’s expense; and (c) giving the Indemnifying Party sole control over the defense and settlement of each Covered Claim. A Protected Party may participate in a Covered Claim for which it seeks protection with its own attorneys only at its own expense. The Indemnifying Party may not agree to any settlement of a Covered Claim that contains an admission of fault or otherwise materially and adversely impacts the Protected Party without the prior written consent of the Protected Party.
+
+Changes to Product. If required by settlement or court order, or if deemed reasonably necessary in response to a Provider Covered Claim, Provider may: (a) obtain the right for Customer to continue using the Product; (b) replace or modify the affected component of the Product without materially reducing the general functionality of the Product; or (c) if neither (a) nor (b) are reasonable, terminate the affected Order Form and issue a prorated refund of prepaid Fees for the remainder of the Subscription Period.
+
+Exclusions. 
+Provider’s obligations as an Indemnifying Party will not apply to Provider Covered Claims that result from (i) modifications to the Product that were not authorized by Provider or that were made in compliance with Customer’s instructions; (ii) unauthorized use of the Product, including use in violation of this Agreement; (iii) use of the Product in combination with items not provided by Provider; or (iv) use of an old version of the Product where a newer release would avoid the Provider Covered Claim.
+
+Customer’s obligations as an Indemnifying Party will not apply to Customer Covered Claims that result from the unauthorized use of the Customer Content, including use in violation of this Agreement.
+
+Exclusive Remedy. This Section 9 (Indemnification), together with any termination rights, describes each Protected Party’s exclusive remedy and each Indemnifying Party’s entire liability for a Covered Claim.
+
+Confidentiality 
+Non-Use and Non-Disclosure. Except as otherwise authorized in the Agreement or as needed to fulfill its obligations or exercise its rights under this Agreement, Recipient will not (a) use Discloser’s Confidential Information; nor (b) disclose Discloser’s Confidential Information to anyone else. In addition, Recipient will protect Discloser’s Confidential Information using at least the same protections Recipient uses for its own similar information but no less than a reasonable standard of care.
+
+Exclusions. Confidential Information does not include information that (a) Recipient knew without any obligation of confidentiality before disclosure by Discloser; (b) is or becomes publicly known and generally available through no fault of Recipient; (c) Recipient receives under no obligation of confidentiality from someone else who is authorized to make the disclosure; or (d) Recipient independently developed without use of or reference to Discloser’s Confidential Information.
+
+Required Disclosures. Recipient may disclose Discloser’s Confidential Information to the extent required by Applicable Laws if, unless prohibited by Applicable Laws, Recipient provides Discloser reasonable advance notice of the required disclosure and reasonably cooperates, at Discloser’s expense, with Discloser’s efforts to obtain confidential treatment for the Confidential Information.
+
+Permitted Disclosures. Recipient may disclose Discloser’s Confidential Information to Users, employees, advisors, contractors, and representatives who each have a need to know the Confidential Information, but only if the person or entity is bound by confidentiality obligations at least as protective as those in this Section 10 (Confidentiality) and Recipient remains responsible for everyone’s compliance with the terms of this Section 10 (Confidentiality).
+
+Reservation of Rights 
+Except for the limited license to copy and use Software and Documentation in Section 1.1 (Access and Use), Provider retains all right, title, and interest in and to the Product, whether developed before or after the Effective Date. Except for the limited rights in Section 1.5 (Customer Content), Customer retains all right, title, and interest in and to the Customer Content.
+
+General Terms 
+Entire Agreement. This Agreement is the only agreement between the parties about its subject and this Agreement supersedes all prior or contemporaneous statements (whether in writing or not) about its subject. Provider expressly rejects any terms included in Customer’s purchase order or similar document, which may only be used for accounting or administrative purposes. No terms or conditions in any Customer documentation or online vendor portal will apply to Customer’s use of the Product unless expressly agreed to in a legally binding written agreement signed by an authorized Provider representative, regardless of what such terms may say.
+
+Modifications, Severability, and Waiver. Any waiver, modification, or change to the Agreement must be in writing and signed or electronically accepted by each party. If any term of this Agreement is determined to be invalid or unenforceable by a relevant court or governing body, the remaining terms of this Agreement will remain in full force and effect. The failure of a party to enforce a term or to exercise an option or right in this Agreement will not constitute a waiver by that party of the term, option, or right.
+
+Governing Law and Chosen Courts. The Governing Law will govern all interpretations and disputes about this Agreement, without regard to its conflict of laws provisions. The parties will bring any legal suit, action, or proceeding about this Agreement in the Chosen Courts and each party irrevocably submits to the exclusive jurisdiction of the Chosen Courts.
+
+Injunctive Relief. Despite Section 12.3 (Governing Law and Chosen Courts), a breach of Section 10 (Confidentiality) or the violation of a party’s intellectual property rights may cause irreparable harm for which monetary damages cannot adequately compensate. As a result, upon the actual or threatened breach of Section 10 (Confidentiality) or violation of a party’s intellectual property rights, the non-breaching or non-violating party may seek appropriate equitable relief, including an injunction, in any court of competent jurisdiction without the need to post a bond and without limiting its other rights or remedies.
+
+Non-Exhaustive Remedies. Except where the Agreement provides for an exclusive remedy, seeking or exercising a remedy does not limit the other rights or remedies available to a party.
+
+Assignment. Neither party may assign any rights or obligations under this Agreement without the prior written consent of the other party. However, either party may assign this Agreement upon notice if the assigning party undergoes a merger, change of control, reorganization, or sale of all or substantially all its equity, business, or assets to which this Agreement relates. Any attempted but non-permitted assignment is void. This Agreement will be binding upon and inure to the benefit of the parties and their permitted successors and assigns.
+
+Beta Products. If Provider gives Customer access to a Beta Product, the Beta Product is provided “AS IS” and Section 6.3 (Representations & Warranty From Provider) does not apply to any Beta Products. Customer acknowledges that Beta Products are experimental in nature and may be modified or removed at Provider’s discretion with or without notice.
+
+Logo Rights. Provider may identify Customer and use Customer’s name and logo in marketing to identify Customer as a user of Provider’s products and services.
+
+Notices. Any notice, request, or approval about the Agreement must be in writing and sent to the Notice Address. Notices will be deemed given (a) upon confirmed delivery if by email, registered or certified mail, or personal delivery; or (b) two days after mailing if by overnight commercial delivery.
+
+Independent Contractors. The parties are independent contractors, not agents, partners, or joint venturers. Neither party is authorized to bind the other to any liability or obligation.
+
+No Third-Party Beneficiary. There are no third-party beneficiaries of this Agreement.
+
+Force Majeure. Neither party will be liable for a delay or failure to perform its obligations of this Agreement if caused by a Force Majeure Event. However, this section does not excuse Customer’s obligations to pay Fees.
+
+Export Controls. Customer may not remove or export from the United States or allow the export or re-export of the Product or any related technology or materials in violation of any restrictions, laws, or regulations of the United States Department of Commerce, OFAC, or any other United States or foreign agency or authority. Customer represents and warrants that it is not (a) a resident or national of an Embargoed Country; (b) an entity organized under the laws of an Embargoed Country; (c) designated on any list of prohibited, restricted, or sanctioned parties maintained by the U.S. government or agencies or other applicable governments or agencies, including OFAC’s Specially Designated Nationals and Blocked Persons List and the UN Security Council Consolidated List; nor (d) 50% or more owned by any party designated on any of the above lists. Provider may terminate this Agreement immediately without notice or liability to comply, as determined in Provider’s sole discretion, with applicable export controls and sanctions laws and regulations.
+
+Government Rights. The Cloud Service and Software are deemed “commercial items” or “commercial computer software” according to FAR section 12.212 and DFAR section 227.7202, and the Documentation is “commercial computer software documentation” according to DFAR section 252.227-7014(a)(1) and (5). Any use, modification, reproduction, release, performance, display, or disclosure of the Product by the U.S. Government will be governed solely by the terms of this Agreement and all other use is prohibited.
+
+Anti-Bribery. Neither party will take any action that would be a violation of any Applicable Laws that prohibit the offering, giving, promising to offer or give, or receiving, directly or indirectly, money or anything of value to any third party to assist Provider or Customer in retaining or obtaining business. Examples of these kinds of laws include the U.S. Foreign Corrupt Practices Act and the UK Bribery Act 2010.
+
+Titles and Interpretation. Section titles are for convenience and reference only. All uses of “including” and similar phrases are non-exhaustive and without limitation. The United Nations Convention for the International Sale of Goods and the Uniform Computer Information Transaction Act do not apply to this Agreement.
+
+Signature. This Agreement may be signed in counterparts, including by electronic copies or acceptance mechanism. Each copy will be deemed an original and all copies, when taken together, will be the same agreement.
+
+Definitions 
+“Affiliate” means an entity that, directly or indirectly, controls, is under the control of, or is under common control with a party, where control means having more than fifty percent (50%) of the voting stock or other ownership interest.
+
+“Agreement” means the Order Form between Provider and Customer as governed by the Framework Terms.
+
+“Applicable Data Protection Laws” means the Applicable Laws that govern how the Cloud Service may process or use an individual’s personal information, personal data, personally identifiable information, or other similar term.
+
+“Applicable Laws” means the laws, rules, regulations, court orders, and other binding requirements of a relevant government authority that apply to or govern Provider or Customer.
+
+“Beta Product” means an early or prerelease feature or version of the Product that is identified as beta or similar, or a version of the Product that is not generally available.
+
+“Cloud Service” means the product described in the Order Form.
+
+“Confidential Information” means information in any form disclosed by or on behalf of a Discloser, including before the Effective Date, to a Recipient in connection with this Agreement that (a) the Discloser identifies as “confidential”, “proprietary”, or the like; or (b) should be reasonably understood as confidential or proprietary due to its nature and the circumstances of its disclosure. Confidential Information includes the existence of this Agreement and the information on each Cover Page. Customer’s Confidential Information includes non-public Customer Content and Provider’s Confidential Information includes non-public information about the Product.
+
+“Cover Page” means a document that is signed or electronically accepted by the parties, incorporates these Standard Terms or is governed by the Framework Terms, and identifies Provider and Customer. A Cover Page may include an Order Form, Key Terms, or both.
+
+“Covered Claim” means either a Provider Covered Claim or Customer Covered Claim.
+
+“Customer Content” means data, information, or materials submitted by or on behalf of Customer or Users to the Product but excludes Feedback.
+
+“Discloser” means a party to this Agreement when the party is providing or disclosing Confidential Information to the other party.
+
+“Documentation” means the usage manuals and instructional materials for the Cloud Service or Software that are made available by Provider.
+
+“Embargoed Country” means any country or region to or from where Applicable Laws generally restrict the export or import of goods, services, or money.
+
+“Feedback” means suggestions, feedback, or comments about the Product or related offerings.
+
+“Fees” means the applicable amounts described in an Order Form.
+
+“Force Majeure Event” means an unforeseen event outside a party’s reasonable control where the affected party took reasonable measures to avoid or mitigate the impacts of the event. Examples of these kinds of events include unpredicted natural disasters like a major earthquake, war, pandemic, riot, act of terrorism, or public utility or internet failure.
+
+“Framework Terms” means these Standard Terms, the Key Terms between Provider and Customer, and any policies and documents referenced in or attached to the Key Terms.
+
+“GDPR” means European Union Regulation 2016/679 as implemented by local law in the relevant European Union member nation, and by section 3 of the United Kingdom’s European Union (Withdrawal) Act of 2018 in the United Kingdom.
+
+“High Risk Activity” means any situation where the use or failure of the Product could be reasonably expected to lead to death, bodily injury, or environmental damage. Examples include full or partial autonomous vehicle technology, medical life-support technology, emergency response services, nuclear facilities operation, and air traffic control.
+
+“Indemnifying Party” means a party to this Agreement when the party is providing protection for a particular Covered Claim.
+
+“Key Terms” means a Cover Page that includes the key legal details and Variables for this Agreement. The Key Terms may include details about Covered Claims, set the Governing Law, or contain other details about this Agreement.
+
+“OFAC” means the United States Department of Treasury’s Office of Foreign Assets Control.
+
+“Order Form” means a Cover Page that includes the key business details and Variables for this Agreement that are not defined in the Framework Terms. An Order Form includes the policies and documents referenced in or attached to the Order Form. An Order Form may include details about the level of access and use granted to the Cloud Service, length of Subscription Period, or other details about the Product.
+
+“Personal Data” will have the meaning(s) set forth in the Applicable Data Protection Laws for personal information, personal data, personally identifiable information, or other similar term.
+
+“Product” means the Cloud Service, Software, and Documentation.
+
+“Prohibited Data” means (a) patient, medical, or other protected health information regulated by the Health Insurance Portability and Accountability Act; (b) credit, debit, bank account, or other financial account numbers; (c) social security numbers, driver’s license numbers, or other unique and private government ID numbers; (d) special categories of data as defined in the GDPR; and (e) other similar categories of sensitive information as set forth in the Applicable Data Protection Laws.
+
+“Protected Party” means a party to this Agreement when the party is receiving the benefit of protection for a particular Covered Claim.
+
+“Recipient” means a party to this Agreement when the party receives Confidential Information from the other party.
+
+“Software” means the client-side software or applications made available by Provider for Customer to install, download (whether onto a machine or in a browser), or execute as part of the Product.
+
+“Standard Terms” means these Common Paper Cloud Service Agreement Standard Terms Version 3.0, which are posted at https://commonpaper.com/standards/cloud-service-agreement/3.0/.
+
+“Usage Data” means data and information about the provision, use, and performance of the Product and related offerings based on Customer’s or User’s use of the Product.
+
+“User” means any individual who uses the Product on Customer’s behalf or through Customer’s account.
+
+“Variable” means a word or phrase that is highlighted and capitalized, such as Subscription Period or Governing Law.
+
+ Common Paper Cloud Service Agreement (Version 3.0)
+ free to use under CC BY 4.0.
+
+The Cloud Service Agreement, annotated
+
+Order Form
+
+ The Order Form contains the business details that you can customize from
+ deal to deal.
+
+ The Order Form is contained in a Cover Page. Learn about how standard
+ agreements work in our
+ anatomy of a contract
+ blog post.
+
+Framework Terms
+
+ The Framework Terms operate as an overarching governing document between two
+ organizations, similar to a “master agreement”. Framework Terms can apply to
+ one or many Order Forms. When you combine an Order Form with Framework
+ Terms, you get the Agreement or overall contract.
+
+The Framework Terms included below
+
+ If the Framework Terms are not included as Key Terms in this same document,
+ you can replace this first sentence with “This Order Form incorporates and
+ is governed by the Framework Terms dated [ enter Effective Date of Key Terms
+ ] between [ enter name of Provider ] and [ enter name of Customer ].”
+
+Order Date
+
+ The Order Date is distinct from the Effective Date, which is the date the
+ Framework Terms start and is defined below the Key Terms. They are often,
+ but not always, the same date.
+
+( x )
+
+ Choices pre-marked with an “x” show the default selection. You can use the
+ “x” to mark off your choice, or keep the text for your choice and delete the
+ text for the other options.
+
+( )
+
+ Parentheses with blank space indicate a choice you need to make where one
+ option must be chosen, but not more than one should be selected.
+
+[ Fill in custom start date ]
+
+ Square brackets with text indicate a field you can fill in or customize
+ before sending the agreement.
+
+ For this one, if the Order Date is different from the date of signature,
+ then set the Order Date here.
+
+Pilot
+
+ This is an optional field. Use it to include a pilot or trial period that is
+ in addition to the full Subscription Period. If there is no pilot period,
+ delete this entire row.
+
+ The Subscription Period will automatically start following the Pilot Period.
+
+ This clarifies that the Pilot Period is in addition to the Subscription
+ Period.
+
+[ ]
+
+ Square brackets with blank space indicate choices that are optional. You can
+ pick none, one, or more than one. Indicate selections by checking the box
+ for those you wish to include and/or deleting the unused options.
+
+ [ For example: – Sections 6.3 (Representations & Warranties from Provider), 6.4 (Provider
+ Warranty Remedy), and 9 (Indemnification) do not apply during the Pilot
+ Period. – There are no Increased Claims or Uncapped Claims during the Pilot
+ Period. – The General Cap Amount is $1,000 for all claims that arise during
+ the Pilot Period. – Either party may immediately terminate the Agreement
+ during the Pilot Period for any or no reason by giving notice to the other
+ party. ]
+
+ Use this area to make modifications that only apply during the Pilot Period.
+ Shown are some common modifications that occur for pilots and trials, which
+ can be changed to suit your needs.
+
+[ Fill in length of access, e.g. 12 months ]
+
+ From the
+ Benchmark
+ : The majority (70%) of CSAs have a Subscription Period of one year. The
+ next most common length is one month, accounting for 19% of CSAs.
+
+[ ] Fees may increase up to [ # ]% per renewal.
+
+ This is optional and may be deleted if not applicable. It permits a Fee
+ increase upon renewal, but would require notifying the customer about an
+ increase before it happens.
+
+ From the
+ Benchmark
+ : 29% of CSAs include the ability to increase fees upon renewal, typically
+ in the range of a 5-8% increase.
+
+[ ] Fees will increase [ # ]% per renewal.
+
+ This is optional and may be deleted if not applicable. It authorizes an
+ automatic Fee increase upon renewal, without the requirement to notify the
+ customer.
+
+ [ ] Modifying Section 4.1 of the Standard Terms, Fees are
+ inclusive of taxes.
+
+ This is optional and may be deleted if not applicable. It is for situations
+ where the prices listed include applicable taxes, such as in regions that
+ use a VAT-inclusive model.
+
+Invoicing & Payment
+
+ Use Invoicing & Payment to clarify how billing and payments will work for
+ your customer.
+
+( ) Pay by invoice
+
+ This option requires the provider to send invoices in order for your
+ customer to pay.
+
+ [ monthly | quarterly | annually | once per
+ Subscription Period ]
+
+ If using this option, set how frequently the provider must send invoices.
+ Although this time frame is often the same as the Subscription Period, it
+ can be different. For example, you can have a 1 year subscription period
+ that is invoiced monthly in 12 equal increments.
+
+ From the
+ Benchmark
+ : 48% of CSAs use monthly invoices, while 46% send annual invoices.
+
+ [ # ] days from [ Customer’s receipt of invoice | the
+ invoice date ]
+
+ Together, these two fields set how long a customer has to pay each invoice.
+ Finance teams often refer to this time period in “NET terms” such as “NET-30
+ days”.
+
+ From the
+ Benchmark
+ : “30 days from Customer’s receipt of invoice” is the most common payment
+ period, making up 62% of CSAs.
+
+( ) Automatic payment
+
+ This option requires the customer to keep a credit card or other payment
+ method on file that the provider automatically charges on the agreed-upon
+ cadence.
+
+[ monthly | quarterly | annually | once per Subscription Period ]
+
+ If using this option, set how frequently the provider will charge the
+ customer’s payment method. Although this time frame is often the same as the
+ Subscription Period, it can be different. For example, you can have a 1 year
+ subscription period that is charged monthly in 12 equal increments.
+
+( x )
+
+ The Standard Terms set a default of automatic renewal for contracts.
+ However, automatic renewal doesn’t mean the contract cannot end. At
+ baseline, either side can cancel renewal by giving sufficient notice, the
+ time period for which is set here.
+
+ From the
+ Benchmark
+ : The vast majority (90%) of CSAs retain automatic renewal.
+
+[ fill in number ]
+
+ From the
+ Benchmark
+ : The majority (84%) of automatically renewing CSAs require 30 days prior
+ notice to cancel renewal.
+
+( )
+
+ Select this option if the contract will not automatically renew when it
+ ends. In these situations, both sides will need to explicitly opt in to the
+ renewal by signing a new Order Form.
+
+Technical Support
+
+ Including technical support is optional. If no technical support is
+ included, delete this entire row.
+
+Additions and Modifications
+
+ All sections in the Additions and Modifications section are optional. Delete
+ any rows that do not apply.
+
+SLA
+
+ From the
+ Benchmark
+ : SLAs are included in 39% of CSAs.
+
+ [ Provider will use commercially reasonable efforts to provide and maintain
+ the Cloud Service without excessive errors and interruptions. If Provider
+ does not meet the SLA in two consecutive months or over three months in any
+ 12-month period, then Customer may, as its only remedy, terminate this Order
+ Form upon notice and receive a prorated refund of prepaid Fees for the
+ remainder of the Subscription Period. ]
+
+ This is a very basic and lightweight example of SLA language. Modify it to
+ your situation, incorporate your own, or use the
+ Common Paper SLA.
+
+[ ]
+
+ If including professional services, use this option to incorporate an
+ existing SOW or professional services agreement, which will govern the
+ services.
+
+[ ]
+
+ If including professional services, use this option to describe the services
+ directly on this Order Form. Without a separate professional services
+ agreement, the CSA will govern the services.
+
+[ ]
+
+ If only using the CSA to describe the services and fees, describe how the
+ fees will be billed and paid. If referencing an SOW or professional services
+ agreement that already includes fees and payment terms, including those
+ details here isn’t necessary.
+
+Other Changes to Standard Terms
+
+ Including Other Changes is optional. Examples of how to use this section can
+ be found in the
+ Language Library.
+
+Framework Terms
+
+ The Framework Terms operate as an overarching governing document between two
+ organizations. Framework Terms can apply to one or many Order Forms. The
+ Framework Terms are made up of the Key Terms + the Standard Terms. When you
+ combine an Order Form with Framework Terms, you get the Agreement or overall
+ contract.
+
+ The Common Paper Cloud Service Standard Terms Version 3.0 posted at
+ commonpaper.com/standards/cloud-service-agreement/3.0
+
+ The CSA incorporates the Standard Terms by reference, with a link to
+
+ commonpaper.com/standards/cloud-service-agreement/3.0. Each version of the Standard Terms will remain unchanged and posted on our
+ website, and updates will get posted as new versions.
+
+Incorporated by reference
+
+ Incorporating the Standard Terms by reference ensures there are no hidden
+ changes in the Standard Terms.
+
+A copy of the Standard Terms is attached for convenience only.
+
+ This allows including a copy of the text of the Standard Terms for
+ convenience. You can find a version without the standard terms attached on
+ the
+ cloud service agreement page.
+
+Key Terms
+
+The Key Terms contains the key legal details of each specific contract.
+
+Effective Date
+
+ The Effective Date is when the Framework Terms start. If the Effective Date
+ is different than the Order Date, then things like confidentiality
+ obligations start on the Effective Date, while the customer’s access to the
+ product won’t start until the Order Date.
+
+Governing Law
+
+ Governing Law identifies the set of laws under which the contract will be
+ interpreted.
+
+ From the
+ Benchmark: 71% of CSAs set Governing Law to Delaware. California is the next most
+ common choice.
+
+Chosen Courts
+
+ Chosen Courts identifies where a lawsuit related to the contract can be
+ filed in the event of a dispute.
+
+ From the
+ Benchmark: 71% of CSAs set Chosen Courts to Delaware. California is the next most
+ common choice.
+
+Covered Claims
+
+ Including Covered Claims is optional. Use this Variable to set which claims
+ the provider and/or customer will be responsible for under an indemnity
+ obligation.
+
+ Section 9 of the Standard Terms includes the full language around
+ indemnities and Covered Claims, including narrowing the obligation to claims
+ brought by entities other than the provider, customer, end users, or their
+ affiliates (i.e., third party claims).
+
+If there are no Covered Claims, delete the entire row.
+
+ [ Any action, proceeding, or claim that the Cloud Service, when used by
+ Customer according to the terms of the Agreement, violates, misappropriates,
+ or otherwise infringes upon anyone else’s intellectual property or other
+ proprietary rights. ]
+
+ This reflects a default for Provider Covered Claims (i.e., what
+ indemnification obligations the provider has) set by the
+ Committee. You can modify it in any way to address your particular situation.
+
+ From the
+ Benchmark: 76% of CSAs keep this default.
+
+ [ Any action, proceeding, or claim that (1) the Customer Content, when used
+ according to the terms of the Agreement, violates, misappropriates, or
+ otherwise infringes upon anyone else’s intellectual property or other
+ proprietary rights; or (2) results from Customer’s breach or alleged breach
+ of Section 2.1 (Restrictions on Customer). ]
+
+ This reflects a default for Customer Covered Claims (i.e., what
+ indemnification obligations the customer has) set by the
+ Committee. You can modify it in any way to address your particular situation.
+
+ From the
+ Benchmark: 76% of CSAs keep this default.
+
+General Cap Amount
+
+ The General Cap Amount is the maximum dollar amount a party to the contract
+ could be responsible for in the event of a legal dispute over the contract.
+ It applies to all cont

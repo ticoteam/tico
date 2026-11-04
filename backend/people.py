@@ -14,6 +14,7 @@ reads the YAML and hands the document here; `backend/tests/test_people.py` cover
   load(doc)                              -> roster           normalised, always usable
   is_developer(pid, roster)              -> bool             named in the `developers` list
   team_of(slug, employees, roster)       -> group | None     the bot's group id
+  manager_team(reports_to, employees, roster) -> group | None  the group a new bot takes from above it (a person's team)
   primary_users(slug, roster, employees) -> [person, ...]    never empty
   bots_of(person, roster, employees)     -> [slug, ...]      what that person is primary for
   may_chat(email, slug, roster, employees) -> bool           only an assigned person may chat
@@ -28,6 +29,10 @@ DEFAULT_PERSON = {"id": "", "name": "", "email": "", "title": "",
                   "slack": "", "slack_id": "", "github": "", "notify_slack_task_done": True,
                   "notify_slack_bot_messages": True, "slack_muted_bots": [], "phone": "", "about": "", "goals": "", "notes": "",
                   "update_draft": True,
+                  # Browser notifications for Needs you (off by default; the page asks the browser's permission).
+                  "notify_browser": False,
+                  # Email digests of the threads they follow on digest (backend/thread_digest.py): on unless turned off.
+                  "email_digest": True,
                   "directory": "", "external_id": "", "directory_left": False,
                   # What a member may do (docs/permissions.md): create bots (on by default), and add people
                   # (None = the default: coworkers in the company's email domain may, others may not).
@@ -72,6 +77,8 @@ def _person(row):
             "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
             # The Assistant drafts their daily update unless they turn it off.
             "update_draft": row.get("update_draft") is not False,
+            "notify_browser": row.get("notify_browser") is True,
+            "email_digest": row.get("email_digest") is not False,
             "slack_muted_bots": _list(row.get("slack_muted_bots")),
             "phone": _clean(row.get("phone")),
             "about": _clean(row.get("about")),
@@ -106,10 +113,14 @@ def people_rows(doc, owner=None):
     return people
 
 
+def may_sign_in(person):
+    """Whether a normalised roster row may sign in at all: an address, not hidden, not left the directory, sign-in on."""
+    return bool(person["email"]) and not person["hidden"] and not person["directory_left"] and person["sign_in"]
+
+
 def signed_in_count(doc, owner=None):
     """How many roster people count toward company turn levels: email set, may sign in, not hidden or left."""
-    return sum(1 for p in people_rows(doc, owner)
-               if p["email"] and not p["hidden"] and not p["directory_left"] and p["sign_in"])
+    return sum(1 for p in people_rows(doc, owner) if may_sign_in(p))
 
 
 def load(doc, owner=None):
@@ -227,6 +238,32 @@ def team_of(slug, employees, roster):
         if at in roots:
             return roots[at]
         seen.add(at)
+        at = _clean(entry.get("reports_to"))
+    return None
+
+
+def manager_team(reports_to, employees, roster):
+    """The group a bot takes when it names none and `team_of` finds none above it: the one its manager is in. `team_of`
+    walks a bot's manager up through bots but stops at a person, so a bot under a person in a group would sit at the
+    root of the chart. This walks the same way and, reaching a person, takes that person's `team` when it is a group.
+    None when nobody above it is in one. Used where a bot is made (settings_admin `_team`), which keeps the copy as the
+    bot's own team, the way external_sync does.
+    """
+    groups = (roster or {}).get("org_groups") or {}
+    roots = {g["root"]: gid for gid, g in groups.items() if g.get("root")}
+    at, seen = _clean(reports_to), set()
+    while at and at not in seen:
+        if at.startswith("human:") or (at not in (employees or {}) and person(at, roster)):
+            pid = _clean(at[6:]) if at.startswith("human:") else at
+            team = _clean((person(pid, roster) or {}).get("team"))
+            return team if team in groups else None
+        seen.add(at)
+        entry = (employees or {}).get(at) or {}
+        named = _clean(entry.get("team"))
+        if entry.get("team") is not None and (named in groups or not named):
+            return named or None           # "" says: in no group, whatever its manager is in
+        if at in roots:
+            return roots[at]
         at = _clean(entry.get("reports_to"))
     return None
 
@@ -358,7 +395,7 @@ def org_group_under(team, lead_id, roster):
 
 
 def org_parent(kind, ident, roster, employees, archived=(), bare_people=False):
-    """Parent key for the mixed org tree: `p:<id>`, `b:<slug>`, `g:<group>`, or '' for a root.
+    """Parent key for the mixed org tree: `p:<id>`, `b:<id>`, `g:<group>`, or '' for a root.
 
     People follow `reports_to`, except a named department under that boss becomes `g:<team>`.
     A bot follows its `reports_to` bot when that bot is still on the tree; otherwise it hangs
@@ -432,6 +469,8 @@ def profile(person_row):
             "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
             "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
             "update_draft": p.get("update_draft") is not False,
+            "notify_browser": p.get("notify_browser") is True,
+            "email_digest": p.get("email_digest") is not False,
             "slack_muted_bots": list(p.get("slack_muted_bots") or []),
             "phone": p.get("phone") or "",
             "about": p.get("about") or "",
@@ -442,7 +481,7 @@ def profile(person_row):
 def org_view(roster, employees, archived=(), person_id="", team="", bare_people=False):
     """The mixed org chart for bots and the hub: visible people (with contact and goals),
     live bots, and the groups, each with an `org_parent` key
-    (`p:<id>` / `b:<slug>` / `g:<group>` / ''). A person or bot carries its group as `team`; a group carries
+    (`p:<id>` / `b:<id>` / `g:<group>` / ''). A person or bot carries its group as `team`; a group carries
     its `parent` group. `team` keeps one group and the groups under it."""
     archived = set(archived or ())
     employees = employees or {}
@@ -567,7 +606,7 @@ def mailboxes_below(pid, roster):
 
 
 def inbox_person(slug, roster):
-    """The person whose `inbox_bot` is this employee slug, or None."""
+    """The person whose `inbox_bot` is this employee's bot id, or None."""
     slug = _clean(slug)
     if not slug:
         return None

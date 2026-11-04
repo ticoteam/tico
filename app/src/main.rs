@@ -2,86 +2,120 @@
 // A bundled first-run page selects the server, then one ordinary window shows the hub's own page. No
 // menu-bar item: on macOS the Dock icon reopens a hidden window and carries the Needs you count. One
 // source builds every company's app on macOS, Windows and Linux: the name, icon, identifier and server
-// URL come in at build time (scripts/app.sh).
+// URL come in at build time (scripts/app.sh). A generic macOS build keeps a list of servers (orgs): each
+// org's page is a child of the main window on its own data store, and a rail on the left switches them.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod applog;
 mod config;
+mod cookies;
 mod hub;
+mod orgs;
+mod recorder;
 mod visual_origin;
+mod bridge;
+mod signin;
+mod timing;
+mod windows;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_opener::OpenerExt;
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WindowEvent};
+use tauri::RunEvent;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
+use bridge::{app_log, bridge};
 use config::Config;
 use hub::{Client, HubStatus};
+use orgs::{Document, Org, Orgs};
+#[cfg(target_os = "macos")]
+use windows::clear_store;
+use windows::{active_webview, build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_page, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
 const MIN_HEIGHT: u32 = 400;
 // Lines of the shell's log a Support diagnostics bundle carries.
-const LOG_LINES: usize = 200;
+pub(crate) const LOG_LINES: usize = 200;
 
-/// The main window's last outer frame (x, y, width, height) in `frame` units: points on macOS,
-/// where one point space spans every display whatever its scale, and physical pixels elsewhere,
-/// where the virtual screen is the consistent space. Older builds wrote `full` in physical pixels
-/// and `mode` ("full" or "rail"); `mode` is ignored, so a window last used as the right rail opens
-/// at its full frame.
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
-struct Saved {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    frame: Option<(f64, f64, f64, f64)>,
-    #[serde(default, skip_serializing)]
-    full: Option<(i32, i32, u32, u32)>,
-}
-
-/// Frames are kept in points on macOS (see `Saved`).
-const POINTS: bool = cfg!(target_os = "macos");
-
-/// Pixels per frame unit on a display with this scale factor.
-fn unit(scale: f64, points: bool) -> f64 {
-    if points && scale > 0.0 { scale } else { 1.0 }
-}
-
-impl Saved {
-    /// The frame to restore. An older file's physical `full` frame converts to points only when every
-    /// connected display has the same scale; with mixed scales its unit is unknown, so none.
-    fn frame(&self, scales: &[f64], points: bool) -> Option<(f64, f64, f64, f64)> {
-        if self.frame.is_some() { return self.frame; }
-        let (x, y, w, h) = self.full?;
-        let scale = *scales.first()?;
-        if points && scales.iter().any(|s| (s - scale).abs() > 1e-6) { return None; }
-        let u = unit(scale, points);
-        Some((x as f64 / u, y as f64 / u, w as f64 / u, h as f64 / u))
-    }
-}
-
+/// The shell's state. When more than one lock is held, they are taken in this order: changing, orgs, prefetch,
+/// connection, visual_origin, parked_visual, shown, kept, capture.
 struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
     status: Mutex<HubStatus>,
-    // Set while the shell itself places the window, so that placement is not saved as the person's.
-    applying_frame: AtomicBool,
+    // The orgs this run shows, and which one is open. The open one's server is `connection`.
+    orgs: Mutex<Orgs>,
+    // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
+    owned: Mutex<Vec<(String, String)>>,
+    // The org capabilities granted this run, by identifier: one per org (see windows::server_capability). Org ids
+    // are never reused, so a grant never has to be taken back.
+    granted: Mutex<HashSet<String>>,
+    // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
+    // the main thread: a switch waits on it for webview work.
+    pub(crate) changing: Mutex<()>,
+    // The orgs whose pages are open, least recently shown first: the open org's last, and before it those kept
+    // hidden since a switch away (`kept`), windows::KEEP_ALIVE in all at most. A prefetched page is not among them.
+    shown: Mutex<Vec<String>>,
+    // The pages kept hidden after a switch away, each closing windows::KEEP_FOR after it went hidden unless it is
+    // shown again first, with the visual allowance each had when open.
+    kept: Mutex<windows::Kept>,
+    // What each org's page says it captures (bridge `capture`): a hint for whether a switch away keeps that page
+    // hidden or closes it (windows::keeps).
+    capture: Mutex<HashMap<String, windows::CaptureNote>>,
+    // The page built hidden for the org the pointer rests on in the rail, and the visual allowance it sent while
+    // hidden, which becomes the open one when it is shown.
+    prefetch: Mutex<windows::Prefetch>,
+    parked_visual: Mutex<Option<visual_origin::VisualOrigin>>,
+    // Switches being timed, for the log.
+    traces: Mutex<Vec<timing::Trace>>,
+    // When each org page's webview was built, by its label: its first `bootTiming` report says how long the open
+    // took from there (bridge.rs). Taken last: no other lock is taken while it is held.
+    page_opened: Mutex<HashMap<String, std::time::Instant>>,
+}
+
+impl AppState {
+    fn new(orgs: Orgs, connection: Option<Config>) -> AppState {
+        AppState {
+            connection: Mutex::new(connection),
+            visual_origin: Mutex::new(None),
+            status: Mutex::new(HubStatus::default()),
+            orgs: Mutex::new(orgs),
+            owned: Mutex::new(Vec::new()),
+            granted: Mutex::new(HashSet::new()),
+            changing: Mutex::new(()),
+            shown: Mutex::new(Vec::new()),
+            kept: Mutex::new(windows::Kept::default()),
+            capture: Mutex::new(HashMap::new()),
+            prefetch: Mutex::new(windows::Prefetch::default()),
+            parked_visual: Mutex::new(None),
+            traces: Mutex::new(Vec::new()),
+            page_opened: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 type App = AppHandle<tauri::Wry>;
 
+/// The autostart entry is named by the bundle identifier, which each environment's build sets (scripts/app.sh).
+/// Product names are not unique, and the package name is the same for every build, so two apps would share one entry.
+fn autostart_plugin(identifier: String) -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    let builder = tauri_plugin_autostart::Builder::new().app_name(identifier);
+    #[cfg(target_os = "macos")]
+    let builder = builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+    builder.build()
+}
+
 fn main() {
     applog::init();
-    let state = AppState {
-        connection: Mutex::new(None),
-        visual_origin: Mutex::new(None),
-        status: Mutex::new(HubStatus::default()),
-        applying_frame: AtomicBool::new(false),
-    };
-
+    // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -92,22 +126,39 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
-        .manage(state)
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address])
+        // The main window's frame between launches. The plugin restores it while the window is built, before the app
+        // shows the window, and only the main window is tracked (see windows::tracks_frame).
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(windows::frame_flags())
+                .with_filter(windows::tracks_frame)
+                .build(),
+        )
+        .plugin(autostart_plugin(identifier))
+        // The real list is read in setup, once the app's folders are known.
+        .manage(AppState::new(Orgs::new(Document::default(), None), None))
+        .invoke_handler(tauri::generate_handler![app_log, bridge, bridge::page_dialog, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_hover, rail_add, rail_menu, signin::tico_signin])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
                 None => log::warn!("{} {} starting; no log file, so this log goes to stderr only", config::app_name(), app.package_info().version),
             }
-            let path = server_path(app.handle())?;
-            let config = Config::load(&path).map_err(std::io::Error::other)?;
-            if let Some(config) = &config {
-                app.add_capability(server_capability(&config.hub).to_string())?;
-            }
+            // The orgs this run shows: orgs.json on a build that keeps a list, otherwise the one server the app
+            // has always used (server.txt, or the build's own address).
+            let file = if orgs::multi_org_build() { Some(app.path().app_config_dir()?.join(orgs::FILE_NAME)) } else { None };
+            let legacy = || -> Result<Option<url::Url>, String> {
+                let path = server_path(app.handle()).map_err(|e| e.to_string())?;
+                Ok(Config::load(&path)?.map(|config| config.hub))
+            };
+            let found = orgs::startup(file, legacy).map_err(std::io::Error::other)?;
+            let connection = found.active().and_then(|org| org.hub()).map(Config::new);
             let state: State<AppState> = app.state();
-            select_connection(&state, config);
-            if connection(app.handle()).is_some() { build_window(app.handle())?; }
-            else { build_server_window(app.handle())?; }
+            *state.orgs.lock().unwrap() = found;
+            select_connection(&state, connection);
+            // Data stores a run that quit left behind: a sign-in window open at Cmd-Q, or orgs it was adding.
+            #[cfg(target_os = "macos")]
+            signin::clean_up_last_run(app.handle());
+            build_window(app.handle())?;
             build_menu(app.handle())?;
             #[cfg(not(target_os = "macos"))]
             {
@@ -125,12 +176,17 @@ fn main() {
             }
             start_polling(app.handle().clone());
             start_updates(app.handle().clone());
-            restore_frame(app.handle());
-            show_window(app.handle());
+            // Once the org page has painted, so the window never shows blank first.
+            windows::show_when_painted(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
             if window.label() != "main" {
+                // A window an org opened belongs to that org only while it is open.
+                if let WindowEvent::Destroyed = event {
+                    forget_owned(window.app_handle(), window.label());
+                    signin::closed(window.app_handle(), window.label());
+                }
                 return;
             }
             match event {
@@ -139,26 +195,31 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
+                    // The open org's next page, after a quit too, opens where this one is.
+                    windows::remember_open_place(window.app_handle());
                     let _ = window.hide();
                 }
                 // A meeting window left open must not keep the app running with no main window.
                 #[cfg(not(target_os = "macos"))]
                 WindowEvent::Destroyed => window.app_handle().exit(0),
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => remember_frame(window.app_handle()),
+                // The rail and the org's page are placed by the shell, so both follow the window's size.
+                WindowEvent::Resized(_) => layout(window.app_handle()),
                 _ => {}
             }
         })
         .on_menu_event(|app, event| menu_event(app, event.id().as_ref()))
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("the app could not start")
         .run(|app, event| {
+            // Quitting: the open org's next page, at the next launch, opens where this one is.
+            if let RunEvent::Exit = event {
+                windows::remember_open_place(app);
+            }
             // A click on the Dock icon while the main window is hidden.
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = event {
                 if !main_window(app).and_then(|w| w.is_visible().ok()).unwrap_or(false) { show_window(app); }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
         });
 }
 
@@ -183,17 +244,19 @@ fn server_path(app: &App) -> tauri::Result<std::path::PathBuf> {
     Ok(app.path().app_config_dir()?.join("server.txt"))
 }
 
-fn build_server_window(app: &App) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window("server") {
-        window.show()?;
-        window.set_focus()?;
-        return Ok(());
-    }
-    WebviewWindowBuilder::new(app, "server", WebviewUrl::App("index.html".into()))
-        .title(config::app_name()).inner_size(440.0, 400.0).min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
-        .on_navigation(|url| url.scheme() == "tauri" || matches!(url.host_str(), Some("tauri.localhost") | Some("localhost")))
-        .build()?;
-    Ok(())
+/// The open org, if there is one.
+pub(crate) fn active_org(app: &App) -> Option<Org> {
+    app.state::<AppState>().orgs.lock().unwrap().active().cloned()
+}
+
+/// How many orgs this run shows.
+pub(crate) fn org_count(app: &App) -> usize {
+    app.state::<AppState>().orgs.lock().unwrap().orgs().len()
+}
+
+/// The label of the open org's page, or "" with none (no webview has that label).
+fn active_label(app: &App) -> String {
+    active_webview(app).map(|page| page.label().to_string()).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -205,6 +268,24 @@ fn server_address(app: App) -> String {
 async fn connect_server(app: App, address: String) -> Result<(), String> {
     if !config::is_generic() { return Err("This app uses its built-in server.".into()); }
     let hub = config::validate_server(&address).await?;
+    if orgs::multi_org_build() {
+        // An org already on this server is opened; otherwise the server is added as an org on a store of its own.
+        let id = {
+            let state = app.state::<AppState>();
+            let mut list = state.orgs.lock().unwrap();
+            let existing = list.find_hub(&hub).map(|org| org.id.clone());
+            let id = match existing {
+                Some(id) => id,
+                None => list.add(&hub)?.id,
+            };
+            id
+        };
+        switch_to(&app, &id).map_err(|e| e.to_string())?;
+        // The main window may be hidden (macOS keeps it so when closed): the org must be seen once the setup window goes.
+        show_window(&app);
+        close_setup_later(&app);
+        return Ok(());
+    }
     let path = server_path(&app).map_err(|_| "Could not open the app's settings folder.")?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|_| "Could not create the app's settings folder.")?;
     let temporary = path.with_extension("tmp");
@@ -217,878 +298,273 @@ async fn connect_server(app: App, address: String) -> Result<(), String> {
     Ok(())
 }
 
-fn server_capability(hub: &url::Url) -> Value {
-    let mut capability: Value = serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
-    // Explicit port also confines default-port URLs: URLPattern otherwise treats an
-    // omitted port as a wildcard. Host characters must stay literal in URLPattern.
-    let mut host = String::new();
-    for ch in hub.host_str().unwrap().chars() {
-        if matches!(ch, ':' | '*' | '?' | '+' | '(' | ')' | '{' | '}' | '\\') { host.push('\\'); }
-        host.push(ch);
-    }
-    let port = hub.port_or_known_default().unwrap();
-    capability["remote"] = serde_json::json!({"urls": [format!("{}://{host}:{port}/*", hub.scheme())]});
-    capability
+/// Closes the setup window a moment after it has asked for a server: closing a window from its own call would tear
+/// down the page that is still waiting for the answer.
+fn close_setup_later(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if let Some(window) = app.get_webview_window("server") {
+            let _ = window.close();
+        }
+    });
 }
 
-#[cfg(test)]
-mod capability_tests {
-    use super::*;
+// ----------------------------------------------------------------------------- orgs
+/// Brings the menu, the rail and the open org's place up to date after the orgs or the open one change. It runs as
+/// its own task, because a menu cannot be rebuilt inside the menu event that asked for the change.
+pub(crate) fn refresh_chrome(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = build_menu(&app);
+        let _ = sync_rail(&app);
+        layout(&app);
+        emit_orgs(&app);
+    });
+}
 
-    #[test]
-    fn ipc_is_confined_to_selected_origin_and_main_window() {
-        for (address, pattern) in [
-            ("https://team.example.com/tico/", "https://team.example.com:443/*"),
-            ("http://localhost:8765/", "http://localhost:8765/*"),
-            ("http://team.example.com/", "http://team.example.com:80/*"),
-            ("https://[::1]:8765/", r"https://[\:\:1]:8765/*"),
-            ("https://*.example.com/", r"https://\*.example.com:443/*"),
-        ] {
-            let capability = server_capability(&url::Url::parse(address).unwrap());
-            assert_eq!(capability["remote"]["urls"], serde_json::json!([pattern]));
-            let matcher: tauri::utils::acl::RemoteUrlPattern = pattern.parse().unwrap();
-            assert!(matcher.test(&url::Url::parse(address).unwrap()));
-            for other in ["https://accounts.google.com/", "https://team.cloudflareaccess.com/",
-                          "https://other.example.com/", "https://team.example.com:8443/",
-                          "http://team.example.com:8080/", "http://localhost:8766/",
-                          "https://team.files.example.com/visuals/payload.mac", "https://team.example.com.evil.example/",
-                          "https://team.example.com@evil.example/", "about:blank", "data:text/html,hi",
-                          "blob:https://team.example.com/opaque"] {
-                assert!(!matcher.test(&url::Url::parse(other).unwrap()), "{pattern} accepted {other}");
+/// What the rail shows: each org's id and title, and which one is open. Nothing else of an org leaves the shell.
+fn rail_list(app: &App) -> Value {
+    let state = app.state::<AppState>();
+    let list = state.orgs.lock().unwrap();
+    let open = list.active().map(|org| org.id.clone());
+    // The rail is the app's own page, so it may show each org's address and email (its initials and color come from
+    // them); org pages never receive this list.
+    let items: Vec<Value> = list.orgs().iter().map(|org| serde_json::json!({
+        "id": org.id,
+        "url": org.url,
+        "name": org.name,
+        "email": org.email,
+        "active": open.as_deref() == Some(org.id.as_str()),
+    })).collect();
+    Value::Array(items)
+}
+
+/// Tells the rail that the list changed. The event carries nothing: Tauri also delivers targeted events to listeners
+/// on any target, so the rail reads the list itself through `rail_orgs`, which only the rail may call.
+fn emit_orgs(app: &App) {
+    let _ = app.emit_to(EventTarget::webview(RAIL), "orgs-changed", ());
+}
+
+/// The setup window, to add an org: from the rail, the menu, or the bridge. Spawned, as window creation is.
+pub(crate) fn add_org(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = build_server_window(&app);
+    });
+}
+
+/// The org menu, at the pointer: the orgs, then add and remove. Spawned, because a popup cannot run inside the call
+/// that asked for it. At the pointer, because macOS measures popup points from the frame top, which Tauri can't give.
+pub(crate) fn popup_orgs(app: &App) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let (Some(window), Ok(menu)) = (main_window(&app), org_menu(&app)) else { return };
+        let _ = window.popup_menu(&menu);
+    });
+}
+
+fn org_menu(app: &App) -> tauri::Result<Menu<tauri::Wry>> {
+    let (list, open) = {
+        let state = app.state::<AppState>();
+        let orgs = state.orgs.lock().unwrap();
+        let open = orgs.active().cloned();
+        (orgs.orgs().to_vec(), open)
+    };
+    let menu = Menu::new(app)?;
+    for org in &list {
+        let checked = open.as_ref().is_some_and(|open| open.id == org.id);
+        menu.append(&CheckMenuItem::with_id(app, format!("org-switch:{}", org.id), org.title(), true, checked, None::<&str>)?)?;
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "org-add", "Add Organization…", true, None::<&str>)?)?;
+    if let Some(open) = &open {
+        menu.append(&MenuItem::with_id(app, "org-remove", format!("Remove {}…", open.title()), true, None::<&str>)?)?;
+    }
+    Ok(menu)
+}
+
+/// Asks before an org is removed. Its sign-in and its data on this Mac go with it; the other orgs are not touched.
+fn ask_remove(app: &App, org: &Org) {
+    let (handle, id) = (app.clone(), org.id.clone());
+    app.dialog()
+        .message(format!("Remove {}? Its sign-in and its data on this Mac are deleted. Other organizations are not affected.", org.title()))
+        .title("Remove organization")
+        .buttons(MessageDialogButtons::OkCancelCustom("Remove".into(), "Cancel".into()))
+        .show(move |confirmed| {
+            if confirmed {
+                tauri::async_runtime::spawn(async move { remove_org(&handle, &id).await });
             }
-            assert_eq!(capability["windows"], serde_json::json!(["main"]));
-            assert_eq!(capability["local"], false);
-        }
-        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(config["app"]["security"]["capabilities"], serde_json::json!(["server"]));
-    }
+        });
 }
 
-#[cfg(test)]
-mod visual_bridge_tests {
-    use super::*;
-
-    const HUB: &str = "https://team.example.com/tico/";
-    const ASSETS: &str = "https://team.files.example.com";
-
-    fn state() -> AppState {
-        AppState {
-            connection: Mutex::new(Some(Config::new(url::Url::parse(HUB).unwrap()))),
-            visual_origin: Mutex::new(None),
-            status: Mutex::new(HubStatus::default()),
-            applying_frame: AtomicBool::new(false),
+/// Removes an org: its windows and page close, its data store is deleted, and the list is saved. Removing the open
+/// org opens the first one left, or the setup window when none is left.
+async fn remove_org(app: &App, id: &str) {
+    // A session being renewed into the org's store finishes first (see signin::RENEWING); one that starts after this
+    // finds the org gone.
+    let renewing = signin::RENEWING.lock().await;
+    let (removed, was_open) = {
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        // A dialog the org's page has open is answered first.
+        bridge::DIALOGS.wait_closed();
+        let (removed, was_open) = {
+            let mut list = state.orgs.lock().unwrap();
+            let was_open = list.active().is_some_and(|org| org.id == id);
+            (list.remove(id), was_open)
+        };
+        for label in take_owned(app, id) {
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.close();
+            }
         }
-    }
-
-    #[test]
-    fn visual_allowance_never_grants_bridge_or_log_authority() {
-        let state = state();
-        let hub = url::Url::parse(HUB).unwrap();
-        let body = serde_json::json!({"origin": ASSETS});
-        assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
-        let visual = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
-        assert!(state.visual_origin.lock().unwrap().as_ref().unwrap().permits(Some(&hub), &visual));
-        for document in [visual, url::Url::parse("https://team.example.com.evil.example/").unwrap(),
-                         url::Url::parse("about:blank").unwrap(), url::Url::parse("data:text/html,hi").unwrap(),
-                         url::Url::parse("blob:https://team.example.com/opaque").unwrap()] {
-            // Both bridge and app_log use this guard, including after a visual becomes top-level.
-            assert!(!server_document(Some(&hub), "main", Some(&document)), "{document}");
-            assert!(set_visual_origin(&state, "main", Some(&document), Some(&body)).is_err());
+        windows::forget_page(app, id);
+        if let Some(page) = org_page(app, id) {
+            let _ = page.close();
         }
-        assert!(server_document(Some(&hub), "main", Some(&hub)));
-        assert!(!server_document(Some(&hub), "meeting-1", Some(&hub)));
-        assert!(!server_document(Some(&hub), "main", None));
-        assert!(set_visual_origin(&state, "meeting-1", Some(&hub), Some(&body)).is_err());
-    }
-
-    #[test]
-    fn malformed_updates_clear_and_old_connection_updates_are_refused() {
-        let state = state();
-        let hub = url::Url::parse(HUB).unwrap();
-        let valid = serde_json::json!({"origin": ASSETS});
-        for body in [None, Some(Value::Null), Some(Value::String(ASSETS.into())),
-                     Some(serde_json::json!({})), Some(serde_json::json!({"origin": false})),
-                     Some(serde_json::json!({"origin": ASSETS, "other": true})),
-                     Some(serde_json::json!({"origin": ""})), Some(serde_json::json!({"origin": "http://team.files.example.com"})),
-                     Some(serde_json::json!({"files": FILES})), Some(serde_json::json!({"origin": "", "files": ""})),
-                     Some(serde_json::json!({"origin": "", "files": false})),
-                     Some(serde_json::json!({"origin": ASSETS, "files": "http://acme-files.ticofiles.com"}))] {
-            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)), Ok(true));
-            assert_eq!(set_visual_origin(&state, "main", Some(&hub), body.as_ref()), Ok(false));
-            assert!(state.visual_origin.lock().unwrap().is_none());
-        }
-        assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)), Ok(true));
-        let old = state.visual_origin.lock().unwrap().clone().unwrap();
-        select_connection(&state, None);
-        assert!(state.visual_origin.lock().unwrap().is_none());
-        assert!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)).is_err());
-        let next = url::Url::parse("https://other.example.com/").unwrap();
-        select_connection(&state, Some(Config::new(next.clone())));
-        assert!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)).is_err());
-        let visual = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
-        assert!(!old.permits(Some(&next), &visual));
-    }
-
-    const FILES: &str = "https://acme-files.ticofiles.com";
-
-    #[test]
-    fn file_hosting_alone_allows_its_signed_visual_links_in_frames() {
-        let state = state();
-        let hub = url::Url::parse(HUB).unwrap();
-        let link = url::Url::parse(&format!("{FILES}/visuals/ab/ab{}?e=1793250000&k=k1&s={}", "0".repeat(62), "A".repeat(43))).unwrap();
-        let signing_in = AtomicBool::new(false);
-        assert!(!follow_window(&state, &signing_in, true, &link), "not before the signed-in page names the address");
-        let body = serde_json::json!({"origin": "", "files": FILES});
-        assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
-        assert!(follow_window(&state, &signing_in, true, &link));
-        assert!(!signing_in.load(Ordering::Relaxed));
-        let other = url::Url::parse(&format!("{FILES}/blobs/ab/ab{}?e=1793250000&k=k1&s={}", "0".repeat(62), "A".repeat(43))).unwrap();
-        assert!(!follow_window(&state, &signing_in, true, &other));
-        assert!(!follow_window(&state, &signing_in, false, &link), "a meeting window never follows one");
-        assert!(set_visual_origin(&state, "main", Some(&link), Some(&body)).is_err(), "a hosted page can't configure visuals");
-    }
-
-    #[test]
-    fn visual_navigation_neither_starts_nor_ends_a_sign_in() {
-        let state = state();
-        let hub = url::Url::parse(HUB).unwrap();
-        let body = serde_json::json!({"origin": ASSETS});
-        let url = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
-        assert!(state.visual_origin.lock().unwrap().is_none());
-        for active in [false, true] {
-            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
-            let signing_in = AtomicBool::new(active);
-            assert!(follow_window(&state, &signing_in, true, &url));
-            assert_eq!(signing_in.load(Ordering::Relaxed), active);
-            top_level_window(&state, &signing_in, true, &url);
-            assert_eq!(signing_in.load(Ordering::Relaxed), active);
-            assert!(state.visual_origin.lock().unwrap().is_some());
-        }
-        let signing_in = AtomicBool::new(false);
-        assert!(!follow_window(&state, &signing_in, false, &url));
-        top_level_window(&state, &signing_in, false, &hub);
-        assert!(state.visual_origin.lock().unwrap().is_some(), "another window cannot clear main's allowance");
-        for boundary in ["https://team.example.com/api/v2/logout", "https://team.example.com/tico/auth/logout",
-                         "https://team.cloudflareaccess.com/cdn-cgi/access/logout", "https://team.example.com/tico/auth/login",
-                         "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com"] {
-            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
-            follow_window(&state, &signing_in, true, &url::Url::parse(boundary).unwrap());
-            assert!(state.visual_origin.lock().unwrap().is_none(), "{boundary}");
-        }
-        for top in [HUB, "https://accounts.google.com/ServiceLogin"] {
-            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
-            top_level_window(&state, &signing_in, true, &url::Url::parse(top).unwrap());
-            assert!(state.visual_origin.lock().unwrap().is_none(), "{top}");
-        }
-        assert!(!session_exit(Some(&hub), &url::Url::parse("https://other.example.com/api/v2/logout").unwrap()));
-    }
-}
-
-// ----------------------------------------------------------------------------- window
-fn build_window(app: &App) -> tauri::Result<()> {
-    let Some(config) = connection(app) else { return build_server_window(app) };
-    let start = config.start_url();
-    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start))
-        .title(config::app_name())
-        .inner_size(1240.0, 820.0)
-        .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
-        .user_agent(USER_AGENT)
-        .devtools(true)
-        .visible(false)
-        .initialization_script(&bridge_script(app))
-        .on_new_window(new_window_handler(app));
-    // A sign-in's whole redirect chain stays in this web view, so the resulting cookie belongs to the
-    // app, not the browser.
-    builder = follow_sign_in(app, builder, true);
+        (removed, was_open)
+    };
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    let Some(removed) = removed else { return };
+    // Its page is closed. Its store is noted for deletion before anything else, so a deletion that fails (or a quit
+    // first) is retried at the next launch; the org is no longer in the list, so nothing keeps the store.
     #[cfg(target_os = "macos")]
-    {
-        // The native title bar drags the window on every page, including sign-in pages that are
-        // not ours; an overlay title bar would leave dragging to each page.
-        builder = builder.title_bar_style(tauri::TitleBarStyle::Visible);
+    let store = removed.store_id();
+    #[cfg(target_os = "macos")]
+    if let Some(store) = store {
+        signin::note_removed_store(app, store);
     }
-    builder.build()?;
+    drop(renewing);
+    // The next org opens (and the rail drops the removed one) before the store is deleted, which can take seconds.
+    if was_open {
+        match active_org(app) {
+            Some(next) => {
+                if let Err(e) = switch_to(app, &next.id) {
+                    log::warn!("could not open the next org: {e}");
+                }
+            }
+            None => {
+                let state = app.state::<AppState>();
+                // Checked again under the lock: an org added meanwhile opens through its own switch, which waits on it.
+                let _changing = state.changing.lock().unwrap();
+                if active_org(app).is_none() {
+                    select_connection(&state, None);
+                    *state.status.lock().unwrap() = HubStatus::default();
+                    state.shown.lock().unwrap().clear();
+                    *state.kept.lock().unwrap() = windows::Kept::default();
+                    state.capture.lock().unwrap().clear();
+                    // The setup window first, so that the app keeps a window while the main one goes.
+                    let _ = build_server_window(app);
+                    if let Some(window) = main_window(app) {
+                        let _ = window.destroy();
+                    }
+                }
+            }
+        }
+    }
+    refresh_chrome(app);
+    #[cfg(target_os = "macos")]
+    match store {
+        // The org moved over from server.txt uses the default store, which cannot be deleted: cleared, so its sign-in
+        // goes too. Every other org has a store of its own, so nothing of theirs is in it.
+        None => if let Err(e) = clear_store(app, &removed).await { log::warn!("could not clear the default data store: {e}"); },
+        Some(store) => if !signin::delete_store(app, store).await {
+            // Still in use: its data is cleared at least, and the next launch deletes it.
+            log::warn!("could not delete an org's data store, so clearing it now; the next launch deletes it");
+            if let Err(e) = clear_store(app, &removed).await { log::warn!("could not clear an org's data store: {e}"); }
+        }
+    }
+}
+
+#[tauri::command]
+fn rail_orgs(app: App, webview: tauri::Webview) -> Result<Value, String> {
+    only_rail(&webview)?;
+    Ok(rail_list(&app))
+}
+
+/// A click on an org in the rail, sent for every click (the rail's own idea of the open org can be a draw behind).
+/// Not async, so it runs on the main thread in the order the clicks came, and numbers each one there; the switch
+/// itself runs apart, and a click that a later one overtook does nothing (`windows::switch_for_click`).
+#[tauri::command]
+fn rail_switch(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
+    only_rail(&webview)?;
+    timing::click(&app, &id, "click");
+    let click = windows::next_click();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = windows::switch_for_click(&app, &id, click) {
+            log::warn!("could not switch organization: {e}");
+        }
+    });
     Ok(())
 }
 
-/// Anything that is not the hub opens in the default browser, except during a sign-in: from the hub's
-/// own Cloudflare Access login, or the hub's own sign-in, the whole redirect chain stays in the window
-/// whatever identity provider it passes through, so the resulting cookie belongs to the app, not the
-/// browser. Each window keeps its own `signing_in`. Embedded frames navigate through the same handler
-/// with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the hub
-/// origin; and only the hub's own logins start one.
-fn follow_sign_in<'a>(app: &App, builder: WebviewWindowBuilder<'a, tauri::Wry, App>, visuals: bool) -> WebviewWindowBuilder<'a, tauri::Wry, App> {
-    let signing_in = Arc::new(AtomicBool::new(false));
-    let (opener, page, committed) = (app.clone(), app.clone(), signing_in.clone());
-    builder
-        .on_navigation(move |url| stays_in_app(&opener, &signing_in, visuals, url))
-        // `Started` is the top-level page committing, with its address; frames never send it.
-        .on_page_load(move |_, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                top_level_window(&page.state::<AppState>(), &committed, visuals, payload.url());
-            }
-        })
-}
-
-fn stays_in_app(opener: &App, signing_in: &AtomicBool, visuals: bool, url: &url::Url) -> bool {
-    let stays = follow_window(&opener.state::<AppState>(), signing_in, visuals, url);
-    if !stays {
-        let _ = opener.opener().open_url(url.as_str(), None::<&str>);
-    }
-    stays
-}
-
-fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, url: &url::Url) -> bool {
-    let connection = state.connection.lock().unwrap();
-    let hub = connection.as_ref().map(|c| &c.hub);
-    let mut visual = state.visual_origin.lock().unwrap();
-    let allowed = if visuals { visual.as_ref() } else { None };
-    let stays = follow(hub, allowed, signing_in, url);
-    if visuals && (navigation(hub, false, url) == Navigation::Start || session_exit(hub, url)) {
-        *visual = None;
-    }
-    stays
-}
-
-fn top_level_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, url: &url::Url) {
-    let connection = state.connection.lock().unwrap();
-    let hub = connection.as_ref().map(|c| &c.hub);
-    if visuals {
-        let mut visual = state.visual_origin.lock().unwrap();
-        // A new top-level Hub page must authenticate and send its config again. A permitted
-        // visual commit changes neither its allowance nor sign-in state.
-        if !visual.as_ref().is_some_and(|visual| visual.permits(hub, url)) {
-            *visual = None;
-        }
-    }
-    top_level_page(hub, signing_in, url);
-}
-
-/// Whether the window follows a navigation, from any frame; a sign-in's start sets `signing_in`.
-fn follow(hub: Option<&url::Url>, visual: Option<&visual_origin::VisualOrigin>, signing_in: &AtomicBool, url: &url::Url) -> bool {
-    let destination = if visual.is_some_and(|visual| visual.permits(hub, url)) { Navigation::Stay }
-        else { navigation(hub, signing_in.load(Ordering::Relaxed), url) };
-    match destination {
-        Navigation::Start => signing_in.store(true, Ordering::Relaxed),
-        Navigation::Stay => {}
-        Navigation::Browser => return false,
-    }
-    true
-}
-
-fn session_exit(hub: Option<&url::Url>, url: &url::Url) -> bool {
-    let own = hub.is_some_and(|hub| url.origin() == hub.origin());
-    (own && (url.path().ends_with("/api/v2/logout") || url.path().ends_with("/auth/logout")))
-        || ((own || url.host_str().is_some_and(|host| host.ends_with(".cloudflareaccess.com")))
-            && url.path().ends_with("/cdn-cgi/access/logout"))
-}
-
-/// The top-level page committed at `url`: back on the hub origin, a sign-in is over. Another port or
-/// scheme on the hub's host is not the hub, so a sign-in passing through one goes on.
-fn top_level_page(hub: Option<&url::Url>, signing_in: &AtomicBool, url: &url::Url) {
-    if hub.is_some_and(|hub| url.origin() == hub.origin()) {
-        signing_in.store(false, Ordering::Relaxed);
-    }
-}
-
-/// Where a navigation in an app window goes.
-#[derive(Debug, PartialEq)]
-enum Navigation {
-    /// The hub's own sign-in: stays, and so does every page after it until the top-level page is back
-    /// on the hub. Cloudflare's provider choice is itself a clicked link, and the provider may be
-    /// anyone's (Google, Microsoft, Okta, GitHub), so no list of provider hosts would do.
-    Start,
-    /// The hub's host, Cloudflare Access, Google, a page during a sign-in, or not a site at all
-    /// (`about:blank`, the app's own `tauri:` pages): stays, and changes nothing.
-    Stay,
-    /// Anything else opens in the default browser.
-    Browser,
-}
-
-fn navigation(hub: Option<&url::Url>, signing_in: bool, url: &url::Url) -> Navigation {
-    // A Markdown mailto (or tel, sms) link has no target, so it arrives here rather than as a new window.
-    if matches!(url.scheme(), "mailto" | "tel" | "sms") {
-        return Navigation::Browser;
-    }
-    let host = hub.and_then(|hub| hub.host_str()).unwrap_or("");
-    let target = url.host_str().unwrap_or("");
-    // Cloudflare's login names the application it signs in to: /cdn-cgi/access/login/<hostname>.
-    let access_login = target.ends_with(".cloudflareaccess.com")
-        && url.path().strip_prefix("/cdn-cgi/access/login/").is_some_and(|app| app.split('/').next() == Some(host));
-    // The hub's own sign-in (TICO_AUTH_PROXY=oidc) starts on the hub and redirects to the provider.
-    let hub_login = hub.is_some_and(|hub| url.origin() == hub.origin()) && url.path().ends_with("/auth/login");
-    if target.is_empty() || url.scheme() == "tauri" {
-        Navigation::Stay
-    } else if !host.is_empty() && (access_login || hub_login) {
-        Navigation::Start
-    } else if target == host || target.ends_with(".cloudflareaccess.com") || target == "accounts.google.com"
-        || (signing_in && matches!(url.scheme(), "http" | "https")) {
-        Navigation::Stay
-    } else {
-        Navigation::Browser
-    }
-}
-
-/// Where a request for a new window (a `target="_blank"` link, `window.open`) goes. The web view has
-/// no tabs, and without a handler it drops the request, so the click does nothing. The page opens no
-/// sign-in pop-ups (sign-in redirects within the window, see `stays_in_app`), so no pop-up is let in.
-#[derive(Debug, PartialEq)]
-enum NewWindow {
-    /// The hub's own files and logs under `/api/`: the default browser has none of the app's sign-in,
-    /// so they open in an app window of their own.
-    Hub,
-    /// A new tab in the default browser, as a browser would open it.
-    Browser,
-    /// Nothing the browser could open (`about:blank`, `javascript:`, `data:`, `blob:`, `file:`).
-    Ignore,
-}
-
-fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
-    match url.scheme() {
-        "http" | "https" if hub.is_some_and(|hub| url.origin() == hub.origin()) && url.path().starts_with("/api/") => NewWindow::Hub,
-        "http" | "https" | "mailto" | "tel" | "sms" => NewWindow::Browser,
-        _ => NewWindow::Ignore,
-    }
-}
-
-fn new_window_handler(app: &App) -> impl Fn(url::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<tauri::Wry> + Send + 'static {
-    let opener = app.clone();
-    move |url, _| {
-        match new_window_target(connection(&opener).map(|c| c.hub).as_ref(), &url) {
-            NewWindow::Hub => {
-                // Built off the web view's own callback, which may not block on a new window.
-                let app = opener.clone();
-                tauri::async_runtime::spawn(async move { open_hub_window(&app, url) });
-            }
-            NewWindow::Browser => { let _ = opener.opener().open_url(url.as_str(), None::<&str>); }
-            NewWindow::Ignore => {}
-        }
-        tauri::webview::NewWindowResponse::Deny
-    }
-}
-
-/// An ordinary window on one of the hub's files or logs. It shares the app's sign-in, but like a
-/// meeting window it is not `main`, so the page gets no native permissions.
-fn open_hub_window(app: &App, url: url::Url) {
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-    let label = format!("hub-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-    #[cfg(not(target_os = "linux"))]
-    let opened = url.clone();
-    #[allow(unused_mut)]
-    let mut builder = follow_sign_in(app, WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .title(config::app_name())
-        .inner_size(1000.0, 800.0)
-        .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
-        .user_agent(USER_AGENT)
-        .on_new_window(new_window_handler(app)), false);
-    // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
-    // it to Downloads, show it there and close the window. Only the file this window opened on
-    // counts, so a window that showed its file stays open for later downloads from it. Not on
-    // Linux: there each window's handler sits on the shared web context and outlives its window,
-    // then refuses every later download in the app; WebKit saves to Downloads by itself and the
-    // window stays empty.
-    #[cfg(not(target_os = "linux"))]
-    {
-        let saved = Mutex::new(None);
-        builder = builder.on_download(move |webview, event| {
-            match event {
-                tauri::webview::DownloadEvent::Requested { url, destination } if same_file(&url, &opened) => {
-                    *saved.lock().unwrap() = Some(destination.clone());
-                }
-                tauri::webview::DownloadEvent::Finished { url, success, .. } if same_file(&url, &opened) => {
-                    match (success, saved.lock().unwrap().take()) {
-                        (true, Some(path)) => { let _ = webview.app_handle().opener().reveal_item_in_dir(path); }
-                        _ => log::warn!("a file window's download failed"),
-                    }
-                    let _ = webview.window().close();
-                }
-                _ => {}
-            }
-            true
-        });
-    }
-    let _ = builder.build();
-}
-
-/// The same file, whatever its fragment.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
-fn same_file(a: &url::Url, b: &url::Url) -> bool {
-    a.as_str().split('#').next() == b.as_str().split('#').next()
-}
-
-#[cfg(test)]
-mod new_window_tests {
-    use super::*;
-
-    #[test]
-    fn new_windows_open_in_the_browser_except_hub_files() {
-        for hub in ["https://team.example.com/", "https://team.example.com/tico/"] {
-            let hub = url::Url::parse(hub).unwrap();
-            for (address, expected) in [
-                ("https://github.com/ticoteam/tico/pull/1", NewWindow::Browser),
-                ("http://example.com/", NewWindow::Browser),
-                ("https://team.example.com/#/tasks", NewWindow::Browser),
-                ("https://team.example.com/api/v2/files/f1", NewWindow::Hub),
-                ("https://team.example.com:8443/api/v2/files/f1", NewWindow::Browser),
-                ("http://team.example.com/api/v2/files/f1", NewWindow::Browser),
-                ("https://other.example.com/api/v2/files/f1", NewWindow::Browser),
-                ("https://team.example.com@evil.example/api/v2/files/f1", NewWindow::Browser),
-                ("mailto:support@example.com", NewWindow::Browser),
-                ("tel:+15550100", NewWindow::Browser),
-                ("sms:+15550100", NewWindow::Browser),
-                ("https://team.cloudflareaccess.com/cdn-cgi/access/login", NewWindow::Browser),
-                ("https://accounts.google.com/o/oauth2/auth", NewWindow::Browser),
-                ("about:blank", NewWindow::Ignore),
-                ("javascript:alert(1)", NewWindow::Ignore),
-                ("data:text/html,hi", NewWindow::Ignore),
-                ("blob:https://team.example.com/0b1c", NewWindow::Ignore),
-                ("file:///etc/passwd", NewWindow::Ignore),
-            ] {
-                assert_eq!(new_window_target(Some(&hub), &url::Url::parse(address).unwrap()), expected, "{hub} {address}");
-            }
-        }
-        assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap()), NewWindow::Browser);
-    }
-
-    const HUB: &str = "https://team.example.com/";
-    const ACCESS_LOGIN: &str = "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com?kid=aud&redirect_url=%2F";
-    const MICROSOFT: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-
-    fn go(signing_in: bool, address: &str) -> Navigation {
-        navigation(Some(&url::Url::parse(HUB).unwrap()), signing_in, &url::Url::parse(address).unwrap())
-    }
-
-    /// What one window does with a run of events: `Nav` is a navigation from any frame, `Top` the
-    /// top-level page committing. Returns whether each navigation stayed in the window.
-    enum Event { Nav(&'static str), Top(&'static str) }
-
-    fn run(signing_in: &AtomicBool, events: &[Event]) -> Vec<bool> {
-        let hub = url::Url::parse(HUB).unwrap();
-        events.iter().filter_map(|event| match event {
-            Event::Nav(address) => Some(follow(Some(&hub), None, signing_in, &url::Url::parse(address).unwrap())),
-            Event::Top(address) => { top_level_page(Some(&hub), signing_in, &url::Url::parse(address).unwrap()); None }
-        }).collect()
-    }
-
-    #[test]
-    fn mailto_navigation_leaves_the_app() {
-        for signing_in in [false, true] {
-            assert_eq!(go(signing_in, "mailto:support@example.com"), Navigation::Browser);
-            assert_eq!(go(signing_in, "tel:+15550100"), Navigation::Browser);
-            assert_eq!(go(signing_in, "sms:+15550100"), Navigation::Browser);
-            assert_eq!(go(signing_in, "about:blank"), Navigation::Stay);
-            assert_eq!(go(signing_in, "ftp://files.example.com/"), Navigation::Browser);
-        }
-        assert_eq!(go(false, "https://example.com/"), Navigation::Browser);
-        assert_eq!(go(false, "https://team.example.com/#/tasks"), Navigation::Stay);
-    }
-
-    #[test]
-    fn only_the_hubs_own_logins_start_a_sign_in() {
-        for address in [ACCESS_LOGIN, "https://team.example.com/auth/login?next=/", "https://team.example.com/tico/auth/login"] {
-            assert_eq!(go(false, address), Navigation::Start, "{address}");
-        }
-        // Google and the rest of Access stay as before, but start nothing; so do other apps' Access logins.
-        for address in ["https://accounts.google.com/o/oauth2/auth", "https://team.cloudflareaccess.com/cdn-cgi/access/callback",
-                        "https://team.cloudflareaccess.com/cdn-cgi/access/login/other.example.com",
-                        "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com.evil.example",
-                        "https://team.example.com:8443/auth/login", "http://team.example.com/auth/login"] {
-            assert_eq!(go(false, address), Navigation::Stay, "{address}");
-        }
-        // A look-alike of the hub or of Access is someone else's site.
-        for address in ["https://team.example.com.evil.example/auth/login", "https://team.example.com@evil.example/auth/login",
-                        "https://cloudflareaccess.com.evil.example/cdn-cgi/access/login/team.example.com"] {
-            assert_eq!(go(false, address), Navigation::Browser, "{address}");
-        }
-        // No hub configured: nothing starts.
-        let url = url::Url::parse("https://team.cloudflareaccess.com/cdn-cgi/access/login/").unwrap();
-        assert_eq!(navigation(None, false, &url), Navigation::Stay);
-    }
-
-    #[test]
-    fn during_a_sign_in_any_provider_stays() {
-        for address in [MICROSOFT, "https://acme.okta.com/oauth2/v1/authorize", "https://github.com/login/oauth/authorize",
-                        "http://sso.acme.example/"] {
-            assert_eq!(go(true, address), Navigation::Stay, "{address}");
-            assert_eq!(go(false, address), Navigation::Browser, "{address}");
-        }
-    }
-
-    #[test]
-    fn access_with_microsoft_ends_back_on_the_hub() {
-        use Event::*;
-        let signing_in = AtomicBool::new(false);
-        // Access's provider page, Microsoft, back through Access to the hub; then Microsoft as an ordinary link.
-        let stays = run(&signing_in, &[Top(HUB), Nav(ACCESS_LOGIN), Top(ACCESS_LOGIN), Nav(MICROSOFT), Nav("https://login.live.com/ppsecure"),
-            Top(MICROSOFT), Nav("about:blank"), Nav("https://team.cloudflareaccess.com/cdn-cgi/access/callback"),
-            Nav("https://team.example.com/cdn-cgi/access/authorized"), Nav(HUB), Top(HUB), Nav(MICROSOFT)]);
-        assert_eq!(stays, [true, true, true, true, true, true, true, false]);
-        // Instant Auth: the hub's redirect goes through Access straight to the provider, before any page commits.
-        assert_eq!(run(&signing_in, &[Nav(HUB), Nav(ACCESS_LOGIN), Nav(MICROSOFT)]), [true, true, true]);
-    }
-
-    #[test]
-    fn a_frame_neither_ends_nor_starts_a_sign_in() {
-        use Event::*;
-        // The provider's page frames the hub mid sign-in: no top-level commit, so the next redirect still stays.
-        let signing_in = AtomicBool::new(false);
-        assert_eq!(run(&signing_in, &[Nav(ACCESS_LOGIN), Top(ACCESS_LOGIN), Nav(MICROSOFT), Top(MICROSOFT),
-                                      Nav("https://team.example.com/api/v2/me"), Nav("https://acme.okta.com/oauth2/v1/authorize")]),
-                   [true, true, true, true]);
-        // The hub frames Google, or another app's Access login: an ordinary link still opens the browser.
-        let signing_in = AtomicBool::new(false);
-        assert_eq!(run(&signing_in, &[Top(HUB), Nav("https://accounts.google.com/ServiceLogin"),
-                                      Nav("https://team.cloudflareaccess.com/cdn-cgi/access/login/docs.example.com"),
-                                      Nav("https://github.com/login")]),
-                   [true, true, false]);
-    }
-
-    #[test]
-    fn the_hubs_host_on_another_port_or_scheme_is_not_the_end() {
-        use Event::*;
-        let signing_in = AtomicBool::new(false);
-        let stays = run(&signing_in, &[Nav(ACCESS_LOGIN), Nav("https://team.example.com:8443/sso/authorize"),
-            Top("https://team.example.com:8443/sso/authorize"), Nav(MICROSOFT), Nav("http://team.example.com/sso/next"),
-            Top("http://team.example.com/sso/next"), Nav("https://acme.okta.com/oauth2/v1/authorize"),
-            Nav("https://team.example.com/auth/callback?code=x"), Top("https://team.example.com/#/tasks"), Nav(MICROSOFT)]);
-        assert_eq!(stays, [true, true, true, true, true, true, false]);
-    }
-
-    #[test]
-    fn each_window_has_its_own_sign_in() {
-        use Event::*;
-        let (signing_in, other) = (AtomicBool::new(false), AtomicBool::new(false));
-        assert_eq!(run(&signing_in, &[Nav(ACCESS_LOGIN)]), [true]);
-        assert_eq!(run(&other, &[Nav("https://github.com/login")]), [false]);
-    }
-
-    #[test]
-    fn a_file_window_acts_only_on_its_own_download() {
-        let opened = url::Url::parse("https://team.example.com/api/v2/files/f1?v=2").unwrap();
-        let same = |address: &str| same_file(&url::Url::parse(address).unwrap(), &opened);
-        assert!(same("https://team.example.com/api/v2/files/f1?v=2"));
-        assert!(same("https://team.example.com/api/v2/files/f1?v=2#page=1"));
-        assert!(!same("https://team.example.com/api/v2/files/f1"));
-        assert!(!same("https://team.example.com/api/v2/files/f2?v=2"));
-        assert!(!same("blob:https://team.example.com/0b1c"));
-    }
-}
-
-/// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking
-/// again for the same one brings it to the front.
-fn open_meeting_window(app: &App, id: &str) {
-    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return;
-    }
-    let label = format!("meeting-{id}");
-    if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
-    }
-    let Some(config) = connection(app) else { return };
-    let mut url = config.hub.clone();
-    url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .title("Meeting")
-        .inner_size(1100.0, 820.0)
-        .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
-        .resizable(true)
-        .user_agent(USER_AGENT)
-        .on_new_window(new_window_handler(app));
-    let _ = follow_sign_in(app, builder, false).build();
-}
-
-/// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
-/// `nativeHandler(name)` in ui/app/native.js looks for; `/TicoHub/` in the user agent marks the
-/// page native. (WKWebView's own `window.webkit.messageHandlers` cannot be replaced, so the
-/// shell has its own name.)
-const BRIDGE_SCRIPT: &str = r#"
-(() => {
-  if (!window.__TAURI__ || !window.__TAURI__.core) return;
-  const invoke = window.__TAURI__.core.invoke;
-  window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
-  // What this build's bridge answers beyond the first three, so a page never posts into a
-  // shell too old to hear it.
-  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles'];
-  // The shell's version and the end of its log ({version, lines}), for Support diagnostics.
-  window.ticoNativeLog = () => invoke('app_log');
-})();
-"#;
-
-/// The bridge plus this shell's version, which Settings shows beside the server's.
-fn bridge_script(app: &App) -> String {
-    let version = serde_json::to_string(&app.package_info().version.to_string()).unwrap_or_else(|_| "\"\"".into());
-    format!("{BRIDGE_SCRIPT}window.ticoNativeVersion = {version};\n")
-}
-
-fn main_window(app: &App) -> Option<WebviewWindow> {
-    app.get_webview_window("main")
-}
-
-fn show_window(app: &App) {
-    if let Some(window) = main_window(app).or_else(|| app.get_webview_window("server")) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-}
-
-/// Where this app keeps its window frame: its own config folder, which follows the bundle
-/// identifier, so each company's app (and the generic app) remembers its own place and size.
-fn saved_path(app: &App) -> Option<std::path::PathBuf> {
-    Some(app.path().app_config_dir().ok()?.join("window.json"))
-}
-
-/// Builds before this one kept the frame under ~/.config/tico/app/<environment>, shared by every
-/// app built without an environment. Read once when the app's own file does not exist yet.
-fn legacy_saved_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let name = option_env!("TICO_ENV_SLUG").filter(|s| !s.is_empty()).unwrap_or("tico");
-    Some(std::path::PathBuf::from(home).join(".config").join("tico").join("app").join(name).join("window.json"))
-}
-
-fn parse_saved(text: &str) -> Saved {
-    serde_json::from_str(text).unwrap_or_default()
-}
-
-fn load_saved(app: &App) -> Saved {
-    let read = |path: Option<std::path::PathBuf>| path.and_then(|p| std::fs::read_to_string(p).ok());
-    read(saved_path(app)).or_else(|| read(legacy_saved_path())).map(|s| parse_saved(&s)).unwrap_or_default()
-}
-
-fn save(app: &App, saved: &Saved) {
-    let Some(path) = saved_path(app) else { return };
-    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-    let _ = std::fs::write(path, serde_json::to_string(saved).unwrap_or_default());
-}
-
-/// Every move and resize the person makes is kept, so the next launch opens where they left it.
-fn remember_frame(app: &App) {
-    let state: State<AppState> = app.state();
-    if state.applying_frame.load(Ordering::Relaxed) {
-        return;
-    }
-    let Some(window) = main_window(app) else { return };
-    // A minimised or full-screen window is not a frame to reopen at.
-    if window.is_minimized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
-        return;
-    }
-    let (Ok(position), Ok(size), Ok(scale)) = (window.outer_position(), window.outer_size(), window.scale_factor()) else { return };
-    if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
-        return;
-    }
-    let u = unit(scale, POINTS);
-    let frame = (position.x as f64 / u, position.y as f64 / u, size.width as f64 / u, size.height as f64 / u);
-    save(app, &Saved { frame: Some(frame), full: None });
-}
-
-/// A saved frame is usable when enough of its title bar lies on a display that is still connected,
-/// so the person can grab it; a frame from a display since unplugged is not restored. Frame and work
-/// areas are in the same units (points on macOS).
-fn frame_reachable(frame: (f64, f64, f64, f64), areas: &[(f64, f64, f64, f64)]) -> bool {
-    let (x, y, w, _) = frame;
-    areas.iter().any(|&(ax, ay, aw, ah)| {
-        let (left, right) = (x.max(ax), (x + w).min(ax + aw));
-        let (top, bottom) = (y.max(ay), (y + 24.0).min(ay + ah));
-        right - left >= 80f64.min(w) && bottom > top
-    })
-}
-
-/// Once, before the main window first shows: the saved frame if it is still on a connected display,
-/// otherwise the default size, centred. The window is never moved again by the app after that.
-fn restore_frame(app: &App) {
-    let state: State<AppState> = app.state();
-    let Some(window) = main_window(app) else { return };
-    state.applying_frame.store(true, Ordering::Relaxed);
-    let monitors = window.available_monitors().unwrap_or_default();
-    let scales: Vec<f64> = monitors.iter().map(|m| m.scale_factor()).collect();
-    let areas: Vec<_> = monitors.iter().map(|m| {
-        let (area, u) = (m.work_area(), unit(m.scale_factor(), POINTS));
-        (area.position.x as f64 / u, area.position.y as f64 / u, area.size.width as f64 / u, area.size.height as f64 / u)
-    }).collect();
-    match load_saved(app).frame(&scales, POINTS) {
-        Some(frame @ (x, y, w, h)) if frame_reachable(frame, &areas) => {
-            // Saved frames include the title bar; set_size takes the content size.
-            let u = window.scale_factor().map(|s| unit(s, POINTS)).unwrap_or(1.0);
-            let (outer, inner) = (window.outer_size(), window.inner_size());
-            let (dw, dh) = match (outer, inner) {
-                (Ok(o), Ok(i)) => (o.width.saturating_sub(i.width) as f64 / u, o.height.saturating_sub(i.height) as f64 / u),
-                _ => (0.0, 0.0),
-            };
-            let (cw, ch) = ((w - dw).max(1.0), (h - dh).max(1.0));
-            if POINTS {
-                let _ = window.set_size(LogicalSize::new(cw, ch));
-                let _ = window.set_position(LogicalPosition::new(x, y));
-            } else {
-                let _ = window.set_size(PhysicalSize::new(cw.round() as u32, ch.round() as u32));
-                let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
-            }
-        }
-        _ => {
-            let _ = window.set_size(LogicalSize::new(1240.0, 820.0));
-            let _ = window.center();
-        }
-    }
-    state.applying_frame.store(false, Ordering::Relaxed);
-}
-
-#[cfg(test)]
-mod window_frame_tests {
-    use super::*;
-
-    #[test]
-    fn a_window_saved_as_the_right_rail_reopens_at_its_full_frame() {
-        let rail = parse_saved(r#"{"mode":"rail","full":[240,160,2480,1640]}"#);
-        assert_eq!(rail.frame(&[2.0, 2.0], true), Some((120.0, 80.0, 1240.0, 820.0)));
-        assert_eq!(rail.frame(&[1.25], false), Some((240.0, 160.0, 2480.0, 1640.0)));
-        // Rail mode with no full frame yet: the default size, centred once.
-        assert_eq!(parse_saved(r#"{"mode":"rail"}"#).frame(&[2.0], true), None);
-        assert_eq!(parse_saved("not json"), Saved::default());
-        let saved = Saved { frame: Some((1.0, 2.5, 3.0, 4.0)), full: None };
-        assert_eq!(serde_json::to_string(&saved).unwrap(), r#"{"frame":[1.0,2.5,3.0,4.0]}"#);
-        assert_eq!(parse_saved(&serde_json::to_string(&saved).unwrap()).frame(&[1.0, 2.0], true), saved.frame);
-    }
-
-    #[test]
-    fn an_old_pixel_frame_is_not_guessed_at_on_mixed_scale_displays() {
-        // Laptop at 2x, external at 1x: the old physical frame's unit depends on the screen it was
-        // saved on, so the window is centred once instead.
-        let old = parse_saved(r#"{"full":[5800,200,800,1600]}"#);
-        assert_eq!(old.frame(&[1.0, 2.0], true), None);
-        // Windows and Linux kept virtual-screen pixels all along.
-        assert_eq!(old.frame(&[1.0, 2.0], false), Some((5800.0, 200.0, 800.0, 1600.0)));
-    }
-
-    #[test]
-    fn a_saved_frame_is_restored_only_where_its_title_bar_can_be_grabbed() {
-        let laptop = (0.0, 25.0, 1512.0, 920.0);
-        let external = (1512.0, -200.0, 2560.0, 1415.0);
-        assert!(frame_reachable((100.0, 100.0, 1240.0, 820.0), &[laptop]));
-        assert!(frame_reachable((1700.0, 0.0, 1240.0, 820.0), &[laptop, external]));
-        // The external display was unplugged.
-        assert!(!frame_reachable((1700.0, 0.0, 1240.0, 820.0), &[laptop]));
-        // Title bar above the menu bar's work area, or almost entirely off the right edge.
-        assert!(!frame_reachable((100.0, -900.0, 1240.0, 820.0), &[laptop]));
-        assert!(!frame_reachable((1480.0, 100.0, 1240.0, 820.0), &[laptop]));
-        assert!(frame_reachable((1400.0, 100.0, 1240.0, 820.0), &[laptop]));
-        assert!(!frame_reachable((100.0, 100.0, 1240.0, 820.0), &[]));
-    }
-
-    #[test]
-    fn mixed_scale_displays_are_compared_in_points() {
-        // A 1x 1920x1080 main display and a 2x laptop (1512x982 points) to its right, as macOS
-        // reports their work areas in pixels, converted per display.
-        let scaled = |(x, y, w, h): (i32, i32, u32, u32), s: f64| {
-            let u = unit(s, true);
-            (x as f64 / u, y as f64 / u, w as f64 / u, h as f64 / u)
-        };
-        let main = scaled((0, 25, 1920, 1055), 1.0);
-        let laptop = scaled((3840, 0, 3024, 1964), 2.0);
-        assert_eq!(laptop, (1920.0, 0.0, 1512.0, 982.0));
-        // A window saved on the laptop at (2900, 100) points is reachable there.
-        assert!(frame_reachable((2900.0, 100.0, 400.0, 800.0), &[main, laptop]));
-        // In points, the same pixel frame (5800, 200) lies past the laptop's right edge at 3432.
-        assert!(!frame_reachable((5800.0, 200.0, 800.0, 1600.0), &[main, laptop]));
-    }
-}
-
-// Search from the View menu (⌘K): bring the window forward, then the page opens
-// its own search dialog (`window.ticoSearch` in ui/app/search.js). The menu accelerator takes
-// ⌘K before the webview sees it, so the page's own shortcut still works everywhere else.
-fn open_search(app: &App) {
-    show_window(app);
-    eval(app, "window.ticoSearch && window.ticoSearch()");
-}
-
-fn eval(app: &App, js: &str) {
-    match main_window(app) {
-        Some(window) => { if let Err(e) = window.eval(js) { log::warn!("eval failed: {e}"); } }
-        None => log::warn!("eval: no main window"),
-    }
-}
-
-// Cmd+R reaches this through the View menu too.
-fn reload(app: &App) {
-    if let (Some(config), Some(window)) = (connection(app), main_window(app)) {
-        let _ = window.navigate(config.start_url());
-    }
-}
-
-// ----------------------------------------------------------------------------- bridge
-/// Generic builds accept any server; only the selected origin's page in the main window may call the shell.
-fn from_server(app: &App, window: &WebviewWindow) -> bool {
-    let document = window.url().ok();
-    let state = app.state::<AppState>();
-    let connection = state.connection.lock().unwrap();
-    server_document(connection.as_ref().map(|c| &c.hub), window.label(), document.as_ref())
-}
-
-fn server_document(hub: Option<&url::Url>, label: &str, document: Option<&url::Url>) -> bool {
-    label == "main" && hub.zip(document).is_some_and(|(hub, document)| {
-        matches!(document.scheme(), "http" | "https") && document.username().is_empty()
-            && document.password().is_none() && document.origin() == hub.origin()
-    })
-}
-
-fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>, body: Option<&Value>) -> Result<bool, String> {
-    let connection = state.connection.lock().unwrap();
-    let hub = connection.as_ref().map(|c| &c.hub);
-    if !server_document(hub, label, document) {
-        return Err("Only the selected server's page may configure visuals.".into());
-    }
-    let mut visual = state.visual_origin.lock().unwrap();
-    // `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file
-    // hosting's address, which shows pages and SVG when the server has no visual origin. Anything else clears.
-    fn text(value: Option<&Value>) -> Option<&str> { value.map_or(Some(""), Value::as_str) }
-    let raw = body.and_then(Value::as_object)
-        .filter(|object| object.contains_key("origin") && object.keys().all(|key| key == "origin" || key == "files"))
-        .and_then(|object| Some((text(object.get("origin"))?, text(object.get("files"))?)));
-    *visual = hub.zip(raw).and_then(|(hub, (raw, files))| visual_origin::VisualOrigin::with_files(hub, raw, files));
-    Ok(visual.is_some())
-}
-
-/// What the page posts: `openWindow` ({meeting: id}). Older pages also post `windowMode`, which is
-/// ignored now that the window has one mode.
+/// The pointer rested on an org in the rail (`id`), or left it (none): its page is built hidden ahead of a click.
 #[tauri::command]
-fn bridge(app: App, window: WebviewWindow, name: String, body: Option<Value>) -> Result<Value, String> {
-    if !from_server(&app, &window) { return Err("Only the selected server's page may call the app.".into()); }
-    match name.as_str() {
-        "visualOrigin" => return set_visual_origin(&app.state::<AppState>(), window.label(), window.url().ok().as_ref(), body.as_ref()).map(Value::Bool),
-        "openWindow" => {
-            // `recording` is what an older page called it.
-            let id = body.as_ref().and_then(|b| b.get("meeting").or_else(|| b.get("recording"))).and_then(Value::as_str);
-            if let Some(id) = id {
-                open_meeting_window(&app, id);
-            }
-        }
-        // The page's "App update" bar: check the feed now instead of at the next six-hourly check.
-        "checkForUpdates" => update_now(&app),
-        // Help's "Show the app's log": the log file, selected in Finder (or the platform's file manager).
-        "showLog" => show_log(&app),
-        _ => {}
+async fn rail_hover(app: App, webview: tauri::Webview, id: Option<String>) -> Result<(), String> {
+    only_rail(&webview)?;
+    match id {
+        Some(id) => windows::prefetch(&app, &id).map_err(|e| e.to_string()),
+        None => Ok(windows::leave(&app)),
     }
-    Ok(Value::Null)
 }
 
-fn show_log(app: &App) {
-    let Some(dir) = log_dir(app) else { return };
-    let file = dir.join(applog::FILE_NAME);
-    let shown = if file.exists() { app.opener().reveal_item_in_dir(&file) } else { app.opener().open_path(dir.to_string_lossy(), None::<&str>) };
-    if let Err(e) = shown { log::warn!("could not show the log: {e}"); }
-}
-
-/// This shell's version and the end of its log, which the page adds to a Support diagnostics bundle.
 #[tauri::command]
-fn app_log(app: App, window: WebviewWindow) -> Result<Value, String> {
-    if !from_server(&app, &window) { return Err("Only the selected server's page may read the app's log.".into()); }
-    let lines = log_dir(&app).map(|dir| applog::tail(&dir.join(applog::FILE_NAME), LOG_LINES)).unwrap_or_default();
-    Ok(serde_json::json!({"version": app.package_info().version.to_string(), "lines": lines}))
+async fn rail_add(app: App, webview: tauri::Webview) -> Result<(), String> {
+    only_rail(&webview)?;
+    add_org(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn rail_menu(app: App, webview: tauri::Webview, id: String) -> Result<(), String> {
+    only_rail(&webview)?;
+    let Some(org) = app.state::<AppState>().orgs.lock().unwrap().get(&id).cloned() else { return Ok(()) };
+    let app = app.clone();
+    // One org's menu at the pointer: Remove that org (the rail's own right-click). Spawned, like every popup.
+    tauri::async_runtime::spawn(async move {
+        let Some(window) = main_window(&app) else { return };
+        let Ok(menu) = Menu::with_items(&app, &[
+            &match MenuItem::with_id(&app, format!("org-remove:{}", org.id), format!("Remove {}…", org.title()), true, None::<&str>) {
+                Ok(item) => item,
+                Err(_) => return,
+            },
+        ]) else { return };
+        let _ = window.popup_menu(&menu);
+    });
+    Ok(())
+}
+
+/// The setup page asks whether it is adding an org (one is already open), so it can offer Cancel, and whether Tico
+/// sign-in is offered (a build that keeps a list of orgs), so it can make that the default.
+#[tauri::command]
+fn setup_info(app: App) -> Value {
+    let multi = orgs::multi_org_build();
+    serde_json::json!({"hasOrgs": multi && org_count(&app) > 0, "signIn": multi})
+}
+
+/// Cancel on the setup page while adding an org: the setup window closes, with any Tico sign-in, and the open org stays.
+#[tauri::command]
+fn cancel_setup(app: App) {
+    if org_count(&app) > 0 {
+        signin::close(&app);
+        close_setup_later(&app);
+    }
+}
+
+/// The org commands are the rail's alone; the org pages have no use for them.
+fn only_rail(webview: &tauri::Webview) -> Result<(), String> {
+    if webview.label() == RAIL { Ok(()) } else { Err("Only the org list may call this.".into()) }
 }
 
 // ----------------------------------------------------------------------------- deep links
-// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser.
+// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser. tico://open is Tico
+// Recorder asking to show an org's approval page (recorder.rs).
 fn open_deep_link(app: &App, url: &url::Url) {
+    if url.host_str() == Some("open") {
+        recorder::open_link(app, url);
+        return;
+    }
     let path = format!("{}{}", url.host_str().unwrap_or(""), url.path()).trim_matches('/').to_string();
     if path.is_empty() {
         show_window(app);
@@ -1105,9 +581,16 @@ fn build_menu(app: &App) -> tauri::Result<()> {
     let app_menu = Submenu::new(app, &name, true)?;
     app_menu.append(&PredefinedMenuItem::about(app, Some(&format!("About {name}")), None)?)?;
     app_menu.append(&MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?)?;
-    if config::is_generic() {
+    if orgs::multi_org_build() {
+        app_menu.append(&MenuItem::with_id(app, "org-add", "Add Organization…", true, None::<&str>)?)?;
+        if let Some(open) = active_org(app) {
+            app_menu.append(&MenuItem::with_id(app, "org-remove", format!("Remove {}…", open.title()), true, None::<&str>)?)?;
+        }
+    } else if config::is_generic() {
         app_menu.append(&MenuItem::with_id(app, "server", "Change server…", true, None::<&str>)?)?;
     }
+    #[cfg(target_os = "macos")]
+    app_menu.append(&open_at_login_item(app)?)?;
     app_menu.append_items(&[
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::hide(app, None)?,
@@ -1131,36 +614,99 @@ fn build_menu(app: &App) -> tauri::Result<()> {
 }
 
 fn menu_event(app: &App, id: &str) {
+    // Switching runs as its own task: it opens a page, which a menu event should not wait for.
+    if let Some(org) = id.strip_prefix("org-remove:") {
+        let found = app.state::<AppState>().orgs.lock().unwrap().get(org).cloned();
+        if let Some(found) = found { ask_remove(app, &found); }
+        return;
+    }
+    if let Some(org) = id.strip_prefix("org-switch:") {
+        let (app, org) = (app.clone(), org.to_string());
+        timing::click(&app, &org, "menu");
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = switch_to(&app, &org) {
+                log::warn!("could not open the org: {e}");
+            }
+        });
+        return;
+    }
     match id {
-        "server" if config::is_generic() => { let _ = build_server_window(app); }
+        "server" => { let _ = build_server_window(app); }
+        "org-add" => add_org(app),
+        "org-remove" => {
+            if let Some(open) = active_org(app) {
+                ask_remove(app, &open);
+            }
+        }
         "search" => open_search(app),
         "reload" => reload(app),
         "updates" => update_now(app),
+        #[cfg(target_os = "macos")]
+        "open-at-login" => toggle_open_at_login(app),
         _ => {}
     }
 }
 
+/// Open at Login, checked while the app starts at login. It is off until the person turns it on.
+#[cfg(target_os = "macos")]
+fn open_at_login_item(app: &App) -> tauri::Result<CheckMenuItem<tauri::Wry>> {
+    use tauri_plugin_autostart::ManagerExt;
+    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    CheckMenuItem::with_id(app, "open-at-login", "Open at Login", true, enabled, None::<&str>)
+}
+
+/// Turns Open at Login on or off, then rebuilds the menu so its check shows what the system now has. Spawned: a menu
+/// cannot be rebuilt inside the menu event that asked for the change.
+#[cfg(target_os = "macos")]
+fn toggle_open_at_login(app: &App) {
+    use tauri_plugin_autostart::ManagerExt;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let autolaunch = app.autolaunch();
+        let result = match autolaunch.is_enabled() {
+            Ok(true) => autolaunch.disable(),
+            _ => autolaunch.enable(),
+        };
+        if let Err(e) = result {
+            log::warn!("could not change Open at Login: {e}");
+        }
+        let _ = build_menu(&app);
+    });
+}
+
 // ----------------------------------------------------------------------------- Dock badge
 /// The Needs you count on the Dock icon (macOS), cleared at zero or when the hub cannot be read. Signed out of
-/// Cloudflare Access, it shows "!" instead: the count is unknown, and the window says to sign in again.
+/// Cloudflare Access, it shows "!" instead: the count is unknown, and the window says to sign in again. With 2+ orgs
+/// there is no one count to show, so the badge is cleared.
 fn render_badge(app: &App) {
+    let several = !polls_status(org_count(app));
     let HubStatus { needs, signed_out, .. } = app.state::<AppState>().status.lock().unwrap().clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(window) = main_window(&handle) {
-            if signed_out { badge_signed_out(&window) } else { let _ = window.set_badge_count(badge_count(needs)); }
+        let Some(window) = main_window(&handle) else { return };
+        if several {
+            let _ = window.set_badge_count(None);
+        } else if signed_out {
+            badge_signed_out(&window);
+        } else {
+            let _ = window.set_badge_count(badge_count(needs));
         }
     });
 }
 
+/// Whether the Needs you count is polled. One server has one count, so with 2+ orgs nothing is polled.
+fn polls_status(count: usize) -> bool {
+    count < 2
+}
+
 #[cfg(target_os = "macos")]
-fn badge_signed_out(window: &WebviewWindow) {
+fn badge_signed_out(window: &tauri::Window) {
     let _ = window.set_badge_label(Some("!".into()));
 }
 
 // A label is macOS only; elsewhere the unknown count is cleared.
 #[cfg(not(target_os = "macos"))]
-fn badge_signed_out(window: &WebviewWindow) {
+fn badge_signed_out(window: &tauri::Window) {
     let _ = window.set_badge_count(None);
 }
 
@@ -1174,6 +720,14 @@ mod badge_tests {
     fn the_dock_badge_shows_needs_you_and_clears_at_zero() {
         assert_eq!(super::badge_count(0), None);
         assert_eq!(super::badge_count(7), Some(7));
+    }
+
+    #[test]
+    fn needs_you_is_polled_only_while_there_is_one_org() {
+        assert!(super::polls_status(0));
+        assert!(super::polls_status(1));
+        assert!(!super::polls_status(2));
+        assert!(!super::polls_status(3));
     }
 }
 
@@ -1203,7 +757,7 @@ fn configure_company_updater(
 }
 
 /// Checks now, from the menu or the page; a check already running is not doubled.
-fn update_now(app: &App) {
+pub(crate) fn update_now(app: &App) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move { check_for_update(&app).await });
 }
@@ -1248,7 +802,7 @@ async fn check_for_update_once(app: &App) {
             Err(_) => { report_update(app, "failed", "the update feed address is invalid"); return; }
         };
         let cookie = if hub::same_origin(&connection.hub, &endpoint) {
-            Client::new(connection.clone()).cookie_header(app, &endpoint)
+            Client::new(connection.clone(), active_label(app)).cookie_header(app, &endpoint).await
         } else {
             None
         };
@@ -1311,8 +865,13 @@ fn start_polling(app: App) {
 
 async fn refresh_status(app: &App) {
     let state: State<AppState> = app.state();
+    // With 2+ orgs the Needs you count is off, so nothing is requested from any hub.
+    if !polls_status(org_count(app)) {
+        render_badge(app);
+        return;
+    }
     let Some(config) = connection(app) else { return };
-    let fresh = Client::new(config.clone()).status(app).await;
+    let fresh = Client::new(config.clone(), active_label(app)).status(app).await;
     // A status request for the previous server may finish after someone changes the address.
     if connection(app).map(|c| c.hub) != Some(config.hub) { return; }
     *state.status.lock().unwrap() = fresh;
@@ -1335,14 +894,17 @@ mod updater_integration_tests {
     const TARGET: &str = "tico-updater-test";
     const COOKIE: &str = "CF_Authorization=synthetic-test-session";
 
-    fn key_and_signature(bytes: &[u8]) -> (String, String) {
+    /// Signs `bytes` the way `cargo tauri build` does: the trusted comment records the version, which the updater
+    /// (2.14+) checks against the version the feed announces.
+    fn key_and_signature(bytes: &[u8], version: &str) -> (String, String) {
         let pair = KeyPair::generate_unencrypted_keypair().unwrap();
         let public_key = pair.pk.to_box().unwrap().to_string();
+        let comment = format!("timestamp:0\tfile:Tico.tar.gz\tversion:{version}");
         let signature = sign(
             Some(&pair.pk),
             &pair.sk,
             Cursor::new(bytes.to_vec()),
-            Some("version: 0.3.21"),
+            Some(&comment),
             Some("synthetic updater test"),
         ).unwrap().into_string();
         (base64::engine::general_purpose::STANDARD.encode(public_key),
@@ -1451,12 +1013,14 @@ mod updater_integration_tests {
         let (bundles, installed_dir) = (scratch.join("bundles"), scratch.join("installed"));
         std::fs::create_dir_all(&bundles).unwrap();
         std::fs::create_dir_all(&installed_dir).unwrap();
-        let candidate = b"#!/bin/sh\necho Acme Tico 0.3.99\n";
-        let (public_key, signature) = key_and_signature(candidate);
-        let (other_key, _) = key_and_signature(candidate);
+        // The updater installs only ELF AppImages, and `infer` needs a full 64-byte ELF header to call it one.
+        let mut candidate = b"\x7fELF Acme Tico 0.3.99".to_vec();
+        candidate.resize(64, 0);
+        let (public_key, signature) = key_and_signature(&candidate, CANDIDATE);
+        let (other_key, _) = key_and_signature(&candidate, CANDIDATE);
         // The file names `cargo tauri build --bundles appimage` writes, which app_release.py classifies.
         let appimage = bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage"));
-        std::fs::write(&appimage, candidate).unwrap();
+        std::fs::write(&appimage, &candidate).unwrap();
         std::fs::write(bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")), &signature).unwrap();
         let installed = installed_dir.join("Acme Tico.AppImage");
         let previous = b"#!/bin/sh\necho Acme Tico 0.3.98\n";
@@ -1532,7 +1096,7 @@ mod updater_integration_tests {
     #[tokio::test]
     async fn tauri_updater_rejects_access_login_redirect_without_requesting_login_origin() {
         let expected = b"synthetic Tico updater artifact";
-        let (public_key, signature) = key_and_signature(expected);
+        let (public_key, signature) = key_and_signature(expected, VERSION);
         let (hub_listener, hub_address) = bind();
         let (login_listener, login_address) = bind();
         login_listener.set_nonblocking(true).unwrap();
@@ -1578,7 +1142,7 @@ mod updater_integration_tests {
     #[tokio::test]
     async fn tauri_updater_keeps_configured_public_runner_feed_and_artifact_unauthenticated() {
         let bytes = b"synthetic public runner artifact";
-        let (public_key, signature) = key_and_signature(bytes);
+        let (public_key, signature) = key_and_signature(bytes, VERSION);
         let (runner_listener, runner_address) = bind();
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let endpoint = url(runner_address, "/download/latest.json");

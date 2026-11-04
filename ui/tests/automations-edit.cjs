@@ -109,10 +109,9 @@ async function saved(page, writes, n) {
       await page.waitForSelector('.au-ed:not([hidden]) [data-b="step.prompt"]');
       assert.ok((await page.locator('.au-side').boundingBox()).x > 1000, 'the editor sits on the right');
       assert.equal(await page.locator('.au-scrim').isVisible(), false);
-      assert.equal(await page.locator('.au-botp').isVisible(), false, 'the editor takes the bot’s place');
       await shot(page, 'desktop-edit-llm');
       await page.locator('.au-ed [data-op="close"]').click();
-      assert.equal(await page.locator('.au-botp').isVisible(), true);
+      assert.equal(await page.locator('.au-side').isVisible(), false, 'closed, the flow takes the width');
 
       // Opened and saved untouched, the spend editor keeps the limit (it once drew blank and saved none).
       await page.locator('[data-spend]').click();
@@ -148,12 +147,12 @@ async function saved(page, writes, n) {
       await shot(page, 'desktop-add-menu');
       await page.locator('.au-menu [data-ty="action"]').click();
       await page.selectOption('[data-b="step.do"]', 'label');
-      await page.fill('[data-b="step.args.label"]', 'Later');
+      await page.fill('[data-b="step.args.name"]', 'Later');
       assert.equal(await page.locator('[data-op="del"]').count(), 0, 'a new step has nothing to delete');
       let body = await saved(page, writes, 8);
       const added = body.steps[2].paths[0].steps;
       assert.equal(added.length, 3);
-      assert.deepEqual({type: added[2].type, do: added[2].do, args: added[2].args, enabled: added[2].enabled}, {type: 'action', do: 'label', args: {label: 'Later'}, enabled: true});
+      assert.deepEqual({type: added[2].type, do: added[2].do, args: added[2].args, enabled: added[2].enabled}, {type: 'action', do: 'label', args: {name: 'Later'}, enabled: true});
 
       await page.locator('[data-step="dc1"]').click();
       await page.waitForFunction(() => document.querySelector('.au-card[data-open="dc1"]').classList.contains('off'));

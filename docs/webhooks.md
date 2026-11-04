@@ -145,6 +145,11 @@ hub trigger delivery github <delivery> --part 2
 A bot may read a delivery only if it manages the webhook, a task made from the call is its own, or a notice from Tico naming the
 call went to it. People who manage the webhook read the whole body.
 
+Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
+injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
+person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+(Warn by default); it fails open.
+
 ### Who may do what
 
 Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
@@ -190,7 +195,8 @@ call. A rule can match only on these two things, never on a field inside the bod
   receiver knows which webhook it came through. It works only on `webhook.received`.
 - `create_task {owner, title, body}` files a task for the bot `owner`, in the rule maker's name. `title` and `body` are templates.
   The body ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
-  give that bot tasks.
+  give that bot tasks. With [screening](permissions.md#screening) on, a long call's task opens a few seconds after the call is
+  answered, once the check is in, and a held one goes to the rule's maker.
 
 Rules also have the ordinary outcomes: *ignore*, *note*, *wake* and *ask*.
 
@@ -277,6 +283,7 @@ description and an example (`--group task` narrows it). A few:
 | `approval` | `approval.requested`, `decided`, `withdrawn` |
 | `needs_you` | `needs_you.created`, `answered` |
 | `bot` | `bot.run_failed`, `held`, `released` |
+| `thread` | `thread.created`, `message.created` (outgoing webhooks only), `message.held` ([Threads](threads.md)) |
 | other | `release.published`, `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |
 | `custom` | `custom.<name>`, which only a person or a rule sends (below) |
 
@@ -348,13 +355,13 @@ app.post("/tico", express.raw({ type: "application/json" }), (req, res) => {
 
 A failed send is tried again after 5 seconds, 5 minutes, 30 minutes, 2 hours, 5 hours, 10 hours and 10 hours, each a little
 jittered. That is 8 tries over about 28 hours. After the last, the send is **failed**, the endpoint's Health shows it, and Needs
-you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, cancelled or delivered one again now.
+you gets at most one task a day per endpoint. **Retry** (`hub webhook retry <id> <send>`) sends a failed, canceled or delivered one again now.
 
 Each try waits up to 30 seconds, and the answer is not read past 1 KB. An endpoint sends 600 an hour by default
 (`--rate-per-hour`); sends over that wait, and none are dropped. Tico keeps events and finished sends for 30 days.
 
 The send log (`hub webhook sends <id>`, `--state failed` to narrow) shows each send's state: ready, sending, delivered, failed,
-cancelled or withheld.
+canceled or withheld.
 
 ### Only some events
 
@@ -432,8 +439,9 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 - Bots can list endpoints without the full address. They cannot read send logs.
 - A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
   `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
-- An endpoint hears about a task, approval or bot only if its owner could read it. Health, inbound and webhook events go only to
-  owner and admin endpoints.
+- An endpoint hears about a task, approval or bot only if its owner could read it. A thread or message event goes only to an
+  endpoint whose owner may read that thread. `message.held` goes to owner and admin endpoints, as does a health, inbound or
+  webhook event. Thread events carry ids and facts, never a message's words.
 - A person can have 50 endpoints.
 
 More in [Permissions](permissions.md#outgoing-webhooks) and the [API](api.md#outgoing-webhooks).

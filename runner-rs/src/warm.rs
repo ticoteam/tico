@@ -75,6 +75,11 @@ pub fn fingerprint(env: &Env) -> String {
 }
 
 pub fn write_token(path: &Path, token: &str) {
+    write_token_for(path, token, None)
+}
+
+/// `write_token`, the file owned by `owner` (a leased turn user) in place of the bot user.
+pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
@@ -85,7 +90,12 @@ pub fn write_token(path: &Path, token: &str) {
         .open(&tmp)
         .and_then(|mut f| {
             f.write_all(token.as_bytes())?;
-            crate::isolation::chown_file(&f)
+            match owner {
+                // SAFETY: fchown on a descriptor this process owns.
+                Some((uid, gid)) if unsafe { libc::fchown(std::os::fd::AsRawFd::as_raw_fd(&f), uid, gid) } != 0 => Err(std::io::Error::last_os_error()),
+                Some(_) => Ok(()),
+                None => crate::isolation::chown_file(&f),
+            }
         })
         .and_then(|_| std::fs::rename(&tmp, path));
     let _ = std::fs::remove_file(&tmp);
@@ -177,6 +187,21 @@ impl WarmSessions {
         }
     }
 
+    /// Stop this scope's idle process, so its next `acquire` starts a new one. A busy one is left to its turn.
+    pub async fn discard(&self, attempt: &Value) {
+        let key = scope(attempt);
+        let stop = {
+            let mut entries = self.entries();
+            match entries.get(&key) {
+                Some(e) if !e.busy => entries.remove(&key).map(|e| e.host),
+                _ => None,
+            }
+        };
+        if let Some(h) = stop {
+            h.stop().await;
+        }
+    }
+
     /// Stop idle processes past their time or over the limit (oldest first), or every idle one with `close`.
     pub async fn prune(&self, close: bool) {
         let stopping: Vec<AntigravityHost> = {
@@ -225,6 +250,26 @@ mod tests {
         // hashlib.sha256(json.dumps(["ops", "c-1", None, 0, "gemini-3.8-flash", "low", "antigravity"]).encode()).hexdigest()
         assert_eq!(scope(&attempt), "be415f67ac4890f63e0fdf64bc0f0e45b2d97753e19366cf9d43b3e888e095fa");
         assert_eq!(ascii_dumps(&json!(["é😀"])), "[\"\\u00e9\\ud83d\\ude00\"]");
+    }
+
+    #[tokio::test]
+    async fn a_discarded_idle_process_is_not_the_next_turns() {
+        let dir = std::env::temp_dir().join(format!("warm-discard-{}", uuid::Uuid::new_v4().simple()));
+        let warm = WarmSessions::new(dir, 8);
+        let attempt = json!({"bot": "tico-counsel", "conversation": {"id": "c-chat"}, "config": {"harness": "antigravity"}});
+        let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], mpsc::unbounded_channel().0);
+        let env = Env::new();
+        let (first, _) = warm.acquire(&attempt, &env, make).await.unwrap();
+        first.start().unwrap();
+        warm.release(&first, true).await;
+        assert_eq!(warm.len(), 1, "a completed turn keeps its process");
+        warm.discard(&attempt).await;
+        assert_eq!(warm.len(), 0);
+        let (second, _) = warm.acquire(&attempt, &env, make).await.unwrap();
+        assert!(!second.same(&first), "the next turn gets a new process");
+        second.start().unwrap();
+        warm.release(&second, true).await;
+        warm.close_runtime("antigravity").await;
     }
 
     #[tokio::test]

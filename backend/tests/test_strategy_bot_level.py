@@ -21,10 +21,12 @@ def level(api, n, token="ana-test", expected=200):
     return post(api, "strategy-bot/level", {"level": n}, token=token, expected=expected)
 
 
-def via_assistant(api):
-    api.app.state.store.settings.test_identities["ana-via"] = Identity(OWNER, "owner", "ana@acme.example",
-                                                                       via="assistant", confirmed=True)
-    return "ana-via"
+def via_assistant(api, confirmed=False, via="assistant"):
+    """The owner as the Assistant (or BotOps) acting for them; `confirmed`: their own tap on a Confirm card it made."""
+    token = f"ana-via-{via}" + ("-tap" if confirmed else "")
+    api.app.state.store.settings.test_identities[token] = Identity(OWNER, "owner", "ana@acme.example",
+                                                                   via=via, confirmed=confirmed)
+    return token
 
 
 def review_routine(api):
@@ -95,9 +97,10 @@ def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
     assert changed["level"] == 1 and changed["level_changed_by"] == OWNER and changed["level_changed_at"]
     [entry] = changed["level_history"]
     assert (entry["level"], entry["was"], entry["by"]) == (1, 2, OWNER) and entry["by_name"]
-    for token in ("ben-test", "cara-test", strategy_token, other, via_assistant(api)):
+    for token in ("ben-test", "cara-test", strategy_token, other):
         refused = level(api, 3, token=token, expected=403)
         assert "Only the owner" in str(refused)
+    level(api, 3, token=via_assistant(api), expected=403)     # acting for the owner without their tap
     assert level(api, 3)["level"] == 3
     shown = get(api, "strategy-bot")
     assert shown["level"] == 3 and [(e["level"], e["by"]) for e in shown["level_history"]] == [(3, OWNER), (1, OWNER)]
@@ -105,6 +108,19 @@ def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
     assert len(level(api, 3)["level_history"]) == 2
     level(api, 4, expected=422)
     level(api, 0, expected=422)
+
+
+def test_the_owners_tap_on_a_confirm_card_sets_the_level_and_the_checks(api):
+    """Settings stage 3: BotOps or the owner's Assistant puts the level and the regular checks on a Confirm card; the
+    owner's tap on it is their own click. Acting for them without the tap still changes neither."""
+    with_strategy_bot(api)
+    for via in ("assistant", "botops"):
+        level(api, 3, token=via_assistant(api, via=via), expected=403)
+        post(api, "strategy-bot/checks", {"on": False}, token=via_assistant(api, via=via), expected=403)
+    assert get(api, "strategy-bot")["level"] == 1
+    tapped = level(api, 2, token=via_assistant(api, confirmed=True, via="botops"))
+    assert tapped["level"] == 2 and tapped["level_changed_by"] == OWNER
+    assert post(api, "strategy-bot/checks", {"on": False}, token=via_assistant(api, confirmed=True))["regular_checks"] is False
 
 
 def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api):
@@ -132,7 +148,7 @@ def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api
     assert on["regular_checks"] is True
     assert get(api, f"goals/{goal['id']}")["goal"]["status"] != "red"           # worked out again at once
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT actor FROM events WHERE action='strategy_bot.checks' ORDER BY ts")] == \
+        assert [r[0] for r in c.execute("SELECT actor FROM events WHERE action='strategy_bot.checks' ORDER BY created_at")] == \
             [OWNER, OWNER]
         assert strategy_bot.held_routine(c, {"id": strategy_bot.PASS}) is None
 
@@ -413,7 +429,7 @@ def test_with_regular_checks_off_a_due_kpi_pass_is_skipped(api):
 
     def due_at(day):
         with store.transaction() as c:
-            c.execute("UPDATE automations SET next_due=? WHERE id=?", (f"2026-09-{day}T07:00:00.000000Z", aid))
+            c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (f"2026-09-{day}T07:00:00.000000Z", aid))
         automations.tick(store, datetime(2026, 9, day, 8, tzinfo=timezone.utc))
         with store.read() as c:
             return (c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0],
@@ -442,7 +458,7 @@ def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
         routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (strategy_bot.KEY, json.dumps(
             {"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})))
-        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
+        c.execute("UPDATE schedules SET next_due_at=NULL, last_fired_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
         strategy_bot.migrate(c)                                                   # as the server does at startup
     assert not review_enabled(api)
     Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 17, tzinfo=timezone.utc))

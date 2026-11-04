@@ -24,6 +24,22 @@ function pageTasks(forced, openId = '') {
   state.migrate = !hadQuery;
   if (state.migrate && tasksMigrateOldFilters(state, null)) state.migrated = true;
   tasksNormalise(state, forced);
+  // A return visit: the remembered view as the server last answered it, and the list as it was left, painted with the
+  // shell. The reads below still go out and patch what changed.
+  const keptPref = S.lastRead.tasksPref || null, kept = S.lastRead.tasks?.key === activeTasksPath() ? S.lastRead.tasks : null;
+  const prefApply = value => {
+    if (!hadQuery && !state.typeChosen && value.type != null) state.type = String(value.type) || 'general';
+    // Before `views: 2`, List and Board both showed Needs you, so an old choice means Needs you.
+    if (!forced && value.view) state.view = value.views === 2 ? String(value.view) : 'foryou';
+    tasksPrefsApply(state, value);
+    tasksNormalise(state, forced);
+    tasksTypeCheck(state);
+  };
+  if (keptPref) { prefApply(keptPref); state.migrate = false; }
+  // A kept list read to its end keeps its cursor too, so coming back asks only for what changed since (a delta read),
+  // and the 15-minute clock (refresh.js tasksFreshen) runs on from its last full read.
+  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true,
+    since: kept.since || null, fullAt: kept.since ? kept.fullAt || 0 : 0, activeComplete: !!kept.since});
   const main = $('#main');
   main.classList.add('tasks-layout');
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
@@ -65,7 +81,7 @@ function pageTasks(forced, openId = '') {
   // Go through: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
   $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
-  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); };
+  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
     state.q = search.value;
@@ -159,19 +175,17 @@ function pageTasks(forced, openId = '') {
     const loading = tasksLoad(state);
     const pref = await v2Get('/v2/preferences/' + TASK_PREF);
     if (TASKS_ST !== state) return;
-    if (pref?.value && typeof pref.value === 'object') {
-      if (!hadQuery && !state.typeChosen && pref.value.type != null) state.type = String(pref.value.type) || 'general';
-      // Before `views: 2`, List and Board both showed Needs you, so an old choice means Needs you.
-      if (!forced && pref.value.view) state.view = pref.value.views === 2 ? String(pref.value.view) : 'foryou';
-      tasksPrefsApply(state, pref.value);
-      tasksNormalise(state, forced);
-      tasksTypeCheck(state);
-      const migrated = state.migrate && tasksMigrateOldFilters(state, pref.value);
+    const value = pref?.value && typeof pref.value === 'object' ? pref.value : null;
+    // The same answer as the one already applied draws nothing again: the header is painted once.
+    if (value && !sameData(value, keptPref)) {
+      S.lastRead.tasksPref = value;
+      prefApply(value);
+      const migrated = state.migrate && tasksMigrateOldFilters(state, value);
       if (!openId && (hadQuery || state.type !== 'general' || migrated)) tasksURLWrite(state);
       if (migrated) tasksRemember(state);       // the saved value is written again without the old keys
-    }
-    tasksTools(state);
-    tasksRender(state);
+      tasksTools(state);
+      tasksRender(state);
+    } else if (!value && !keptPref) { tasksTools(state); tasksRender(state); }
     tasksDoneEnsure(state);
     await loading;
     // An old Decide link to one item (#/decide?item=<id>): its card over Needs you.
@@ -199,6 +213,7 @@ function tasksNormalise(state, forced) {
 }
 function tasksRemember(state) {
   taskPipelineRemember(state);
+  S.lastRead.tasksPref = {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)};   // the next visit opens as left
   try {
     localStorage.setItem('hub.tasks.view2', state.view);
     localStorage.setItem('hub.tasks.layout', JSON.stringify(tasksPrefsValue(state)));
@@ -207,18 +222,25 @@ function tasksRemember(state) {
   state.saveTimer = setTimeout(() => { void post('/v2/preferences/' + TASK_PREF,
     {value: {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)}}).catch(() => {}); }, 400);
 }
+// Leaving the page keeps its list for the next visit (S.lastRead), unless the list was never read (a read again under
+// way when leaving still keeps the last one).
+function tasksKeep(state) {
+  if (!state?.read && !state?.kept) return;
+  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
+    since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
+}
 function taskOwnerOptions(selected = '') {
   const people = (S.people || []).filter(p => !p.hidden)
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.name) || [e.name, 'bot:' + e.name].includes(selected)))
-    .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.name).localeCompare(String(b.display_name || b.name)));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
+    .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   const pick = value => value === selected ? ' selected' : '';
   return `<option value="">Who is this for?</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
-      `<option value="${esc(e.name)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
-        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
+      `<option value="${esc(e.id)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
+        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.id) || pick('bot:' + e.id)}>${esc(e.display_name || e.slug)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
 }
 function taskCreateModal() {
   let d = $('#task-create');
@@ -276,8 +298,7 @@ function openTaskCreate(owner = '', opts = {}) {
   let privateTouched = false;
   creation.elements.private.addEventListener('change', () => { privateTouched = true; });
   const privateDefault = () => {
-    const slug = creation.elements.owner.value.replace(/^bot:/, '');
-    const bot = S.emps.find(e => e.name === slug);
+    const bot = botRow(creation.elements.owner.value);
     if (parent?.private || !privateTouched)
       creation.elements.private.checked = !!parent?.private || !!bot?.private_tasks_default;
     creation.elements.private.disabled = !!parent?.private;
@@ -286,7 +307,7 @@ function openTaskCreate(owner = '', opts = {}) {
   goalOptions().then(goals => {
     const sel = $('#task-create-form select[name=goal]'); if (!sel || !goals.length) return;
     sel.innerHTML = '<option value="">No goal</option>' + goals.map(g =>
-      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner).name)}</option>`).join('');
+      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner_id).name)}</option>`).join('');
   });
   taskFormFiles(creation);
   void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
@@ -297,7 +318,7 @@ function openTaskCreate(owner = '', opts = {}) {
     if (!title || !owner) { msg.textContent = 'Choose who this is for.'; return; }
     if (!body) { msg.textContent = 'Add details.'; form.body.focus(); return; }
     btn.disabled = true; msg.textContent = 'Creating…';
-    const payload = {title, body, owner};
+    const payload = {title, body, owner: owner.includes(':') ? owner : 'bot:' + owner};
     payload.private = form.elements.private.checked;
     taskPipelineCreatePayload(form, payload);
     const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -323,16 +344,36 @@ function formFocus(root) {
 }
 const mergeTaskRows = (...groups) => [...new Map(groups.flat().map(task => [task.id, task])).values()];
 // Snoozed tasks too: the Snoozed view shows them and every other view leaves them out (taskItems).
-const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=100&offset=${offset}`;
+// The first page is short so the list paints soon; the rest come 500 at a time (the server's most), so a full read of a
+// thousand open tasks is three requests, not eleven.
+const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=${offset ? 500 : 100}&offset=${offset}`;
 // Every status: a task that finished comes back as finished (as a live event brings it), not as gone.
 const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
-async function tasksLoad(state, opts = {}) {
+// One full read at a time (state.fullRead), the first one on opening the page included. A load asked for while one is
+// on its way never starts the list over: the 2-minute poll shares it, and a load after a save waits for it and then
+// reads what changed since its cursor, which takes in the save. A list with a cursor reads only what changed.
+function tasksLoad(state, opts = {}) {
+  if (state.fullRead) {
+    if (opts.poll) return state.fullRead;
+    return state.loadAfter ||= state.fullRead.then(() => {
+      state.loadAfter = null;
+      return TASKS_ST === state ? tasksLoad(state, opts) : false;
+    });
+  }
+  return state.since ? tasksRead(state, opts) : tasksFullStart(state, opts);
+}
+function tasksFullStart(state, opts) {
+  const read = state.fullRead = tasksRead(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
+  return read;
+}
+async function tasksRead(state, opts = {}) {
   const seq = ++state.loadSeq;
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
   const cursor = state.since;
   if (!cursor) state.activeComplete = false;
-  state.loading = !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
+  // A list kept from the last visit is shown, never a skeleton, while it is read again.
+  state.loading = !state.kept && !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/tasks/labels'),
     taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES)];
@@ -341,11 +382,14 @@ async function tasksLoad(state, opts = {}) {
   if (cursor) {
     [changed, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    if (!changed || changed.reset) { changed = null; state.since = null; state.activeComplete = false; }
+    // The server says to read in full again: that read is the one full read (tasksLoad).
+    if (!changed || changed.reset) { state.since = null; state.activeComplete = false; return tasksLoad(state, opts); }
   }
   if (!changed) {
-    if (cursor) tasksRender(state);
     [active, lab] = await Promise.all([v2Get(activeTasksPath()), ...others()]);
+    // A first read that lands after the page was left is kept for the next visit, as leaving would have kept it.
+    if (TASKS_ST !== state && state.loadSeq === seq && active && !state.read && !state.kept && !S.lastRead.tasks)
+      S.lastRead.tasks = {key: activeTasksPath(), tasks: active.tasks || [], labels: lab?.labels || [], tags: lab?.tags || []};
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
   }
   if (changed) {
@@ -363,7 +407,7 @@ async function tasksLoad(state, opts = {}) {
   // A read that failed (offline, the server away) leaves the list as it was rather than empty; the next poll reads again.
   state.labels = lab?.labels || [];
   state.tags = lab?.tags || [];
-  state.loading = false;
+  state.loading = false; state.read = true;
   tasksTypeCheck(state);
   tasksTools(state); tasksRender(state);
   if (tasksNeedsQueue(state)) void askFilteredLoad(state);
@@ -424,8 +468,7 @@ function tasksReadFull(state, opts = {}) {
   state.since = null;
   getForget();
   getForgetTagged(p => p.startsWith('/v2/tasks'));
-  const read = state.fullRead = tasksLoad(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
-  return read;
+  return tasksFullStart(state, opts);
 }
 // Pulled down at the top on a touch screen (pull-refresh.js): the list, Needs you and the counts read again.
 async function tasksPulled(state) {
@@ -493,8 +536,8 @@ async function tasksLoadAllDone(state) {
 function companyNeedActor(task, need) {
   const me = myActor();
   // A task waiting on me waits with the bot that owns it, whoever asked for it.
-  const candidates = taskWaitingOn(task) === me ? [task.owner]
-    : [need?.ask?.from_actor, task?.ask?.from_actor, taskRequester(task), task?.owner];
+  const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner_id]
+    : [need?.ask?.sender_id, task?.ask?.sender_id, taskRequester(task), task?.owner_id];
   return candidates.find(actor => actorSlug(actor) && actor !== me)
     || candidates.find(actor => actor && actor !== me)
     || me;
@@ -506,15 +549,15 @@ function companyNeedGroups(items) {
   for (const it of items) {
     if (!it.task || it.col === 'done' || !taskNeedsViewer(it.task)) continue;
     const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
-    if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated: ''});
+    if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
     const group = groups.get(actor);
     group.items.push(it);
     group.firstNeed = Math.min(group.firstNeed, needOrder.get(String(it.id)) ?? Infinity);
     group.firstRank = Math.min(group.firstRank, it.rank == null ? Infinity : Number(it.rank));
-    if (String(it.updated || '') > group.updated) group.updated = String(it.updated || '');
+    if (String(it.updated_at || '') > group.updated_at) group.updated_at = String(it.updated_at || '');
   }
   return [...groups.values()].sort((a, b) => a.firstNeed - b.firstNeed || a.firstRank - b.firstRank
-    || String(b.updated).localeCompare(String(a.updated)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
+    || String(b.updated_at).localeCompare(String(a.updated_at)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
 }
 function tasksTabsPaint(state) { tasksPaint($('#task-view'), tasksTabsHTML(state)); }
 // The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the
@@ -604,4 +647,5 @@ function tasksRender(state) {
   }
   tasksSelectionPaint(state);
   tasksTabsPaint(state);
+  fbSync();
 }

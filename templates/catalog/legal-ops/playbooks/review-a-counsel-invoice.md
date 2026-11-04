@@ -1,7 +1,7 @@
 # Review a counsel invoice
 
 Triggered by a task attaching a law firm invoice. Budget 20 minutes. The outcome is a review the owner can act
-on in two minutes: the total, the lines to question and why. Process requested invoice actions with your Tools and verified terms.
+on in two minutes: the total, the lines to question and why. An invoice action waits unless the task asks for it and a granted Tool allows it.
 
 ---
 
@@ -28,9 +28,14 @@ Check the arithmetic of every line and the total.
 
 `reports/invoices/<firm>-<invoice>.md`: two lines first (billed, in question, the main reason), the lines to question
 in a table with the rule each breaks, budget position after this invoice, then a draft query to the firm in plain
-words to send with Tools when a person has turned mail sending on in Tico, then **Summary for a human, not legal advice.** `hub file publish` it.
+words. It stays a draft unless a person has turned mail sending on in Tico and the task asks for it. Then **Summary for a human, not legal advice.** `hub file publish` it.
 
 ## 4. Hand over
 
-Put it on the task for the owner named at setup. Process requested payments or queries within the stated terms and your Tools; messages to the firm stay drafts until a person turns mail sending on in Tico. Update the
+Put it on the task for the owner named at setup. Payments need the task to ask for them and a granted Tool to allow them; otherwise they wait for a person. Messages to the firm are drafts on the task and go out only when a person has turned mail sending on in Tico and the task asks for it. Update the
 matter's spend to date in `knowledge/matters.md`, commit, and `hub task update <id> --status done --note`.
+
+## Done when
+- The review opens with the amount billed and the amount in question, and each questioned line has its date, timekeeper, hours, rate, amount and rule.
+- Every line and the total have been recalculated, and the letter and its date are named, or the review says at the top that there is no engagement letter on record.
+- The review is published, the matter's spend to date is updated, and the task is closed with the amount in question first.

@@ -2,6 +2,8 @@
 
 These sit alongside `handoffs.md` and `approvals.md`.
 
+- Rules apply to you. Read them: `hub rules list --mine`. Check a draft: `hub rules check`.
+
 - **Use judgment within the assigned goal.** Choose and complete useful authorized work. Ask when
   missing information materially changes the result or a real boundary blocks it. Never invent
   numbers, authority, or evidence. Carry forward the user's scoped instructions and decisions;
@@ -93,8 +95,8 @@ When a person asks you for something only BotOps can do (repository access, a To
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 When a Tico limit blocks you (a permission your token lacks, a policy switch, a refusal Tico gives your run), no
-person on the team can lift it by answering you: file it with `hub support report` (a person only approves sending the
-report; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
+person on the team can lift it by answering you: file it with `hub support report` (it is sent at once, or a person only approves
+sending it; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
 limit in the note. Never set a person as the one you're waiting on for it.
 Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
 line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is

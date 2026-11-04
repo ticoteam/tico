@@ -38,8 +38,8 @@ def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_w
     stored = api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content
     assert b"<script" not in stored and b"cdn.acme.example" not in stored and b"42 deals" in stored
     seen = read(api, fid, "ben-test").json()["page"]
-    assert set(seen) >= {"file_id", "title", "bot", "bot_name", "version", "updated", "updated_by", "cadence",
-                         "as_of", "stale_days", "replaced_by", "archived", "task_id", "src"}
+    assert set(seen) >= {"file_id", "title", "bot_id", "bot_name", "version", "updated_at", "updated_by", "cadence",
+                         "as_of", "stale_days", "replaced_by_id", "archived", "task_id", "src"}
     assert (seen["title"], seen["cadence"], seen["as_of"], seen["version"]) == ("Engineering weekly", "weekly",
                                                                                  "2026-10-27", 1)
     assert seen["updated_by"] == "bot:ops" and seen["stale_days"] is None
@@ -88,7 +88,7 @@ def test_a_replaced_page_names_its_replacement_only_to_readers_who_may_see_it(ap
     old = page(api, attempt).json()["page"]["file_id"]
     new = page(api, attempt, name="weekly-2.html", data=HTML + b"<p>v2</p>", replaces=old).json()["page"]
     seen = read(api, old, "ben-test").json()["page"]
-    assert (seen["replaced_by"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
+    assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
     # Another bot's page cannot be named.
     _, other = turn(api, bot="finance")
     assert page(api, other, name="f.html", replaces=old).status_code == 404
@@ -288,7 +288,7 @@ def share_team_icon(api, attempt, data):
 
 def share_retired_icon(api, attempt, data):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES('team_icon',?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES('team_icon',?)",
                   (json.dumps({"id": "gone", "digest": "0" * 64, "retired_digest": hashlib.sha256(data).hexdigest()}),))
     return lambda: on_disk(api, data)
 

@@ -1,5 +1,7 @@
 /* ui/app/slash-commands.js — The "/" menu in a bot's chat box: Tico's own commands and the ones the bot's harness
    takes as-is, its own repository's skills and commands among them. Typing "/" at the start opens it; it narrows as you type.
+   The box is the old chat's pill (pill.js) or a bot's Home or DM composer (thread-view.js, `P.thread`), which brings
+   its own goal state (P.goalsOf) and its own ways to clear, send a command, make a task and start a new chat.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -14,22 +16,26 @@ const SLASH_TICO = [
 ];
 // Make my branch is offered on a shared bot that has no branch of the viewer's yet.
 function slashBranchAllowed(slug) {
-  const bot = (S.emps || []).find(e => e.name === slug);
+  const bot = botRow(slug);
   const original = bot?.shared_from || slug;
-  return !!(S.emps || []).find(e => e.name === original)?.shared
-    && !(S.emps || []).some(e => e.shared_from === original && e.operator === S.me?.id);
+  return !!botRow(original)?.shared
+    && !(S.emps || []).some(e => e.shared_from === original && e.owner_id === S.me?.id);
 }
-function slashCommands(slug) {
-  const state = V2C?.slug === slug ? V2C : null;
+// The chat's goal state: the composer's own (a thread's), else the old chat's when it is this bot's.
+const slashGoals = (slug, P) => P?.goalsOf ? P.goalsOf() : V2C?.slug === slug ? V2C : null;
+function slashCommands(slug, P = null) {
+  const state = slashGoals(slug, P);
   const list = state?.commands || SLASH_TICO;
   return list.filter(c => c && c.name
     && (c.name !== 'goal' || state?.goalSupported)
-    && (c.name !== 'branch' || slashBranchAllowed(slug)));
+    && (c.name !== 'branch' || slashBranchAllowed(slug))
+    // A bot's Home is the one thread it has: only a DM starts over.
+    && (c.name !== 'new' || !P?.thread || !!P.newChat));
 }
 // One row per command, plus a row per sub-command once a space follows its name (/goal pause).
-function slashEntries(slug, typed) {
+function slashEntries(slug, typed, P = null) {
   const t = typed.toLowerCase(), spaced = /\s/.test(t), rows = [];
-  for (const c of slashCommands(slug)) {
+  for (const c of slashCommands(slug, P)) {
     const base = '/' + c.name;
     if (!spaced) rows.push({fill: base + (c.args ? ' ' : ''), label: base, args: c.args || '', help: c.help || '', kind: c.kind});
     else for (const s of c.sub || []) rows.push({fill: `${base} ${s}`, label: `${base} ${s}`, args: '', help: '', kind: c.kind});
@@ -61,7 +67,7 @@ function slashAttach(P) {
     // Only a first line that starts with "/"; Esc keeps it shut until the text changes.
     if (!text.startsWith('/') || text.includes('\n') || text === S_.closedFor) return close();
     S_.closedFor = null;
-    S_.rows = slashEntries(P.slug, text);
+    S_.rows = slashEntries(P.slug, text, P);
     if (!S_.rows.length) return close();
     S_.pick = Math.min(S_.pick, S_.rows.length - 1);
     menu.hidden = false; box.setAttribute('aria-expanded', 'true');
@@ -92,38 +98,43 @@ function slashAttach(P) {
 // A typed "/command" in a bot chat. True when it was handled here; 'plain' when it goes to the bot as ordinary
 // text; false when it is not a command at all, or not one for this composer.
 function slashRun(P, text) {
-  if (P.mode !== 'chat' || !P.slug || !/^\/[a-z0-9_-]/i.test(text)) return false;
+  if ((P.mode !== 'chat' && !P.thread) || !P.slug || !/^\/[a-z0-9_-]/i.test(text)) return false;
   // A bot's own skills and commands may be namespaced (/docs:publish).
   const [, word, rest = ''] = text.match(/^\/([a-z0-9_:-]+)(?:\s+([\s\S]*))?$/i) || [];
   if (!word) return 'plain';
-  const name = word.toLowerCase(), arg = rest.trim();
-  const cmd = slashCommands(P.slug).find(c => c.name === name);
+  const name = word.toLowerCase(), arg = rest.trim(), state = slashGoals(P.slug, P);
+  const cmd = slashCommands(P.slug, P).find(c => c.name === name);
   const scope = sessionScope(pq(P, '.p-text'));
-  const done = () => { sessionAcknowledge(pq(P, '.p-text'), scope); pillClear(P, true); P.slash && (P.slash.closedFor = null); return true; };
+  const done = () => {
+    sessionAcknowledge(pq(P, '.p-text'), scope);
+    if (P.clear) P.clear(); else pillClear(P, true);
+    P.slash && (P.slash.closedFor = null);
+    return true;
+  };
   if (cmd?.kind === 'harness') {
     if (!isKeeper(P.slug)) return 'plain';
-    void v2ChatSend(P, text, P.slug, {}, {command: true});
+    void (P.command ? P.command(text) : v2ChatSend(P, text, P.slug, {}, {command: true}));
     return true;
   }
   if (name === 'goal' && cmd) {
     const sub = arg.toLowerCase();
-    if (!arg) { done(); chatGoalEdit(true); return true; }
-    if (sub === 'edit') { done(); chatGoalEdit(true); return true; }
-    if (['pause', 'resume', 'clear'].includes(sub)) { done(); void chatGoalAct(sub); return true; }
+    if (!arg) { done(); chatGoalEdit(true, state); return true; }
+    if (sub === 'edit') { done(); chatGoalEdit(true, state); return true; }
+    if (['pause', 'resume', 'clear'].includes(sub)) { done(); void chatGoalAct(sub, undefined, state); return true; }
     const objective = /^edit\s/i.test(arg) ? arg.slice(5).trim() : arg;
-    void chatGoalSave(objective.slice(0, GOAL_MAX)).then(ok => { if (ok && pq(P, '.p-text').value.trim() === text) done(); });
+    void chatGoalSave(objective.slice(0, GOAL_MAX), state).then(ok => { if (ok && pq(P, '.p-text').value.trim() === text) done(); });
     return true;
   }
-  if (name === 'new' && cmd) { done(); void slashNewChat(P.slug); return true; }
+  if (name === 'new' && cmd) { done(); void (P.newChat ? P.newChat() : slashNewChat(P.slug)); return true; }
   if (name === 'task' && cmd) {
     if (!arg) { pq(P, '.p-text').value = '/task '; return true; }
     pq(P, '.p-text').value = arg;                       // what the task path acknowledges and clears
-    void (isKeeper(P.slug) ? v2PillTask(P, arg) : pillTask(P, arg));
+    void (P.task ? P.task(arg) : isKeeper(P.slug) ? v2PillTask(P, arg) : pillTask(P, arg));
     return true;
   }
   if (name === 'branch' && cmd) {
     done();
-    const bot = S.emps.find(e => e.name === P.slug);
+    const bot = botRow(P.slug);
     void botBranchCreate(bot?.shared_from || P.slug);
     return true;
   }
@@ -134,7 +145,7 @@ function slashRun(P, text) {
 }
 function slashHelp(P) {
   const out = pq(P, '.p-cmd'); if (!out) return;
-  out.innerHTML = `<div class="cmd-out slash-help-out">${slashCommands(P.slug).map(c =>
+  out.innerHTML = `<div class="cmd-out slash-help-out">${slashCommands(P.slug, P).map(c =>
     `<div><code>/${esc(c.name)}${c.args ? ' ' + esc(c.args) : ''}</code> <span class="muted">${esc(c.help || '')}</span></div>`).join('')}</div>`;
   out.hidden = false;
   out.onclick = () => { out.hidden = true; out.innerHTML = ''; out.onclick = null; };

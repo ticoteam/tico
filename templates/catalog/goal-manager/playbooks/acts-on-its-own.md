@@ -4,6 +4,8 @@ Only when `hub goal strategy-bot` says `level` 3 ("Acts on its own"), which only
 refuses every decision: at level 2 a red goal gets a recovery proposal (`playbooks/recoveries.md`), at Passive a
 check-in question at most. Read the level at the start of every run; the owner may have lowered it since.
 
+Inputs: `hub goal strategy-bot` (the level and `asked_today`), `hub goal list --all`, `hub health check`, the Heads' reports and `state.md`.
+
 A **decision** is one reason and 1 to 10 changes to bot tasks, made together and logged with an Undo for the owner:
 `hub goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`. The changes are:
 - `{"do": "create", "owner": "<bot slug>", "title": "...", "body": "..."}`: a new task for a bot, on the goal;
@@ -89,3 +91,5 @@ the server never makes it and files it as a proposal in the owner's Needs you. N
 `hub task create --owner <person>`: that command makes the task, so it is only for a check-in question
 (`playbooks/check-ins.md`). For the rest, the server refuses your try and files it as the proposal. Never try one
 another way. A proposal counts toward the owner's 5 a day.
+
+**Done when:** each red or stalled goal in this run has one decision with its comment, or a reason it was left alone; each clash is settled and both Heads are told; and `state.md` has each decision's id.

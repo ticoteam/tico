@@ -4,7 +4,7 @@
 // The key is taken in a password field, posted once with `switch` and emptied from the page; the dialog says the
 // subscription stays in use while the computer checks it, offers Cancel switch meanwhile, and ends saying the
 // subscription was signed out, or that it is still in use. Once switched, the same connection (same bots) runs on the
-// key. Every request is intercepted; the harness capabilities come from runner/harnesses/*.toml.
+// key. Every request is intercepted; the harness capabilities come from runner-rs/harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -18,13 +18,13 @@ const {unrouted} = require('./support/routes.cjs');
     const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
     const subscription = () => ({installed: true, authenticated: 'ready', account: {email: 'dev@acme.example', plan: 'pro', checked_at: at(-60000)}});
-    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
       readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex', 'claude'], signed_out: {}, keys: {}, shared_keys: {},
       bot_connections: [{bot: 'writer', runtime: 'codex', profile: ''}],
       readiness: {runtimes: {codex: subscription(), claude: subscription()},
         harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}},
       profiles: []});
-    // How each job ends on the computer: on its second check, or (`hold`) not until it is cancelled.
+    // How each job ends on the computer: on its second check, or (`hold`) not until it is canceled.
     const ending = {codex: {state: 'done', message: 'Switched to the API key; the subscription is signed out'}, claude: 'hold'};
     // `held`: the next Switch to API key request waits until it is released, as on a slow connection.
     let held = null;
@@ -65,18 +65,18 @@ const {unrouted} = require('./support/routes.cjs');
           const body = req.postDataJSON(); writes.push({p, body});
           if (held) await held.promise;
           const id = 'key' + Object.keys(rows).length;
-          rows[id] = {id, kind: body.switch ? 'to_key' : 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created: new Date().toISOString(), lines: []};
+          rows[id] = {id, kind: body.switch ? 'to_key' : 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created_at: new Date().toISOString(), lines: []};
           return json({...rows[id], key: {id: 'cred9', env: 'OPENAI_API_KEY', preview: 'sk-…456'}});
         }
         const cancel = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)\/cancel$/);
         if (cancel) {
           writes.push({p, body: req.postDataJSON()});
-          return json(Object.assign(rows[cancel[1]], {state: 'cancelled', updated: new Date().toISOString()}));
+          return json(Object.assign(rows[cancel[1]], {state: 'canceled', updated_at: new Date().toISOString()}));
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)$/);
         if (one) {
           const row = rows[one[1]], end = ending[row.runtime];
-          if (++row.polls === 2 && end !== 'hold') Object.assign(row, end, {updated: new Date().toISOString()});
+          if (++row.polls === 2 && end !== 'hold') Object.assign(row, end, {updated_at: new Date().toISOString()});
           return json(row);
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -135,9 +135,9 @@ const {unrouted} = require('./support/routes.cjs');
     await dialog.locator('input[name=secret]').fill(SECRET);
     await dialog.locator('[data-key-go]').click();
     await dialog.getByRole('button', {name: 'Cancel switch'}).click();
-    await dialog.locator('[data-status][data-state=cancelled]').waitFor();
+    await dialog.locator('[data-status][data-state=canceled]').waitFor();
     assert.deepEqual(writes.slice(-1).map(w => w.p), ['/api/v2/computers/box/logins/key1/cancel']);
-    assert.equal(await dialog.locator('[data-status]').innerText(), 'Cancelled. The subscription is still in use.');
+    assert.equal(await dialog.locator('[data-status]').innerText(), 'Canceled. The subscription is still in use.');
     await dialog.locator('[data-actions] [data-close]').click();
 
     // Closing the dialog while it is checked cancels it too.
@@ -149,7 +149,7 @@ const {unrouted} = require('./support/routes.cjs');
     for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/logins/key2/cancel'; i++) await page.waitForTimeout(100);
     assert.equal(writes.at(-1).p, '/api/v2/computers/box/logins/key2/cancel');
 
-    // Closed while the request is still on its way: the switch it started is cancelled once it is back.
+    // Closed while the request is still on its way: the switch it started is canceled once it is back.
     held = {}; held.promise = new Promise(resolve => { held.release = resolve; });
     await own('claude').getByRole('button', {name: 'Switch to API key'}).click();
     await dialog.locator('input[name=secret]').fill(SECRET);
@@ -183,7 +183,7 @@ const {unrouted} = require('./support/routes.cjs');
 
     // Offline: Switch to API key stays, disabled, saying why.
     const offered = await detail.locator('[data-model-to-key]').count();
-    box.last_seen = at(-3 * 3600000);
+    box.last_seen_at = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.ok(offered > 0);

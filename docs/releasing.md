@@ -3,8 +3,8 @@
 A release is a version tag. Everything it ships is built once, by the Release validation run for that commit and
 version, and that same build is what the gate tests. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which
 builds nothing: it takes that run's runner binaries and image digests, builds the installer bundle and publishes the
-GitHub release. Running installations look for that release to show
-"New version" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
+GitHub release. Running installations look for that release and offer it as
+"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
 and once the release is published it files one task for the Technical Writer to write that version's section of
 [CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
 so a release's notes reach users with the next build that contains them. No separate product announcement is required.
@@ -57,6 +57,101 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 Releases are started by the Release Manager only. Release validation never runs on a schedule or on a push to main:
 each run is a full gate for one candidate.
 
+## Supported versions
+
+What a server accepts is what the code enforces. This is the matrix the release notes refer to.
+
+| Part | Accepted | Enforced by |
+|---|---|---|
+| Database | schema version 71 (`MIN_BRIDGE_USER_VERSION`) and newer up to this release's; cloud steps up to 75 | `backend/migrations` `preflight`, before the first write |
+| Runner | release `MIN_RUNNER_RELEASE` (0.4.0) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
+| Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
+| Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
+
+A database below schema version 71 is refused: "This database is at schema version N, below 71, the oldest this server
+upgrades. Start it once with Tico v0.5.x (the release that writes version 71), then upgrade to this release." Open it once
+with a v0.5.x release, then upgrade. The legacy import (`manage.migrate_legacy`) is the only path that
+opens an older file directly. A newer database, one whose recorded migration this code does not know, and one whose
+migration file changed after it ran are all refused before anything is written.
+
+## Migrations
+
+Every persistent schema change is a file in `backend/migrations`: `NNNN_name.sql` (its statements) or `NNNN_name.py`
+(an `up(conn)` that does not commit). The number is the next after the highest file. A file runs once, in its own
+transaction with its `schema_migrations` row, so a failure leaves neither. Never edit a file that has run: its checksum is
+recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
+(`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code. hubdb's `MIGRATIONS` list (user_version 71; a file from a
+release that ran growth segments as step 72 opens too, `NEWEST_USER_VERSION`) and the cloud steps in `Store.initialize`
+(75) no longer grow.
+
+The files run right after hubdb's own steps, before the module schema code (`SCHEMA` scripts, `ensure_schema`,
+`add_column`), so a rename or move lands before code that uses the new names. On a new database a module's table does
+not exist yet at that point: a migration that touches one skips it when absent (`DROP ... IF EXISTS`, or a check of
+`sqlite_master`/`PRAGMA table_info`), and the module's `CREATE` makes the new shape. A `.py` file that rebuilds a table
+sets `FOREIGN_KEYS_OFF = True`: the runner turns foreign keys off before the transaction, checks `PRAGMA
+foreign_key_check` for references the migration broke before it commits, and restores the setting.
+
+`backend/tests/test_ddl_guard.py` counts the `CREATE`, `ALTER TABLE` and `add_column` statements still outside
+migrations, per file, in `backend/migrations/ddl_allowlist.txt`. A new one fails the test; when a statement moves into a
+migration, lower its file's count in the same change.
+
+## Release 1 cutover
+
+Release 1 is the contract release: the column renames and retired spellings (`cancelled` became `canceled`,
+`needs_onboarding` became `needs_setup`) land in one tag, and the server, runner, Mac app, templates and bot repos
+come from that tag together. Each install upgrades on its own, one at a time: Acme Team first, as the canary, then
+Acme Ops. An install starts the next one only when the first is healthy and its computers have followed.
+
+Stored work carries over. Approvals keep their payloads and hashes, because the renames touch column names and no
+payload key. Queued jobs, webhook sends and automation definitions are rows the new release reads. Rule conditions and
+task-received automations that name `owner` or `requester` keep matching, because those names are read through the
+rename map. A webhook send queued before the cutover goes out with its body named as the new API names it.
+`backend/tests/test_inflight_cutover.py` pins the approval path on a database from before the renames, and the webhook,
+rule and automation cases on rows as they were saved.
+
+Per install, in this order:
+
+1. **Stop the writers.** Stop the server; nothing else writes to the database. Runners and the Mac app reach an install
+   only through its API (each keeps its own state file, not the hub database), so the server stop is the stop.
+   Work in progress is picked up afterwards: a job whose lease runs out is recovered, and a webhook send caught
+   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico -e acme server stop`.
+2. **Take the consistent backup while stopped.** The checkpoint copies every page of the database into a new private
+   file and checks that the copy is complete, without an integrity scan, so it is quick enough to run with the server down:
+
+   ```sh
+   docker compose run --rm --no-deps --entrypoint sh server -c \
+     'mkdir -p /data/snapshots && python -m backend.manage checkpoint /data/hub.sqlite /data/snapshots/pre-r1-acme-team.sqlite'
+   ```
+
+   Copy the file out of the `/data` volume to a place the next update cannot reach. The updater keeps only its own
+   last three snapshots, so this file is the one to roll back to. `python -m backend.manage inspect` on the copy runs
+   the full integrity check; run it once the server is back, since it reads every page.
+3. **Tag the release commit.** `scripts/release publish` tags the validated commit as `vX.Y.Z`. That one tag names the
+   server image, the runner binaries and the templates in the same tree; the desktop app is part of it when its shell
+   changed (see [Desktop apps follow the release](#desktop-apps-follow-the-release)). Bot repositories are not tagged by
+   the release: record each one's commit next to the freeze record (`git rev-parse --git-path
+   tico-release.json`), so a rollback knows what each bot was on.
+4. **Start the new release.** Docker: set `TICO_TAG=vX.Y.Z` in `.env`, then `docker compose pull && docker compose up -d`.
+   Mac: check out `vX.Y.Z` in the install's checkout (`git -C <checkout> checkout vX.Y.Z`) and restart it with
+   `scripts/tico -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
+   order, each in its own transaction with its `schema_migrations` row. A database that has both an old and a new name
+   of one column is refused, not guessed at (`RenameConflict`). A failed migration leaves the file at the schema it had,
+   and the server does not start on it.
+5. **Let the computers follow.** Each runner sees the new server release, stops taking work and hands its turns back
+   for up to `drain_timeout_seconds` (five minutes by default in `runner.json`), then updates. Its queued work resumes
+   afterwards. A computer that has not yet updated keeps working while it waits, as long as its release is at least the
+   minimum in [Supported versions](#supported-versions), and the runner wire covers the current and previous minor release.
+
+Acme Team's record for the cutover is the checkpoint file, the tag `vX.Y.Z`, the old tag it left and the bot repository
+commits. Acme Ops repeats steps 1 to 5 with its own checkpoint (`pre-r1-acme-ops.sqlite`); its database is its own.
+
+**Rollback boundary.** The updater rolls back by itself only when the new release fails its health check. Before the
+install has done real work on the new release, roll back by putting the checkpoint back and starting the old tag:
+follow [Rolling back](updates.md#rolling-back) for the server, with the checkpoint in place of the pre-update
+snapshot, and pin the runners and the Mac app to the old tag too. After the install has taken real writes on the
+new schema, a rollback to the checkpoint drops every write since the backup, and the old release cannot open the
+newer database at all. Fix forward with a new patch release instead, unless the owner decides to lose those writes.
+
 ## The release command
 
 The Release Manager uses the Rust `tico-release` command through `scripts/release` for each approved release.
@@ -76,14 +171,15 @@ published and files one task, "Release notes for vX.Y.Z", for the Technical Writ
 `docs-writer`) with the release's commit range. The command needs `gh` and a `hub` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
-Run `publish` in the background while validation runs. Its freeze record retains the candidate, run ID, tag and
-notes task, so the same invocation resumes after interruption without dispatching another gate, retagging or filing a
-second task. If interrupted during dispatch before the run ID was saved, inspect Actions and pass `--run <id>` to
-recover it; mismatched runs refuse. If interrupted while filing the notes task, `publish` refuses rather than file
-another: check the Technical Writer's tasks, and file it by hand if it is missing.
-Retain the record as the release receipt. To start a new freeze after a fix, archive/remove that record explicitly
-(`git rev-parse --git-path tico-release.json` shows it), then freeze current main again. `--state <file>` selects an
-explicit record for either phase. No command resets a freeze or falls back to a different validation automatically.
+Run `publish` in the background while validation runs. A validation run that ends canceled is rerun by `publish` (same
+run, up to twice); a failed one still refuses. Its freeze record retains the candidate, run ID, tag and notes task, so
+the same invocation resumes after interruption without dispatching another gate, retagging or filing a second task. If
+interrupted during dispatch before the run ID was saved, inspect Actions and pass `--run <id>` to recover it; mismatched
+runs refuse. If interrupted while filing the notes task, `publish` refuses rather than file another: check the Technical
+Writer's tasks, and file it by hand if it is missing. Retain the record as the release receipt. To start a new freeze
+after a fix, archive/remove that record explicitly (`git rev-parse --git-path tico-release.json` shows it), then freeze
+current main again. `--state <file>` selects an explicit record for either phase. No command resets a freeze or falls
+back to a different validation automatically.
 
 ### After freeze
 
@@ -102,7 +198,7 @@ Caddy image job runs only when a change reaches the image inputs or `backend/cad
 compiles the changed files and runs the Dockerfile's import check itself. Conftest, `pytest.ini`, workflows,
 dependencies, `docs/` (except `docs/images` and `docs/history`), CHANGELOG.md, the selector, and deleted or
 unparsable files fall back to the full default Python suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
-cancels an earlier one; only a pull request's superseded run is cancelled. Runner/harness changes also run
+cancels an earlier one; only a pull request's superseded run is canceled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
 
@@ -114,7 +210,7 @@ account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Py
 finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
 from the last successful full main run, with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
-fails if a required job failed or was cancelled. The target is under ten minutes from start to completed checks;
+fails if a required job failed or was canceled. The target is under ten minutes from start to completed checks;
 hosted run receipts, including cache state, establish whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
@@ -148,15 +244,16 @@ slow tests and every browser script, and release candidate validation covers tha
 ## Hosted release validation
 
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
-interactive work. Its twelve gate jobs, each about 3 minutes of tests, run in parallel on ephemeral 4-vCPU RunsOn Linux VMs in Tico's own AWS account, with read-only
-repository permissions and no production, AWS or provider credentials. It cannot tag, publish or deploy.
+interactive work. Its gate jobs run in parallel on ephemeral RunsOn Linux VMs in Tico's own AWS account (4-vCPU for every
+part), with read-only repository permissions and no production,
+AWS or provider credentials. It cannot tag, publish or deploy.
 
 ```sh
 gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48 -f version=v0.3.49
 ```
 
 The run is titled `Validate <sha> as <version> from <previous>`, which is how the Release workflow finds it. It builds
-once: the Linux (static, musl) and macOS runner and relay binaries, then the server, runner and updater images for
+once: the Linux (static, musl) runner and relay binaries, then the server, runner and updater images for
 amd64 and arm64 from those Linux binaries (`--build-arg NATIVE=prebuilt`), pushed to ghcr.io by digest with no tag.
 The gate VMs test exactly those: the native checks use the built Linux binaries, and the product part pulls the images
 by digest (`TICO_RELEASE_IMAGES`, `TICO_RELEASE_VERSION`) instead of building its own. A digest nobody tags is never
@@ -168,14 +265,15 @@ The reviewed workflow controls and selected candidate have separate checkouts: a
 frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged.
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
-times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, two browser
-shards, eight Python shards and desktop. Only product needs the images: the other parts start as soon as the Linux
-binaries are built, and product waits for the image builds; without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
+times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
+shards, 24 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
+binaries build; each waits for them before its tests. Only product needs the images and waits for the image builds;
+without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
 (`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
 install the update. It does not cover the macOS or Windows installers.
-Beside the gate, four `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into four
-groups of about three minutes each by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
+Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
+groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
 Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
@@ -271,7 +369,7 @@ at the same time, each with its own Docker names; the journey proceeds once thos
   the server restarts and the runner reconnects, the data survives down and up, and a runner box updates to the
   server's release and rolls back one that does not turn healthy;
 - `docker/side-jobs-smoke.sh`: a runner starts and stops the side job the hub assigns to it;
-- `runner/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
+- `runner_support/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
   `TICO_RUNNER_TEST_IMAGE=tico-rc-runner:local` and the same Python worker cap;
 - `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle and seed it like a
   real team (older releases' rows, a computer on the previous runner, a team `HUB_` variable granted to BotOps, a bot
@@ -335,9 +433,15 @@ The workflow then:
 - runs `scripts/build_install_bundle.py`, which attaches the one-line installers: `install.sh` and the Windows
   `install-wsl.ps1` with the tag baked into them, `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`,
   `docker/runner.compose.yaml` and the `setup/` wizard) and `SHA256SUMS` over all three. `install.sh` checks the bundle against `SHA256SUMS` before it unpacks anything;
-- attaches the validated Rust runner for checkouts, `tico-runner-{macos-arm64,macos-x86_64,linux-x86_64,linux-arm64}.gz`
-  (Linux static, musl), with the relay's, and `tico-runner-SHA256SUMS` over them. A Mac or Linux checkout on the tag
-  downloads its one ([updates](updates.md#the-runner-engine));
+- attaches the validated Rust runner for checkouts, `tico-runner-{linux-x86_64,linux-arm64}.gz` (static, musl), with
+  the relay's, and `tico-runner-SHA256SUMS` over them. A Mac or Linux checkout on the tag downloads its one
+  ([updates](updates.md#the-runner-engine));
+- attaches the Mac runner and relay, `tico-runner-{macos-arm64,macos-x86_64}.gz`. No gate part runs on a Mac, so they
+  are not built by validation: when `runner-rs` (its harness manifests included) and `relay-rs` did not change since the previous
+  release, its Mac binaries are published with this one (a checkout checks a binary's `--build-id`, the source
+  fingerprint). When they did change, the `macos` job builds them beside the publication and `macos-assets` adds them
+  to the published release, then rewrites both checksum files. Until then a Mac checkout's update says `waiting`
+  (runner_support/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
   (and `latest` for a stable version) at those digests before publishing, so no installer runs against missing images;
 - marks a tag with a suffix such as `v0.2.0-rc.1` a prerelease, which the update check ignores;
@@ -453,6 +557,8 @@ directly and sends no ID.
 | `TICO_TELEMETRY`, `DO_NOT_TRACK` | `off` / `1` stops the count; the check then goes to GitHub |
 | `TICO_VERSION` | The running version, set by the image |
 | `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | An updater service the owner's "Update now" calls |
+| `TICO_UPDATES` | `tico`: Tico updates this server from outside. The app has no "Update now" and says "Tico updates this server"; Tico support's scheduled update is off. Cell companies no longer use it: they have an updater ([cell mode](cell.md#updates)) |
+| `TICO_CELL` | `1`: a Tico Cloud cell company, written by [cell mode](cell.md) |
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of

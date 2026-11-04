@@ -24,13 +24,14 @@ async function pageNotes() {
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-librarian-open aria-label="Ask the Librarian" title="Ask the Librarian"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask the Librarian</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
+      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
       <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>
       <button type="button" role="tab" data-review="pending" aria-selected="false">Pending <span class="meet-pending-n" id="meet-pending-count"></span></button>
       <button type="button" role="tab" data-review="dismissed" aria-selected="false">Dismissed</button></div>
       <div class="meet-sources" id="meet-sources" hidden></div>
+      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
     <section class="meet-granola" id="meet-granola" aria-label="Granola" hidden></section>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
@@ -49,6 +50,7 @@ async function pageNotes() {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
+  meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog = $('#notes-modal');
   const closeNote = () => {
@@ -95,7 +97,7 @@ async function pageNotes() {
 // Review stays personal until approval; counts are quiet and never enter Needs you.
 function meetPendingBadge(count) {
   for (const el of document.querySelectorAll('[data-meet-pending]')) {
-    el.textContent = count > 99 ? '99+' : String(count || ''); el.hidden = !count;
+    el.hidden = !count; countSet(el, count > 99 ? '99+' : String(count || ''));   // a new number ticks in (ui/app/motion.js)
     el.setAttribute('aria-label', `${count} pending meetings`);
   }
 }
@@ -157,7 +159,7 @@ async function meetReviewAct(state, button, action, id) {
   finally { state.reviewBusy = false; button.disabled = false; }
 }
 function meetReviewDetail(rec) {
-  const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.name !== 'coo').map(e => `<option value="${esc(e.name)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
+  const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.id !== 'coo').map(e => `<option value="${esc(e.id)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
   return `<div class="note-send meet-review-detail"><span class="meet-review-tag">${rec.review_state === 'pending' ? 'Pending' : 'Dismissed'}</span><span class="muted meet-review-who">Only you see this</span><span class="spacer"></span>
     ${rec.review_state === 'pending' ? `<select id="meet-review-private" aria-label="Who sees it once shared"><option value="team"${!rec.private ? ' selected' : ''}>Team</option><option value="private"${rec.private ? ' selected' : ''}>Private</option></select>
     <select id="meet-review-send" aria-label="Bot that files its tasks">${sendTo}</select>
@@ -192,6 +194,21 @@ async function meetSettingsOpen(state) {
 // The meeting sources Tico takes from, in the order they are offered. `logo` is a key in ui/tool-icons.js;
 // a source without one is drawn as its first two letters. Close is set up in its tool doc, the
 // rest in a dialog (ui/meeting-importers.js).
+// Tico Recorder for Mac: the newest release's disk image.
+const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
+// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
+// A browser can't tell, so it keeps the download.
+async function meetRecorderLink() {
+  if (!nativeHas('openRecorder')) return;
+  let installed = false;
+  try { installed = await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch {}
+  const link = $('#meet-recorder');
+  if (!installed || !link) return;
+  const button = document.createElement('button');
+  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
+  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
+  link.replaceWith(button);
+}
 const MEET_SOURCES = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -230,7 +247,7 @@ function meetTile(state, source, big) {
   const account = source.id === 'granola' && !!state.granola;
   const mine = account ? granolaTileState(state) : null;
   const st = mine || (known ? meetSourceState(row, source.id) : {key: '', word: ''});
-  const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_success) : '';
+  const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
   const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
   return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile${big ? ' big' : ' item'}" data-state="${st.key}" ${attrs}${big ? '' : ' role="menuitem"'} aria-label="${esc(label)}">
@@ -444,9 +461,10 @@ function meetMadeChips(r) {
   }
   return chips.join('');
 }
-const sentLink = s => s?.task
-  ? `<a href="#/bot/${esc(s.slug)}/tasks">${esc(empName(s.slug))}</a>`
-  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${esc(empName(s.slug))}</a>`;
+// `bot` is the bot's id; a record sent before ids says `slug`.
+const sentLink = s => { const bot = s?.bot || s?.slug; return s?.task
+  ? `<a href="#/bot/${encodeURIComponent(bot)}/tasks">${empName(bot)}</a>`
+  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${empName(bot)}</a>`; };
 // "Today, 2:37 PM" / "Yesterday, 9:12 AM" / "Sep 4, 2:37 PM"
 function meetWhen(iso) {
   if (!iso) return '';
@@ -534,7 +552,7 @@ function meetPaint(state, rec) {
     `<details data-note-section="source-${t.id}"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)} transcript${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
       ${t.summary ? `<div class="note-body">${esc(t.summary).replace(/\n/g, '<br>')}</div>` : ''}
       <div class="note-transcript">${(t.turns || []).map(turn => `<p><span class="muted mono">[${mmss(turn.start_ms)}]</span> ${turn.speaker ? `<strong>${esc(turn.speaker)}</strong> ` : ''}${esc(turn.text)}</p>`).join('')}</div></details>`).join('');
-  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.name)}">${esc(e.display_name)}</option>`).join('');
+  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('');
   const owner = rec.owner === 'owner' ? 'the owner' : (rec.owner || 'the sender');
   const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
   const leadLink = rec.source === 'close' && /^https:\/\//i.test(rec.source_context?.lead_url || '')
@@ -666,7 +684,7 @@ function meetPaint(state, rec) {
     const msg = $('#meet-msg');
     send.disabled = true; send.title = msg.textContent = 'Sending…';
     try {
-      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {slug: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
+      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {bot_id: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
       await refresh(true); await meetLoad(state, true);
     } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; send.removeAttribute('title'); }
   };
@@ -712,7 +730,7 @@ function meetNotesOpen(state) {
           <label>Recording link (optional) <input type="url" id="manual-media" placeholder="https://…"></label>
         </div>
       </div>
-      <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.name)}">${esc(e.display_name)}</option>`).join('')}</select></label>
+      <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('')}</select></label>
       <label class="import-private"><input type="checkbox" id="manual-private"> Private: participants, its owner and the team owner only</label>
       <div class="row"><button class="primary" type="submit" id="manual-go">Add notes</button>
         <button class="ghost" type="button" id="manual-cancel">Cancel</button><span class="muted" id="manual-msg" role="status"></span></div>
@@ -789,7 +807,7 @@ const meetItemLine = it => {
   const d = it.detail || {};
   // A bare "ana" or "support" is a person's id or a bot's name: show the name, as everywhere else.
   const who = o => String(o).includes(':') ? actorLabel(o) : (S.people || []).find(p => p.id === o)?.name
-    || (S.emps.some(e => e.name === o) ? botDisplayName(o) : o);
+    || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
   if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
     /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
   if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
@@ -815,11 +833,15 @@ function meetSeek(ms) {
   line.classList.add('meet-seeked');
   setTimeout(() => line.classList.remove('meet-seeked'), 1500);
 }
+// The owner picker's bot options are bare ids; a task owner is the actor, `bot:<id>`.
+const meetFieldValue = f => { const v = f.value.trim(); return f.dataset.field === 'owner' && !v.includes(':') ? 'bot:' + v : v; };
 function meetItemFields(section, detail) {
   const fields = (MEET_SECTIONS.find(s => s.key === section) || {fields: []}).fields;
   return fields.map(([name, label]) => {
     if (name === 'owner') {
-      const current = (detail || {}).owner || '';
+      // An owner the notes named by slug (or a bare name) is picked by its id.
+      const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
+      const current = bot ? bot.id : named;
       return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
     }
     return `<input type="text" data-field="${name}" placeholder="${esc(label)}" aria-label="${esc(label)}" value="${esc((detail || {})[name] || '')}">`;
@@ -908,7 +930,7 @@ function meetItemsHandlers(state, rec) {
       const text = form.querySelector('[data-text]').value.trim();
       if (!text) return;
       const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = f.value.trim(); });
+      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
       state.itemAdd = '';
       if (await call('', {section: form.dataset.new, text, detail})) toast('Added');
       else repaint();
@@ -921,7 +943,7 @@ function meetItemsHandlers(state, rec) {
       const text = form.querySelector('[data-text]').value.trim();
       if (!text) return;
       const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = f.value.trim(); });
+      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
       state.itemEdit = '';
       if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail}, form.dataset.edit)) toast('Saved');
       else repaint();

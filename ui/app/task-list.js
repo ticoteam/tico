@@ -32,18 +32,24 @@ const TL_ICON = {
   caret: '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   all: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><rect x="2" y="2" width="10" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 7.2l1.7 1.6 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
+// A bot in the address is `bot:<id>`; an old link's slug (or a bare name) is moved to its id.
+const tasksBotActor = v => {
+  if (v === 'me' || v === 'all' || (v.includes(':') && !v.startsWith('bot:'))) return v;
+  const ref = v.replace(/^bot:/, '');
+  return 'bot:' + (botByRef(ref)?.id || ref);
+};
 function tasksFiltersFromURL(state) {
   const query = new URLSearchParams(String(location.hash).split('?')[1] || '');
   state.filters = tasksEmptyFilters();
   for (const k of Object.keys(state.filters)) {
     const raw = query.get(k);
-    if (raw) state.filters[k] = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))];
+    if (raw) state.filters[k] = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean).map(v => k === 'owner' || k === 'asked' ? tasksBotActor(v) : v))];
   }
   state.urlType = query.get('type') || '';
   state.urlView = query.get('view') || '';
   // An address with any of these says whose tasks the first tab shows (Me when it names nobody).
   if ([...query.keys()].length) {
-    state.who = query.get('who') || 'me';
+    state.who = tasksBotActor(query.get('who') || 'me');
     state.side = query.get('side') === 'asked' ? 'asked' : 'plate';
     state.whoFixed = true;
   }
@@ -148,13 +154,13 @@ function tasksMigrateOldFilters(state, saved) {
   let changed = false;
   if (old.filter === 'mine') changed = add('owner', 'me') || changed;
   if (old.filter === 'asked') changed = add('asked', 'me') || changed;
-  if (old.bot) changed = add('owner', old.bot.includes(':') ? old.bot : 'bot:' + old.bot) || changed;
+  if (old.bot) changed = add('owner', tasksBotActor(old.bot)) || changed;
   if (old.label) changed = add('tag', old.label) || changed;
   return changed || Object.keys(old).some(k => old[k] != null && old[k] !== '' && old[k] !== 'all');
 }
 // the team a task's owner sits in (a group: backend/groups.py)
 function taskTeam(t) {
-  const slug = actorSlug(t?.owner), pid = actorPerson(t?.owner);
+  const slug = actorSlug(t?.owner_id), pid = actorPerson(t?.owner_id);
   if (slug) return teamOf(slug) || '';
   if (pid) return (S.people || []).find(p => p.id === pid)?.team || '';
   return '';
@@ -167,7 +173,7 @@ function taskRepos(t) {
 }
 const resolveMe = v => v === 'me' ? myActor() : v;
 function taskPassesFilters(t, f) {
-  if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner || (!v.includes(':') && t.owner === 'bot:' + v))) return false;
+  if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
   if (f.asked?.length && !f.asked.some(v => resolveMe(v) === taskRequester(t))) return false;
   if (f.team?.length && !f.team.includes(taskTeam(t) || 'none')) return false;
   if (f.tag?.length && !f.tag.some(v => (t.labels || []).includes(v))) return false;
@@ -217,7 +223,7 @@ function tasksWhoKnown(who) {
   if (who === 'me' || who === 'all') return true;
   const pid = actorPerson(who), slug = actorSlug(who);
   if (pid) return !(S.people || []).length || S.people.some(p => p.id === pid);
-  if (slug) return !(S.emps || []).length || S.emps.some(e => e.name === slug);
+  if (slug) return !(S.emps || []).length || !!botRow(slug);
   return false;
 }
 // 'me', 'all' or an actor id; anyone this install does not know is Me
@@ -235,11 +241,11 @@ const tasksPlateView = state => state.view === 'foryou' && state.side !== 'asked
 function taskOnPlate(t, actor) {
   if (!t || !actor || taskFinished(t)) return false;
   if (actor === myActor()) return taskNeedsViewer(t);
+  if (t.status === 'declined') return taskDeclinedToWho(t, actor);
   const on = t.status === 'waiting' && t.waiting_on ? t.waiting_on : '';
-  return (on ? on === actor : t.owner === actor) || (t.ask?.to_actor === actor && !t.ask?.older)
-    || (t.status === 'declined' && taskRequester(t) === actor && !actorPerson(t.owner));
+  return (on ? on === actor : t.owner_id === actor) || (t.ask?.recipient_id === actor && !t.ask?.older);
 }
-const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner !== actor;
+const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner_id !== actor;
 function tasksFirstTabHas(state, it) {
   const key = tasksWhoKey(state), t = it.task;
   if (state.side === 'asked') return taskAskedBy(t, tasksWhoActor(state));
@@ -292,8 +298,8 @@ function tasksWhoMenu(state, anchor, toggle = true) {
   for (const p of people) { const team = p.team || ''; if (!teams.has(team)) teams.set(team, []); teams.get(team).push(p); }
   const order = [...teams.keys()].sort((a, b) => (b === (mine?.team || null)) - (a === (mine?.team || null)) || (a === '') - (b === '') || taskTeamLabel(a).localeCompare(taskTeamLabel(b)));
   const name = p => p.name || titleCase(p.id);
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.name))
-    .sort((a, b) => String(botDisplayName(a.name)).localeCompare(String(botDisplayName(b.name))));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.id))
+    .sort((a, b) => String(botDisplayName(a.id)).localeCompare(String(botDisplayName(b.id))));
   const html = `<div class="tl-menu tl-who-menu" role="group" aria-label="Whose tasks">
     <div class="tl-seg" role="group" aria-label="Show">${[['plate', 'On their plate'], ['asked', 'Asked by them']].map(([k, label]) =>
       `<button type="button" data-who-side="${k}" aria-pressed="${(k === 'asked') === asked}">${esc(label)}</button>`).join('')}</div>
@@ -305,7 +311,7 @@ function tasksWhoMenu(state, anchor, toggle = true) {
         ${teams.get(team).sort((a, b) => name(a).localeCompare(name(b))).map(p => opt('human:' + p.id, actorFace('human:' + p.id, 16), name(p), count('human:' + p.id), `${name(p)} ${p.email || ''} ${taskTeamLabel(team)}`)).join('')}</div>`).join('')}
       ${bots.length ? `<button type="button" class="tl-mi tl-who-more" data-who-bots>${bots.length} bot${bots.length === 1 ? '' : 's'}</button>
         <div class="tl-who-team tl-who-bots" hidden><div class="tl-menu-h" aria-hidden="true">Bots</div>
-        ${bots.map(e => opt('bot:' + e.name, actorFace('bot:' + e.name, 16), botDisplayName(e.name), count('bot:' + e.name), `${botDisplayName(e.name)} ${e.name}`)).join('')}</div>` : ''}
+        ${bots.map(e => opt('bot:' + e.id, actorFace('bot:' + e.id, 16), botDisplayName(e.id), count('bot:' + e.id), `${botDisplayName(e.id)} ${e.slug}`)).join('')}</div>` : ''}
       <div class="tl-menu-none" hidden>Nobody by that name</div>
     </div></div>`;
   tasksMenu(state, anchor, html, pop => {
@@ -353,7 +359,7 @@ function tasksFilterOptions(state, field) {
     return [...(withMe && me ? [{value: 'me', label: 'You', face: actorFace(me, 16)}] : []),
       ...list.map(a => ({value: a, label: actorLabel(a), face: actorFace(a, 16)}))];
   };
-  if (field === 'owner') return actorOpts(tasks.map(t => t.owner), true);
+  if (field === 'owner') return actorOpts(tasks.map(t => t.owner_id), true);
   if (field === 'asked') return actorOpts(tasks.map(taskRequester), true);
   if (field === 'team') {
     const ids = [...new Set([...tasks.map(t => taskTeam(t) || 'none'), ...selected])];
@@ -400,14 +406,14 @@ function tasksGroupsFor(items, by, state) {
   }
   if (by === 'status') {
     return taskStatusGroups(items).map(g => ({key: g.key, label: g.label, items: g.items, icon: '',
-      create: g.owner ? {owner: g.owner} : g.key === 'doing' ? {} : null}));
+      create: g.owner ? {owner_id: g.owner} : g.key === 'doing' ? {} : null}));
   }
   const byId = tasksById(state);
   for (const it of items) {
     const t = it.task;
     if (by === 'owner') {
       add('o:' + it.actor, () => ({label: actorLabel(it.actor), icon: actorFace(it.actor, 16), actor: it.actor,
-        create: {owner: actorSlug(it.actor) || it.actor}}), it);
+        create: {owner_id: actorSlug(it.actor) || it.actor}}), it);
     } else if (by === 'requester') {
       const who = taskRequester(t) || '';
       add('a:' + who, () => ({label: actorLabel(who) || 'Unknown', icon: actorFace(who, 16), actor: who, chat: chatOf(who), chatName: actorLabel(who)}), it);
@@ -418,7 +424,7 @@ function tasksGroupsFor(items, by, state) {
       const pid = taskParentId(t);
       const parent = pid && (byId.get(pid) || (t.parent && String(t.parent.id) === pid ? t.parent : null));
       add('p:' + (pid || 'none'), () => pid ? {label: parent?.title || 'Parent task', icon: '',
-        create: parent ? {parent: {id: pid, title: parent.title, owner: parent.owner}} : null}
+        create: parent ? {parent: {id: pid, title: parent.title, owner_id: parent.owner_id}} : null}
         : {label: 'No parent', icon: '', last: true}, it);
     } else if (by === 'tag') {
       const labels = t.labels || [];
@@ -478,11 +484,11 @@ function taskListRowHTML(it, ctx, depth = 0) {
   // The amber "Waiting" chip already says the status, so the status word stays out (an empty pad keeps the columns).
   const waitsOnMe = !!taskWaitingOn(t) && taskWaitingOn(t) === me;
   // who asked: a tiny face beside the owner's when it is not you (and not already the group's heading)
-  const showAsker = ctx.by !== 'requester' && asker && asker !== me && asker !== t.owner && (t.owner === me || !!actorPerson(asker));
+  const showAsker = ctx.by !== 'requester' && asker && asker !== me && asker !== t.owner_id && (t.owner_id === me || !!actorPerson(asker));
   // a subtask shown away from its parent says whose it is
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
-  const when = ctx.done ? (it.closed || it.updated) : it.updated;
+  const when = ctx.done ? (it.closed || it.updated_at) : it.updated_at;
   const ageText = ctx.done ? ageShort(when) : taskAge(t);
   const ageTitle = ctx.done ? `${t.status === 'closed' ? 'Closed' : 'Done'} ${fmt(when)}` : taskAgeTitle(t);
   const need = tasksNeedsQueue(state) ? needsItem(t.id) : null;
@@ -491,19 +497,20 @@ function taskListRowHTML(it, ctx, depth = 0) {
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
   void selected;
-  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}"${card ? ` data-need-card="${esc(card)}"` : ''} role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
+  const fb = fbTaskKey(t);             // a bot asked for it: 👍 / 👎 on hover or a long press (ui/app/feedback.js)
+  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}"${card ? ` data-need-card="${esc(card)}"` : ''}${fb ? ` data-fb-press="${esc(fb)}"` : ''} role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
     ${ctx.select ? `<input type="checkbox" class="tl-check" data-select="${esc(key)}" tabindex="-1" aria-label="Select ${esc(it.title)}">` : '<span class="tl-check-pad"></span>'}
     ${kids.length ? `<button type="button" class="tl-chev${open ? ' open' : ''}" data-expand="${esc(key)}" tabindex="-1" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Hide' : 'Show'} subtasks of ${esc(it.title)}">${TL_ICON.chev}</button>` : '<span class="tl-chev-pad"></span>'}
-    <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span></button>
+    <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span>${fbMarkHTML(fb)}</button>
     ${parent?.title ? `<span class="tl-parent" title="Part of ${esc(parent.title)}"><span aria-hidden="true">↳ </span><span class="tl-parent-t">${esc(parent.title)}</span></span>` : ''}
     ${refused ? `<span class="tl-note tl-refused" role="alert" data-task-refused title="${esc(refused)}"><span class="tl-note-text">${esc(refused)}</span></span>`
       : note ? `<span class="tl-note" title="${esc(note.text)}"><span class="tl-note-ic">${TL_ICON.note}</span><span class="tl-note-text">${esc(note.text)}</span></span>` : '<span class="tl-fill"></span>'}
     <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : taskStatusLabel(t) === 'Waiting' ? '' : taskWaitTag(t)}${taskChipsHTML(t)}</span>
     ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskRowStatus(t, key)}
-    <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
+    <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner_id))}">${actorFace(t.owner_id, 18)}</span></span>
     <time class="tl-age tnum" datetime="${esc(when || '')}" title="${esc(ageTitle)}">${esc(ageText)}</time>
-    ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}
+    ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}${fbButtonsHTML(fb, {row: true})}
   </div>`);
   return row + (open ? kids.map(k => taskListRowHTML(k, ctx, depth + 1)).join('') : '');
 }
@@ -534,6 +541,7 @@ async function tasksRowStatusSave(state, id, bodyFor) {
   for (let attempt = 0; t && attempt < 2; attempt++) {
     const body = bodyFor(t);
     if (!body) return;
+    if (attempt === 0 && body.status === 'done') taskDoneMotion('t' + id);   // its check draws while the list catches up
     state.refused?.delete(id);
     try { await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body}); break; }
     catch (e) {
@@ -592,7 +600,7 @@ function tasksListHTML(items, state) {
   const select = tasksCanSelect();
   return `<div class="tl${select ? ' can-select' : ''}" data-group-by="${esc(by)}">${asks}${groups.map((g, i) => {
     const {tops: raw, kids} = tasksNest(g.items, nest);
-    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated)) : byRank);
+    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated_at).localeCompare(String(b.updated_at)) : byRank);
     const more = extra.get(g.key) || [];
     if (!tops.length && !more.length) return '';
     const ctx = {state, kids, done, by, select};
@@ -929,7 +937,7 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
       try {
         await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
         changed++;
-        if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner, typed: pipelineTypeId(t) !== 'general',
+        if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general',
           told: !!actorSlug(taskRequester(t))});
         break;
       } catch (e) {
@@ -984,7 +992,7 @@ async function tasksBulkServer(state, describe, action, tasks) {
     out.skipped ? `${out.skipped} not changed: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}` : ''].filter(Boolean).join(', ');
   if (describe.close) {
     const closed = (out.tasks?.changed || []).map(c => byId.get(String(c.id))).filter(Boolean).map(t => ({id: t.id, title: t.title, status: t.status,
-      step_id: t.step_id || '', owner: t.owner, typed: pipelineTypeId(t) !== 'general', told: !!actorSlug(taskRequester(t))}));
+      step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general', told: !!actorSlug(taskRequester(t))}));
     if (closed.length) state.bulkUndo = {items: closed, until: Date.now() + 10000};
   }
   if (skipped.length) toast(`${skipped.length} not changed: ${skipped.map(s => `${s.title || '#' + s.number} (${s.reason})`).join('; ')}`, true);
@@ -1015,7 +1023,7 @@ async function tasksBulkUndo(state) {
     try {
       const fresh = (await get(`/v2/tasks/${encodeURIComponent(prev.id)}`)).task;
       const body = prev.typed && prev.step_id ? {step: prev.step_id} : {status: prev.status};
-      if (fresh.owner !== prev.owner) body.owner = actorSlug(prev.owner) || prev.owner;
+      if (fresh.owner_id !== prev.owner_id) body.owner = actorSlug(prev.owner_id) || prev.owner_id;
       await post(`/v2/tasks/${encodeURIComponent(prev.id)}`, {version: fresh.version, ...body});
       ok++;
     } catch (e) { failed.push({id: prev.id, title: prev.title, why: e.message}); }
@@ -1059,7 +1067,7 @@ function tasksBulkMenu(state, kind, anchor) {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-owner]'); if (!b) return;
         const owner = b.dataset.bulkOwner, actor = owner.includes(':') ? owner : 'bot:' + owner;
-        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner}, {action: 'owner', owner});
+        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner_id === actor ? null : {owner: actor}, {action: 'owner', owner: actor});
       };
     });
   } else if (kind === 'tags') {
@@ -1229,7 +1237,7 @@ function tasksKeys(state, ev) {
     return;
   }
   if (key === '/') { ev.preventDefault(); $('#task-q')?.focus(); $('#task-q')?.select(); return; }
-  if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); return; }
+  if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); return; }
   if (key === 'x' && listy && state.cursor?.startsWith('t') && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
   if (key === 'Enter' && listy && state.cursor && (!el || el === document.body || el.closest?.('.tl-row,.bcard') && !el.matches('button,a,input'))) {
     ev.preventDefault();
@@ -1279,8 +1287,8 @@ function tasksBodyClick(state, ev) {
   if (addIn) {
     const g = tasksGroupsFor(taskItems(state), tasksGroupBy(state), state).find(x => x.key === addIn.dataset.groupAdd);
     const c = g?.create || {};
-    if (c.parent) openTaskCreate(c.parent.owner ? (actorSlug(c.parent.owner) || c.parent.owner) : '', {parent: c.parent});
-    else openTaskCreate(c.owner ? (actorSlug(c.owner) || c.owner) : '', {labels: c.labels || []});
+    if (c.parent) openTaskCreate(c.parent.owner_id ? (actorSlug(c.parent.owner_id) || c.parent.owner_id) : '', {parent: c.parent});
+    else openTaskCreate(c.owner_id ? (actorSlug(c.owner_id) || c.owner_id) : '', {labels: c.labels || []});
     return true;
   }
   if (ev.target.closest('[data-clear-filters]')) {

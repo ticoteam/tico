@@ -5,10 +5,11 @@ window.renderChangelogNotice = function () {
   const notice = document.querySelector('#changelog-notice');
   const badge = document.querySelector('#changelog-badge');
   if (notice) {
-    notice.hidden = !count;
-    notice.querySelector('.changelog-notice-label').textContent = `What's new · ${count} ${count === 1 ? 'update' : 'updates'}`;
+    // The sidebar's one version row (ui/app/notices.js): while a newer release is offered, that row stands in for this one.
+    notice.hidden = !count || nvUpdateShown();
+    notice.querySelector('.changelog-notice-label').textContent = S.config.version ? `Updated to ${nvVersion(S.config.version)}` : "What's new";
   }
-  if (badge) { badge.hidden = !count; badge.textContent = count; }
+  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = count; }   // ticks (ui/app/motion.js)
 };
 
 // The top of What's new: the Beta features, from the server's one list (backend/beta.py), each with its pages in the

@@ -8,6 +8,9 @@ yes, no or unknown on "are we affected", the tier, and the fix. Nothing is chang
 
 ## 1. Read the advisory
 
+EPSS is the chance of exploitation in the next 30 days, not the damage. Rate the damage as
+`knowledge/security-practice.md` describes.
+
 `hub doc fetch <advisory url>`. Note the affected versions, the fixed version, the vulnerable function or
 configuration, and the date. Check CISA's KEV catalogue and the EPSS score for the CVE; record both with the
 date read.
@@ -18,6 +21,8 @@ Search each in-scope repository's lockfiles for the package. Record direct or tr
 parent), the installed version, and whether it is a runtime or a dev/test dependency.
 
 ## 3. Can our code reach it?
+
+Follow `skills/trace-reachability-of-a-vulnerable-call/SKILL.md`.
 
 Search the code for imports of the package and calls to the vulnerable function or the risky configuration.
 Record the file and line of each call site, and whether it handles untrusted input on an internet-facing

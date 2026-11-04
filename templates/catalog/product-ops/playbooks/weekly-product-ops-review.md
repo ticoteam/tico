@@ -30,14 +30,16 @@ exception with who should fix it.
 
 ## 5. Betas and the calendar
 
-Beta participants whose feedback is overdue, betas past their exit date. The next eight weeks of releases
-from milestones, the calendar and the Release Manager's tasks; flag weeks with two launches and launches
+Beta participants whose feedback is overdue, and betas at or past their exit date. For each of those, follow
+`skills/decide-a-beta-exit/SKILL.md` and record the recommendation; the owner decides. The next eight weeks of
+releases from milestones, the calendar and the Release Manager's tasks; flag weeks with two launches and launches
 without a support briefing or release notes owner.
 
 ## 6. Ship notices
 
-For each request marked shipped since last week: the requesting accounts, where they asked, and a short
-notice text. Put them on the task for the owner to review; nothing is sent.
+For each request marked shipped since last week, follow `skills/prepare-a-ship-notice/SKILL.md`: one notice per
+requesting account, each checked against the released behaviour and the account's current record. Put them on the
+task for the owner to review; nothing is sent.
 
 ## 7. Write and hand over
 

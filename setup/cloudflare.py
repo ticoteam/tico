@@ -32,12 +32,13 @@ def _urllib_transport(method: str, url: str, headers: dict, body: bytes | None) 
 
 
 def ingress_config(hostname: str, runner_host: str = "", *, aliases=(), visual_origin: str = "") -> dict:
-    """The route a Tico tunnel needs: the hostname to the server, anything else a 404. With a runner hostname (served without
-    Access, for computers and outside agents) that host goes to the server too, for /api/v2 and /download only. It is what
-    setup stores in a tunnel it creates through the API, and what the server writes for the cloudflared container from
-    TICO_DOMAIN and TICO_RUNNER_URL at every start (docker/entrypoint.sh `tunnel-config`, read by compose.yaml's cloudflared
-    service), so a tunnel run with only its token still has a route. A tunnel managed in Cloudflare (the dashboard, or setup
-    through the API) keeps its own: cloudflared prefers it to the local file."""
+    """The route a Tico tunnel needs: the hostname to the server (through compose.yaml's hold, contract.TUNNEL_ORIGIN),
+    anything else a 404. With a runner hostname (served without Access, for computers and outside agents) that host goes to
+    the server too, for /api/v2 and /download only. It is what setup stores in a tunnel it creates through the API, and what
+    the server writes for the cloudflared container from TICO_DOMAIN and TICO_RUNNER_URL at every start
+    (docker/entrypoint.sh `tunnel-config`, read by compose.yaml's cloudflared service), so a tunnel run with only its token
+    still has a route. A tunnel managed in Cloudflare (the dashboard, or setup through the API) keeps its own: cloudflared
+    prefers it to the local file."""
     if not st.plain_hostname(hostname.lower()) or runner_host and not st.plain_hostname(runner_host.lower()):
         raise st.MissingInput("Tunnel hosts must be plain DNS hostnames")
     canonical, runner_host = hostname.lower(), runner_host.lower()
@@ -50,7 +51,7 @@ def ingress_config(hostname: str, runner_host: str = "", *, aliases=(), visual_o
         visual = ""  # The local runtime also leaves invalid optional visual routes out.
     value = aliases if isinstance(aliases, str) else ",".join(aliases)
     app_hosts = st.aliases(value, canonical, runner_host, visual)
-    service = f"http://{contract.SERVICE_SERVER}:{contract.SERVER_PORT}"
+    service = f"http://{contract.TUNNEL_ORIGIN}"
     rules = [{"hostname": host, "service": service} for host in (canonical, *app_hosts)]
     if runner_host:
         rules.append({"hostname": runner_host, "path": contract.RUNNER_ROUTE_PATH, "service": service})
@@ -131,7 +132,7 @@ class Cloudflare:
 DASHBOARD_STEPS = [
     "In Cloudflare, open Zero Trust > Networks > Tunnels > Create a tunnel > Cloudflared.",
     "Name it, then copy the token from the install command (the long string after `--token`).",
-    "In the tunnel's Public Hostname tab add: hostname {domain}, service type HTTP, URL server:8765.",
+    "In the tunnel's Public Hostname tab add: hostname {domain}, service type HTTP, URL " + contract.TUNNEL_ORIGIN + ".",
 ]
-RUNNER_DASHBOARD_STEP = ("Add a second Public Hostname: hostname {runner}, path {path}, service type HTTP, URL server:8765. "
+RUNNER_DASHBOARD_STEP = ("Add a second Public Hostname: hostname {runner}, path {path}, service type HTTP, URL " + contract.TUNNEL_ORIGIN + ". "
                          "Leave it out of the Access application: Tico checks the computers' and agents' tokens itself.")

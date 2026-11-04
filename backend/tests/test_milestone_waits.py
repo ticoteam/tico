@@ -22,7 +22,7 @@ def wakes(api, task):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL", (task["id"],))]
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL", (task["id"],))]
 
 
 def name(task):
@@ -127,7 +127,7 @@ def test_a_merge_while_the_server_was_down_wakes_once_after_restart(api, tmp_pat
         Scheduler(restarted.state.store, restarted.state.execution).tick()
         with restarted.state.store.read() as c:
             woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL",
+                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
                              (waiter["id"],)).fetchone()[0]
         assert woke == 1
         assert client  # the restarted app served while the sweep ran
@@ -226,7 +226,7 @@ def recover(app, monkeypatch, github):
     import threading
     service = app.state.github_app
     with service.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated,default_branch) "
+        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated_at,default_branch) "
                   "VALUES('ticoteam/tico',1,1,'human:ana',?,'main')", (H.now(),))
     monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *a, **kw: ("test-token", "later"))
@@ -272,6 +272,43 @@ def test_a_release_published_while_the_server_was_down_wakes_once_after_restart(
         recover(restarted, monkeypatch, github)
         with restarted.state.store.read() as c:
             woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL",
+                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.milestone') IS NOT NULL",
                              (following["id"],)).fetchone()[0]
         assert woke == 1
+
+
+def test_a_wait_note_comes_back_in_the_wake_and_a_task_wait_takes_none(api):
+    _, waiter = pair(api)
+    hook(api, "pull_request", pr_event("opened"))
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "pr:" + PR, "note": "Check the migration, then QA"},
+                 headers=headers())
+    assert r.status_code == 200, r.text
+    assert shown(api, waiter)["milestone_waits"][0]["note"] == "Check the migration, then QA"
+    merge(api)
+    assert len(wakes(api, waiter)) == 1
+    assert wakes(api, waiter)[0].endswith("\nYour note: Check the migration, then QA")
+    # A task: wait is the blocked_by relation, which has no note of its own: refused rather than dropped.
+    other = post(api, "tasks", {"owner": "cmo", "title": "Pick the logo", "body": "x"})
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "task:" + other["id"], "note": "later"},
+                 headers=headers())
+    assert r.status_code >= 400 and "note" in r.text
+
+
+def test_a_changed_wait_note_is_a_task_change_with_history_and_the_later_wake_carries_it(api):
+    _, waiter = pair(api)
+    hook(api, "pull_request", pr_event("opened"))
+    wait(api, waiter, "pr:" + PR)                                   # first stored with no note
+    version = shown(api, waiter)["version"]
+    raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
+    assert shown(api, waiter)["version"] == version + 1, "a changed note bumps the task version"
+    again = raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
+    assert again["readback"][0].startswith("Already: ")
+    assert shown(api, waiter)["version"] == version + 1, "the same note again changes nothing"
+    raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration, then QA"})
+    with api.app.state.store.read() as c:
+        notes = [(r["old"], r["new"]) for r in c.execute(
+            "SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='milestone_wait_note' ORDER BY created_at,id",
+            (waiter["id"],))]
+    assert notes == [(None, "Check the migration"), ("Check the migration", "Check the migration, then QA")], notes
+    merge(api)
+    assert wakes(api, waiter)[-1].endswith("\nYour note: Check the migration, then QA")

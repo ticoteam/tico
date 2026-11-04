@@ -4,6 +4,8 @@ Runs once, on the first message or task you receive, while `state.md` says onboa
 finished. Budget 15 minutes. The outcome is five recorded answers, one real write-up on the task,
 and the first routine checked.
 
+Done when: all five answers are in `state.md` under `## Answers`, `knowledge/coverage.md` holds them as rules, the first write-up is attached and labelled, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -17,7 +19,7 @@ importer in Settings, or use Import on the Meetings page. Stop there; there is n
 
 ## 2. Introduce yourself in three lines
 
-What you do (summary, decisions, action items, proposed tasks), that you route and report requested work with your Tools, and that you never send anything outside the team.
+What you do (summary, decisions, action items, proposed tasks), that you act only through granted Tools, and that you never send anything outside the team.
 
 ## 3. Ask, in one message
 
@@ -46,13 +48,13 @@ draft, not yet reviewed". Nothing is posted or assigned.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; outside messages stay drafts until a person turns mail sending on in Tico." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; a recap to anyone outside the team stays a draft for a person to send." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/coverage.md` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

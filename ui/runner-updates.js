@@ -26,8 +26,8 @@ window.runnerOutdatedBanner = function runnerOutdatedBanner(machines, me, name, 
   const stale = (machines || []).filter(machine => machine.update?.outdated && online(machine));
   if (!stale.length) return '';
   const server = stale[0].update.server_release;
-  const mine = stale.filter(machine => machine.operator === me);
-  const list = stale.map(machine => `${esc(machine.label)} (${esc(machine.update.release || 'release unknown')}${machine.operator === me ? '' : machine.operator ? `, ${esc(name(machine.operator))}'s` : ', no owner'})`).join(', ');
+  const mine = stale.filter(machine => machine.owner_id === me);
+  const list = stale.map(machine => `${esc(machine.label)} (${esc(machine.update.release || 'release unknown')}${machine.owner_id === me ? '' : machine.owner_id ? `, ${esc(name(machine.owner_id))}'s` : ', no owner'})`).join(', ');
   const ask = mine.length ? ` ${mine.length === 1 ? 'Yours updates' : 'Yours update'} by itself between turns; when it stays behind, its row says why.` : ' Their owners update them.';
   return `<div class="machine-outdated-banner" role="status" data-runner-outdated-banner>${stale.length === 1 ? 'A computer runs' : `${stale.length} computers run`} older code than this server (Tico ${esc(server)}): ${list}.${ask}</div>`;
 };

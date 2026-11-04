@@ -106,6 +106,6 @@ def test_a_persons_new_slack_thread_to_a_held_bot_waits_and_runs_once_it_is_back
     assert run_all(api, machine, "finance") == [kept["message_id"]], "it runs once it is back"
     assert gateway.tick()["events"] == [] and run_all(api, machine, "finance") == [], "and is not sent again"
     with api.app.state.store.read() as c:
-        jobs = [dict(r) for r in c.execute("SELECT bot, message_id, state FROM jobs")]
-        sent = c.execute("SELECT count(*) FROM messages WHERE from_actor='human:ana' AND to_actor='bot:finance'").fetchone()[0]
-    assert jobs == [{"bot": "finance", "message_id": kept["message_id"], "state": "completed"}] and sent == 1
+        jobs = [dict(r) for r in c.execute("SELECT bot_id, message_id, state FROM jobs")]
+        sent = c.execute("SELECT count(*) FROM messages WHERE sender_id='human:ana' AND recipient_id='bot:finance'").fetchone()[0]
+    assert jobs == [{"bot_id": "finance", "message_id": kept["message_id"], "state": "completed"}] and sent == 1

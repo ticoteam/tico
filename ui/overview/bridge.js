@@ -1,6 +1,6 @@
 const $ = selector => document.querySelector(selector);
 const origin = location.origin;
-let model = null, scene = null, topology = '', revision = 0, disposed = false, failed = false, replay = null, replaying = false;
+let model = null, scene = null, topology = '', revision = 0, disposed = false, failed = false, replay = null, replaying = false, paused = false;
 // The renderer starts downloading before the team arrives; the page preloads it too.
 const renderer = import('./building.js'); renderer.catch(() => {});
 const preferences = {layout: 'campus'};
@@ -57,6 +57,7 @@ async function mount(quiet = false) {
     const {createBuilding} = await renderer;
     if (disposed || seq !== revision) return;
     scene = createBuilding(currentData(), preferences, openMember);
+    if (paused) scene.pause?.();
   } catch (error) {
     if (disposed || seq !== revision) return;
     failed = true; fallback('The 3D view is unavailable. Explore your team below.');
@@ -111,6 +112,9 @@ window.addEventListener('message', event => {
   if (event.source !== parent || event.origin !== origin || disposed) return;
   if (event.data?.type === 'tico-overview-data') update(event.data.model);
   if (event.data?.type === 'tico-overview-dispose') dispose();
+  // The app parks this frame while another page shows (ui/app/overview.js): no frames are drawn until it is back.
+  if (event.data?.type === 'tico-overview-pause') { paused = true; if (replaying) stopReplay(); scene?.pause?.(); }
+  if (event.data?.type === 'tico-overview-resume') { paused = false; scene?.resume?.(); }
   if (event.data?.type === 'tico-overview-replay-data') showReplay(event.data);
   if (event.data?.type === 'tico-overview-replay-error' && replaying) $('#replay-note').textContent = 'The replay could not be loaded.';
 });

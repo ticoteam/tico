@@ -5,6 +5,10 @@ a human says the books are final), or by a request for "how are we doing against
 minutes. The outcome is one page: each budget line's actual, the variance, the material ones explained
 and owned, and the forecast rolled forward. Nothing in the budget or the books is changed.
 
+Inputs: the month's profit-and-loss export or the Bookkeeper's close status, `knowledge/forecast.md` (budget and current forecast), and the variance rule in `knowledge/thresholds.md`.
+
+Done when: every budget line has its actual and variance, each material variance has a cause and an owner, the forecast is rolled with a reason for each changed line, the report is published, and the task is closed with the headline.
+
 ---
 
 ## 1. Check the inputs are final

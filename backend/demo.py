@@ -16,11 +16,14 @@ minute with no domain, DNS, sign-in or model account. It cannot be mistaken for 
 import argparse
 import asyncio
 import contextlib
+import contextvars
 import errno
 import ipaddress
 import logging
 import os
 import re
+import shutil
+import signal
 import socket
 import sys
 import tempfile
@@ -38,7 +41,7 @@ log = logging.getLogger("tico.demo")
 DEFAULT_PORT = 8765
 OWNER_EMAIL = "ana@acme.example"
 BANNER = "Demo — sample data"
-EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing leaves this computer. "
+EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing is sent. "
            "On a real install, this starts the bot on a connected computer.")
 BOT_REPLY = ("This is a demo, so I do not run here. On a real install this message would reach me on a "
              "connected computer and I would answer it there.")
@@ -125,12 +128,25 @@ def network_blocked():
 
 
 # ----------------------------------------------------------------------------- the running demo
-async def keep_alive(store, stop):
+async def keep_alive(store, stop, vault=None):
     """What a real install's scheduler and a runner's heartbeat would keep true: the computers look
     online, the scheduler looks alive, and a message to a bot is answered (once) that this is a demo."""
+    # The demo's scheduler is off, so Finance's bank worker would never sync. With TICO_MERCURY_BASE set (a local
+    # fake Mercury: scripts/finance_e2e.sh), the worker runs and reads only that base. Without it, nothing starts.
+    # The same override runs Finance's short jobs every tick (waiting events, bills due, reminders), so payments and
+    # approvals can be tested without the scheduler.
+    finance_jobs = False
+    if vault is not None:
+        from .finance import actions as finance
+        from .finance import mercury
+        if mercury.base_url() != mercury.BASE:
+            finance.banking_start(store, vault)
+            finance_jobs = True
     while not stop.is_set():
         try:
             await asyncio.to_thread(tick, store)
+            if finance_jobs:
+                await asyncio.to_thread(finance_tick, store)
         except Exception as exc:
             log.error("Demo tick failed: %s", type(exc).__name__)
         try:
@@ -142,18 +158,29 @@ async def keep_alive(store, stop):
 def tick(store):
     with store.transaction() as c:
         now = H.now()
-        c.execute("UPDATE runners SET last_seen=? WHERE revoked_at IS NULL", (now,))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id IN (SELECT id FROM runners WHERE revoked_at IS NULL)",
+                  (now,))
         c.execute("INSERT INTO service_health VALUES('scheduler',?,NULL,'{}') ON CONFLICT(service) DO UPDATE SET "
-                  "last_success=excluded.last_success,last_error=NULL", (now,))
-        for job in c.execute("SELECT j.id,j.bot,m.from_actor,m.conversation_id,m.id AS message FROM jobs j "
+                  "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL", (now,))
+        for job in c.execute("SELECT j.id,j.bot_id,m.sender_id,m.conversation_id,m.id AS message FROM jobs j "
                              "JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchall():
-            c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job["id"],))
-            if H.is_human(job["from_actor"]):
+            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job["id"],))
+            if H.is_human(job["sender_id"]):
                 try:
-                    H.say(c, H.bot_actor(job["bot"]), job["from_actor"], BOT_REPLY,
+                    H.say(c, H.bot_actor(job["bot_id"]), job["sender_id"], BOT_REPLY,
                           conversation_id=job["conversation_id"], in_reply_to=job["message"])
                 except H.Refused:
                     pass
+
+
+def finance_tick(store):
+    from .finance import actions as finance, reads as finance_reads
+    with store.read() as c:
+        if not finance_reads.is_set_up(c):
+            return
+    for step in (finance.drain_events, finance.watch_documents):
+        with store.transaction() as c:
+            step(c)
 
 
 def avatar(pid):
@@ -168,16 +195,46 @@ def avatar(pid):
     return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "private, max-age=3600"})
 
 
+class _Discarded(Exception):
+    """Ends a public demo GET's write transaction so it rolls back."""
+
+
+# Set for a public demo's GET or HEAD: a read may still open a write (a DM page makes the DM it shows), and on a demo
+# every visitor shares that write would change the company for everyone, so it rolls back instead.
+PUBLIC_READ = contextvars.ContextVar("demo_public_read", default=False)
+
+
+def discard_read_writes(store):
+    """Make `store.transaction()` roll back, never commit, while PUBLIC_READ is set. The caller still sees its own
+    writes inside the transaction, so the page it asked for is drawn; nothing stays."""
+    real = store.transaction
+
+    @contextlib.contextmanager
+    def transaction(durable=False):
+        if not PUBLIC_READ.get():
+            with real(durable) as c:
+                yield c
+            return
+        try:
+            with real(durable) as c:
+                yield c
+                c.after_commit.clear()
+                raise _Discarded
+        except _Discarded:
+            pass
+
+    store.transaction = transaction
+
+
 def install(app, auth, settings):
     """The demo's front gate, outermost so nothing else answers first."""
+    if settings.demo_public:
+        discard_read_writes(app.state.store)
 
-    # "Ask the librarian" answers from the graph alone: no model is called.
-    from . import market
-    market.complete = lambda question, excerpts: ""
-
-    # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent".
-    async def granola_recent(who, interval=0):
-        return {"state": "recent", "last_sync": app.state.granola.status(who)["last_sync"]}
+    # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent" (Sync now
+    # takes the same answer, as the route passes `now` too).
+    async def granola_recent(who, interval=0, now=False):
+        return {"state": "recent", "last_synced_at": app.state.granola.status(who)["last_synced_at"]}
     app.state.granola.trigger = granola_recent
 
     def problem(status, code, detail):
@@ -194,7 +251,7 @@ def install(app, auth, settings):
         photo = AVATAR.match(path)
         if photo and request.method == "GET":
             return avatar(photo.group(1))
-        if request.method == "GET" and path in ("/", "/index.html"):
+        if request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
             # Nobody types a secret to try a demo: the first page visit is the sign-in.
             if not auth.local_session(request.cookies):
                 token = auth.local_token()
@@ -203,8 +260,8 @@ def install(app, auth, settings):
             if RUNS.match(path):
                 return problem(409, "demo", EXPLAIN)
             if settings.demo_public and not PUBLIC_WRITES.match(path):
-                return problem(403, "demo", "This public demo is read-only. Run your own with "
-                               "`docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico demo`.")
+                return problem(403, "demo", "This public demo is read-only.")
+        PUBLIC_READ.set(settings.demo_public and request.method in ("GET", "HEAD"))
         return await call_next(request)
 
 
@@ -271,16 +328,23 @@ def main(argv=None):
     prepare_relay()
     directory = Path(args.data_dir or tempfile.mkdtemp(prefix="tico-demo-"))
     directory.mkdir(parents=True, exist_ok=True)
-    print("Building the Acme demo ...", flush=True)
-    with network_blocked():
-        settings = build(directory, url=args.url, public=args.public_demo)
-        if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
-            settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
-        browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
-        print(f"\nTico demo is ready: open {browser_url}\n"
-              "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
-              "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
-        run(settings=settings, host=host, port=args.port, log_level="warning")
+    # SIGTERM (docker stop, a supervisor) ends the demo the way Ctrl+C does, so the folder below still goes.
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
+    try:
+        print("Building the Acme demo ...", flush=True)
+        with network_blocked():
+            settings = build(directory, url=args.url, public=args.public_demo)
+            if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
+                settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
+            browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"
+            print(f"\nTico demo is ready: open {browser_url}\n"
+                  "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
+                  "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
+            run(settings=settings, host=host, port=args.port, log_level="warning")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if not args.data_dir:          # a folder the person named with --data-dir is theirs to keep
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 if __name__ == "__main__":
