@@ -38,7 +38,7 @@ class Loads:
             row = self.runners[runner_id]
         else:
             from .read_cache import one
-            row = one(c, "SELECT * FROM runners WHERE id=?", (runner_id,))
+            row = one(c, "SELECT * FROM runners_with_state WHERE id=?", (runner_id,))
         return None if live and row is not None and row["revoked_at"] is not None else row
 
     def plain_record(self, c):

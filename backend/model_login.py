@@ -191,7 +191,7 @@ def _person_only(who, what):
 
 
 def _runner(c, rid):
-    row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not row:
         raise Problem("not_found", "That computer is not registered", 404)
     return row
@@ -396,7 +396,7 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
     from .computer_keys import SHARED_WITH, names
     rows = []
     for rid in dict.fromkeys([here, *runner_ids]):
-        row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
         if not row:
             raise Problem("computers", "Share it only with computers that are connected", 422)
         rows.append(row)
@@ -523,7 +523,7 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers
     from .shared_bots import follow
     from .subscriptions import computer_logins
-    runner = c.execute('SELECT readiness,capabilities FROM runners WHERE id=?', (rid,)).fetchone()
+    runner = c.execute('SELECT readiness,capabilities FROM runners_with_state WHERE id=?', (rid,)).fetchone()
     ready = H._json(runner['readiness'], {}) or {}
     current = computer_logins(runner, ready)
     if profile and current:

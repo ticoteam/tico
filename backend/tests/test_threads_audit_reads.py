@@ -48,7 +48,8 @@ def task_thread(api, task):
 
 
 def dm(api, token, *members):
-    return ok(call(api, "POST", "threads/dm", token, {"members": list(members)}))
+    named = {"title": "Plans"} if len(members) > 1 else {}       # a group DM needs a name
+    return ok(call(api, "POST", "threads/dm", token, {"members": list(members), **named}))
 
 
 # ----------------------------------------------------------------------------- opening an existing DM (finding 5)

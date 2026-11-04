@@ -16,11 +16,13 @@ function settingsChoiceFromValue(value) {
   const parts = String(value || '').split('::');
   return {harness: parts[0] || '', model: parts[1] || '', effort: parts[2] || ''};
 }
-// "Claude Opus 5 · high" (modelChoiceWords, ui/app/format.js); the tool that runs it only when it is not the model's own.
+// "Claude Opus 5 · high · 1M" (modelChoiceWords and modelContextWords, ui/app/format.js); the tool that runs it only when it is not the model's own.
 const settingsChoiceLabel = (harness, model, effort) => {
   if (!model) return 'not set';
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
-  return modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
+  const words = modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
+  const context = modelContextWords(row?.context_tokens);
+  return context ? `${words} · ${context}` : words;
 };
 // ----------------------------------------------------------------- Tico AI Gateway picks
 // A Gateway bot's model is a pick, not a name: Department · Level · Fast · Version (GET /v2/models `gateway`, backend/gateway_tiers.py).
@@ -39,17 +41,20 @@ function settingsTierName(id) {
   const t = settingsTierParse(id);
   return t ? `${SETTINGS_DATA.gateway.tiers[t.tier].name}${t.version === 'auto' ? ' (auto)' : ' ' + t.version}` : '';
 }
-// "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (an old id from the model row).
+// "Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (an old id from the model row).
 function settingsTierLine(id) {
   const t = settingsTierParse(id), tier = t && SETTINGS_DATA.gateway.tiers[t.tier];
   const now = tier && tier.versions.find(v => v.version === (t.version === 'auto' ? tier.current : t.version));
-  if (now) return `${now.model} · $${now.price.input.toFixed(2)} / $${now.price.output.toFixed(2)} per 1M`;
+  if (now) return [now.model, modelContextWords(now.context), `$${now.price.input.toFixed(2)} / $${now.price.output.toFixed(2)} per 1M`]
+    .filter(Boolean).join(' · ');
   return settingsModel(id)?.description?.replace(/ underneath$/, '') || '';
 }
 // In the model list a Tico model says what runs underneath it: "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+// The same list says the window the model takes: "grok 4.6 · 500K" (modelContextWords, ui/app/format.js).
 const settingsModelPickName = id => {
-  const row = settingsModel(id);
-  return /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+  const row = settingsModel(id), context = modelContextWords(row?.context_tokens);
+  const name = /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+  return context ? `${name} · ${context}` : name;
 };
 // A bot with no model of its own follows the team default; say which one it resolves to.
 function settingsDefaultLabel(e) {
@@ -83,12 +88,6 @@ function settingsOffHarnesses(choices) {
       !model.deprecated && model.provider && !enabled.includes(model.provider) &&
       (model.harnesses || [model.runtime]).includes(row.id)));
 }
-// One line naming what is off and where to turn it on; the Models section itself says only the owner can.
-function settingsOffNote(off) {
-  if (!off.length) return '';
-  const names = off.map(row => harnessWords(row.id)).join(', ');
-  return `<p class="settings-choice-block" data-choice-off><span>${esc(names)} ${off.length === 1 ? 'is' : 'are'} off — turn on ${off.length === 1 ? 'its' : 'their'} provider in Models</span> <a href="#/settings" data-off-providers>Open Models</a></p>`;
-}
 // What the bot's computer cannot run, as the server judges it (backend/readiness.py `can_run`, sent with
 // /v2/operations as `runnable`): {can_run: false, problem, short, computer, sign_in, move}. Not listed: not refused.
 function settingsRuntimeBlock(e, harness) {
@@ -116,7 +115,6 @@ async function settingsMoveForModel(button) {
 document.addEventListener('click', event => {
   const move = event.target.closest('[data-choice-move]');
   if (move) void settingsMoveForModel(move);
-  if (event.target.closest('[data-off-providers]')) settingsShow('models');
 });
 // Keep the three choices local until Apply, so selecting a harness cannot start a transition. `none` allows no
 // choice at all, named by it when it is a string ("Same as bot" for a task model), else "None". `noEffort` hides the
@@ -203,11 +201,9 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
         .map(row => option(row.id, `${harnessWords(row.id)} (off)`, false, true)).join('');
     harness.title = block(picked.harness === 'tico' ? 'tico' : picked.harness)?.reason || '';
     // The reason and its Sign in / Move line only in the open bot editor: the table already marks the bot's row,
-    // and every bot on that computer would repeat it. The provider-off line shows wherever the picker is, since
-    // it is about the team, not the bot.
+    // and every bot on that computer would repeat it.
     const notes = fields.querySelector('[data-choice-blocks]');
-    if (notes) notes.innerHTML = (guard && !readonly && fields.closest('#bot-editor') ? settingsBlockedNote(guard, harnesses) : '')
-      + (!readonly ? settingsOffNote(off) : '');
+    if (notes) notes.innerHTML = guard && !readonly && fields.closest('#bot-editor') ? settingsBlockedNote(guard, harnesses) : '';
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
     modelLabel.hidden = inTier(); tierBox.hidden = !inTier();
     model.innerHTML = option('', 'Choose model', !picked.model, true)
@@ -289,12 +285,11 @@ function settingsModelEfforts(id) {
   const t = settingsTierParse(id), row = (t && settingsModel(`${t.tier}-${SETTINGS_DATA.gateway.tiers[t.tier]?.current}`)) || settingsModel(id);
   return row?.efforts?.length ? [...row.efforts] : t ? ['low', 'high', 'max'] : [];
 }
-// What the bot's tasks run on, in a few words: "Claude Haiku 5.5 · high · 600k", "the bot's model · 600k".
+// What the bot's tasks run on, in a few words: "Claude Haiku 5.5 · high · 1M", "the bot's model · high". The end is the
+// model's window, never the task's compaction length (that is the Tasks mark's own "Tasks · 600k").
 function settingsTaskWords(task) {
-  const context = settingsContextName(task?.compact_at);
-  const model = task?.model ? settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)
+  return task?.model ? settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)
     : ["the bot's model", settingsEffortName(task?.reasoning_effort)].filter(Boolean).join(' · ');
-  return [model, context].filter(Boolean).join(' · ');
 }
 // The /task-model body for one change, carrying the other parts as they are: `choice` a task model ({harness, model,
 // effort}, null for Same as bot), `effort` a task effort ('' for Same as bot), `compact_at` a task context length (null

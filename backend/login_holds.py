@@ -111,7 +111,7 @@ def _canonical(c, runner_id, profile, runtime, loads=None):
     from .store import readiness_document
     from .read_cache import one
     row = (loads.runner_of(c, runner_id) if loads is not None
-           else one(c, "SELECT readiness,capabilities FROM runners WHERE id=?", (runner_id,)))
+           else one(c, "SELECT readiness,capabilities FROM runners_with_state WHERE id=?", (runner_id,)))
     ready = readiness_document(row["readiness"]) if row else {}
     from .subscriptions import computer_logins
     current = row and computer_logins(row, ready)

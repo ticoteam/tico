@@ -38,7 +38,7 @@ from .store import H, Problem
 
 log = logging.getLogger("tico.health_monitor")
 
-SLUG = "health-monitor"
+SLUG = H.HEALTH_MONITOR
 NAME = "Health Monitor"
 RULE = "health_monitor_reports"
 SCHEMA = """
@@ -217,7 +217,7 @@ def _runner_checks(c, settings):
                                 # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
                                 severity=BAD if update["state"] == "incompatible" else WARN))
     cutoff = H.shift(H.now(), minutes=-health.RESTART_STUCK_MINUTES)
-    for r in c.execute("SELECT id,label,restart_since FROM runners WHERE revoked_at IS NULL AND restart_since<? "
+    for r in c.execute("SELECT id,label,restart_since FROM runners_with_state WHERE revoked_at IS NULL AND restart_since<? "
                        "ORDER BY label", (cutoff,)).fetchall():
         if r["id"] not in {x["id"] for x in online}:
             continue        # a computer that stopped checking in is computer_silent
@@ -241,7 +241,7 @@ def _runner_checks(c, settings):
                             f"Ask the person who runs {x['label']} to wake it and check Tico there "
                             "(`tico status`; `tico restart` starts it again), or move its bots to an online computer."))
     starts = None
-    for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL").fetchall():
+    for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         lines = [str(x) for x in (readiness_document(r["readiness"]).get("recent_errors") or [])]
         for check_id, kind, pattern, least, title, fix in LOG_PATTERNS:
             hits = [line for line in lines if pattern.search(line)]
@@ -321,7 +321,7 @@ def out_of_quota_logins(c, settings=None):
 
 def _login_checks(c, settings):
     from .store import readiness_document
-    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL")}
+    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL")}
     labels = {rid: r["label"] for rid, r in runners.items()}
     record = providers.load(c, settings)
     out = []

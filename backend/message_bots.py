@@ -46,7 +46,7 @@ def mailbox_in_words(text):
 
 def reported_mailbox(c, bot):
     """The identity of the `gmail` tool the bot's computer reports from its bot.yaml, or empty."""
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
                     (bot,)).fetchone()
     report = ((readiness_document(row["readiness"]) if row else {}).get("bots") or {}).get(bot)
     return routines.declared_mailbox({"tools": (report or {}).get("tools") or []}) if isinstance(report, dict) else ""
