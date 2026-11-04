@@ -1111,6 +1111,15 @@ impl Recorder {
             }
             match reply.result {
                 Err(error) => {
+                    if reply.kind == "items"
+                        && (["HTTP 401 (", "HTTP 403 (", "HTTP 404 ("]
+                            .iter()
+                            .any(|status| error.contains(status))
+                            || error.contains("Sign in to Tico again"))
+                    {
+                        self.saved_items = json!({"gone":true});
+                        self.bump();
+                    }
                     if reply.kind != "live" {
                         self.error = error;
                     }

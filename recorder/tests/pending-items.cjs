@@ -40,7 +40,7 @@ const path = require('node:path');
     });
     await page.locator('.row[data-id="m1"]').click();
     await page.getByText('Sam is here',{exact:true}).waitFor();
-    const title=page.getByRole('textbox',{name:'Title',exact:true});
+    const title=page.locator('[data-shared-item]').getByRole('textbox',{name:'Title',exact:true});
     await page.evaluate(() => { const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve); });
     await title.fill('Saving draft');
     await page.waitForFunction(()=>window.pendingFixture.inflight===1);
