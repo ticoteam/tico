@@ -406,9 +406,11 @@ const HUB_PATHS: &[&str] = &[
 
 /// What a shell command does, for a tool event: the program it runs, by file name, never its arguments. A `hub` run
 /// reads as `hub` and the command path its words name, up to three words. A compound line (`&&`, `||`, `|`, `;`,
-/// newlines) names its `hub` run first, else its first run past shell setup. Leading `NAME=value` assignments are
-/// skipped, a `sh -c` wrapper is unwrapped, and a `#` comment is no run at all. A command whose quoting does not close,
-/// or whose program could come from an expansion, gives nothing, and so does a program name that is not a plain file name.
+/// newlines) names its `hub` run first, else its first run past shell setup. Leading `NAME=value` assignments and
+/// redirections are skipped, a `sh -c` wrapper is unwrapped, and a `#` comment is no run at all. A line with a heredoc,
+/// a substitution or a process substitution is not cut into runs: only its first program is read. A command whose quoting
+/// does not close, or whose program word is not a plain path, gives nothing, and a program name must match
+/// `^[A-Za-z0-9._+-]{1,40}$`.
 pub fn command_program(command: &str) -> String {
     let Some(words) = chosen_words(command) else { return String::new() };
     if words[0] == "hub" {
@@ -427,10 +429,22 @@ fn program_name_ok(program: &str) -> bool {
 /// The words of the run that names what a command does: the first `hub` run, else the first run past shell setup,
 /// else the first run.
 fn chosen_words(command: &str) -> Option<Vec<String>> {
-    let runs: Vec<Vec<String>> = command_runs(command).into_iter().filter_map(run_words).collect();
+    let runs: Vec<Vec<String>> = shell_runs(command).into_iter().filter_map(run_words).collect();
     let hub = runs.iter().find(|words| words[0] == "hub");
     let work = runs.iter().find(|words| !SHELL_SETUP.contains(&words[0].as_str()));
     hub.or(work).or(runs.first()).cloned()
+}
+
+/// The runs a shell line is read as. A line with a heredoc, a substitution, a process substitution or an ANSI-C string is
+/// one run and is not cut: its bodies and nested quoting are not parsed here, so only its first program is read from it.
+/// Any other line is cut at its separators by `command_runs`.
+fn shell_runs(command: &str) -> Vec<&str> {
+    const OPAQUE: [&str; 7] = ["<<", "$(", "`", "${", "<(", ">(", "$'"];
+    if OPAQUE.iter().any(|token| command.contains(*token)) {
+        vec![command]
+    } else {
+        command_runs(command)
+    }
 }
 
 /// The runs a shell line holds: its text cut at `&&`, `||`, `|`, `;` and newlines. A separator inside quotes, inside
@@ -486,16 +500,21 @@ fn starts_word(command: &str, i: usize) -> bool {
     command[..i].chars().next_back().map_or(true, |p| p.is_whitespace() || ";|&()".contains(p))
 }
 
-/// The words of one shell run: leading `NAME=value` assignments dropped and the program reduced to its file name. A
-/// `sh -c` wrapper gives the words of its script instead. None when the run has no program, its quoting does not
-/// close, or its program could come from an expansion (`$(...)`, backticks, `${...}`), which is not split here.
+/// The words of one shell run, from its program on: leading `NAME=value` assignments and redirections dropped, and the
+/// program reduced to its file name. A `sh -c` wrapper gives the words of its script instead. None when the run has no
+/// program, its quoting does not close, its program could come from an expansion, or its program word is anything but a
+/// plain path (`[A-Za-z0-9._+/-]`, after its subshell parentheses are trimmed).
 fn run_words(run: &str) -> Option<Vec<String>> {
     let words = shell_words(run)?;
-    let at = words.iter().position(|w| !is_assignment(w))?;
+    let at = program_index(&words)?;
     if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
         return None;
     }
-    let program = words[at].rsplit('/').next().unwrap_or(&words[at]).trim_matches(&['(', ')'][..]).to_string();
+    let raw = words[at].trim_matches(&['(', ')'][..]);
+    if raw.is_empty() || !raw.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c)) {
+        return None;
+    }
+    let program = raw.rsplit('/').next().unwrap_or(raw).to_string();
     let shell = matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash");
     if let (true, Some(flag), Some(inner)) = (shell, words.get(at + 1), words.get(at + 2)) {
         if flag.starts_with('-') && flag.ends_with('c') {
@@ -505,6 +524,32 @@ fn run_words(run: &str) -> Option<Vec<String>> {
     let mut out = vec![program];
     out.extend(words[at + 1..].iter().cloned());
     Some(out)
+}
+
+/// The index of a run's program word: the first word that is neither a `NAME=value` assignment nor a redirection. When a
+/// redirection's operator stands alone, its target (the next word) is skipped too.
+fn program_index(words: &[String]) -> Option<usize> {
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        if is_assignment(word) {
+            at += 1;
+        } else if let Some(alone) = redirection(word) {
+            at += if alone { 2 } else { 1 };
+        } else {
+            return Some(at);
+        }
+    }
+    None
+}
+
+/// Whether a word is a redirection: `<` or `>`, or digits then one (`2>&1`). None for any other word. Some(true) when the
+/// operator stands alone, so its target is the next word (`> file`); Some(false) when the target is attached (`>/tmp/x`).
+fn redirection(word: &str) -> Option<bool> {
+    let rest = word.trim_start_matches(|c: char| c.is_ascii_digit());
+    if !(rest.starts_with('<') || rest.starts_with('>')) {
+        return None;
+    }
+    Some(rest.chars().all(|c| matches!(c, '<' | '>' | '&' | '|')))
 }
 
 /// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
@@ -1162,6 +1207,26 @@ mod tests {
         assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
         assert_eq!(command_program("hub bot status history"), "hub bot status history");
         assert_eq!(command_program("hub nosuch command"), "hub");
+    }
+
+    #[test]
+    fn a_heredoc_substitution_or_redirection_never_shows_its_arguments() {
+        // Nested quotes inside a substitution: the line is one run and reads no further than its first program.
+        let nested = command_program(r#"export X="$(printf '%s' "a; private-token")""#);
+        assert!(nested.is_empty() || nested == "export", "{nested}");
+        assert!(!nested.contains("private-token"));
+        // A heredoc body is no run.
+        assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
+        // A redirection is skipped to the program behind it, whether its target is attached or the next word.
+        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "printf");
+        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "printf");
+        assert_eq!(command_program("cd /w && 2>&1 npm test"), "npm");
+        // A program word is a plain path, and a program name is at most 40 characters.
+        assert_eq!(command_program("$HOME/bin/tool --x"), "");
+        assert_eq!(command_program(&format!("{} x", "a".repeat(41))), "");
+        // The hub and npm commands still read as before.
+        assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
+        assert_eq!(command_program("cd /w && npm test"), "npm");
     }
 
     #[test]
