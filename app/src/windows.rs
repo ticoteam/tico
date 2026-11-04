@@ -6,12 +6,12 @@ use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent, PageLoadPayload, Webview, WebviewBuilder};
 use tauri::window::{Window, WindowBuilder};
-use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Rect, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::StateFlags;
 use uuid::Uuid;
 
 use crate::bridge::bridge_script;
@@ -19,40 +19,6 @@ use crate::config::{self, Config};
 use crate::orgs::Org;
 use crate::visual_origin;
 use crate::{active_org, connection, refresh_chrome, select_connection, App, AppState, MIN_HEIGHT, MIN_WIDTH, USER_AGENT};
-
-/// The main window's last outer frame (x, y, width, height) in `frame` units: points on macOS,
-/// where one point space spans every display whatever its scale, and physical pixels elsewhere,
-/// where the virtual screen is the consistent space. Older builds wrote `full` in physical pixels
-/// and `mode` ("full" or "rail"); `mode` is ignored, so a window last used as the right rail opens
-/// at its full frame.
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
-struct Saved {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    frame: Option<(f64, f64, f64, f64)>,
-    #[serde(default, skip_serializing)]
-    full: Option<(i32, i32, u32, u32)>,
-}
-
-/// Frames are kept in points on macOS (see `Saved`).
-const POINTS: bool = cfg!(target_os = "macos");
-
-/// Pixels per frame unit on a display with this scale factor.
-fn unit(scale: f64, points: bool) -> f64 {
-    if points && scale > 0.0 { scale } else { 1.0 }
-}
-
-impl Saved {
-    /// The frame to restore. An older file's physical `full` frame converts to points only when every
-    /// connected display has the same scale; with mixed scales its unit is unknown, so none.
-    fn frame(&self, scales: &[f64], points: bool) -> Option<(f64, f64, f64, f64)> {
-        if self.frame.is_some() { return self.frame; }
-        let (x, y, w, h) = self.full?;
-        let scale = *scales.first()?;
-        if points && scales.iter().any(|s| (s - scale).abs() > 1e-6) { return None; }
-        let u = unit(scale, points);
-        Some((x as f64 / u, y as f64 / u, w as f64 / u, h as f64 / u))
-    }
-}
 
 pub(crate) fn build_server_window(app: &App) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("server") {
@@ -157,8 +123,7 @@ mod capability_tests {
 pub(crate) fn build_window(app: &App) -> tauri::Result<()> {
     let Some(org) = active_org(app) else { return build_server_window(app) };
     if main_window(app).is_none() {
-        build_main(app)?;
-        restore_frame(app);
+        keep_title_bar_reachable(app, &build_main(app)?);
     }
     if active_webview(app).is_none() {
         open_org_webview(app, &org)?;
@@ -168,11 +133,14 @@ pub(crate) fn build_window(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// The window itself, hidden until its frame is restored. Its content is child webviews, placed by `layout`.
+/// The window itself, hidden until the app shows it. The window-state plugin restores its saved frame while it is
+/// built, so it never shows at the default place first. Its content is child webviews, placed by `layout`.
 fn build_main(app: &App) -> tauri::Result<Window> {
     let builder = WindowBuilder::new(app, "main")
         .title(config::app_name())
         .inner_size(1240.0, 820.0)
+        // Where a first launch opens; a saved frame replaces it.
+        .center()
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .visible(false);
     // The native title bar drags the window on every page, including sign-in pages that are
@@ -799,58 +767,24 @@ pub(crate) fn show_window(app: &App) {
     }
 }
 
-/// Where this app keeps its window frame: its own config folder, which follows the bundle
-/// identifier, so each company's app (and the generic app) remembers its own place and size.
-fn saved_path(app: &App) -> Option<std::path::PathBuf> {
-    Some(app.path().app_config_dir().ok()?.join("window.json"))
+/// What the window-state plugin keeps of the main window between launches: its size and place. Visibility is left
+/// out: the window is built hidden and `show_window` shows it once the app is ready. Maximized and full screen are
+/// left out too: on quit the plugin refreshes only single-webview windows, and the main window holds several, so
+/// those two would be saved only when the window was closed first.
+pub(crate) fn frame_flags() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION
 }
 
-/// Builds before this one kept the frame under ~/.config/tico/app/<environment>, shared by every
-/// app built without an environment. Read once when the app's own file does not exist yet.
-fn legacy_saved_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let name = option_env!("TICO_ENV_SLUG").filter(|s| !s.is_empty()).unwrap_or("tico");
-    Some(std::path::PathBuf::from(home).join(".config").join("tico").join("app").join(name).join("window.json"))
+/// Frames are compared in points on macOS, where one point space spans every display whatever its scale, and in
+/// physical pixels elsewhere, where the virtual screen is the consistent space.
+const POINTS: bool = cfg!(target_os = "macos");
+
+fn unit(scale: f64) -> f64 {
+    if POINTS && scale > 0.0 { scale } else { 1.0 }
 }
 
-fn parse_saved(text: &str) -> Saved {
-    serde_json::from_str(text).unwrap_or_default()
-}
-
-fn load_saved(app: &App) -> Saved {
-    let read = |path: Option<std::path::PathBuf>| path.and_then(|p| std::fs::read_to_string(p).ok());
-    read(saved_path(app)).or_else(|| read(legacy_saved_path())).map(|s| parse_saved(&s)).unwrap_or_default()
-}
-
-fn save(app: &App, saved: &Saved) {
-    let Some(path) = saved_path(app) else { return };
-    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-    let _ = std::fs::write(path, serde_json::to_string(saved).unwrap_or_default());
-}
-
-/// Every move and resize the person makes is kept, so the next launch opens where they left it.
-pub(crate) fn remember_frame(app: &App) {
-    let state: State<AppState> = app.state();
-    if state.applying_frame.load(Ordering::Relaxed) {
-        return;
-    }
-    let Some(window) = main_window(app) else { return };
-    // A minimised or full-screen window is not a frame to reopen at.
-    if window.is_minimized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
-        return;
-    }
-    let (Ok(position), Ok(size), Ok(scale)) = (window.outer_position(), window.outer_size(), window.scale_factor()) else { return };
-    if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
-        return;
-    }
-    let u = unit(scale, POINTS);
-    let frame = (position.x as f64 / u, position.y as f64 / u, size.width as f64 / u, size.height as f64 / u);
-    save(app, &Saved { frame: Some(frame), full: None });
-}
-
-/// A saved frame is usable when enough of its title bar lies on a display that is still connected,
-/// so the person can grab it; a frame from a display since unplugged is not restored. Frame and work
-/// areas are in the same units (points on macOS).
+/// A frame is usable when enough of its title bar lies on a connected display for the person to grab it. Frame and
+/// work areas are (x, y, width, height) in the same units.
 fn frame_reachable(frame: (f64, f64, f64, f64), areas: &[(f64, f64, f64, f64)]) -> bool {
     let (x, y, w, _) = frame;
     areas.iter().any(|&(ax, ay, aw, ah)| {
@@ -860,101 +794,112 @@ fn frame_reachable(frame: (f64, f64, f64, f64), areas: &[(f64, f64, f64, f64)]) 
     })
 }
 
-/// Once, before the main window first shows: the saved frame if it is still on a connected display,
-/// otherwise the default size, centred. The window is never moved again by the app after that.
-pub(crate) fn restore_frame(app: &App) {
-    let state: State<AppState> = app.state();
-    let Some(window) = main_window(app) else { return };
-    state.applying_frame.store(true, Ordering::Relaxed);
+/// Room left above a window's content for its title bar, in points (logical pixels).
+const TITLE_BAR: f64 = 28.0;
+
+/// The plugin's saved frame for the main window, from its own file: outer position and content size, in physical
+/// pixels. None when there is none yet.
+fn saved_frame(app: &App) -> Option<(f64, f64, f64, f64)> {
+    use tauri_plugin_window_state::AppHandleExt;
+    let path = app.path().app_config_dir().ok()?.join(app.filename());
+    let states: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let main = states.get("main")?;
+    let n = |key: &str| main.get(key).and_then(Value::as_f64);
+    let frame = (n("x")?, n("y")?, n("width")?, n("height")?);
+    (frame.2 > 0.0 && frame.3 > 0.0).then_some(frame)
+}
+
+/// The default frame, fitted to a work area (x, y, width, height in points) and centred in it: 1240 by 820 where
+/// that fits, never taller than the area leaves room for, so its title bar is always on the display.
+fn fallback_frame((ax, ay, aw, ah): (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+    let (w, h) = (1240f64.min(aw), 820f64.min(ah - TITLE_BAR).max(1.0));
+    (ax + (aw - w) / 2.0, ay + ((ah - h - TITLE_BAR) / 2.0).max(0.0), w, h)
+}
+
+/// The plugin brings back a saved frame when any corner lies on a display, which can leave the title bar off screen
+/// after a display is unplugged. Such a frame gives way to the default one on the primary display. The saved frame is
+/// read from the plugin's file because on macOS the plugin's move and resize are queued, so the window does not have
+/// that frame yet; these are queued after the plugin's, so they are the ones that land.
+fn keep_title_bar_reachable(app: &App, window: &Window) {
+    let Some((x, y, w, h)) = saved_frame(app) else { return };
+    let u = unit(window.scale_factor().unwrap_or(1.0));
     let monitors = window.available_monitors().unwrap_or_default();
-    let scales: Vec<f64> = monitors.iter().map(|m| m.scale_factor()).collect();
     let areas: Vec<_> = monitors.iter().map(|m| {
-        let (area, u) = (m.work_area(), unit(m.scale_factor(), POINTS));
+        let (area, u) = (m.work_area(), unit(m.scale_factor()));
         (area.position.x as f64 / u, area.position.y as f64 / u, area.size.width as f64 / u, area.size.height as f64 / u)
     }).collect();
-    match load_saved(app).frame(&scales, POINTS) {
-        Some(frame @ (x, y, w, h)) if frame_reachable(frame, &areas) => {
-            // Saved frames include the title bar; set_size takes the content size.
-            let u = window.scale_factor().map(|s| unit(s, POINTS)).unwrap_or(1.0);
-            let (outer, inner) = (window.outer_size(), window.inner_size());
-            let (dw, dh) = match (outer, inner) {
-                (Ok(o), Ok(i)) => (o.width.saturating_sub(i.width) as f64 / u, o.height.saturating_sub(i.height) as f64 / u),
-                _ => (0.0, 0.0),
-            };
-            let (cw, ch) = ((w - dw).max(1.0), (h - dh).max(1.0));
-            if POINTS {
-                let _ = window.set_size(LogicalSize::new(cw, ch));
-                let _ = window.set_position(LogicalPosition::new(x, y));
-            } else {
-                let _ = window.set_size(PhysicalSize::new(cw.round() as u32, ch.round() as u32));
-                let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
-            }
-        }
-        _ => {
-            let _ = window.set_size(LogicalSize::new(1240.0, 820.0));
-            let _ = window.center();
-        }
+    if areas.is_empty() || frame_reachable((x / u, y / u, w / u, h / u + TITLE_BAR), &areas) {
+        return;
     }
-    state.applying_frame.store(false, Ordering::Relaxed);
+    let Some(monitor) = window.primary_monitor().ok().flatten().or_else(|| monitors.into_iter().next()) else { return };
+    // Fitted in the primary display's points (logical pixels).
+    let (area, scale) = (monitor.work_area(), monitor.scale_factor().max(f64::EPSILON));
+    let (fx, fy, fw, fh) = fallback_frame((area.position.x as f64 / scale, area.position.y as f64 / scale,
+                                           area.size.width as f64 / scale, area.size.height as f64 / scale));
+    if POINTS {
+        // macOS points are one space across every display.
+        let _ = window.set_size(LogicalSize::new(fw, fh));
+        let _ = window.set_position(LogicalPosition::new(fx, fy));
+    } else {
+        // Elsewhere a logical value is converted with the window's own scale, which is the display the plugin put it
+        // on, not the primary one. Physical pixels on the primary display land where they are meant to. Moved first:
+        // Windows rescales a window that changes display, so the size is set once it is on the primary one.
+        let _ = window.set_position(PhysicalPosition::new((fx * scale).round() as i32, (fy * scale).round() as i32));
+        let _ = window.set_size(PhysicalSize::new((fw * scale).round() as u32, (fh * scale).round() as u32));
+    }
+}
+
+/// The window-state plugin tracks only the main window. Org pages, meetings and the setup window keep no frame.
+pub(crate) fn tracks_frame(label: &str) -> bool {
+    label == "main"
 }
 
 #[cfg(test)]
-mod window_frame_tests {
+mod window_state_tests {
     use super::*;
 
     #[test]
-    fn a_window_saved_as_the_right_rail_reopens_at_its_full_frame() {
-        let rail = parse_saved(r#"{"mode":"rail","full":[240,160,2480,1640]}"#);
-        assert_eq!(rail.frame(&[2.0, 2.0], true), Some((120.0, 80.0, 1240.0, 820.0)));
-        assert_eq!(rail.frame(&[1.25], false), Some((240.0, 160.0, 2480.0, 1640.0)));
-        // Rail mode with no full frame yet: the default size, centred once.
-        assert_eq!(parse_saved(r#"{"mode":"rail"}"#).frame(&[2.0], true), None);
-        assert_eq!(parse_saved("not json"), Saved::default());
-        let saved = Saved { frame: Some((1.0, 2.5, 3.0, 4.0)), full: None };
-        assert_eq!(serde_json::to_string(&saved).unwrap(), r#"{"frame":[1.0,2.5,3.0,4.0]}"#);
-        assert_eq!(parse_saved(&serde_json::to_string(&saved).unwrap()).frame(&[1.0, 2.0], true), saved.frame);
+    fn only_the_main_window_keeps_its_frame() {
+        assert!(tracks_frame("main"));
+        for label in ["server", "hub-3", "meeting-o_7f3a0001-abc123"] {
+            assert!(!tracks_frame(label), "{label} must not keep a frame");
+        }
     }
 
     #[test]
-    fn an_old_pixel_frame_is_not_guessed_at_on_mixed_scale_displays() {
-        // Laptop at 2x, external at 1x: the old physical frame's unit depends on the screen it was
-        // saved on, so the window is centred once instead.
-        let old = parse_saved(r#"{"full":[5800,200,800,1600]}"#);
-        assert_eq!(old.frame(&[1.0, 2.0], true), None);
-        // Windows and Linux kept virtual-screen pixels all along.
-        assert_eq!(old.frame(&[1.0, 2.0], false), Some((5800.0, 200.0, 800.0, 1600.0)));
+    fn the_app_decides_when_the_main_window_shows() {
+        let flags = frame_flags();
+        assert!(!flags.contains(StateFlags::VISIBLE));
+        assert_eq!(flags.bits(), (StateFlags::SIZE | StateFlags::POSITION).bits());
     }
 
     #[test]
-    fn a_saved_frame_is_restored_only_where_its_title_bar_can_be_grabbed() {
+    fn a_saved_frame_is_kept_only_where_its_title_bar_can_be_grabbed() {
         let laptop = (0.0, 25.0, 1512.0, 920.0);
         let external = (1512.0, -200.0, 2560.0, 1415.0);
         assert!(frame_reachable((100.0, 100.0, 1240.0, 820.0), &[laptop]));
         assert!(frame_reachable((1700.0, 0.0, 1240.0, 820.0), &[laptop, external]));
         // The external display was unplugged.
         assert!(!frame_reachable((1700.0, 0.0, 1240.0, 820.0), &[laptop]));
-        // Title bar above the menu bar's work area, or almost entirely off the right edge.
-        assert!(!frame_reachable((100.0, -900.0, 1240.0, 820.0), &[laptop]));
+        // Title bar above the work area (its lower corners still on the laptop), or almost entirely off the right edge.
+        assert!(!frame_reachable((100.0, -500.0, 1000.0, 820.0), &[laptop]));
         assert!(!frame_reachable((1480.0, 100.0, 1240.0, 820.0), &[laptop]));
         assert!(frame_reachable((1400.0, 100.0, 1240.0, 820.0), &[laptop]));
         assert!(!frame_reachable((100.0, 100.0, 1240.0, 820.0), &[]));
     }
 
     #[test]
-    fn mixed_scale_displays_are_compared_in_points() {
-        // A 1x 1920x1080 main display and a 2x laptop (1512x982 points) to its right, as macOS
-        // reports their work areas in pixels, converted per display.
-        let scaled = |(x, y, w, h): (i32, i32, u32, u32), s: f64| {
-            let u = unit(s, true);
-            (x as f64 / u, y as f64 / u, w as f64 / u, h as f64 / u)
-        };
-        let main = scaled((0, 25, 1920, 1055), 1.0);
-        let laptop = scaled((3840, 0, 3024, 1964), 2.0);
-        assert_eq!(laptop, (1920.0, 0.0, 1512.0, 982.0));
-        // A window saved on the laptop at (2900, 100) points is reachable there.
-        assert!(frame_reachable((2900.0, 100.0, 400.0, 800.0), &[main, laptop]));
-        // In points, the same pixel frame (5800, 200) lies past the laptop's right edge at 3432.
-        assert!(!frame_reachable((5800.0, 200.0, 800.0, 1600.0), &[main, laptop]));
+    fn the_fallback_frame_fits_a_small_display_with_its_title_bar_on_it() {
+        // 1366x768 with a taskbar: the work area is shorter than the default window.
+        let small = (0.0, 0.0, 1366.0, 728.0);
+        let (x, y, w, h) = fallback_frame(small);
+        assert!(h + TITLE_BAR <= 728.0 && w <= 1366.0);
+        assert!(frame_reachable((x, y, w, h + TITLE_BAR), &[small]));
+        // A large display gets the default size, centred.
+        let (x, y, w, h) = fallback_frame((0.0, 25.0, 2560.0, 1415.0));
+        assert_eq!((w, h), (1240.0, 820.0));
+        assert_eq!(x, 660.0);
+        assert!(y > 25.0 && frame_reachable((x, y, w, h), &[(0.0, 25.0, 2560.0, 1415.0)]));
     }
 }
 
