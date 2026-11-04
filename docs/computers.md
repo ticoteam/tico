@@ -258,12 +258,39 @@ Codex bots on one Computer using the same ChatGPT sign-in run turns at the same 
 
 ### What "% left" means
 
-Usage always reads as the share of the plan's weekly allowance that is **left**, never used. It is the provider's own
-reading for that account, so **use outside Tico counts too**: someone chatting in ChatGPT or Claude on the same account
-lowers it. Tico never estimates it from its own token counts. A reading has a reset time and an age ("as of 2 min ago");
-one older than a day is marked as possibly out of date, and after its reset it reads as the previous week, never as a
-fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Details are in
+On Settings > Computers, the chips and the computer pop-up show the share of the plan's weekly allowance that is **left**,
+never used. Settings > Models shows **used** instead; see [Usage on Settings > Models](#usage-on-settings--models).
+It is the provider's own reading for that account, so **use outside Tico counts too**: someone chatting in ChatGPT or
+Claude on the same account lowers it. Tico never estimates it from its own token counts. A reading has a reset time and
+an age ("as of 2 min ago"). A reading older than a day is marked as possibly out of date. After its reset it reads as
+the previous week, never as a fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Details are in
 [Signed-in account and usage windows](#signed-in-account-and-usage-windows).
+
+### Usage on Settings > Models
+
+Settings > Models shows each plan's used percent with its window: **N% used in the week**, or **N% used in the 5h
+window**. The percent comes from the computers the plan is given to. A reading counts under these rules:
+
+- It counts only from when the plan was given to that computer, or when its value was replaced or reconnected in Tico.
+  A rename, an owner change or a refresh of the same account does not restart it.
+- A turn that signed in with this plan counts.
+- A computer's own login counts only when the plan's account is known and matches. Only a ChatGPT login names its
+  account, by email. A Claude token names no account, so a computer's own login never counts for a Claude plan.
+- A window whose reset has passed does not count.
+- The most-used window wins. A tie goes to the newer report.
+- An active limit hold shows **100% used** until its reset.
+
+When no percent is known, the Usage column shows a muted reason in place of it:
+
+| Reason | What it means |
+|---|---|
+| Not on a computer yet | No computer has this plan for this tool. |
+| Reconnect to see usage | The plan's sign-in needs a reconnect. |
+| Update the computer to see usage | The computer is too old to send usage. Update it. |
+| No percentage from the plan | A reading came from the plan without a percent. |
+| No usage reported since this subscription was added | The computers have readings, but none counts under the rules above. |
+| Its computers are offline | Every computer with this plan is offline. |
+| Waiting for a computer to report | A computer has the plan, but none has reported usage yet. |
 
 ## The computers list
 
@@ -626,8 +653,9 @@ a supported standalone weekly read use observations from normal runs or a manual
 provider reading. Missing percentages remain unknown, not zero.
 
 Starting a new sign-in, a switch or a sign-out through Tico invalidates earlier readings and in-flight refresh
-results for that profile/runtime. Replacing credentials outside Tico under the same
-local profile cannot currently be detected: refresh and confirm the provider reading
+results for that profile/runtime. A value replaced or reconnected in Tico also starts its plan's readings over;
+[Usage on Settings > Models](#usage-on-settings--models) says which readings count. Replacing credentials outside Tico
+under the same local profile cannot currently be detected: refresh and confirm the provider reading
 after such a change. Usage reported by a turn that was already running during sign-in
 can also refer to its earlier account; avoid replacing an active profile while turns
 are running. This is approximate monitoring, not a spending limit.
