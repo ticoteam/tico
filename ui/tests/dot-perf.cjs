@@ -112,7 +112,8 @@ const round = v => Math.round(v * 10) / 10;
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');
     await page.waitForLoadState('networkidle');
-    await page.waitForFunction(() => window.__dotPeekChecked);
+    // Support's read is scheduled from window.load, later than Ask's script-time peek check.
+    await page.waitForFunction(() => window.__dotPeekChecked && window.supportState?.().enabled === true);
     await page.evaluate(() => document.fonts.ready);
     await rendered(page);
 
@@ -172,26 +173,32 @@ const round = v => Math.round(v * 10) / 10;
       && document.getAnimations().filter(a => a.effect?.target?.closest?.('#ask-panel, #ask-row, .ldot-layer'))
         .every(a => !Number.isFinite(a.effect.getComputedTiming().endTime) || a.playState === 'finished'));
     await settle();
+    // Dispatch through the real DOM handlers without timing Playwright's actionability polling and pointer moves.
+    // Trusted pointer/keyboard wiring is exercised in the toggle journey below and in ask-panel.cjs.
+    const key = key => page.evaluate(key => document.activeElement.dispatchEvent(
+      new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true})), key);
     const phases = {
-      open: async () => { await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
+      open: async () => { await page.evaluate(() => document.querySelector('#ask-row').click()); await settle(); },
       reply: async () => {
-        const box = page.locator('#ask-panel .ask-form .p-text');
-        await box.fill('Thanks'); await box.press('Enter');
+        await key('Enter');
         await page.locator('#ask-panel .conv-run[data-message="b1"]').waitFor(); await settle();
-        // open: one dot, flying or still; the header's is the live one
-        const live = await dotAnimations(page);
-        assert.ok(live.dots <= 1, `open: ${live.dots} moving dots`);
-        assert.ok(live.props.every(p => DOT_ANIMATED.has(p)), `open: the dot animates ${live.props}`);
       },
-      close: async () => { await page.keyboard.press('Escape'); await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); },
+      close: async () => { await key('Escape'); await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); },
     };
     out.work4x = {};
     const measured = {};
     for (const [name, act] of Object.entries(phases)) {
+      // Filling the fixture's composer and inspecting keyframes both force style work of their own.
+      if (name === 'reply') { await page.locator('#ask-panel .ask-form .p-text').fill('Thanks'); await rendered(page); }
       const {work, wall} = await frames(page, act);
       measured[name] = work;
       out.work4x[name] = {frames: work.frames, cpuP95: round(work.p95), cpuMax: round(work.max), taskCpuMax: round(work.task),
         wallP95: round(wall.p95), wallMax: round(wall.max), longTask: round(wall.long)};
+      if (name === 'reply') {
+        const live = await dotAnimations(page);
+        assert.ok(live.dots <= 1, `open: ${live.dots} moving dots`);
+        assert.ok(live.props.every(p => DOT_ANIMATED.has(p)), `open: the dot animates ${live.props}`);
+      }
     }
     for (const [name, work] of Object.entries(measured)) assertFrameWork(name, work);
 
