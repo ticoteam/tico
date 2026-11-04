@@ -73,6 +73,12 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   Omit `private` to keep its source default: Granola is private by default; other sources are team
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
+  `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
+  person it is filed for and the people added to or joined in the live meeting it came from; the company
+  owner is held to that too. `"audience": "team"` opens it to the Team. The import route takes
+  `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
+- `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
+  removes its transcript, chat and events from Tico; the recording stays on their computer.
 - The same route with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a

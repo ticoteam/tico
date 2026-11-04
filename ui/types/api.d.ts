@@ -3162,6 +3162,26 @@ export type Locations = {
   next_cursor: string | null;
 };
 
+export type MaintenanceRunRequest = {
+  step?: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream" | null;
+};
+
+export type MaintenanceStepChange = {
+  custom_every?: number | null;
+  custom_unit?: "hours" | "days" | null;
+  enabled?: boolean | null;
+  frequency?: "run" | "day" | "week" | "custom" | null;
+  key: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream";
+  max_bots?: number | null;
+};
+
+export type MaintenanceUpdate = {
+  monthly_cap_usd?: number | null;
+  paused?: boolean | null;
+  schedule?: "hourly" | "2h" | "3h" | "6h" | "12h" | "daily" | null;
+  steps?: Array<MaintenanceStepChange> | null;
+};
+
 export type MarketAnswers = {
   buyers?: string;
   competitors?: string;
@@ -3801,6 +3821,17 @@ export type QuestionSets = {
 }>;
 };
 
+export type QueuePurge = {
+  scope?: string;
+};
+
+export type QueuePurgeResult = {
+  cancelled: number;
+  kept_people: number;
+  scope: string;
+  still_running: number;
+};
+
 export type RanOn = {
   fallback: string | null;
   family: string | null;
@@ -3932,6 +3963,7 @@ export type RequesterInput = {
 
 export type Review = {
   action: "approve" | "dismiss" | "restore";
+  audience?: "team" | "participants" | "private" | null;
   private?: boolean | null;
   send_to?: string | null;
 };
@@ -7382,6 +7414,11 @@ export type GetLocationParams = {
 export type GetLocationBody = never;
 export type GetLocationResponse = LocationOne;
 
+/** GET /api/v2/maintenance */
+export type GetMaintenanceParams = Record<string, never>;
+export type GetMaintenanceBody = never;
+export type GetMaintenanceResponse = unknown;
+
 /** GET /api/v2/me */
 export type GetMeParams = Record<string, never>;
 export type GetMeBody = never;
@@ -7795,6 +7832,7 @@ export type ImportMeetingParams = {
   "Idempotency-Key": string;
 };
 export type ImportMeetingBody = {
+  audience?: "participants" | null;
   context?: Record<string, unknown>;
   duration_seconds?: number | null;
   external_id?: string;
@@ -8486,6 +8524,14 @@ export type ListLocationsParams = {
 export type ListLocationsBody = never;
 export type ListLocationsResponse = Locations;
 
+/** GET /api/v2/maintenance/runs */
+export type ListMaintenanceRunsParams = {
+  before?: string | null;
+  limit?: number;
+};
+export type ListMaintenanceRunsBody = never;
+export type ListMaintenanceRunsResponse = unknown;
+
 /** GET /api/v2/meetings/{rid}/tasks */
 export type ListMeetingTasksParams = {
   cursor?: string | null;
@@ -9119,6 +9165,13 @@ export type PublishStrategyParams = {
 export type PublishStrategyBody = StrategyPublish;
 export type PublishStrategyResponse = unknown;
 
+/** POST /api/v2/usage/queues/purge */
+export type PurgeAutomaticQueueParams = {
+  "Idempotency-Key": string;
+};
+export type PurgeAutomaticQueueBody = QueuePurge;
+export type PurgeAutomaticQueueResponse = QueuePurgeResult;
+
 /** GET /api/v2/inbound/phone-quote */
 export type QuoteInboundPhoneParams = Record<string, never>;
 export type QuoteInboundPhoneBody = never;
@@ -9748,6 +9801,13 @@ export type RunAutomationParams = {
 export type RunAutomationBody = RunNow | null;
 export type RunAutomationResponse = AutomationRunNow;
 
+/** POST /api/v2/maintenance/run */
+export type RunMaintenanceParams = {
+  "Idempotency-Key": string;
+};
+export type RunMaintenanceBody = MaintenanceRunRequest;
+export type RunMaintenanceResponse = MaintenanceRunRequest;
+
 /** POST /api/v2/system-routines/{key}/run */
 export type RunSystemRoutineParams = {
   "Idempotency-Key": string;
@@ -9755,6 +9815,13 @@ export type RunSystemRoutineParams = {
 };
 export type RunSystemRoutineBody = Empty;
 export type RunSystemRoutineResponse = unknown;
+
+/** PATCH /api/v2/maintenance */
+export type SaveMaintenanceParams = {
+  "Idempotency-Key": string;
+};
+export type SaveMaintenanceBody = MaintenanceUpdate;
+export type SaveMaintenanceResponse = MaintenanceUpdate;
 
 /** PUT /api/v2/places/{place} */
 export type SavePlaceParams = {

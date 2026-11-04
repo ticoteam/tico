@@ -42,7 +42,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Task roundup** | Owner or admin | On or off, schedule preset, **Run now** |
-| **Start fresh when the topic changes**, **Stalled task check** (not run) | Owner or admin | On or off |
+| **Start fresh when the topic changes** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
 
 A department tag on a built-in does not grant permission to change it. Task rules have no separate view-only role within their department. People outside that department can read the list without gaining editing rights.
@@ -96,7 +96,7 @@ Only the done-and-untouched trigger and close action are available for task rule
 
 ## Which AI answered
 
-Two jobs ask Decide, Tico's question-answering model: **Stale ticket review** and **Nightly learnings**. The **Stalled task check** row asks nothing, because it no longer runs. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
+Two jobs ask Decide, Tico's question-answering model: **Stale ticket review** and **Nightly learnings**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
 
 | Pill | Meaning |
 |---|---|
@@ -138,7 +138,6 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Email digest** | Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread count and a link, never the messages. Nothing new is a quiet run. Each person turns theirs off under Email digests. See [Thread helper](thread-helper.md). Not a switch. | Hourly |
 | **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |
 | **Unanswered questions** | On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' task roundup, never as a wake. | Hourly |
-| **Stalled task check** (AI) | Not run. Stall checks no longer wake a bot about one quiet task, so Decide reads none of them. | When it happens |
 | **Stall checks** | Every minute: allocates waiting tickets, closes timed-out checks, drops queued work its bot can no longer read, and alerts once when an Engineering task has been blocked over four hours (to its manager, or else its requester). It does not wake a bot about one stalled task: the task roundup lists those. | Every minute |
 | **Task roundup** | Each run (three times a day by default, at 6am, noon and 6pm company time) sends each bot at most one list of its tasks, with these lines in order: a follow-up time that came (listed once, then cleared), an unanswered question, an assignment not started an hour after it was given (listed once), a task to restate, a Dev ticket late at its step (on its manager's list, relisted every seven days while it stays late), an engineering exception on a manager's list, a step's backlog (on each bot it names, relisted every `every_hours` while it stays over), a task with a missed update, and a task gone quiet for a day with nothing holding it. Managers and doers sweep (a custom bot can turn it off), so they get every line; a reviewer, lead, responder or monitor gets its unanswered questions and its own follow-up times only. Only tasks the bot owns that are still live are listed. The list goes only to the bot, in its own notice room, so no person is told about a task. The roundup is the one grouped wake for a bot's tasks: a per-task wake becomes a line on this list. Tico's own notices and check-backs do not count as a missed update. Plain code: no model is called, and nothing to list is a quiet run. | Three times a day, at 6am, noon and 6pm company time |
 | **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |
@@ -147,7 +146,6 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Go-live expiry** | Ends a go-live waiting for a computer that never reports. | Every 10 minutes |
 | **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily |
 | **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |
-| **Cleanup** | Clears old events, mail, retry keys and recorder data. | Hourly |
 | **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly |
 | **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly |
 | **Updates** | Asks people and bots for today's updates, one at a time. | Every 10 seconds |

@@ -12,7 +12,7 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(api, botops):
     ana = turn(api, botops, person="ana-test", text="Turn the daily release off and set the team budget")
     for name, args in (("hub_release_schedule", {"on": False}), ("hub_team_budget", {"hour": 5}),
-                       ("hub_stall_triage", {"on": False}), ("hub_task_manager_set", {"on": True})):
+                       ("hub_maintenance_set", {"paused": True}), ("hub_task_manager_set", {"on": True})):
         err, result = mcp(api, name, args, ana["token"])
         assert not err, (name, result)
     err, made = mcp(api, "hub_task_type_create", {"name": "Ops", "default_visibility": "private"}, ana["token"])
@@ -25,7 +25,7 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
 
     cara = turn(api, botops, person="cara-test", text="Turn the daily release on")
     for name, args in (("hub_release_schedule", {"on": True}), ("hub_team_budget", {"hour": 9}),
-                       ("hub_stall_triage", {"on": True}), ("hub_task_type_delete", {"id": "Ops"})):
+                       ("hub_maintenance_set", {"paused": False}), ("hub_task_type_delete", {"id": "Ops"})):
         err, result = mcp(api, name, args, cara["token"])
         assert err, (name, result)
     # The same through a plain `hub api` call with no on_behalf_of: the route still checks Cara, not BotOps.

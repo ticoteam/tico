@@ -258,3 +258,17 @@ def test_task_trash_restores_links_and_skips_a_meeting_deleted_while_trashed(api
     restored = post(api, f"tasks/{t['id']}/restore", {})
     assert restored['restored'] == t['id'] and restored['skipped'] == {'meeting_task_links': 1}
     assert not get(api, f"tasks/{t['id']}/meetings")['meetings']
+
+
+def test_recorder_participant_audiences_keep_the_current_media_read_boundary(api):
+    from backend.tests.test_recorder_audience import live_meeting
+    mid = live_meeting(api, visibility='team', joiner='cara')
+    post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')
+    rid = post(api, f'live-meetings/{mid}/finalize', {}, 'ben-test')['meeting_id']
+    post(api, f'meetings/{rid}/review', {'action': 'approve', 'private': True, 'audience': 'participants'}, 'ben-test')
+    t = task(api, private=False)
+    link(api, rid, [t['id']], 'ben-test')
+    assert get(api, f"tasks/{t['id']}/meetings", 'cara-test')['meetings'][0]['meeting_id'] == rid
+    assert get(api, f"tasks/{t['id']}/meetings") == {'meetings': [], 'next_cursor': None}
+    get(api, f'meetings/{rid}/tasks', expected=403)
+    link(api, rid, [t['id']], expected=403)
