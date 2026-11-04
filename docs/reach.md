@@ -163,9 +163,23 @@ Details of the API as built:
 ## The panel
 
 - Header: the party's name.
-- Can reach anyone / Nearby / Only who's listed. Up to [N] chats a day. Up to [N] tasks a day.
-- **Rules**, with `+ Add rule`. Company rules and the team's rules first, collapsed and always on; then the party's own
-  internal rules (Who names it). Tapping a rule opens it.
-- **Exceptions**, with `+ Add exception`. Rows read `To X` or `From X`, the count (`0 a day`, `1 a day`) and the rule.
+- The mode reads **Can reach anyone**, **Nearby** or **Only who's listed**.
+- The caps, **Up to [N] chats a day** and **Up to [N] tasks a day**, show the value that applies.
+- A value the party does not set itself shows where it comes from: **from Everyone**, **from [team]** or **default**. This covers the mode and both caps.
+- To set a cap, enter a number and leave the box. Clear the box to take the value from above again.
+- **Rules**, with `+ Add rule`, which opens the **Add rule** dialog with this party already set. The list starts with **Company rules**, unless the party is Everyone. Then come **[team] rules** for each team above the party, nearest first. For a bot, **Rules for all bots** comes next. The party's own rules come last. Each group opens by default; tap its heading to fold it.
+- **Exceptions**, with `+ Add exception`. Rows read `To X` or `From X`, the count (`0 a day`, `1 a day`) and the rule. A line with no count and no rule reads `Allowed`.
   Adding searches teams, people and bots; the editor sets the direction, `Up to N a day` and the rule.
 - Each line is drawn on the chart with a chip: `N a day · rule…`.
+
+## A bot's Rules tab
+
+A bot's **Rules** tab has an **Internal** table. Its reach rows come after the bot's written rules. Each row ends with
+**Setting ›**, which opens the bot's panel on the Rules page, where the value is changed.
+
+- `Reach: anyone`, `Reach: nearby` or `Reach: only who's listed`.
+- `Up to N chats a day` and `Up to N tasks a day`.
+- One row for each exception the bot sends or receives: `To X · 5 a day` or `From X · 0 a day`. A line with no count reads
+  `by rule` when it has a rule, and `Allowed` when it has neither.
+
+A value the bot does not set itself shows where it comes from: `from Everyone`, `from [team]` or `default`.
