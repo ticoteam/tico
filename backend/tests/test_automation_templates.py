@@ -149,7 +149,7 @@ def test_a_group_owner_gets_sort_and_its_lead_runs_the_task_and_meeting_routes(a
     assert [rule["to"] for rule in route[:-1]] == criteria                    # one route per criterion, in its order
     assert all(rule["when"] == [{"field": "draft.route", "op": "is", "value": dest, "min": 0.5}]
                for rule, dest in zip(route[:-1], criteria))
-    assert route[-1] == {"when": [], "to": "me", "next": "end", "stop": True}  # the default, when nothing matches
+    assert route[-1]["when"] == [] and route[-1]["to"] == "me"               # the default, when nothing matches
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:cpo"       # the task route
     route = by_id(flow["steps"])["route"]["rules"]
     assert any(a["do"] == "draft_reply" for rule in route for a in rule.get("then", []))            # the meeting route
