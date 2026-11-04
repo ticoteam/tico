@@ -345,14 +345,18 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-task-caret')), true, 'focus is back on the caret');
 
     // Queue: the icon changes, the comment names it, and it is kept on the server.
+    const queueSaved = page.waitForResponse(response => response.request().method() === 'POST'
+      && response.url().endsWith('/api/v2/preferences/compose.send_way') && response.status() === 200);
     await pick('queue');
     assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
     if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await queueSaved;
     assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
 
     // Defer 4h: a clock with a 4h badge, and it stays after the send.
+    const deferSaved = page.waitForResponse(response => response.request().method() === 'POST'
+      && response.url().endsWith('/api/v2/preferences/compose.send_way') && response.status() === 200);
     await pick('defer:4h');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: await modal.locator('.task-pill').boundingBox()});
@@ -368,7 +372,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await looks(), {shows: 'goal:', label: 'Set as goal', badge: ''});
     assert.equal((await send('Finish the billing migration.')).delivery, 'goal');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'}, 'back to the kept way');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await deferSaved;
     assert.deepEqual(prefPosts.map(([, v]) => v), ['queue', 'defer:4h'], 'goal is never written');
 
     // Send itself opens the ways: a right-click on a computer, a long press on a phone; neither sends.
