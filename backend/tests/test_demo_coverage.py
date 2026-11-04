@@ -60,6 +60,8 @@ PAGES = {
     "replay": page("replay", "items", **{"from": WEEK_AGO.isoformat(), "to": NOW.isoformat()}),
     "changelog": page("changelog", "entries"),
     "settings": page("bots"),
+    # History reuses the runs, task changes and decisions the existing demo sections record.
+    "settings-history": page("history", "items"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
 }

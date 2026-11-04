@@ -2657,6 +2657,10 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             fields = {k: v for k, v in body.model_dump().items() if v is not None}
+            from . import assistant_routines
+            chat_draft = who.via == "assistant" and not who.confirmed and assistant_routines.message(fields)
+            if chat_draft:
+                fields = {**assistant_routines.defaults(fields), "enabled": False}
             if _by_botops(who) and "enabled" not in body.model_fields_set:
                 fields["enabled"] = False   # what BotOps builds waits for a Turn on, unless the request said on
             flow = _checked(c, fields, store.settings)
@@ -2668,7 +2672,13 @@ def install(app, store, auth, mutate):
                     blocked and may_change(c, who, flow)):
                 return _bot_draft(c, who, flow)
             _require(c, who, flow, "make an automation for " + flow["owner"])
-            return view(c, _save(c, who.actor, "auto_" + H.new_id(), flow, None, via=_via(who)), who, detail=True)
+            assistant_routines.check_confirmed(c, request, None, flow)
+            row = _save(c, who.actor, "auto_" + H.new_id(), flow, None, via=_via(who))
+            result = view(c, row, who, detail=True)
+            if chat_draft:
+                result.update(assistant_routines.propose_saved(c, store.settings, who, row, app.routes))
+                result["needs_confirm"] = True
+            return result
         return mutate(request, body, work)
 
     AO.install(app, store, auth)   # /runs and /stats, before /{aid} reads them as ids
@@ -2713,6 +2723,8 @@ def install(app, store, auth, mutate):
                             access=any(merged.get(k) != before.get(k)
                                        for k in ("trigger", "steps", "owner", "destinations")),
                             saved=before, aid=aid)
+            from . import assistant_routines
+            assistant_routines.check_confirmed(c, request, row, flow)
             if before.get("readonly"):
                 # Tico's own rules, shown read-only: the top of the org may pause or resume it, and nothing else.
                 if who.role != "owner" or set(changes) - {"enabled"}:

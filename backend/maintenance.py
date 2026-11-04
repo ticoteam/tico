@@ -24,7 +24,7 @@ import logging
 import threading
 from datetime import datetime, time, timedelta, timezone
 
-from .maintenance_steps import clean_up, collect, dream
+from .maintenance_steps import clean_up, collect, dream, find_stuck
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
 
@@ -34,8 +34,8 @@ ORDER = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest"
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
 EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
-OLD_TIMER = ("check_health", "find_stuck", "learn", "suggest", "update")   # still on their own timers until their track lands
-LIVE = {"collect": collect.run, "clean_up": clean_up.run, "dream": dream.run}
+OLD_TIMER = ("check_health", "learn", "suggest", "update")   # still on their own timers until their track lands
+LIVE = {"collect": collect.run, "clean_up": clean_up.run, "find_stuck": find_stuck.run, "dream": dream.run}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
 MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
@@ -321,6 +321,10 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
             c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+? WHERE id=?", (result["cost_usd"], run_id))
             return
         _finish_row(c, row_id, result)
+        if key == "dream" and result["status"] == "skipped" and result["details"].get("limited"):
+            # A wake refused before Dream can attempt a start leaves it due on a later run of the same day.
+            c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=? AND last_started_at=?",
+                      (row["last_started_at"], key, now))
         if result["status"] == "ran":
             _move_cursor(c, key, now, H.now())
         c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+?, heartbeat_at=? WHERE id=?",

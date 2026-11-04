@@ -40,13 +40,16 @@ jobs:
         timeout-minutes: 11
         run: bash scripts/ci_install.sh python
       - name: Restore measured timings from the latest successful full main run
+        # Optional: missing/expired artifacts stop immediately; transient errors get only 90s of retry backoff.
+        timeout-minutes: 2
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p previous-timings
           run=$(gh run list --workflow pr-checks.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || run=''
           if [ -n "$run" ]; then
-            gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
+            bash scripts/ci/retry.sh --max-attempts 3 --clear previous-timings --permanent 'HTTP (404|410)|no (valid )?artifacts? (match|found)' -- gh run download "$run" --name pr-python-timings --dir previous-timings || echo "No measured timings yet; use collected counts this run"
           fi
       - name: Select affected tests and size measured Python and browser groups
         id: plan

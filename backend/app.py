@@ -904,7 +904,7 @@ def create_app(settings=None):
                     on_turn = request.state.identity.via == "assistant" and not approves
                     unmatched = on_turn and assistant_mod.settings_route_unmatched(request.method, request.url.path, raw)
                     outside = on_turn and await asyncio.to_thread(
-                        assistant_mod.automation_sends_outside, store, request.method, request.url.path, raw)
+                        assistant_mod.automation_needs_confirm, store, request.method, request.url.path, raw)
                     admitted = (request.state.identity.via == "assistant" and assistant_direct()
                                 and (approves or (not unmatched and not outside
                                                   and assistant_mod.admits_on_turn(request.method, request.url.path, raw))))
@@ -1139,8 +1139,10 @@ def create_app(settings=None):
             found = request.scope.get("route")
             route = getattr(found, "path", None) or ("static" if not route.startswith("/api") else "unmatched")
             total = (time.perf_counter() - started) * 1000
+            extra = getattr(request.state, "server_timing", "")
             response.headers["Server-Timing"] = (f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
-                                                + (f", sql;dur={cost[0]:.1f}, wait;dur={cost[1]:.1f}" if cost is not None else ""))
+                                                + (f", sql;dur={cost[0]:.1f}, wait;dur={cost[1]:.1f}" if cost is not None else "")
+                                                + (", " + extra if extra else ""))
             return response
         finally:
             found = request.scope.get("route")
@@ -8649,6 +8651,8 @@ def create_app(settings=None):
     install_goal_routes(app, store, auth, mutate, settings)
     from .replay import install as install_replay
     install_replay(app, store, auth)
+    from . import history_log
+    history_log.install(app, store, auth)
     from .bot_hours import install as install_bot_hours
     install_bot_hours(app, store, auth)
     from .usage import install as install_usage

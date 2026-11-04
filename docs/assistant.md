@@ -145,6 +145,29 @@ including what you ask for in your DM. An assistant run's credential works only 
 **Settings > General** on, the Assistant's read-back of exactly what it approves, and your plain yes (see below). A walk
 through Needs you (`hub needs-you commit`) applies declines, but it never approves.
 
+## Routines from chat
+
+Ask for recurring inbox work: “Every new email from a customer, draft a reply; newsletters go to Read later.” Your
+Assistant can fill a Founder, Sales, Support or Blank inbox template, or write a Message flow, and adapt it to your
+request. It saves the routine **off** and puts a Confirm / Cancel card in your chat. The card shows the trigger inbox,
+every destination and **Sort**, **Draft** or **Reply**. The full flow stays under Details. No new page is needed.
+
+Reply-writing steps default to **Draft**. The Assistant chooses **Reply** only if you explicitly ask it to send replies;
+Reply also requires the inbox's send switch and, for email, the company's Send mail permission. Both are checked when
+the card is made and again when confirmed. The Assistant never enables that permission as part of creating a routine.
+Sort-only flows have no reply-writing step.
+
+Only your own **Confirm** turns the routine on. Saying “yes” in chat does not. Cancel, withdrawal or expiry leaves it off.
+An edit gets a card too; the saved flow stays unchanged until you confirm. If someone changes the routine while a card
+waits, that card fails rather than overwriting the newer flow. Stopping a routine is direct; enabling, running or
+restoring it through chat requires a card.
+
+`POST /api/v2/automations` from an Assistant turn, with a Message trigger and `enabled: false` (or omitted), returns
+the saved off routine plus `action`, `message_id` and `needs_confirm: true`. The action is a PATCH of the reviewed flow
+with `enabled: true`. If direct writes are disabled, `hub assistant propose` can instead hold a POST on its card;
+confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
+to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
