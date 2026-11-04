@@ -169,6 +169,9 @@ KEEP = frozenset((
     "message_routes",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
     "home_merges", "home_merge_messages",   # where each person's old chat with a bot went (backend/bot_home_merge.py)
+    # The Google Workspace generation counter (backend/google_workspace.py): no secrets, and kept so a copy never issues
+    # a number that an older setup code already holds.
+    "google_setup_generations",
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
