@@ -10,6 +10,8 @@ read-back. `hub approval show <id>` gives one in full. Never guess an id.
    message in their chat, one line per approval, and it is your reply: make it the turn's last call (do the closes and declines first), then say nothing more. Only what it
    lists can be approved, and only on their plain "yes" to it, even when they already said "approve ...". After the read-back,
    your reply is one line with no items in it, for example "The list is in your chat; reply yes to approve it."
+   Put any real decision you found (by name, with its link) in `--note`: `hub approval read-back <id> --note "<the decision>"`.
+   The read-back is the whole reply, so anything you write after it is not posted. The yes still approves only the listed ids.
 2. On their yes, decide each one: `hub approval approve <id> --on-behalf-of turn` (or `hub approval decline <id> --note "<reason>"`; declines need
    no read-back). Never ask again per item. Reply with one line per item: "Approved <item> as you, through the Assistant. Say undo to put it back."
    - An approval you requested yourself is never yours to approve (`own_request`): it stays their click on a card.

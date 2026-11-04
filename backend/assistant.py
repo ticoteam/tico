@@ -1590,7 +1590,8 @@ def install(app, store, auth, mutate, onboarding):
     def read_back(request: Request, body: M.AssistantReadBack):
         """The Assistant's list of what it is about to approve for the person, posted in their chat as its reply. The
         server writes all of it from the approvals themselves, so what the person says yes to is what runs, and records
-        the ids: only those may then be approved, on their yes (`approval_words`)."""
+        the ids: only those may then be approved, on their yes (`approval_words`). `note` is the Assistant's own words
+        shown above the list (the real decision it found, with its link); the yes still approves only the listed ids."""
         who = person(request)
         if who.via != "assistant" or who.confirmed or not who.attempt_id:
             raise Problem("forbidden", "Only the " + settings.assistant_name + ", in the person's own chat, reads back "
@@ -1625,6 +1626,9 @@ def install(app, store, auth, mutate, onboarding):
             text = (f"I'll approve {'this' if n == 1 else f'these {n}'} for you:\n" + "\n".join(lines)
                     + "\n\nReply yes to approve exactly " + ("this" if n == 1 else "these")
                     + "; any other reply approves nothing.")
+            # The note is the Assistant's own words above the list; the list and the yes below it are unchanged.
+            if note := body.note.strip():
+                text = note + "\n\n" + text
             # The reply to the person's message: the turn's closing text is not posted after it (backend/execution.py),
             # so their next message answers this list and nothing else.
             turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",

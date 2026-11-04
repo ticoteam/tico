@@ -645,6 +645,20 @@ def test_the_assistant_decides_approvals_in_bulk_on_the_persons_yes_by_default(a
     assert refused["error"]["code"] == "approve_setting_off" and "owner" in refused["error"]["detail"]
 
 
+def test_a_read_back_note_shows_above_the_list_and_approves_nothing_more(api):
+    q = needs_you_queue(api)
+    _, attempt = assistant_turn(api, "ben-test", "Approve the old publish batches")
+    token = attempt["token"]
+    note = "The one real decision is the merge of acme/site PR 12: it stays yours to make."
+    back = post(api, "assistant/read-back", {"approvals": q["old"], "note": note}, token=token)
+    # The note comes first; the list and the yes line are unchanged and last; only the listed ids may be approved.
+    assert back["text"].startswith(note + "\n\nI'll approve these 3 for you:\n- Approve the publish")
+    assert back["text"].endswith("Reply yes to approve exactly these; any other reply approves nothing.")
+    assert back["approves"] == q["old"]
+    # A note is at most 400 characters: a longer one is refused before anything is posted.
+    post(api, "assistant/read-back", {"approvals": q["old"], "note": "x" * 401}, token=token, expected=422)
+
+
 def test_words_in_a_message_or_file_never_approve_only_the_persons_own(api):
     q = needs_you_queue(api)
     post(api, "assistant/settings", {"decides_approvals": True}, token="ben-test")

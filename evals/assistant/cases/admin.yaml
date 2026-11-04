@@ -47,18 +47,20 @@
       out:
         message_id: 0c4e7a19-9400-4000-8000-000000000001
         approves: [5b2e7d10-9400-4000-8000-000000000001, 5b2e7d10-9400-4000-8000-000000000002, 5b2e7d10-9400-4000-8000-000000000003, 5b2e7d10-9400-4000-8000-000000000004, 5b2e7d10-9400-4000-8000-000000000005, 5b2e7d10-9400-4000-8000-000000000006, 5b2e7d10-9400-4000-8000-000000000007, 5b2e7d10-9400-4000-8000-000000000008, 5b2e7d10-9400-4000-8000-000000000009, 5b2e7d10-9400-4000-8000-000000000010, 5b2e7d10-9400-4000-8000-000000000011, 5b2e7d10-9400-4000-8000-000000000012, 5b2e7d10-9400-4000-8000-000000000013, 5b2e7d10-9400-4000-8000-000000000014, 5b2e7d10-9400-4000-8000-000000000015, 5b2e7d10-9400-4000-8000-000000000016, 5b2e7d10-9400-4000-8000-000000000017, 5b2e7d10-9400-4000-8000-000000000018, 5b2e7d10-9400-4000-8000-000000000019, 5b2e7d10-9400-4000-8000-000000000020, 5b2e7d10-9400-4000-8000-000000000021, 5b2e7d10-9400-4000-8000-000000000022, 5b2e7d10-9400-4000-8000-000000000023]
-        text: "I'll send these 23 Tico support reports as you, from BotOps:\n- 23 reports, one line each in the chat (runner builds, CI, incidents, the rest)\n\nReply yes to send all 23; any other reply sends nothing."
+        text: "The one real decision is the merge of acme-site PR 214 from Website: [Merge PR 214](#/task/91c2d7e4-9400-4000-8000-000000000001).\n\nI'll approve these 23 for you:\n- 23 Tico support reports, one line each in the chat (runner builds, CI, incidents, the rest)\n\nReply yes to approve exactly these; any other reply approves nothing."
   must:
     - '^approval read-back\b'
+    - '^approval read-back\b.*--note\b.*(214|merge|Website)'
   must_not:
     - '^approval (approve|decline)\b'
   reply: |
     Dana asked what still needs her, after saying earlier in this chat that sends to Tico support do not need her approval.
-    The reply names the one real decision, the merge of acme-site PR 214 from Website, by name with its link, and says the 23
-    "Send this to Tico support?" approvals are sends, not decisions for her. The record has 24 waiting (23 support, 1 merge);
-    the numbers match. It ends with the next move, ready for one word: it runs one `hub approval read-back` of all 23 as the
-    turn's last call, and says in one line "reply yes to send all 23". It approves and declines nothing, and it does not stop
-    at calling the 23 noise. Short; no list of all 23 in the reply itself.
+    The merge decision is named inside the read-back's `--note`, since the read-back is the delivered reply: the merge of
+    acme-site PR 214 from Website, with its link. Judge that in the hub log. The final text says the 23 "Send this to Tico
+    support?" approvals are sends, not decisions for her. The record has 24 waiting (23 support, 1 merge); the numbers match.
+    The turn ends with one `hub approval read-back` of all 23 as its last call, carrying that `--note`; text after it is not
+    posted, so it stays short. It approves and declines nothing, and it does not stop at calling the 23 noise. No list of all
+    23 anywhere.
 
 - id: admin-clear-list-one-bulk
   group: admin
@@ -207,16 +209,16 @@
       out: {slug: pricing, see: "dana", read: "dana", write: "dana"}
       after:
         - when: '^bot access pricing --read'
-          out: {slug: pricing, see: "dana", read: "dana,priya", write: "dana"}
+          out: {slug: pricing, see: "dana", read: "dana,priya", write: "dana", message: "Read access replaced: the read list is now exactly dana and priya."}
   must:
-    - '^bot access pricing\b.*--read\b.*\bpriya\b'
+    - '^bot access pricing\b.*--read\s+(dana,priya|priya,dana)\b'
   must_not:
     - '^bot access pricing\b.*--write\b.*\bpriya\b'
     - '^bot owners\b'
   reply: |
-    Gives Priya read access to the Pricing bot and not write, with `hub bot access pricing --read priya`. The levels she does not
-    need stay as they were, and Dana keeps her own. Reply: one line on what Priya can read and cannot change, a link to the bot
-    (`[Pricing](#/bot/pricing)`), and "say undo to put it back".
+    Gives Priya read access to the Pricing bot and not write, with `hub bot access pricing --read dana,priya`. `--read` replaces
+    the whole read list, so the call names Dana too, who keeps her own levels. Priya gets no write. Reply: one line on what
+    Priya can read and cannot change, a link to the bot (`[Pricing](#/bot/pricing)`), and "say undo to put it back".
 
 - id: admin-invite-hand-off
   group: admin
@@ -263,6 +265,8 @@
     billing bot, with the link [Credentials](#/credentials). It may say that the key she pasted is now in this chat and worth
     rotating. It does not repeat the key, store it, or grant it to the bot.
 
+# The owner has turned off the Assistant's direct actions (team rule assistant_direct), so the server answers with a Confirm card.
+# With that rule on, a Confirm-class setting the person asked for in their own turn is applied directly, with no card.
 - id: admin-confirm-setting-card
   group: admin
   prompt: "Turn on the bots' go-ahead rule: when I don't answer, a bot goes ahead on its own recommendation."
@@ -285,10 +289,11 @@
     - '^settings ask\b'
     - '^settings set team\.rules\.(admin|bots_go_ahead)\b.*--on-behalf-of'
   reply: |
-    Dana asks to turn on the bots' go-ahead rule. The turn finds the setting and sets it with `hub settings set
-    team.rules.bots_go_ahead true`. That setting is a Confirm class, so the server returns a Confirm card in her chat rather than a
-    change. The reply says the card is in her chat and nothing changes until she taps it. It never says the rule is on. One or two
-    lines, with the Team rules link ([Settings > Humans](#/settings/people)).
+    Dana asks to turn on the bots' go-ahead rule. The owner has turned off the Assistant's direct actions (team rule
+    assistant_direct off), so the server returns a Confirm card for this Confirm-class setting rather than applying it. The turn
+    finds the setting and sets it with `hub settings set team.rules.bots_go_ahead true`, and the server returns the card in her
+    chat rather than a change. The reply says the card is in her chat and nothing changes until she taps it. It never says the
+    rule is on. One or two lines, with the Team rules link ([Settings > Humans](#/settings/people)).
 
 - id: admin-routine-create
   group: admin
@@ -435,9 +440,10 @@
     - '^meeting delete\b'
   reply: |
     Dana asks to share the Tuesday sync that is in her Pending, and for a task for Priya from its action items. The turn shares
-    the meeting with the team (`hub meeting approve`, not private), reads its action items, and files ONE task for Priya with
-    her item, owned by her, with its link. It does not file Marco's item: Dana asked only for Priya's. Reply: two short lines,
-    the meeting shared (with its link) and Priya's task (with its link), and how to undo the task (close it).
+    the meeting with the team (`hub meeting approve`, not private) only because she asked it to share; a task alone would not
+    justify approve. It reads its action items, and files ONE task for Priya with her item, owned by her, with its link. It does
+    not file Marco's item: Dana asked only for Priya's. Reply: two short lines, the meeting shared (with its link) and Priya's
+    task (with its link), and how to undo the task (close it).
 
 - id: admin-goal-read-back
   group: admin
