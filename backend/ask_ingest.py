@@ -765,8 +765,22 @@ REPLAY_PAGE = 25
 def _next_day(day):
     import datetime as dt
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
+# A task's status as of a time, read from its status changes (task_events): the status it took at its last change before
+# then; with none before, the status it had before its first change after (what it held from creation, the creation
+# change itself having no old status); with no change at all, its status now. Used on `tasks` unaliased.
+_STATUS_AT = ("COALESCE((SELECT e.new FROM task_events e WHERE e.task_id=tasks.id AND e.field='status' "
+              "AND e.created_at<? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1), "
+              "(SELECT COALESCE(e.old, e.new) FROM task_events e WHERE e.task_id=tasks.id AND e.field='status' "
+              "ORDER BY e.created_at, e.rowid LIMIT 1), tasks.status)")
+# Open then, as the live plate counts it (hubdb.needs_you: ACTIVE_STATUSES, snoozed left out, not done or closed).
 _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
-              "AND COALESCE(snoozed_until,'')<=?")
+              "AND COALESCE(snoozed_until,'')<=? AND " + _STATUS_AT
+              + f" IN ({','.join('?' * len(H.ACTIVE_STATUSES))})")
+
+
+def _active_args(person, at):
+    """The parameters of `_ACTIVE_AT` for `person` at `at`, in its order."""
+    return (person, at, at, at, at, at, *H.ACTIVE_STATUSES)
 
 
 def replay_items(c, person, start, end, assistant_bot=None):
@@ -803,25 +817,28 @@ def load_at(c, person, at):
     # The owned ones as live: off the product lane and off numbered types (`tasks(tickets=False)`).
     owned = {r[0] for r in c.execute(
         f"SELECT id FROM tasks WHERE {_ACTIVE_AT} AND COALESCE(lane,'company')<>'product' AND NOT EXISTS "
-        "(SELECT 1 FROM task_types ty WHERE ty.id=tasks.type_id AND ty.numbered=1)", (person, at, at, at, at))}
+        "(SELECT 1 FROM task_types ty WHERE ty.id=tasks.type_id AND ty.numbered=1)", _active_args(person, at))}
+    # Waiting then: live, a bot's task with status waiting and waiting_on the person.
     waiting = {r[0] for r in c.execute(
         "SELECT t.id FROM tasks t WHERE t.id IN (SELECT task_id FROM task_events WHERE field='waiting_on' AND new=?) "
         "AND t.created_at<? AND (t.done_at IS NULL OR t.done_at>?) AND (t.closed_at IS NULL OR t.closed_at>?) "
         "AND COALESCE(t.snoozed_until,'')<=? AND (SELECT e.new FROM task_events e WHERE e.task_id=t.id AND "
-        "e.field='waiting_on' AND e.created_at<? ORDER BY e.created_at DESC LIMIT 1)=?",
-        (person, at, at, at, at, at, person))}
+        "e.field='waiting_on' AND e.created_at<? ORDER BY e.created_at DESC LIMIT 1)=? AND "
+        + _STATUS_AT.replace("tasks.", "t.") + "='waiting'",
+        (person, at, at, at, at, at, person, at))}
     asks = c.execute(
         f"SELECT m.id AS mid, {H.MESSAGE_TASK_SQL} AS tid FROM messages m "
         "JOIN conversations cv ON cv.id=m.conversation_id "
         f"LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} AND t.created_at<? AND (t.done_at IS NULL OR t.done_at>?) "
-        "AND (t.closed_at IS NULL OR t.closed_at>?) AND COALESCE(t.snoozed_until,'')<=? "
+        "AND (t.closed_at IS NULL OR t.closed_at>?) AND COALESCE(t.snoozed_until,'')<=? AND "
+        + _STATUS_AT.replace("tasks.", "t.") + f" IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
         "WHERE m.recipient_id=? AND m.kind='ask' AND m.sender_id LIKE 'bot:%' AND m.created_at<? "
         "AND (m.deleted_at IS NULL OR m.deleted_at>?) AND (m.superseded_at IS NULL OR m.superseded_at>?) "
         "AND (m.expires_at IS NULL OR m.expires_at>?) AND NOT EXISTS (SELECT 1 FROM messages a WHERE "
         "(a.id=m.answered_by_id OR (a.in_reply_to=m.id AND a.kind='answer')) AND a.created_at<? "
         "AND (a.deleted_at IS NULL OR a.deleted_at>=?)) "
         f"AND ({H.MESSAGE_TASK_SQL} IS NULL OR t.id IS NOT NULL)",
-        (at, at, at, at, person, at, at, at, at, at, at)).fetchall()
+        (at, at, at, at, at, *H.ACTIVE_STATUSES, person, at, at, at, at, at, at)).fetchall()
     on_tasks = {r["tid"] for r in asks if r["tid"]}
     loose = {r["mid"] for r in asks if not r["tid"]}
     ids = owned | waiting | on_tasks | loose
@@ -840,7 +857,7 @@ def open_items_at(c, person, at, leave_out=""):
     """The person's items open just before `at`, as the gate would have offered them as `covered`, the replayed
     item itself left out."""
     rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC LIMIT ?",
-                     (person, at, at, at, at, leave_out, MAX_ITEMS)).fetchall()
+                     (*_active_args(person, at), leave_out, MAX_ITEMS)).fetchall()
     return {f"item-{n}": (r["id"], r["title"] or "") for n, r in enumerate(rows, 1)}
 
 

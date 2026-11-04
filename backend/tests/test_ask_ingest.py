@@ -1458,3 +1458,64 @@ def test_a_product_lane_task_is_left_out_of_the_replay_load_as_live(ben_off):
     with api.app.state.store.read() as c:
         assert A.load(c, "human:ben") == (5, 0)            # the live gate leaves the product backlog off
         assert A.load_at(c, "human:ben", stamp(10)) == (5, 0)
+
+
+def stamp_status(c, tid, status, at):
+    """Stamp the status changes that set `status` (the test's store writes them at the real clock)."""
+    c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='status' AND new=?", (at, tid, status))
+
+
+def test_a_task_declined_before_the_replay_time_is_left_out_of_the_replay_load(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        H.task_update(c, "human:ben", tid, status="declined")
+        stamp_status(c, tid, "open", stamp(8))
+        stamp_status(c, tid, "declined", stamp(9))
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (4, 0)                    # the live plate leaves a declined task off
+        assert A.load_at(c, "human:ben", stamp(10)) == (4, 0)      # so does the replay at ten
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == (5, 0)   # but it was open at half past eight
+
+
+def test_a_task_waiting_on_the_person_then_declined_is_left_out_of_the_replay_load(ben_off):
+    api, token = ben_off
+    plate(api, 2)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Bot asks Ben", "", "bot:ops", lint=False)
+        tid = c.execute("SELECT id FROM tasks WHERE title='Bot asks Ben'").fetchone()[0]
+        at_eight(c)
+        c.execute("UPDATE tasks SET created_at=?, status='waiting', waiting_on='human:ben' WHERE id=?", (stamp(8), tid))
+        for field, old, new in (("status", "open", "waiting"), ("waiting_on", None, "human:ben")):
+            c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,?)",
+                      (H.new_id(), tid, stamp(8, 45), "bot:ops", field, old, new, ""))
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", tid, status="declined")
+        stamp_status(c, tid, "declined", stamp(9))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 50)) == (3, 0)   # two plate items and the wait, at ten to nine
+        assert A.load_at(c, "human:ben", stamp(10)) == (2, 0)      # the wait was declined by ten
+        assert A.load(c, "human:ben") == (2, 0)                    # and the live plate agrees
+
+
+def test_a_pending_approval_counts_in_the_replay_load_only_while_it_is_undecided(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        rows = [("apr-open", "human:ben", None, stamp(9), stamp(9), None),          # pending from nine
+                ("apr-decided", "human:ben", "approved", stamp(9), stamp(9), stamp(9, 30)),
+                ("apr-later", "human:ben", None, stamp(10, 30), stamp(10, 30), None),   # asked at half past ten
+                ("apr-other", "human:ana", None, stamp(8), stamp(8), None)]           # someone else's
+        for aid, owner, decision, created, ready, decided in rows:
+            c.execute("INSERT INTO approvals(id,kind,task_id,message_id,payload,payload_hash,requested_by_id,decision,"
+                      "decided_at,created_at,ready_since,decision_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (aid, "publish", None, None, "{}", aid, "bot:ops", decision, decided, created, ready, owner))
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (7, 0)                    # five plate items and the two pending approvals
+        assert A.load_at(c, "human:ben", stamp(11)) == (7, 0)      # by eleven the same two are pending
+        assert A.load_at(c, "human:ben", stamp(10)) == (6, 0)      # at ten the one asked at half past is not yet
+        assert A.load_at(c, "human:ben", stamp(9, 15)) == (7, 0)   # at quarter past nine, the one decided at half past
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == (5, 0)   # nothing was asked yet at half past eight
