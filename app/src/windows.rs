@@ -331,23 +331,96 @@ pub(crate) fn opening_page(usual: url::Url, hub: &url::Url, sign_in: bool, last:
 }
 
 /// Where a page at `url` is in the web app on `hub`, to open there next time: `Some(Some(place))` at a route (the
-/// hub's own address with the route's hash, and nothing else of `url`), `Some(None)` at the web app's start, and
-/// `None` anywhere else, which leaves the last place as it was: another origin (a sign-in provider, Cloudflare Access),
-/// any other path on the hub (its sign-in, its API), or a hash that is not a route of the web app.
+/// hub's own address with the route `route_of` keeps, and nothing else of `url`), `Some(None)` at the web app's start,
+/// and `None` anywhere else, which leaves the last place as it was: another origin (a sign-in provider, Cloudflare
+/// Access), any other path on the hub (its sign-in, its API), or a hash `route_of` refuses. Used both when a place is
+/// saved and when one is read back from orgs.json.
 pub(crate) fn place_of(hub: &url::Url, url: &url::Url) -> Option<Option<url::Url>> {
     if url.origin() != hub.origin() || url.path() != hub.path() || !url.username().is_empty() || url.password().is_some() {
         return None;
     }
-    match url.fragment().filter(|route| !route.is_empty() && *route != "/") {
-        None => Some(None),
-        Some(route) if route.starts_with('/') && route.len() <= 2000 && !route.to_ascii_lowercase().contains("token") => {
-            let mut place = hub.clone();
-            place.set_query(None);
-            place.set_fragment(Some(route));
-            Some(Some(place))
-        }
-        Some(_) => None,
+    let Some(fragment) = url.fragment().filter(|fragment| !fragment.is_empty() && *fragment != "/") else { return Some(None) };
+    let route = route_of(fragment)?;
+    if route == "/" {
+        return Some(None);
     }
+    let mut place = hub.clone();
+    place.set_query(None);
+    place.set_fragment(Some(&route));
+    Some(Some(place))
+}
+
+/// The view settings of a route's query (`#/...?name=value`) that a place keeps, as the web app's routes use them.
+/// Anything else is dropped, including one-time ones (a finance or update hand-off, a meeting window).
+const PLACE_PARAMS: &[&str] = &["view", "kind", "type", "owner", "tag", "month", "place", "item", "q", "who", "issues",
+    "collection", "kpi", "night", "edition", "m", "focus", "due", "rule", "from", "meeting", "recording"];
+
+/// Words that mark a credential, in a route's path, or a query name or value, anywhere: a place with one is refused.
+const CREDENTIAL_WORDS: &[&str] = &["token", "secret", "password", "passwd", "key", "code", "sig", "auth", "session"];
+
+/// The route a hash (`fragment`, as the address holds it) keeps as a place, or `None` to refuse it. Decoded first
+/// (until it stops changing, three rounds at most), so no escape hides a word: a path of plain segments only
+/// (`[A-Za-z0-9._~:@-]`), and in its query only the view settings in `PLACE_PARAMS`, the rest dropped. Any credential
+/// word refuses the whole place.
+pub(crate) fn route_of(fragment: &str) -> Option<String> {
+    fn credential(text: &str) -> bool {
+        let text = text.to_ascii_lowercase();
+        CREDENTIAL_WORDS.iter().any(|word| text.contains(word))
+    }
+    if fragment.len() > 2000 || credential(&decoded(fragment)?) {
+        return None;
+    }
+    let (path, query) = fragment.split_once('?').unwrap_or((fragment, ""));
+    let path = decoded(path)?;
+    let segments = path.strip_prefix('/')?;
+    let plain = |segment: &str| !segment.is_empty() && segment != "." && segment != ".."
+        && segment.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b':' | b'@' | b'-'));
+    if !(segments.is_empty() || segments.split('/').all(plain)) || credential(&path) {
+        return None;
+    }
+    let mut kept = url::form_urlencoded::Serializer::new(String::new());
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        // As the web app reads them (URLSearchParams): `+` is a space.
+        let (name, value) = (decoded(&name.replace('+', " "))?, decoded(&value.replace('+', " "))?);
+        if credential(&name) || credential(&value) {
+            return None;
+        }
+        if PLACE_PARAMS.contains(&name.as_str()) {
+            kept.append_pair(&name, &value);
+        }
+    }
+    let query = kept.finish();
+    Some(if query.is_empty() { path } else { format!("{path}?{query}") })
+}
+
+/// `text` percent-decoded until it stops changing, or `None` if three rounds are not enough.
+fn decoded(text: &str) -> Option<String> {
+    let mut text = text.to_string();
+    for _ in 0..3 {
+        let next = percent_decode(&text);
+        if next == text {
+            return Some(text);
+        }
+        text = next;
+    }
+    (percent_decode(&text) == text).then_some(text)
+}
+
+/// One round of percent-decoding; a `%` not followed by two hex digits stays as it is.
+fn percent_decode(text: &str) -> String {
+    let (bytes, mut out, mut i) = (text.as_bytes(), Vec::with_capacity(text.len()), 0);
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if let (b'%', Some(high), Some(low)) = (bytes[i], bytes.get(i + 1).and_then(|b| hex(*b)), bytes.get(i + 2).and_then(|b| hex(*b))) {
+            out.push((high * 16 + low) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Notes where org `id`'s page (`page`) is, for its next page to open there, after this run too (orgs.json).
@@ -1190,6 +1263,29 @@ mod page_tests {
                       "https://team.example.com/#/invite?token=abc", "about:blank"] {
             assert_eq!(place(other), None, "{other}");
         }
+        // No escape hides a credential, however many times it is encoded.
+        for hidden in ["https://team.example.com/#/threads/t_1?access_%74oken=secret", "https://team.example.com/#/threads/t_1?access_%2574oken=x",
+                       "https://team.example.com/#/threads/t_1?access_%252574oken=x", "https://team.example.com/#/threads/t_1?view=%2573ecret",
+                       "https://team.example.com/#/%61uth/callback", "https://team.example.com/#/threads/t_1?q=my+password",
+                       "https://team.example.com/#/threads/%2e%2e/x", "https://team.example.com/#/threads/t 1", "https://team.example.com/#/a//b"] {
+            assert_eq!(place(hidden), None, "{hidden}");
+        }
+        // Four rounds of encoding are more than a route ever needs: refused.
+        assert_eq!(route_of("/threads/t_1?q=%25252541"), None);
+        assert_eq!(route_of("/threads/t_1?q=%252541").as_deref(), Some("/threads/t_1?q=A"));
+        // The view settings a route uses survive; anything else is dropped, not the whole place.
+        assert_eq!(place("https://team.example.com/#/updates?kind=weekly&view=archive").flatten().unwrap().as_str(),
+                   "https://team.example.com/#/updates?kind=weekly&view=archive");
+        assert_eq!(place("https://team.example.com/#/finance/sources?books=ok&reason=x&month=2026-10").flatten().unwrap().as_str(),
+                   "https://team.example.com/#/finance/sources?month=2026-10");
+        assert_eq!(route_of("/meetings?window=1").as_deref(), Some("/meetings"));
+        assert_eq!(route_of("/library?q=road%20map&who=me").as_deref(), Some("/library?q=road+map&who=me"));
+        assert_eq!(place("https://team.example.com/#/?update=u_1"), Some(None), "a start with nothing kept is the start");
+        // A hand-edited orgs.json gets the same check when the place is read back.
+        let hub_text = Some("https://team.example.com/#/threads/t_1?access_%74oken=secret");
+        assert_eq!(opening_page(hub.clone(), &hub, false, hub_text), hub);
+        assert_eq!(opening_page(hub.clone(), &hub, false, Some("https://team.example.com/#/updates?view=archive&x=1")).as_str(),
+                   "https://team.example.com/#/updates?view=archive");
         // A hub under a path: only its own address, with a route.
         let prefixed = url::Url::parse("https://team.example.com/tico/").unwrap();
         assert!(place_of(&prefixed, &url::Url::parse("https://team.example.com/tico/#/inbox").unwrap()).flatten().is_some());
