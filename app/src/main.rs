@@ -17,7 +17,6 @@ mod windows;
 
 
 use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -34,7 +33,7 @@ use hub::{Client, HubStatus};
 use orgs::{Document, Org, Orgs};
 #[cfg(target_os = "macos")]
 use windows::clear_store;
-use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, remember_frame, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
+use windows::{build_server_window, build_window, eval, forget_owned, layout, main_window, open_search, org_label, reload, show_window, switch_to, sync_rail, take_owned, RAIL};
 
 const USER_AGENT: &str = "TicoHub/2.0 Tauri";
 const MIN_WIDTH: u32 = 360;
@@ -47,8 +46,6 @@ struct AppState {
     connection: Mutex<Option<Config>>,
     visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
     status: Mutex<HubStatus>,
-    // Set while the shell itself places the window, so that placement is not saved as the person's.
-    applying_frame: AtomicBool,
     // The orgs this run shows, and which one is open. The open one's server is `connection`.
     orgs: Mutex<Orgs>,
     // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
@@ -66,7 +63,6 @@ impl AppState {
             connection: Mutex::new(connection),
             visual_origin: Mutex::new(None),
             status: Mutex::new(HubStatus::default()),
-            applying_frame: AtomicBool::new(false),
             orgs: Mutex::new(orgs),
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
@@ -77,8 +73,20 @@ impl AppState {
 
 type App = AppHandle<tauri::Wry>;
 
+/// The autostart entry is named by the bundle identifier, which each environment's build sets (scripts/app.sh).
+/// Product names are not unique, and the package name is the same for every build, so two apps would share one entry.
+fn autostart_plugin(identifier: String) -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    let builder = tauri_plugin_autostart::Builder::new().app_name(identifier);
+    #[cfg(target_os = "macos")]
+    let builder = builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+    builder.build()
+}
+
 fn main() {
     applog::init();
+    // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -89,6 +97,15 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
+        // The main window's frame between launches. The plugin restores it while the window is built, before the app
+        // shows the window, and only the main window is tracked (see windows::tracks_frame).
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(windows::frame_flags())
+                .with_filter(windows::tracks_frame)
+                .build(),
+        )
+        .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
         .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_add, rail_menu])
@@ -150,16 +167,12 @@ fn main() {
                 #[cfg(not(target_os = "macos"))]
                 WindowEvent::Destroyed => window.app_handle().exit(0),
                 // The rail and the org's page are placed by the shell, so both follow the window's size.
-                WindowEvent::Resized(_) => {
-                    layout(window.app_handle());
-                    remember_frame(window.app_handle());
-                }
-                WindowEvent::Moved(_) => remember_frame(window.app_handle()),
+                WindowEvent::Resized(_) => layout(window.app_handle()),
                 _ => {}
             }
         })
         .on_menu_event(|app, event| menu_event(app, event.id().as_ref()))
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("the app could not start")
         .run(|app, event| {
             // A click on the Dock icon while the main window is hidden.
@@ -501,6 +514,8 @@ fn build_menu(app: &App) -> tauri::Result<()> {
     } else if config::is_generic() {
         app_menu.append(&MenuItem::with_id(app, "server", "Change server…", true, None::<&str>)?)?;
     }
+    #[cfg(target_os = "macos")]
+    app_menu.append(&open_at_login_item(app)?)?;
     app_menu.append_items(&[
         &PredefinedMenuItem::separator(app)?,
         &PredefinedMenuItem::hide(app, None)?,
@@ -550,8 +565,37 @@ fn menu_event(app: &App, id: &str) {
         "search" => open_search(app),
         "reload" => reload(app),
         "updates" => update_now(app),
+        #[cfg(target_os = "macos")]
+        "open-at-login" => toggle_open_at_login(app),
         _ => {}
     }
+}
+
+/// Open at Login, checked while the app starts at login. It is off until the person turns it on.
+#[cfg(target_os = "macos")]
+fn open_at_login_item(app: &App) -> tauri::Result<CheckMenuItem<tauri::Wry>> {
+    use tauri_plugin_autostart::ManagerExt;
+    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    CheckMenuItem::with_id(app, "open-at-login", "Open at Login", true, enabled, None::<&str>)
+}
+
+/// Turns Open at Login on or off, then rebuilds the menu so its check shows what the system now has. Spawned: a menu
+/// cannot be rebuilt inside the menu event that asked for the change.
+#[cfg(target_os = "macos")]
+fn toggle_open_at_login(app: &App) {
+    use tauri_plugin_autostart::ManagerExt;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let autolaunch = app.autolaunch();
+        let result = match autolaunch.is_enabled() {
+            Ok(true) => autolaunch.disable(),
+            _ => autolaunch.enable(),
+        };
+        if let Err(e) = result {
+            log::warn!("could not change Open at Login: {e}");
+        }
+        let _ = build_menu(&app);
+    });
 }
 
 // ----------------------------------------------------------------------------- Dock badge

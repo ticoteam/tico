@@ -30,6 +30,8 @@ time = { version = "0.3", features = ["formatting"] }
 log = { version = "0.4", features = ["std"] }
 tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-process = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-autostart = "2"
 
 # The badge reads the page's cookies through WebKit's own callback, so the main thread never waits for them
 # (see src/cookies.rs). The same versions wry already uses.
