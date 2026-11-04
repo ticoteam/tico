@@ -1,6 +1,6 @@
 //! Idle load: once an hour the runner names the processes and Docker containers on its computer that are busy, and
-//! posts the ones busy in two hourly samples in a row to `runners/idle-load`, for the Health Monitor
-//! (backend/health_monitor.py). Two samples an hour apart are not a turn that happened to be running. The model CLIs
+//! posts the ones busy in two hourly samples in a row to `runners/idle-load`, for Check health
+//! (backend/maintenance_health.py). Two samples an hour apart are not a turn that happened to be running. The model CLIs
 //! that run turns are left out: they are busy on purpose.
 //!
 //! A sample holds names and numbers only: an executable's base name (letters, digits and `._-`), its CPU and its
