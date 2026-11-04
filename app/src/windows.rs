@@ -123,7 +123,7 @@ mod capability_tests {
 pub(crate) fn build_window(app: &App) -> tauri::Result<()> {
     let Some(org) = active_org(app) else { return build_server_window(app) };
     if main_window(app).is_none() {
-        keep_title_bar_reachable(&build_main(app)?);
+        keep_title_bar_reachable(app, &build_main(app)?);
     }
     if active_webview(app).is_none() {
         open_org_webview(app, &org)?;
@@ -794,21 +794,50 @@ fn frame_reachable(frame: (f64, f64, f64, f64), areas: &[(f64, f64, f64, f64)]) 
     })
 }
 
-/// The plugin restores a saved frame when any corner lies on a display, which can leave the title bar off screen
-/// after a display is unplugged. Such a frame gives way to the default size, centred.
-fn keep_title_bar_reachable(window: &Window) {
-    let (Ok(position), Ok(size), Ok(scale)) = (window.outer_position(), window.outer_size(), window.scale_factor()) else { return };
-    let u = unit(scale);
-    let frame = (position.x as f64 / u, position.y as f64 / u, size.width as f64 / u, size.height as f64 / u);
-    let areas: Vec<_> = window.available_monitors().unwrap_or_default().iter().map(|m| {
+/// Room left above a window's content for its title bar, in points (logical pixels).
+const TITLE_BAR: f64 = 28.0;
+
+/// The plugin's saved frame for the main window, from its own file: outer position and content size, in physical
+/// pixels. None when there is none yet.
+fn saved_frame(app: &App) -> Option<(f64, f64, f64, f64)> {
+    use tauri_plugin_window_state::AppHandleExt;
+    let path = app.path().app_config_dir().ok()?.join(app.filename());
+    let states: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let main = states.get("main")?;
+    let n = |key: &str| main.get(key).and_then(Value::as_f64);
+    let frame = (n("x")?, n("y")?, n("width")?, n("height")?);
+    (frame.2 > 0.0 && frame.3 > 0.0).then_some(frame)
+}
+
+/// The default frame, fitted to a work area (x, y, width, height in points) and centred in it: 1240 by 820 where
+/// that fits, never taller than the area leaves room for, so its title bar is always on the display.
+fn fallback_frame((ax, ay, aw, ah): (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+    let (w, h) = (1240f64.min(aw), 820f64.min(ah - TITLE_BAR).max(1.0));
+    (ax + (aw - w) / 2.0, ay + ((ah - h - TITLE_BAR) / 2.0).max(0.0), w, h)
+}
+
+/// The plugin brings back a saved frame when any corner lies on a display, which can leave the title bar off screen
+/// after a display is unplugged. Such a frame gives way to the default one on the primary display. The saved frame is
+/// read from the plugin's file because on macOS the plugin's move and resize are queued, so the window does not have
+/// that frame yet; these are queued after the plugin's, so they are the ones that land.
+fn keep_title_bar_reachable(app: &App, window: &Window) {
+    let Some((x, y, w, h)) = saved_frame(app) else { return };
+    let u = unit(window.scale_factor().unwrap_or(1.0));
+    let monitors = window.available_monitors().unwrap_or_default();
+    let areas: Vec<_> = monitors.iter().map(|m| {
         let (area, u) = (m.work_area(), unit(m.scale_factor()));
         (area.position.x as f64 / u, area.position.y as f64 / u, area.size.width as f64 / u, area.size.height as f64 / u)
     }).collect();
-    if areas.is_empty() || frame_reachable(frame, &areas) {
+    if areas.is_empty() || frame_reachable((x / u, y / u, w / u, h / u + TITLE_BAR), &areas) {
         return;
     }
-    let _ = window.set_size(LogicalSize::new(1240.0, 820.0));
-    let _ = window.center();
+    let Some(monitor) = window.primary_monitor().ok().flatten().or_else(|| monitors.into_iter().next()) else { return };
+    // In points (logical pixels): the window's own scale converts them back on every platform.
+    let (area, scale) = (monitor.work_area(), monitor.scale_factor().max(f64::EPSILON));
+    let (fx, fy, fw, fh) = fallback_frame((area.position.x as f64 / scale, area.position.y as f64 / scale,
+                                           area.size.width as f64 / scale, area.size.height as f64 / scale));
+    let _ = window.set_size(LogicalSize::new(fw, fh));
+    let _ = window.set_position(LogicalPosition::new(fx, fy));
 }
 
 /// The window-state plugin tracks only the main window. Org pages, meetings and the setup window keep no frame.
@@ -848,6 +877,20 @@ mod window_state_tests {
         assert!(!frame_reachable((1480.0, 100.0, 1240.0, 820.0), &[laptop]));
         assert!(frame_reachable((1400.0, 100.0, 1240.0, 820.0), &[laptop]));
         assert!(!frame_reachable((100.0, 100.0, 1240.0, 820.0), &[]));
+    }
+
+    #[test]
+    fn the_fallback_frame_fits_a_small_display_with_its_title_bar_on_it() {
+        // 1366x768 with a taskbar: the work area is shorter than the default window.
+        let small = (0.0, 0.0, 1366.0, 728.0);
+        let (x, y, w, h) = fallback_frame(small);
+        assert!(h + TITLE_BAR <= 728.0 && w <= 1366.0);
+        assert!(frame_reachable((x, y, w, h + TITLE_BAR), &[small]));
+        // A large display gets the default size, centred.
+        let (x, y, w, h) = fallback_frame((0.0, 25.0, 2560.0, 1415.0));
+        assert_eq!((w, h), (1240.0, 820.0));
+        assert_eq!(x, 660.0);
+        assert!(y > 25.0 && frame_reachable((x, y, w, h), &[(0.0, 25.0, 2560.0, 1415.0)]));
     }
 }
 
