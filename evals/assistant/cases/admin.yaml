@@ -56,8 +56,9 @@
   reply: |
     Dana asked what still needs her, after saying earlier in this chat that sends to Tico support do not need her approval.
     The merge decision is named inside the read-back's `--note`, since the read-back is the delivered reply: the merge of
-    acme-site PR 214 from Website, with its link. Judge that in the hub log. The final text says the 23 "Send this to Tico
-    support?" approvals are sends, not decisions for her. The record has 24 waiting (23 support, 1 merge); the numbers match.
+    acme-site PR 214 from Website, in plain words (the read-back shows no links, so none is expected there). Judge that in
+    the hub log. The note or the final text says the 23 "Send this to Tico support?" approvals are sends, not decisions for
+    her. The record has 24 waiting (23 support, 1 merge); the numbers match.
     The turn ends with one `hub approval read-back` of all 23 as its last call, carrying that `--note`; text after it is not
     posted, so it stays short. It approves and declines nothing, and it does not stop at calling the 23 noise. No list of all
     23 anywhere.
