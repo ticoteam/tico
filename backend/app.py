@@ -177,6 +177,8 @@ def create_app(settings=None):
         cloud_access.current(store)        # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
+        # The UI bundle (about half a second to build and slim), before the first page asks for it on the event loop.
+        asyncio.get_running_loop().run_in_executor(None, ui_bundle.build_id, settings.ui_dir)
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
         if settings.company_file_configured or settings.company_file_data:
             # A file that can't be applied is kept for the owner to see; never a sample company in its place.

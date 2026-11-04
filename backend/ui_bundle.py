@@ -12,6 +12,11 @@ gets `?v=<hash of the file>`, and the server keeps that URL for a year (backend/
 needs no round trip to revalidate them. The bundle's first statement marks `tico:bundle-start` for the boot timing
 (ui/app/boot-timing.js).
 
+Each file goes in smaller (`slim_js`, `slim_css`): without its comment lines, blank lines and indentation, about a
+fifth of the UI's size, gzipped or not. Nothing on a line with code changes, nor anything inside a string or template
+literal; a file that does not read cleanly to its end goes in as it is. TICO_UI_SLIM=off bundles the files unchanged
+(the bundle's line numbers then match the files').
+
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
@@ -40,6 +45,138 @@ class BundleError(Exception):
 
 def enabled():
     return os.environ.get("TICO_UI_BUNDLE", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def slim_enabled():
+    return os.environ.get("TICO_UI_SLIM", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+# A `/` after one of these (or at the start) begins a regular expression; after anything else it divides.
+_REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
+_REGEX_WORDS = {"return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else",
+                "yield", "await"}
+_KEEP = ("/*!", "@license", "@preserve")
+
+
+def slim_js(text):
+    """`text` without its comment lines, blank lines and leading indentation. Only whole lines go: a line holding code
+    is kept as it is, comment and all, and so is every line inside a string or a template literal (its text and
+    indentation are the string's). Returns `text` unchanged when it does not read to its end in plain code (an
+    unclosed template or comment, or a regular expression read as division)."""
+    out, i, n = [], 0, len(text)
+    # The open templates: for each, how many `{` deep its current `${...}` is (None while in the template's text).
+    stack = []
+    last = ""            # the last character of code that was not space, or the last word
+    line_start = True
+    while i < n:
+        in_text = bool(stack) and stack[-1] is None
+        if line_start and not in_text:
+            j = i
+            while j < n and text[j] in " \t":
+                j += 1
+            end = text.find("\n", j)
+            end = n if end < 0 else end
+            if text.startswith("//", j) or j == end:
+                i = end + 1             # a comment line or a blank one: gone, with its newline
+                continue
+            if text.startswith("/*", j) and not any(k in text[j:text.find("*/", j) + 2] for k in _KEEP):
+                close = text.find("*/", j + 2)
+                if close < 0:
+                    return text
+                after = text.find("\n", close)
+                after = n if after < 0 else after
+                if not text[close + 2:after].strip():
+                    i = after + 1       # a comment of its own lines: gone
+                    continue
+            i, line_start = j, False    # the indentation goes; the line itself is kept as it is
+            continue
+        line_start = False
+        c = text[i]
+        if in_text:
+            if c == "\\":
+                out.append(text[i:i + 2]); i += 2; continue
+            if c == "`":
+                stack.pop(); last = "`"
+            elif c == "$" and text.startswith("${", i):
+                stack[-1] = 0; out.append("${"); i += 2; last = "{"; continue
+            elif c == "\n":
+                out.append(c); i += 1; continue    # a template's own line: kept whole, indentation and all
+            out.append(c); i += 1; continue
+        if c == "\n":
+            out.append(c); i += 1; line_start = True; continue
+        if c in "'\"":
+            j = i + 1
+            while j < n and text[j] != c:
+                if text[j] == "\n":
+                    return text
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1]); i = j + 1; last = c; continue
+        if c == "`":
+            stack.append(None); out.append(c); i += 1; continue
+        if c == "/" and text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(text[i:end]); i = end; continue
+        if c == "/" and text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            if close < 0:
+                return text
+            out.append(text[i:close + 2]); i = close + 2; continue
+        if c == "/" and (not last or last in _REGEX_AFTER or last in _REGEX_WORDS):
+            j, cls = i + 1, False
+            while j < n and (cls or text[j] != "/"):
+                if text[j] == "\n":
+                    return text
+                if text[j] == "\\":
+                    j += 1
+                elif text[j] == "[":
+                    cls = True
+                elif text[j] == "]":
+                    cls = False
+                j += 1
+            out.append(text[i:j + 1]); i = j + 1; last = "/re"; continue
+        if stack and c == "{":
+            stack[-1] += 1
+        elif stack and c == "}":
+            if stack[-1] == 0:
+                stack[-1] = None; out.append(c); i += 1; last = "}"; continue
+            stack[-1] -= 1
+        if c.isalnum() or c in "_$":
+            j = i
+            while j < n and (text[j].isalnum() or text[j] in "_$"):
+                j += 1
+            out.append(text[i:j]); last = text[i:j]; i = j; continue
+        if c in "+-" and last == c:
+            last = c + c        # `i++ / n` divides
+        elif c not in " \t\r":
+            last = c
+        out.append(c); i += 1
+    return "".join(out) if not stack else text
+
+
+def slim_css(text):
+    """`text` without its comments (outside strings), blank lines and indentation; unchanged if a comment or a string
+    never closes."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in "'\"":
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            if j >= n or text[j] != c:
+                return text
+            out.append(text[i:j + 1]); i = j + 1; continue
+        if text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            if close < 0:
+                return text
+            body = text[i:close + 2]
+            # A comment parts what is on either side of it, as a space does.
+            out.append(body if body.startswith("/* file: ") or any(k in body for k in _KEEP) else " ")
+            i = close + 2; continue
+        out.append(c); i += 1
+    return "".join(line.strip() + "\n" for line in "".join(out).splitlines() if line.strip())
 
 
 def _tag(kind, url):
@@ -86,8 +223,11 @@ def build(ui_dir):
         text = path.read_text()
         if not re.search(r"^'use strict';", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")
+        if slim_enabled():
+            text = slim_js(text)
         js.append(f"// file: {name}\n{text.rstrip()}\n")
-    css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n" for name, path in files["css"]]
+    css = [f"/* file: {name} */\n{(slim_css if slim_enabled() else str)(path.read_text()).rstrip()}\n"
+           for name, path in files["css"]]
     js_b, css_b = "\n".join(js).encode(), "\n".join(css).encode()
     urls = {"js": f"{JS_PATH}?v={_etag(js_b)[1:17]}", "css": f"{CSS_PATH}?v={_etag(css_b)[1:17]}"}
     page = REGION.sub(lambda m: _tag(m.group(1), urls[m.group(1)]), html)

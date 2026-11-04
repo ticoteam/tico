@@ -29,7 +29,9 @@ start every `app/` file and every feature file (`ui/*.js`) with it. `TICO_UI_BUN
 tests run the real bundler and serve the bundle by default; `TICO_UI_BUNDLE=off npm run test:ui` runs them on
 the separate files. The feature files (`ui/*.js`) are in the bundle too, ahead of `app/`; only `theme.js` (in the head, before
 the first paint) and `vendor/` load on their own. The page names `theme.js` and `vendor/marked.min.js` with `?v=<content hash>` too, and the
-server keeps them for a year at that URL (`STANDALONE` in backend/ui_bundle.py), so opening the app revalidates neither.
+server keeps them for a year at that URL (`STANDALONE` in backend/ui_bundle.py), so opening the app revalidates neither. The bundle leaves out
+each file's comment lines, blank lines and indentation (about a fifth of its size); `TICO_UI_SLIM=off` keeps them, so
+the bundle's line numbers match the files'.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
 (`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.js` compares both with what the page loaded with, on the

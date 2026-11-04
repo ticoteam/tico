@@ -120,3 +120,62 @@ def test_no_two_files_declare_the_same_top_level_name():
                 seen.setdefault(name, []).append((path.name, kind))
     clashes = {n: d for n, d in seen.items() if len(d) > 1 and any(k in ("const", "let", "class") for _, k in d)}
     assert clashes == {}
+
+
+def test_slimming_drops_only_whole_comment_and_blank_lines_and_indentation():
+    js = (
+        "'use strict';\n"
+        "// a comment line\n"
+        "/**\n * A doc comment of its own lines.\n */\n"
+        "function f(a) {\n"
+        "\n"
+        "    const url = 'https://x.example//y'; // kept: the line holds code\n"
+        "    const re = /^\\s*(```|~~~)\\/\\//;    // backticks and slashes in a regular expression\n"
+        "    const half = a / 2, more = a++ / 2;\n"
+        "    const page = `\n"
+        "      <pre>\n"
+        "      // inside a template: its text\n"
+        "\n"
+        "      ${a.map(x => `<i>${x}</i>`).join('')} ${ {b: 1}.b }\n"
+        "      </pre>`;\n"
+        "    /*! kept */\n"
+        "    return [url, re, half, more, page];\n"
+        "}\n")
+    assert ui_bundle.slim_js(js) == (
+        "'use strict';\n"
+        "function f(a) {\n"
+        "const url = 'https://x.example//y'; // kept: the line holds code\n"
+        "const re = /^\\s*(```|~~~)\\/\\//;    // backticks and slashes in a regular expression\n"
+        "const half = a / 2, more = a++ / 2;\n"
+        "const page = `\n"
+        "      <pre>\n"
+        "      // inside a template: its text\n"
+        "\n"
+        "      ${a.map(x => `<i>${x}</i>`).join('')} ${ {b: 1}.b }\n"
+        "      </pre>`;\n"
+        "/*! kept */\n"
+        "return [url, re, half, more, page];\n"
+        "}\n")
+    # Anything it cannot read to its end goes in unchanged.
+    for broken in ("const a = `open\n", "const a = 'open\n;", "/* open\n", "const r = /open\n;"):
+        assert ui_bundle.slim_js(broken) is broken
+    css = "/* file: a.css */\n/* why */\na {\n  color: red; /* inline */\n  content: \"/* not a comment */\";\n}\n\nb{margin:0/**/auto}\n"
+    assert ui_bundle.slim_css(css) == (
+        "/* file: a.css */\na {\ncolor: red;\ncontent: \"/* not a comment */\";\n}\nb{margin:0 auto}\n")
+
+
+def test_the_bundle_is_slimmed_unless_turned_off(tmp_path, monkeypatch):
+    ui = tmp_path / "ui"
+    (ui / "app").mkdir(parents=True)
+    (ui / "styles").mkdir()
+    (ui / "app/a.js").write_text("'use strict';\n// why\nfunction a() {\n  return 1;\n}\n")
+    (ui / "styles/a.css").write_text("/* why */\na {\n  color: red;\n}\n")
+    (ui / "index.html").write_text(
+        "<head>\n<!-- bundle:css:start -->\n<link rel=\"stylesheet\" href=\"/tico/ui/styles/a.css\">\n<!-- bundle:css:end -->\n</head>\n<body>\n"
+        "<!-- bundle:js:start -->\n<script src=\"/tico/ui/app/a.js\"></script>\n<!-- bundle:js:end -->\n</body>\n")
+    slim, _ = ui_bundle.build(ui)
+    assert b"// why" not in slim.js and b"\nreturn 1;" in slim.js and b"// file: app/a.js" in slim.js
+    assert b"why" not in slim.css and b"\ncolor: red;" in slim.css
+    monkeypatch.setenv("TICO_UI_SLIM", "off")
+    plain, _ = ui_bundle.build(ui)
+    assert b"// why" in plain.js and b"  return 1;" in plain.js and b"/* why */" in plain.css
