@@ -2,7 +2,8 @@
 // rules, questions, LLM and destinations, a flow without them keeps the step list; a rule's pop-up adds an action and
 // saves both (with the destinations unchanged), a rule moved on saves next "rule"; a proposal's diff shows destination,
 // `to` and move-on changes (by id when two destinations share a name); a webhook board offers Sort only and no mail
-// actions; deleting down to one destination saves Sort as one routing rule; a switched-off Sort keeps the step list;
+// actions; deleting down to one destination saves Sort as one routing rule, and a second one again (or a draft) starts
+// with an instruction the hub accepts; a switched-off Sort keeps the step list; the step list's Stop here keeps next;
 // a phone stacks the board with no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -21,6 +22,13 @@ async function save(page, writes, id, n) {
   assert.equal(w.method, 'PATCH');
   assert.equal(w.path, '/api/v2/automations/' + id);
   return w.body;
+}
+
+// Save the open editor and wait for the new version, whatever its number.
+async function saveAny(page) {
+  const was = await ver(page);
+  await page.locator('.au-save').click();
+  await page.waitForFunction(v => document.querySelector('.au-ver')?.textContent !== v && document.querySelector('.au-ed').hidden, was);
 }
 
 (async () => {
@@ -182,6 +190,60 @@ async function save(page, writes, id, n) {
       await page.locator('.au-ed [data-op="close"]').click();
       await page.locator('[data-board="dest:0"]').click();
       assert.equal(await page.locator('.au-ed [data-op="bdel"]').count(), 0, 'the last destination stays');
+      await page.locator('.au-ed [data-op="close"]').click();
+      // A second destination again: Sort asks once more, with a starting instruction the hub accepts, at the board's level.
+      await page.locator('.au-dest-add').click();
+      await page.fill('[data-b="item.name"]', 'Archive');
+      const back = await save(page, writes, 'au_hook', 4);
+      assert.deepEqual(back.steps.map(x => x.type), ['filter', 'decide', 'filter']);
+      assert.equal(back.steps[1].level, 'high');
+      assert.deepEqual(back.steps[1].questions.to.instructions, 'Pick where this goes.');
+      assert.deepEqual(Object.keys(back.steps[1].questions.to.criteria), ['ops', 'archive']);
+      assert.equal(back.steps[2].id, 'sf');
+      await page.locator('[data-board="llm"]').click();
+      assert.equal(await page.locator('.au-ed [data-b="item.prompt"]').inputValue(), 'Pick where this goes.', 'the person can edit it');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // One destination on mail, switched to Sort + draft: the llm step gets a starting prompt the hub accepts.
+    {
+      const one = fx => { tweak(fx); const a = fx.automations.find(x => x.id === 'au_board');
+        a.steps.splice(3, 2, {id: 'sf', type: 'filter', enabled: true, rules: [{when: [], match: 'all', then: [], to: 'me', next: 'end', stop: true}]}); };
+      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_board', tweak: one});
+      await page.waitForSelector('.au-board');
+      await page.locator('[data-bmode="draft"]').click();
+      await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v4');
+      const turn = writes.at(-1).body.steps.at(-1);
+      assert.equal(turn.type, 'llm');
+      assert.equal(turn.prompt, 'Pick where this message goes.');
+      assert.deepEqual(turn.choose, {to: ['me'], default: 'me', mode: 'draft'});
+      assert.equal(writes.at(-1).body.steps[1].level, 'medium', 'a kept decide keeps its level');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // The step list's Filter: Stop here reads where a rule goes (its own next, else stop), and a save keeps each next.
+    {
+      const rules = fx => { tweak(fx); const f = fx.automations.find(x => x.id === 'au_inbox').steps[0], w = v => [{field: 'message.subject', op: 'contains', value: v}];
+        f.rules = [{when: w('a'), match: 'all', then: ['archive'], next: 'end'}, {when: w('b'), match: 'all', then: ['archive'], next: 'end', stop: false},
+          {when: w('c'), match: 'all', then: ['archive'], next: 'rule', stop: false}]; };
+      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_inbox', tweak: rules});
+      await page.locator('.au-card[data-open="f1"]').click();
+      const box = i => page.locator(`[data-b="step.rules.${i}.stop"]`);
+      assert.deepEqual([await box(0).isChecked(), await box(1).isChecked(), await box(2).isChecked()], [true, true, false]);
+      const n = writes.length;
+      await saveAny(page);
+      assert.equal(writes.length, n + 1);
+      let r = writes.at(-1).body.steps[0].rules;
+      assert.deepEqual(r.map(x => [x.next, 'stop' in x ? x.stop : 'none']), [['end', 'none'], ['end', true], ['rule', false]]);
+      // Unstopped, a rule goes on to the next step; stopped, it ends.
+      await page.locator('.au-card[data-open="f1"]').click();
+      await box(0).uncheck();
+      await box(2).check();
+      await saveAny(page);
+      r = writes.at(-1).body.steps[0].rules;
+      assert.deepEqual(r.map(x => [x.next, x.stop]), [['step', false], ['end', true], ['end', true]]);
       assert.deepEqual(errors, []);
       await page.close();
     }

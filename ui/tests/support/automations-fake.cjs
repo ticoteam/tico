@@ -13,6 +13,21 @@ const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const clone = x => JSON.parse(JSON.stringify(x));
 // A version's flow: the trigger, the steps and (a board's) destinations.
 const flowOf = a => ({trigger: clone(a.trigger), steps: clone(a.steps), ...(a.destinations ? {destinations: clone(a.destinations)} : {})});
+// The hub's own refusals that a board save could trip (backend/automation_flow.py): a decide question needs
+// instructions, a choice two options, an llm step a prompt; steps nest in paths and branches.
+function flowProblem(steps) {
+  for (const s of steps || []) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.type === 'llm' && !String(s.prompt ?? '').trim()) return `${s.id}: an llm step needs a prompt`;
+    if (s.type === 'decide') for (const [id, q] of Object.entries(s.questions || {})) {
+      if (q?.instructions == null || (typeof q.instructions === 'string' && !q.instructions.trim())) return `${s.id}.${id}: a question needs instructions`;
+      if (q?.type === 'choice' && (Array.isArray(q.criteria) ? q.criteria : Object.keys(q.criteria || {})).length < 2) return `${s.id}.${id}: a choice is a criteria map of at least two options`;
+    }
+    for (const kid of [s.steps, s.then, s.else, ...(Array.isArray(s.paths) ? s.paths.map(x => x?.steps) : [])])
+      if (Array.isArray(kid)) { const bad = flowProblem(kid); if (bad) return bad; }
+  }
+  return '';
+}
 
 // A bot's draft (`draft: true` in openAutomations): off, its version 1 pending until Turn on (CONTRACT §2).
 const DRAFT = {id: 'au_draft', name: 'Receipts to archive', owner_id: 'person:dana', enabled: false, builtin: false, version: 1,
@@ -184,6 +199,8 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       if (!rest && method === 'PATCH') {
         for (const k of ['enabled', 'spend_cap', 'name']) if (k in body) { if (body[k] === null) delete a[k]; else a[k] = body[k]; }
         if (body.steps || body.trigger || body.destinations) {
+          const bad = body.steps && flowProblem(body.steps);
+          if (bad) return refuse(422, 'invalid_flow', bad);
           if (body.steps) a.steps = body.steps;
           if (body.trigger) a.trigger = body.trigger;
           if (Array.isArray(body.destinations)) a.destinations = body.destinations;

@@ -65,6 +65,14 @@ assert.equal(nb.questions[1].min, 0.8);
 assert.equal('min' in nb.llm, false);
 assert.deepEqual(plain(flow(nb)), {steps: nomin.steps, destinations: nomin.destinations});
 
+// Levels as stored: a decide with none keeps none (the engine runs it as low), and a written prompt is kept.
+const nolevel = clone(fx.inbox);
+delete nolevel.steps[1].level; delete nolevel.steps[3].level;
+assert.deepEqual(plain(flow(shape(nolevel))), {steps: nolevel.steps, destinations: nolevel.destinations});
+const noWebLevel = clone(fx.webhook);
+delete noWebLevel.steps[1].level;
+assert.deepEqual(plain(flow(shape(noWebLevel))), {steps: noWebLevel.steps, destinations: noWebLevel.destinations});
+
 // Sort with one destination: a last filter with one rule and no conditions, no decide (a one-option choice is refused).
 const one = shape(fx.inbox);
 Object.assign(one.llm, {to: ['me'], default: 'me'});
@@ -77,9 +85,17 @@ assert.deepEqual(plain(flow(oneBack)), plain(oneOut));
 const lone = {...clone(fx.webhook), steps: [{id: 's1', type: 'filter', enabled: true, rules: [{when: [], match: 'all', then: [], to: 'ops', next: 'end', stop: true}]}]};
 assert.deepEqual(plain(shape(lone).rules), [], 'a lone routing filter is Sort, not a rule');
 assert.equal(shape(lone).llm.default, 'ops');
-// Back to two: a new decide and the same filter, at the board's minimum.
-Object.assign(oneBack.llm, {to: ['me', 'eng'], prompt: 'Pick one.'});
+// Back to two: a new decide (the board's level, a starting instruction) and the same filter, at the board's minimum.
+Object.assign(oneBack.llm, {to: ['me', 'eng']});
 const two = flow(oneBack);
+const newSort = two.steps.find(s => s.type === 'decide' && s.questions.to);
+assert.equal(newSort.level, 'high');
+assert.equal(newSort.questions.to.instructions, 'Pick where this message goes.');
+assert.equal(flow({...shape(lone), llm: {...shape(lone).llm, to: ['ops', 'log']}}).steps[0].questions.to.instructions, 'Pick where this goes.');
+// One destination to a draft: the llm step gets the starting instruction too (a prompt is required).
+const drafted = flow({...oneBack, llm: {...oneBack.llm, to: ['me'], mode: 'draft', as: 'assistant:dana'}});
+assert.equal(drafted.steps.at(-1).type, 'llm');
+assert.equal(drafted.steps.at(-1).prompt, 'Pick where this message goes.');
 assert.deepEqual(plain(two.steps.slice(-1)[0].rules.map(r => [r.when[0]?.min ?? null, r.to])), [[0.5, 'me'], [0.5, 'eng'], [null, 'me']]);
 assert.equal(two.steps.slice(-1)[0].id, 'sf');
 assert.ok(shape({...fx.inbox, ...plain(two)}));
@@ -101,6 +117,8 @@ assert.equal(without(f => { f.steps[4].rules[1].when[0].min = 0.7; }), null);
 assert.equal(without(f => { delete f.steps[4].rules[2].when[0].min; }), null);
 assert.equal(without(f => { f.steps[3].enabled = false; f.steps[4].enabled = false; }), null);
 assert.equal(without(f => { f.steps[0].enabled = false; }), null);
+// A rule with a destination that still moves on (its own next wins) isn't one the board can draw.
+assert.equal(without(f => { f.steps[0].rules[0].next = 'rule'; }), null);
 assert.equal(shape({trigger: {type: 'message'}, steps: [{id: 'f1', type: 'filter', rules: []}]}), null, 'a plain flow keeps its steps');
 const legacy = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/redesign-automations.json'), 'utf8')).automations;
 for (const a of legacy) assert.equal(shape(a), null, `${a.id} keeps its step list`);
