@@ -25,7 +25,9 @@ MAX_RULES = 50
 MAX_CONDS = 20
 MAX_DESTINATIONS = 20   # a flow's named chains that a filter rule's `to` may send a thread to
 MAX_DESTINATION_ACTIONS = 10
-COLORS = ("amber", "orange", "violet", "green", "blue", "teal", "pink", "gray", "red")
+CHOICE_MODES = ("draft", "reply")   # what a choose step's body does: a draft for review, or a reply sent
+MAX_CHOICES = 20                    # destinations one choose step picks between
+COLORS =("amber", "orange", "violet", "green", "blue", "teal", "pink", "gray", "red")
 NEXTS = ("end", "rule", "step")   # what a filter rule does once its actions ran (rule_next)
 MAX_TEXT = 8000
 MAX_PROMPT = 32000           # an llm or bot_turn prompt (an Inbox Manager's instructions can run long)
@@ -251,6 +253,7 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
     _need(counts[0] <= MAX_STEPS, where, f"a flow has at most {MAX_STEPS} steps")
     kind = step.get("type")
     _need(kind in STEP_TYPES, where, f"type is one of {', '.join(STEP_TYPES)}")
+    _need(kind == "llm" or step.get("choose") is None, where, "choose is on an llm step")
     _need(isinstance(step.get("enabled", True), bool), where, "enabled is true or false")
     if kind == "filter":
         rules = step.get("rules", [])
@@ -282,6 +285,8 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
               where, "as is assistant:<person> or bot:<slug>")
         _text(step.get("prompt"), where, "prompt", cap=MAX_PROMPT)
         _need(isinstance(step.get("out"), str) and NAME.fullmatch(step["out"]), where, "out names the result, such as draft")
+        if step.get("choose") is not None:
+            _check_choose(step["choose"], where, targets)
     elif kind == "find":
         _need(depth == 0, where, "find is a top-level step")
         _need(not counts[1], where, "a flow has one find")
@@ -335,6 +340,32 @@ def _check_steps(steps, where, seen, depth, counts, targets=frozenset()):
         # Paths never rejoin: what comes after a fork would run on no path in particular.
         _need(step.get("type") != "paths" or n == len(steps) - 1, f"step {step['id']}",
               "paths end their list; put what follows inside each path")
+        # A choice ends its thread on the chosen destination's chain, so nothing follows it in its list.
+        _need(step.get("choose") is None or n == len(steps) - 1, f"step {step['id']}",
+              "a choose step is the last step in its list")
+
+
+def _check_choose(choose, where, targets):
+    """An llm step's `choose`: the destinations its answer may pick (ids in this flow, each once), the one a missing or
+    refused answer picks, and what its body does (a draft for review, or a reply sent)."""
+    _need(isinstance(choose, dict) and set(choose) <= {"to", "default", "mode"}, where,
+          "choose is a map with to, default and mode")
+    to = choose.get("to")
+    _need(isinstance(to, list) and 1 <= len(to) <= MAX_CHOICES and all(isinstance(x, str) for x in to)
+          and len(set(to)) == len(to), where, f"choose.to is 1 to {MAX_CHOICES} destination ids, each once")
+    _need(all(x in targets for x in to), where, "choose.to names destinations in this flow")
+    _need(choose.get("default") in to, where, "choose.default is one of choose.to")
+    _need(choose.get("mode") in CHOICE_MODES, where, "choose.mode is draft or reply")
+
+
+def choosing(steps):
+    """The llm steps that choose a destination (`choose`), nested paths included."""
+    for step in steps or []:
+        if step.get("type") == "llm" and step.get("choose") is not None:
+            yield step
+        for path in step.get("paths") or []:
+            yield from choosing(path.get("steps"))
+        yield from choosing((step.get("otherwise") or {}).get("steps"))
 
 
 def question_set(ref):
@@ -374,7 +405,9 @@ def check(flow):
     targets = _check_destinations(flow["destinations"]) if flow.get("destinations") is not None else frozenset()
     counts = [0, False]
     _check_steps(flow.get("steps", []), "steps", set(), 0, counts, targets)
-    out = {**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
+    _need(not (owner.startswith("group:") and next(choosing(flow.get("steps")), None)), "steps",
+          "a group's flow has no turn to choose with: a choose step needs a person's or a bot's flow")
+    out ={**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
            "builtin": flow.get("builtin") is True, "steps": flow.get("steps", [])}
     if out.get("destinations") is None:
         out.pop("destinations", None)
@@ -601,7 +634,10 @@ STEP_WORDS = {
               "and end the thread",
     "decide": "a judge answers each question; its answers read as `<out>.<question id>`. Give `set` (a saved question "
               "set, from hub_automation_question_sets) or `questions`, never both",
-    "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`",
+    "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`. With `choose` (`{to: [destination ids], "
+           "default, mode: draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
+           "or sent as the reply to the message (never templated), then the chosen destination's actions run. A malformed "
+           "answer, a spend cap or a held webhook runs `default` with no reply",
     "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the top",
     "bot_turn": "a task for a bot with the prompt; the bot runs it in its own session",
     "paths": "named paths tested in order; the first whose conditions hold runs. Nothing follows a paths step in its list",
@@ -634,6 +670,11 @@ def shape_text():
               f"{MAX_DESTINATIONS}): named chains a rule's `to` runs. Each is `{{\"id\", \"name\", \"color\", \"then\"}}`: an id like "
               f"`legal`, a name, a color ({', '.join(COLORS)}) that may be left out, and `then` (at most {MAX_DESTINATION_ACTIONS} "
               "actions; empty means the destination only ends the thread).",
+              "", "A choose (`choose` on an `llm` step, as its last step): `{\"to\": [destination ids, at most "
+              f"{MAX_CHOICES}], \"default\": one of them, \"mode\": \"draft\" (save the reply as a draft) or \"reply\" (send it)}}`. "
+              "The turn answers `{\"to\": <id>, \"body\": <text>}`; the body goes out as the reply, not templated, then the "
+              "chosen destination's actions run. The step's `as` is the owner's own: `assistant:<owner>` for a person, "
+              "`bot:<owner>` for a bot. A group's flow has no choose.",
               "", "Actions (`{\"do\": ..., \"args\": {...}}`):"]
     lines += [f"- `{name}`" + (": " + "; ".join(f"`{key}` {text}" for key, text in args.items()) if args else " (no args)")
               for name, args in ACTION_ARGS.items()]
