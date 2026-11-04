@@ -64,6 +64,24 @@ const until = async (check, what, ms = 8000) => {
   }
 };
 const writesTo = (fake, path, method = 'POST') => fake.writes.filter(write => write.path === path && write.method === method);
+// The page arms the next 20 s check only when it paints an answer, and that comes after the answer's response, which
+// may land after the POST the test waits for. So the test counts the paints of the check's result, and advances the
+// fake clock only once the answer to the last check is on screen. Otherwise runFor can run before the timer exists,
+// and the chain stops for good (the test then times out waiting for the next POST).
+const countPaints = page => page.evaluate(() => {
+  window.__checkPaints = 0;
+  new MutationObserver(records => {
+    if (records.some(r => (r.target.nodeType === 1 ? r.target : r.target.parentElement)?.closest('[data-ws-check-result]')))
+      window.__checkPaints += 1;
+  }).observe(document.body, {childList: true, subtree: true});
+});
+const painted = async (page, n, what, ms = 8000) => {
+  const end = Date.now() + ms;
+  while ((await page.evaluate(() => window.__checkPaints)) < n) {
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+};
 const KEY = {type: 'service_account', private_key_id: 'KEYMARK-7731', client_email: 'tico-mail@tico-mail-a1b2c3.iam.gserviceaccount.com'};
 const keyFile = {name: 'key.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(KEY))};
 
@@ -123,6 +141,7 @@ const scenarios = {
     fake.state.workspace = row('pending');
     fake.checks = ['unauthorized', 'unauthorized', 'ok'];
     const {page, seen} = await open(browser, fake, {clock: true});
+    await countPaints(page);
     await page.locator('[data-ws-check]').click();
     await page.locator('.google-causes li').nth(3).waitFor();
     assert.equal(await page.locator('.google-causes li').count(), 4);
@@ -131,6 +150,7 @@ const scenarios = {
     await until(() => checks().length === 1, 'the first check');
     await page.clock.runFor(20000);
     await until(() => checks().length === 2, 'the second check after 20 s');
+    await painted(page, 3, 'the answer to the second check');
     await page.clock.runFor(20000);
     await page.locator('[data-ws-status]', {hasText: 'Connected · checked ana@acme.example'}).waitFor();
     assert.equal(await page.locator('[data-ws-replace]').count(), 1, 'the key is connected now');
@@ -141,11 +161,14 @@ const scenarios = {
     const fake = googleFake();
     fake.state.workspace = row('pending');
     const {page, seen} = await open(browser, fake, {clock: true});
+    await countPaints(page);
     await page.locator('[data-ws-check]').click();
     await until(() => writesTo(fake, '/api/v2/google/workspace/check').length === 1, 'the first check');
+    await painted(page, 2, 'the answer to the first check');
     for (let tick = 1; tick <= 30; tick += 1) {
       await page.clock.runFor(20000);
       await until(() => writesTo(fake, '/api/v2/google/workspace/check').length === tick + 1, `check ${tick + 1}`);
+      await painted(page, tick + 2, `the answer to check ${tick + 1}`);
     }
     await page.locator('[data-ws-check]', {hasText: 'Check again'}).waitFor();
     assert.match(await page.locator('[data-ws-check-result]').innerText(), /Still not accepted/);
