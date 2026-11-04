@@ -171,13 +171,11 @@ let browser = null;
 
     // Notifications: one choice saves; Off unfollows; another choice follows again.
     await dlg.locator('[data-notify="digest"]').click();
-    await until(page, () => seen.follows.length === 1, 'digest');
-    assert.equal(await pressed(dlg), 'Digest');
+    await dlg.locator('[data-notify="digest"][aria-pressed="true"]').waitFor();
     await dlg.locator('[data-notify="off"]').click();
-    await until(page, () => seen.follows.length === 2, 'off');
-    assert.equal(await pressed(dlg), 'Off');
+    await dlg.locator('[data-notify="off"][aria-pressed="true"]').waitFor();
     await dlg.locator('[data-notify="live"]').click();
-    await until(page, () => seen.follows.length === 3, 'all');
+    await dlg.locator('[data-notify="live"][aria-pressed="true"]').waitFor();
     assert.deepEqual(seen.follows, ['PUT:digest', 'DELETE', 'PUT:live']);
 
     // Pin for everyone is a switch; Keep messages a select.
@@ -194,6 +192,7 @@ let browser = null;
     seen.patches.length = 0;
 
     // Done closes it; open again, it shows what was saved.
+    await page.waitForLoadState('networkidle');
     await dlg.locator('footer [data-close]').click();
     await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
     dlg = await openPanel(page, 't-plan');
