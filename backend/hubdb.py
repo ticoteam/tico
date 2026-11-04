@@ -3786,6 +3786,10 @@ def task_private_readable(conn, actor, row):
             return False
     if actor in (row["owner_id"], row["requester_id"]):
         return True
+    from .meeting_audience import participant_sql
+    if conn.execute("SELECT 1 FROM tasks WHERE id=? AND (" + participant_sql(conn, '?') + ")",
+                    (row["id"], actor)).fetchone():
+        return True
     from .task_rights import private_subjects
     inherited = private_subjects(conn, actor)
     if any(row[k] in inherited for k in ("owner_id", "requester_id")):

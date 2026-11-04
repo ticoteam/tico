@@ -54,7 +54,7 @@ def test_a_private_meeting_keeps_its_items_to_the_people_the_invite_names(api):
     # Making it a company meeting again opens the items with it.
     api.post(f"/api/meetings/{rid}/edit", json={"private": False, "version": 1},
              headers=headers("ben-test"))
-    assert items(api, rid, "cara-test")["can_push"] is False
+    assert items(api, rid, "cara-test")["can_send"] is True
 
 
 # ----------------------------------------------------------------------------- comments

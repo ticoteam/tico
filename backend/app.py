@@ -4396,6 +4396,11 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
+        from . import meeting_audience
+        meeting_participants = meeting_audience.check(
+            c, auth, who, owner, live_id=body.live_meeting_id, roles=body.roles) if body.live_meeting_id else None
+        if meeting_participants is not None:
+            body = body.model_copy(update={"private": True})
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
         reach.check(c, who, owner, "task", task_id=parent_id)
@@ -4618,6 +4623,11 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
+        if body.live_meeting_id:
+            meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
+                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"))
+            c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
+            meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
@@ -8492,7 +8502,9 @@ def create_app(settings=None):
     from .team_icon import install_team_icon
     install_team_icon(app, store)
     from .meeting_items import install_meeting_items
-    install_meeting_items(app, store, mutate, task_create)
+    install_meeting_items(app, store, mutate, task_create, auth)
+    from . import presence
+    presence.install(app, store, mutate, auth)
     from .connectors import install_connectors
     install_connectors(app, store, execution, mutate)
     from .imports import install_imports

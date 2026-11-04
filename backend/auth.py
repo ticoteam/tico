@@ -761,9 +761,11 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
+        from .meeting_audience import participant_sql
+        participant = participant_sql(c, me)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-                    f"OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
                     f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)

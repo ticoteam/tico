@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import Field
 
-from . import media
+from . import media, meeting_audience
 from . import models as M
 from . import people as P
 from .store import H, Problem
@@ -37,7 +37,7 @@ DOC_BOT = "doc-updater"
 # Only these keys mean anything per section, so anything else is a mistake worth naming.
 DETAIL_KEYS = {
     "doc": ("document", "change", "why"),
-    "task": ("owner", "due", "priority"),
+    "task": ("owner", "due", "priority", "body"),
     "feature": ("side", "app", "area", "bug", "current", "expected", "labels"),
 }
 PRIORITIES = ("p0", "p1", "p2", "p3")
@@ -60,6 +60,8 @@ class ItemEdit(M.Contract):
 
 class ItemPush(M.Contract):
     force: bool = False
+    text: str | None = Field(default=None, min_length=1, max_length=2_000)
+    detail: dict | None = None
 
 
 class CommentCreate(M.Contract):
@@ -100,6 +102,8 @@ def detail_of(section, value):
                                 f"{', '.join(allowed) or 'no detail'}", 422)
     out = {}
     for key, raw in value.items():
+        if raw is None or raw == "":
+            continue
         if key == "bug":
             out[key] = bool(raw)
         elif key == "labels":
@@ -114,10 +118,27 @@ def detail_of(section, value):
 
 
 # ----------------------------------------------------------------------------- reading
-def view(row):
+def view(row, c=None, who=None, auth=None):
     item = dict(row)
     item["detail"] = json.loads(item.pop("detail") or "{}")
-    return item
+    return redact(c, who, auth, item) if c is not None else item
+
+
+def redact(c, who, auth, value):
+    """Apply current task access even to an idempotency receipt."""
+    if isinstance(value, dict):
+        value = {key: redact(c, who, auth, part) for key, part in value.items()}
+        for key in ("proposed_task_id", "result_ref"):
+            if value.get(key):
+                try:
+                    if auth is None:
+                        raise Problem("not_found", "Task not found", 404)
+                    auth.task(c, who, value[key])
+                except Problem:
+                    value[key] = None
+    elif isinstance(value, list):
+        value = [redact(c, who, auth, part) for part in value]
+    return value
 
 
 def one(c, rid, iid):
@@ -127,12 +148,16 @@ def one(c, rid, iid):
     return row
 
 
-def listing(c, who, rid):
+def listing(c, who, rid, auth=None):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
-    rows = [view(r) for r in c.execute(
+    rows = [view(r, c, who, auth) for r in c.execute(
         "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))]
-    return {"id": rid, "can_push": media.may_write(who, record),
+    private = record['metadata'].get('private')
+    allowed = meeting_audience.audience(c, auth, record=record) if private and auth else None
+    return {"id": rid, "can_send": record.get("review_state", "live") == "live",
+            "can_push": record.get("review_state", "live") == "live",
+            "audience": sorted(allowed) if allowed is not None else None,
             "sections": {section: [r for r in rows if r["section"] == section] for section in SECTIONS},
             "counts": {"proposed": sum(1 for r in rows if r["status"] == "proposed" and r["section"] in PUSHABLE)}}
 
@@ -156,13 +181,19 @@ def edit(c, rid, author, iid, body):
     row = one(c, rid, iid)
     if body.text is None and body.detail is None and body.status is None:
         raise Problem("validation", "Change the text, the detail, or delete the item", 422)
+    if (body.text is not None or body.detail is not None) and row["status"] != "proposed":
+        raise Problem("status", "Already sent", 409)
     if body.status == "dismissed" and row["status"] != "proposed":
         raise Problem("status", "Only a proposed item can be deleted", 409)
     sets, args = ["updated_by=?", "updated_at=?"], [author, H.now()]
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
-        sets.append("detail=?"); args.append(json.dumps(detail_of(row["section"], body.detail), sort_keys=True))
+        merged = json.loads(row["detail"] or "{}")
+        for key in body.detail:
+            merged.pop(key, None)
+        merged.update(detail_of(row["section"], body.detail))
+        sets.append("detail=?"); args.append(json.dumps(merged, sort_keys=True))
     if body.status is not None:
         sets.append("status=?"); args.append(body.status)
     c.execute(f"UPDATE meeting_items SET {','.join(sets)} WHERE id=? AND meeting_id=?", (*args, iid, rid))
@@ -200,7 +231,7 @@ def owner_of(c, detail):
 def push_task(c, settings, task_create, who, record, row, detail):
     owner = owner_of(c, detail)
     priority = detail.get("priority") or "p2"
-    body = "\n\n".join([row["text"], f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
+    body = "\n\n".join([detail.get("body") or "", f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
     created = task_create(c, who, M.TaskCreate(title=row["text"][:300], body=body, owner=owner,
                                               due=detail.get("due") or None))
     return created["task"]["id"]
@@ -249,13 +280,19 @@ def _normalise(title):
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(title or "").lower()).split())
 
 
-def feature_duplicate(c, title):
+def feature_duplicate(c, title, who=None, auth=None):
     """A task still on the board whose title means the same thing, or None."""
     wanted = _normalise(title)
     if not wanted:
         return None
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for row in c.execute(f"SELECT id,title,status FROM tasks WHERE status IN ({marks})", H.ACTIVE_STATUSES):
+        try:
+            if auth is None:
+                continue
+            auth.task(c, who, row['id'])
+        except Problem:
+            continue
         if difflib.SequenceMatcher(None, wanted, _normalise(row["title"])).ratio() >= DUPLICATE_RATIO:
             return {"id": row["id"], "name": row["title"], "list": row["status"]}
     return None
@@ -270,11 +307,11 @@ def feature_owner(c):
     return H.human_actor(r.get("default_user") or H.default_human(c))
 
 
-def push_feature(c, settings, task_create, who, record, row, detail, force):
+def push_feature(c, settings, task_create, who, record, row, detail, force, auth=None):
     """The feature-request task, or a 409 naming the task that already says this."""
     fields = feature_fields(settings, record, row, detail, person_name(c, who))
     if not force:
-        found = feature_duplicate(c, fields["title"])
+        found = feature_duplicate(c, fields["title"], who, auth)
         if found:
             found["url"] = f"{settings.public_url}/#/task/{found['id']}"
             raise Problem("duplicate", "A task on the board already says this: "
@@ -288,8 +325,6 @@ def push_feature(c, settings, task_create, who, record, row, detail, force):
 def pushable(c, who, rid, iid):
     record = media.authorized(c, who, rid)
     media.require_live(record)
-    if not media.may_write(who, record):
-        raise Problem("forbidden", "The meeting's owner pushes its items", 403)
     row = one(c, rid, iid)
     if row["section"] not in PUSHABLE:
         raise Problem("section", "This section is not pushed", 422)
@@ -311,8 +346,13 @@ def record_push(c, who, rid, iid, ref):
 
 
 # ----------------------------------------------------------------------------- routes
-def install_meeting_items(app, store, mutate, task_create):
+def install_meeting_items(app, store, mutate, task_create, auth):
     settings = store.settings
+
+    def reply(request, body, work, rid):
+        result = mutate(request, body, work, check=lambda c: media.authorized(c, request.state.identity, rid))
+        with store.read() as c:
+            return redact(c, request.state.identity, auth, result)
 
     @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")
@@ -320,7 +360,7 @@ def install_meeting_items(app, store, mutate, task_create):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
-            return listing(c, who, rid)
+            return listing(c, who, rid, auth)
 
     @app.get("/api/v2/meetings/{rid}/comments")
     @app.get("/api/meetings/{rid}/comments")
@@ -339,7 +379,7 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             record = media.authorized(c, who, rid)
             return {"comment": comment(c, record, who, body)}
-        return mutate(request, body, work)
+        return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items")
     @app.post("/api/meetings/{rid}/items")
@@ -349,7 +389,7 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             record = media.authorized(c, who, rid)
             return {"item": add(c, record, who.actor, body)}
-        return mutate(request, body, work)
+        return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}")
     @app.post("/api/meetings/{rid}/items/{iid}")
@@ -359,7 +399,7 @@ def install_meeting_items(app, store, mutate, task_create):
         def work(c):
             media.authorized(c, who, rid)
             return {"item": edit(c, rid, who.actor, iid, body)}
-        return mutate(request, body, work)
+        return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}/push")
     @app.post("/api/meetings/{rid}/items/{iid}/push")
@@ -370,15 +410,32 @@ def install_meeting_items(app, store, mutate, task_create):
             record, row = pushable(c, who, rid, iid)
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
+            if body.text is not None or body.detail is not None:
+                edit(c, rid, who.actor, iid, ItemEdit(text=body.text, detail=body.detail))
+                row = one(c, rid, iid)
             detail = json.loads(row["detail"] or "{}")
+            owner = (owner_of(c, detail) if row["section"] == "task" else
+                     "bot:" + DOC_BOT if row["section"] == "doc" else feature_owner(c))
+            participants = meeting_audience.check(c, auth, who, owner, record=record)
+
+            def create_task(c, who, body, **kwargs):
+                if participants is not None:
+                    body = body.model_copy(update={"private": True})
+                created = task_create(c, who, body, **kwargs)
+                actual = H.task(c, created['task']['id'])
+                meeting_audience.check(c, auth, who, actual['owner_id'], record=record, guest=actual.get('guest'))
+                meeting_audience.grant(c, actual['id'], participants, who.actor)
+                meeting_audience.record_sent_link(c, rid, actual['id'], who.actor)
+                return created
+
             if row["section"] == "task":
-                result = push_task(c, settings, task_create, who, record, row, detail)
+                result = push_task(c, settings, create_task, who, record, row, detail)
             elif row["section"] == "doc":
-                result = push_doc(c, settings, task_create, who, record, row, detail)
+                result = push_doc(c, settings, create_task, who, record, row, detail)
             else:
                 # a close match on the board is refused; `force` is the person saying they meant it
-                result = push_feature(c, settings, task_create, who, record, row, detail, body.force)
+                result = push_feature(c, settings, create_task, who, record, row, detail, body.force, auth)
             return {"item": record_push(c, who, rid, iid, result), "pushed": True}
-        return mutate(request, body, work)
+        return reply(request, body, work, rid)
 
     return {"add": add, "listing": listing}
