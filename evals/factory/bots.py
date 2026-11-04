@@ -83,8 +83,8 @@ class Bot:
     TAIL = {"build": (180, 240), "fix": (60, 120), "review": (30, 60), "qa": (40, 60), "plan": (60, 120)}
 
     def start(self, attempt):
-        """Begin a claimed turn: read what woke the bot, and ask the server to start it. A start refused for a computer
-        place parks the turn (see begin). Returns whether the turn started; it acts when its run ends."""
+        """Begin a claimed turn: read what woke the bot, then ask the server for a computer place before anything starts
+        (see ask_place). Returns whether the turn started; it acts when its run ends."""
         w = self.world
         self._token = attempt["token"]
         self.attempt = attempt
@@ -101,20 +101,46 @@ class Bot:
                        # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
                        # returns it, since no input row is written for it.
                        "prompt": message.get("id")}
-        return self.begin() == "started"
+        return self.ask_place() == "started"
+
+    def ask_place(self):
+        """Ask the server for a computer place before the claimed turn starts, as the runner does (runner-rs execute.rs
+        try_start_place). The server records a wait it gives, so its next ask sees the wait and can stop the turn if its
+        task finished meanwhile. A place starts the turn (begin); a stop ends it unstarted (stop_unstarted); a lapsed
+        lease loses it (lose); a wait parks it (park). Answers what begin answers, or "parked", "stopped" or "gone"."""
+        w, attempt = self.world, self.attempt
+        status, reply = w.request("post", f"attempts/{attempt['id']}/start-place", {}, token=w.runner["token"])
+        if status >= 500:
+            return self.park()      # recorded by the world; the turn stays leased and asks again on the next tick
+        if status >= 400:
+            if refusal_code(reply) == "stale_lease":
+                self.lose()
+                return "gone"
+            raise Refusal(status, str(reply))
+        if reply.get("stop"):
+            self.stop_unstarted()
+            return "stopped"
+        if reply.get("reserved"):
+            return self.begin()
+        return self.park()
+
+    def park(self):
+        """The turn waits for a computer place: it stays leased, holds no place, and asks again on each tick."""
+        if not self.parked:
+            self.parked, self.parked_since = True, self.world.now()
+            self.record["parked"] = True
+        return "parked"
 
     def begin(self):
-        """Ask the server to start the claimed turn. Answers "started", "parked" (no computer place is free: start_wait,
-        so the turn stays leased and waits), or "gone" (its lease lapsed while it waited)."""
+        """Ask the server to start the claimed turn, once it holds a place. Answers "started", "parked" (the place was
+        refused since: start_wait, so the turn stays leased and waits), or "gone" (its lease lapsed while it waited).
+        The server refuses a start it has not reserved, so this is a safety net behind ask_place."""
         w, attempt = self.world, self.attempt
         status, reply = w.request("post", f"attempts/{attempt['id']}/started", {"thread_id": "sim"},
                                   token=w.runner["token"])
         code = refusal_code(reply) if 400 <= status < 500 else None
         if code == "start_wait":
-            if not self.parked:
-                self.parked, self.parked_since = True, w.now()
-                self.record["parked"] = True
-            return "parked"
+            return self.park()
         if code == "stale_lease":
             self.lose()
             return "gone"
@@ -131,22 +157,11 @@ class Bot:
     def retry_start(self):
         """A parked turn asks for a computer place again, as the runner's wait does (runner-rs execute.rs
         wait_start_place): a place starts it at once, and a stop before the start ends it unstarted."""
-        w, attempt = self.world, self.attempt
-        status, reply = w.request("post", f"attempts/{attempt['id']}/start-place", {}, token=w.runner["token"])
-        if status >= 500:
-            return
-        if status >= 400:
-            if refusal_code(reply) == "stale_lease":
-                return self.lose()
-            raise Refusal(status, str(reply))
-        if reply.get("stop"):
-            return self.stop_unstarted()
-        if reply.get("reserved"):
-            self.begin()
+        self.ask_place()
 
     def stop_unstarted(self):
-        """A parked turn the server stopped before its start (its task finished while it waited, or a person stopped
-        it): the runner ends it unstarted, and the server settles it as interrupted."""
+        """A turn the server stopped before its start (its task finished while it waited, or a person stopped it): the
+        runner ends it unstarted, and the server settles it as interrupted."""
         attempt, record = self.attempt, self.record
         self.attempt = self.record = None
         self.parked = False
