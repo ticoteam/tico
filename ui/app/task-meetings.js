@@ -5,12 +5,14 @@ function taskMeetingsAdopt(d, task) {
   const slot = $('[data-task-meetings]', d);
   if (!slot) return;
   d.tmEl = slot;
+  const reading = {};
+  d.tmRead = reading;
   const rows = [];
   const load = async cursor => {
     const query = new URLSearchParams({limit: '20'});
     if (cursor) query.set('cursor', cursor);
     const result = await get(`/v2/tasks/${encodeURIComponent(task.id)}/meetings?${query}`);
-    if (d.tmEl !== slot || !slot.isConnected) return;
+    if (d.tmEl !== slot || d.tmRead !== reading || !slot.isConnected) return;
     rows.push(...(result.meetings || []));
     slot.hidden = !rows.length;
     slot.innerHTML = `<h3 class="rail-h">Meetings</h3><ul class="task-meetings-list">${rows.map(m =>
@@ -30,7 +32,7 @@ liveOn('tasks', event => {
   for (const dialog of document.querySelectorAll('dialog[open][data-task]')) {
     const id = dialog.dataset.task;
     if (!event.bulk && String(event.id) !== id) continue;
-    liveSoon('task-meetings:' + id, () => {
+    liveSoon('task-meetings:' + dialog.id + ':' + id, () => {
       if (dialog.open && dialog.dataset.task === id) taskMeetingsAdopt(dialog, {id});
     }, 200);
   }
