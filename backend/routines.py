@@ -254,17 +254,26 @@ def message_bot_mailboxes(c, roster=None):
     person's own email only when the bot declares none. People who left (hidden) and archived bots are
     skipped, and so is a mailbox that two bots share (listed once)."""
     roster = roster if roster is not None else _roster(c)
+    people = [p for p in (roster or {}).get("people") or [] if p.get("inbox_bot") and not p.get("hidden")]
+    # The bots and their declarations are read together, a fixed number of statements however long the roster is.
+    named = sorted({p["inbox_bot"] for p in people})
+    states, configs = {}, {}
+    for start in range(0, len(named), 500):
+        part = named[start:start + 500]
+        ids = sorted({H.actor_id(bot) for bot in part})
+        marks = ",".join("?" * len(ids))
+        states.update((r["id"], r["state"]) for r in c.execute(f"SELECT id,state FROM bots WHERE id IN ({marks})", ids))
+        marks = ",".join("?" * len(part))
+        configs.update((r["bot"], r["config"]) for r in c.execute(
+            f"SELECT bc.bot AS bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot IN ({marks})", part))
     out, seen = [], set()
-    for person in (roster or {}).get("people") or []:
-        bot = person.get("inbox_bot")
-        if not bot or person.get("hidden"):
+    for person in people:
+        bot = person["inbox_bot"]
+        state = states.get(H.actor_id(bot))
+        if state is None or state == "archived":
             continue
-        row = H.bot(c, bot)
-        if not row or row["state"] == "archived":
-            continue
-        found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         try:
-            config = json.loads(found["config"] or "{}") if found else {}
+            config = json.loads(configs.get(bot) or "{}")
         except ValueError:
             config = {}
         declared = declared_mailbox(config)

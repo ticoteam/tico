@@ -677,16 +677,16 @@ def _reachable(settings):
 IN_FLIGHT = ("signing_in", "ready", "finishing", "disconnecting", "revoking")
 
 
-def _person_status(grant, mailbox, row):
-    """One person's Google state for the team list, by the same rule as `authority`: a live personal grant first, then
-    the Workspace key's domain, then any Connect Google attempt under way or failed."""
-    if grant and str(grant["mailbox"] or "").lower() != mailbox:
-        grant = None                    # their mailbox changed since: that connection is for another address
-    status = grant["status"] if grant else None
-    if grant and grant["holder"] and grant["grant_hash"] and status != "disconnected":
-        return {"connected": "connected", "failed": "failing"}.get(status, "pending")
+def _person_status(mailbox, grants, attempt, row):
+    """One person's Google state for the team list, by the rule `authority` picks a credential with: any live personal
+    grant for the mailbox first, whoever made it; then the Workspace key's domain; then the person's own Connect
+    Google attempt for this mailbox, under way or failed. `grants` are the live grants for the mailbox."""
+    if grants:
+        statuses = {grant["status"] for grant in grants}
+        return "connected" if "connected" in statuses else "failing" if "failed" in statuses else "pending"
     if row and _domain(mailbox) == row["domain"]:
         return "workspace"
+    status = attempt["status"] if attempt and str(attempt["mailbox"] or "").lower() == mailbox else None
     if status in IN_FLIGHT:
         return "pending"
     return "failing" if status == "failed" else "none"
@@ -694,22 +694,29 @@ def _person_status(grant, mailbox, row):
 
 def team_statuses(c):
     """Every person on the roster with a mailbox (people, never bots; nobody hidden or gone from the directory), and
-    whether their mailbox is connected: one read of google_connects, nothing asked of Google. Sorted by name, capped."""
+    whether their mailbox is connected. A fixed number of statements however long the roster is (the bots, their
+    declarations and google_connects each read once), and nothing asked of Google. Sorted by name, capped."""
     from .views import roster
     people = roster(c)
     boxes = routines.message_bot_mailboxes(c, people)
+    own = {}
+    for box in boxes:                   # routines.mailbox_of, indexed once: the first bot mailbox a person has
+        own.setdefault(box["person_id"], box["address"])
     row = active(c)
-    grants = {r["person_id"]: r for r in c.execute(
-        "SELECT person_id,mailbox,status,holder,grant_hash FROM google_connects")}
+    live, attempts = {}, {}
+    for grant in c.execute("SELECT person_id,mailbox,status,holder,grant_hash FROM google_connects"):
+        if grant["holder"] and grant["grant_hash"] and grant["status"] != "disconnected":
+            live.setdefault(str(grant["mailbox"] or "").lower(), []).append(grant)
+        attempts[grant["person_id"]] = grant
     out = []
     for person in people.get("people") or []:
         if person.get("hidden") or person.get("directory_left"):
             continue
-        mailbox = routines.mailbox_of(person, boxes)
+        mailbox = own.get(person["id"]) or str(person.get("email") or "").strip().lower()
         if not routines.MAILBOX.fullmatch(mailbox):
             continue
         out.append({"person_id": person["id"], "name": person.get("name") or person["id"], "mailbox": mailbox,
-                    "status": _person_status(grants.get(person["id"]), mailbox, row)})
+                    "status": _person_status(mailbox, live.get(mailbox), attempts.get(person["id"]), row)})
     out.sort(key=lambda p: (p["name"].lower(), p["person_id"]))
     return {"people": out[:PEOPLE_MAX], "more": len(out) > PEOPLE_MAX}
 
@@ -768,7 +775,8 @@ def install(app, store):
                 me = None
             return {"can_admin": administrator(c, who, settings.credential_admins), "workspace": workspace,
                     "pending": waiting, "oauth": _oauth_view(c, settings), "me": me,
-                    "setup": {"base": settings.runner_url, "reachable": _reachable(settings)}}
+                    # `newest` lets the page drop a setup command another admin's newer one superseded.
+                    "setup": {"base": settings.runner_url, "reachable": _reachable(settings), "newest": _newest(c)}}
 
     @app.get(PEOPLE_PATH)
     def team_google(request: Request):

@@ -79,9 +79,9 @@
   const howToggle = (path, how) => `<div class="google-how" role="group" aria-label="How to set it up">
       <button type="button" data-google-how="agent" data-google-path="${path}" aria-pressed="${how === 'agent'}">Have my agent do it</button>
       <button type="button" data-google-how="self" data-google-path="${path}" aria-pressed="${how === 'self'}">Set it up myself</button></div>`;
-  const promptBlock = (name, text) => `<div class="google-prompt" data-google-prompt="${name}">
+  const promptBlock = (name, text, more = '') => `<div class="google-prompt" data-google-prompt="${name}">
       <textarea readonly rows="9" spellcheck="false" aria-label="Prompt for your agent">${esc(text)}</textarea>
-      <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button></div></div>`;
+      <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button>${more}</div></div>`;
 
   // The Workspace prompt holds the setup command, so it lives exactly as long as the command does (only in this page).
   function workspacePrompt(made) {
@@ -116,6 +116,27 @@
     ].join('\n');
   }
 
+  // The part of step 1 that shows the setup command (inside the prompt, or bare), in its own box so a Domain edit can
+  // drop it in place without a repaint taking the cursor out of the field.
+  function madePart(how, made) {
+    const inner = how === 'agent'
+      ? (made ? promptBlock('workspace', workspacePrompt(made), '<button type="button" class="ghost" data-ws-prompt>New prompt</button>')
+        : '<div class="row"><button type="button" class="primary" data-ws-prompt>Make prompt</button></div>')
+      : (made ? `<p class="muted">Paste this in Cloud Shell. It expires at ${esc(clock(made.expires_at))}.</p>
+          <div class="machine-command"><code>${esc(made.command)}</code>
+          <button type="button" class="ghost" data-copy="${esc(made.command)}">Copy</button></div>` : '');
+    return `<div data-ws-made>${inner}</div>`;
+  }
+
+  // A setup command names its domain, so a different Domain makes it wrong: drop it, and the next click makes one for
+  // the new domain.
+  function domainEdited(host, input) {
+    if (!command || input.value.trim().toLowerCase() === command.domain) return;
+    command = null;
+    const box = input.closest('[data-ws-step="create"]')?.querySelector('[data-ws-made]');
+    if (box) box.outerHTML = madePart(howOf(host, 'workspace'), null);
+  }
+
   function createStep(host, g, {reachable, cancel, domainValue}) {
     const made = live() ? command : null;
     const domain = `<label class="google-field"><span>Domain</span>
@@ -129,13 +150,10 @@
     }
     const how = howOf(host, 'workspace');
     const body = how === 'agent'
-      ? (made ? promptBlock('workspace', workspacePrompt(made))
-        : '<div class="row"><button type="button" class="primary" data-ws-prompt>Make prompt</button></div>')
+      ? madePart(how, made)
       : `<div class="row"><button type="button" class="primary" data-ws-command>New command</button>
           <a class="ghost" href="${CLOUD_SHELL}" target="_blank" rel="noopener">Open Cloud Shell</a></div>
-          ${made ? `<p class="muted">Paste this in Cloud Shell. It expires at ${esc(clock(made.expires_at))}.</p>
-          <div class="machine-command"><code>${esc(made.command)}</code>
-          <button type="button" class="ghost" data-copy="${esc(made.command)}">Copy</button></div>` : ''}
+          ${madePart(how, made)}
           <details class="google-more"><summary>Or upload a key file</summary>${upload('Key file')}</details>`;
     return `<div class="google-step" data-ws-step="create"><h4>1 Run one command in Cloud Shell</h4>${domain}
       ${howToggle('workspace', how)}${body}${back}</div>`;
@@ -621,6 +639,7 @@
     });
     host.addEventListener('input', event => {
       if (event.target.matches?.('[data-oauth-project]')) projectLinks(host);
+      if (event.target.matches?.('[data-ws-domain]')) domainEdited(host, event.target);
     });
   }
 
@@ -652,7 +671,8 @@
     const {active} = rowsOf(g);
     // A setup command is used up by the first read that shows a key, pending or active, at its generation or newer.
     // Every read checks this, so a key that arrived while the tab was hidden still counts on the next visit.
-    if (command && newestGeneration(g) >= command.generation) command = null;
+    // A setup command another admin made since supersedes this one too (the server takes only the newest).
+    if (command && (newestGeneration(g) >= command.generation || (g.setup?.newest ?? 0) > command.generation)) command = null;
     const replacing = replacingNow(host, g);
     const isLive = live();
     const snapshot = JSON.stringify([g.can_admin, unchecked(g.workspace), unchecked(g.pending), g.oauth, g.me,

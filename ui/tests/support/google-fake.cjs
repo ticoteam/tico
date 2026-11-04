@@ -41,15 +41,20 @@ exports.googleFake = () => {
   fake.answer = (p, url, method = 'GET', body = null) => {
     const s = fake.state;
     if (method !== 'GET') fake.writes.push({method, path: p, body});
-    if (p === '/api/v2/google' && method === 'GET') return structuredClone(s);
+    if (p === '/api/v2/google' && method === 'GET') {
+      const out = structuredClone(s);
+      if (out.setup) out.setup.newest = newestGeneration();
+      return out;
+    }
     if (p === '/api/v2/google/people' && method === 'GET') {
       fake.peopleReads += 1;
       return s.can_admin ? {people: structuredClone(fake.people), more: false} : undefined;
     }
     if (p === '/api/v2/google/workspace/setup-code' && method === 'POST') {
       fake.codes += 1;
+      fake.gen = newestGeneration() + 1;
       return {code: `code${fake.codes}`, command: `curl -fsSL https://tico-ui.test/api/v2/google/setup.sh | bash -s -- code${fake.codes}`,
-        expires_at: soon(10), generation: newestGeneration() + 1};
+        expires_at: soon(10), generation: fake.gen};
     }
     if (p === '/api/v2/google/workspace/key' && method === 'POST') {
       const made = row('pending', {domain: body?.domain || 'acme.example', generation: newestGeneration() + 1});

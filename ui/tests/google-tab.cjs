@@ -162,6 +162,43 @@ const scenarios = {
     assert.deepEqual(seen.errors, []);
   },
 
+  'Whole Workspace: New prompt makes a fresh code; a Domain edit or another admin\'s newer code drops the prompt': async browser => {
+    const fake = googleFake();
+    const {page, seen} = await open(browser, fake);
+    await pick(page, 'workspace');
+    const codes = () => writesTo(fake, '/api/v2/google/workspace/setup-code');
+    const prompt = () => page.locator('[data-google-prompt=workspace] textarea').inputValue();
+    const holds = code => page.waitForFunction(code => document.querySelector('[data-google-prompt=workspace] textarea')
+      ?.value.includes(`bash -s -- ${code}`), code);
+    await page.locator('[data-ws-prompt]', {hasText: 'Make prompt'}).click();
+    await holds('code1');
+    await page.locator('[data-google-prompt=workspace] [data-ws-prompt]', {hasText: 'New prompt'}).click();
+    await holds('code2');
+    assert.equal(codes().length, 2, 'New prompt makes one fresh code');
+    // A different domain makes the shown code wrong: it goes at once, and the cursor stays in the field.
+    await page.locator('[data-ws-domain]').fill('acme2.example');
+    await page.locator('[data-ws-prompt]', {hasText: 'Make prompt'}).waitFor();
+    assert.equal(await page.locator('[data-google-prompt]').count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-ws-domain]')), true);
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator('[data-google-prompt]').count(), 0, 'a render brings no code back');
+    assert.equal(await page.locator('[data-ws-domain]').inputValue(), 'acme2.example');
+    assert.equal(codes().length, 2, 'a Domain edit or a render makes no code');
+    await page.locator('[data-ws-prompt]', {hasText: 'Make prompt'}).click();
+    await holds('code3');
+    assert.equal(codes()[2].body.domain, 'acme2.example');
+    assert.match(await prompt(), /Workspace for acme2\.example/);
+    // Another admin makes a newer code, so the server would refuse this one: the next read drops it.
+    fake.gen += 1;
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.locator('[data-ws-prompt]', {hasText: 'Make prompt'}).waitFor();
+    assert.equal(await page.locator('[data-google-prompt]').count(), 0);
+    assert.doesNotMatch(await page.locator('#set-google').innerText(), /code3/);
+    assert.equal(codes().length, 3);
+    assert.deepEqual(seen.errors, []);
+  },
+
   'a path already set up skips the question, and both show the Workspace first': async browser => {
     const fake = googleFake();
     fake.state.workspace = row('connected');
