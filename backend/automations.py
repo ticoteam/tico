@@ -79,7 +79,8 @@ SCHEMA = (
     "runs INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(automation_id, day))",
     "CREATE TABLE IF NOT EXISTS automation_mail_actions(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT, "
     "mailbox TEXT NOT NULL, msg_id TEXT NOT NULL, action TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT, result TEXT, attempts INTEGER NOT NULL DEFAULT 0)",
+    "created_at TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT, result TEXT, attempts INTEGER NOT NULL DEFAULT 0, "
+    "step TEXT, \"after\" TEXT)",
     "CREATE INDEX IF NOT EXISTS automation_mail_queue ON automation_mail_actions(mailbox, state, created_at)",
     # An inbox's send switch (on unless a row says off): off, send_reply saves a draft instead.
     "CREATE TABLE IF NOT EXISTS automation_inboxes(inbox TEXT PRIMARY KEY, send INTEGER NOT NULL, updated_at TEXT NOT NULL, "
@@ -1222,17 +1223,44 @@ def _received_task(task, owner):
             "type_id": task.get("type_id") or H.GENERAL_TYPE, "owner": owner}
 
 
+# The Gmail category labels a message can carry, as the words a rule reads. A message in no category has none.
+MAIL_CATEGORIES = {"CATEGORY_PERSONAL": "primary", "CATEGORY_PROMOTIONS": "promotions", "CATEGORY_SOCIAL": "social",
+                   "CATEGORY_UPDATES": "updates", "CATEGORY_FORUMS": "forums"}
+
+
+def _mail_category(labels):
+    return next((MAIL_CATEGORIES[str(label).upper()] for label in labels if str(label).upper() in MAIL_CATEGORIES), "")
+
+
+def _calendar_invite(attachments):
+    """A calendar part or an .ics file. The connector posts each attachment with its MIME type (connectors/mail/gmail.py),
+    so the type is read as well as the name; a bare name (no type) is read as the name alone."""
+    for a in attachments:
+        if isinstance(a, dict):
+            if str(a.get("type") or "").lower() == "text/calendar" or str(a.get("name") or "").lower().endswith(".ics"):
+                return True
+        elif str(a or "").lower().endswith(".ics"):
+            return True
+    return False
+
+
 def on_mail(c, mailbox, message):
     """A new message in a person's mailbox (the mail connector's copy), for the automations of that mailbox's
     person: whose it is is checked again now, since a person may have lost it since the save."""
-    attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in getattr(message, "attachments", None) or []]
+    raw = list(getattr(message, "attachments", None) or [])
+    attachments = [a.get("name") if isinstance(a, dict) else str(a) for a in raw]
+    sender = str(message.from_addr or "").lower()
     payload = {"message": {"source": "mail", "mailbox": mailbox, "id": message.msg_id, "thread": message.thread_id,
                            "from": message.from_addr, "from_name": getattr(message, "from_header", "") or "",
+                           "from_domain": sender.rpartition("@")[2] if "@" in sender else "",
                            "to": list(message.to or []), "cc": list(getattr(message, "cc", None) or []),
                            "subject": message.subject, "snippet": message.snippet, "body": (message.body or "")[:8000],
                            "labels": list(message.labels or []), "list_id": message.list_id,
+                           "category": _mail_category(message.labels or []),
                            "unsubscribe": bool(getattr(message, "has_unsubscribe", False)),
                            "attachments": [a for a in attachments if a],
+                           "is_calendar_invite": _calendar_invite(raw),
+                           "known_sender": getattr(message, "known_sender", None),
                            "internal": bool(message.is_internal), "date": message.date}}
     return fire(c, "message", payload, f"mail:{mailbox}:{message.msg_id}",
                 lambda t: str(t["inbox"]).lower() == str(mailbox).lower(),
@@ -1600,7 +1628,8 @@ class HubServices:
 
     def __init__(self, hub, row, flow, run_id, chain):
         self.hub, self.row, self.flow, self.run_id, self.chain = hub, row, flow, run_id, chain
-        self.auto = {"id": row["id"], "flow": flow, "assistant_bot": hub.settings.assistant_bot, "chain": list(chain)}
+        self.auto = {"id": row["id"], "flow": flow, "assistant_bot": hub.settings.assistant_bot, "chain": list(chain),
+                     "settings": hub.settings}
         self.dirty = False
 
     def _write(self, fn):
@@ -1960,6 +1989,7 @@ def settle_mail(c, state):
             entry["ok"] = now == "done"
             entry["detail"] = ("send_off" if entry["ok"] and result.get("send_off")
                                else "canceled: the run failed" if now == "canceled"
+                               else "skipped: an earlier action on this message failed" if now == "skipped"
                                else str(result.get("detail") or ("done" if entry["ok"] else "no such mail action")))
             entry.update({k: result[k] for k in ("message", "draft", "thread", "send_off") if result.get(k)})
         record["status"] = ("waiting" if any(a["queued"] for a in mail)
@@ -1980,6 +2010,19 @@ def _cancel_mail(c, run_id, state=None):
     if n and state is not None:
         settle_mail(c, state)
     return n
+
+
+def _chain_end(c, mid, state):
+    """The queued actions chained after `mid` (the same step's later ones on its message) will not run: they take
+    `state`, and so do the ones chained after them. Claimed ones cannot be here: a successor waits for its predecessor.
+    Walks the chain with a work list, not recursion: a chain can be longer than Python's recursion limit."""
+    todo = [mid]
+    while todo:
+        parent = todo.pop()
+        for row in c.execute("SELECT id FROM automation_mail_actions WHERE \"after\"=? AND state='queued'",
+                             (parent,)).fetchall():
+            c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
+            todo.append(row["id"])
 
 
 def _requeue(c, row):
@@ -2029,6 +2072,8 @@ def restate(c, run_id, key, value, changes):
 def _mail_report(c, row, state, result):
     c.execute("UPDATE automation_mail_actions SET state=?, result=? WHERE id=?",
               (state, json.dumps(result, default=str), row["id"]))
+    if state in ("failed", "canceled"):
+        _chain_end(c, row["id"], "skipped" if state == "failed" else "canceled")
     if state in ("done", "failed") and row["run_id"]:
         _settle_run(c, row["run_id"])
 
@@ -2812,10 +2857,16 @@ def install(app, store, auth, mutate):
                     _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
                                                     "detail": f"no result after {MAIL_TRIES} tries"})
                 else:
-                    c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (_requeue(c, row), row["id"]))
+                    state = _requeue(c, row)
+                    c.execute("UPDATE automation_mail_actions SET state=? WHERE id=?", (state, row["id"]))
+                    if state == "canceled":
+                        _chain_end(c, row["id"], "canceled")
             rows, spent = [], 0
-            for r in c.execute("SELECT * FROM automation_mail_actions WHERE state='queued' AND mailbox=? "
-                               "ORDER BY created_at LIMIT 20", (mailbox,)):
+            # An action waits for the one before it in its step's chain (`after`) to be done: a chain is claimed in order.
+            for r in c.execute("SELECT * FROM automation_mail_actions AS r WHERE r.state='queued' AND r.mailbox=? "
+                               "AND (r.\"after\" IS NULL OR EXISTS (SELECT 1 FROM automation_mail_actions AS p "
+                               "WHERE p.id=r.\"after\" AND p.state='done')) ORDER BY r.created_at LIMIT 20",
+                               (mailbox,)):
                 size = len(r["args"] or "") + len(r["result"] or "")
                 if rows and spent + size > LIST_BYTES:
                     break                  # the rest stay queued for the next claim

@@ -171,9 +171,10 @@ too long: the numbers come from the same query as the board.
 
 ## Letting it decide your approvals
 
-Off by default. Turn on **My assistant can decide approvals for me** in **Settings > General** (only you can, signed in
-to the app: not the Assistant, a bot, BotOps or a personal API token). Then your own Assistant approves or declines
-approvals addressed to you (send, spend, publish, merge) when you ask in your Assistant DM, one or many at once
+On by default. Turn **My assistant can decide approvals for me** off in **Settings > General** (only you can, signed in
+to the app: not the Assistant, a bot, BotOps or a personal API token), and it stops at once. The owner can also stop it
+for the whole team (Settings > People). While it is on, your own Assistant approves or declines approvals addressed to
+you (send, spend, publish, merge, a report to the Tico team) when you ask in your Assistant DM, one or many at once
 ("approve all the old Google review batches"), with no card and no click per item. It reads back what it is about to
 approve in one list, which Tico writes from the approvals themselves; your plain "yes" to that list approves exactly what
 it names, and it never asks again per item.
@@ -189,13 +190,12 @@ What stays on:
   list is one line, whatever the requesting bot put in its request, and shows every field of the approval except its
   hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and sending mailbox, a
   page's whole address), then the rest, files by name and size. An approval with a field longer than the list can show
-  whole, or a field name that isn't a plain name (`409 approve_too_long`), and a report to the Tico team
-  (`403 approve_support`) are left off the list and stay your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it is put ("approve
+  whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it is put ("approve
   the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another
   bot's output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
 - **Never its own request.** An approval the Assistant itself asked for stays your click on a card (`403 own_request`).
 - **Only approvals addressed to you, only your Assistant.** Someone else's is a `403`. No other bot decides an approval,
-  whatever the setting. A Tico support report is still sent only on your own tap.
+  whatever the setting. A report to the Tico team is approved only on the read-back and your plain yes, like any other.
 - **Recorded and undoable.** Each decision is recorded as decided by the Assistant for you: the approval carries
   `decided_via: "assistant"` and `decided_for` (`{"for", "assistant", "cited", "words", "read_back", "approves"}`),
   and its `history` (`GET /api/v2/approvals/{id}`) lists it. **Settings > General** lists what it decided for you in the
@@ -221,7 +221,8 @@ the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exact
 error's detail are kept of the result, never the answer's body.
 
 **Approvals, and what is never done from chat, are proposed, and only your click runs it:** approving a Needs-you item
-(a send, spend, publish or merge approval, even if you ask for it in your DM, unless you let it decide approvals), anything
+(a send, spend, publish or merge approval, even if you ask for it in your DM, unless it may decide your approvals, which
+is on by default), anything
 the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `hub assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
 with the exact API operation. That leaves a **pending action** and a Confirm / Cancel card in your DM. The server
 refuses these operations when the assistant tries them itself without your cited words (`403 confirm_required`). **Confirm** runs the recorded
@@ -316,14 +317,14 @@ own session, not a personal token.
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |
 | `POST /api/v2/assistant/actions/{id}/confirm` | Runs it as you. `{"action": {...}}` with the result of the operation. A card that makes a new computer's one-time code also answers `shown_once: {code, expires, operator}`, to you only: the code is not stored on the card or in the DM. |
 | `POST /api/v2/assistant/actions/{id}/cancel` | Drops it. |
-| `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals. |
+| `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals (on unless you turned it off). |
 | `POST /api/v2/assistant/settings` `{"decides_approvals"}` | Your own session only (`403` for the Assistant, a bot or turning it on with a personal token). |
 | `GET /api/v2/assistant/changes?days=&limit=&before=` | `{"actor", "days", "changes": [{"id", "at", "what", "words", "object", "undoable", "why_not"?}], "next"}`: what the Assistant did for you, newest first. |
 | `POST /api/v2/assistant/changes/{id}/restore` | Undoes one of those changes as you: `{"id", "restored", "already", "object"}`. `409 not_undoable` with the reason when the record does not allow it; `404` for another person's change. |
 | `GET /api/v2/needs-you/summary?limit=` | `{"actor", "total", "this_week", "by_kind", "by_bot": [{"bot", "count", ...}], "bots_left"}`: the board's own count, split. |
 | `GET /api/v2/origins/{ref}` | `{"ref", "kind", "id", "title", "created_at", "made_by", "task", "cause", "siblings", "stop": [{"how", "command", "note"}]}`: why an item is on your list. |
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
-| `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
+| `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |
 | `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
 | `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant DM; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |

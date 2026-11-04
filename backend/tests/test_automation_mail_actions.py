@@ -17,6 +17,7 @@ from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
 from clients.tico import APIError
 from connectors.mail import access, audit as audit_log, db, gmail as gm
 from connectors.mail import __main__ as cli
+from connectors.mail import actions as mail_actions, unsubscribe as unsub
 from connectors.mail.tests import fake
 from runner_support.connectors import ConnectorPublisher
 
@@ -406,3 +407,166 @@ def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, comp
     post(api, "automations/mail-actions/ma_1/result", {"ok": True, "detail": "sent"}, computer.token, expected=403)
     computer.sync()                                          # published: now it is this computer's
     assert len(claim(api, computer.token)["actions"]) == 1
+
+
+# ---------------------------------------------------------------------------------------------- mail fields, end to end
+def test_the_sync_carries_the_mail_fields_to_the_trigger(api, computer):
+    """The real sync and publish: the owner's earlier send makes the sender known to a later message only; a category
+    label, a calendar part and an .ics file come through the hub copy as the trigger reads them."""
+    now, day, person = int(time.time() * 1000), 86_400_000, "person@customer.example"
+    store = computer.gmail.store
+    store["sent-1"] = fake.message("sent-1", "t-person", {"From": BOX, "To": person, "Subject": "Pricing"},
+                                   body="Here it is.", labels=("SENT",), epoch_ms=now - 2 * day)
+    store["early"] = fake.message("early", "t-early", {"From": person, "To": BOX, "Subject": "Hello"},
+                                  body="Hi.", epoch_ms=now - 3 * day)
+    store["reply"] = fake.message("reply", "t-person", {"From": person, "To": BOX, "Subject": "Re: Pricing"},
+                                  body="Thanks.", epoch_ms=now - day)
+    store["promo"] = fake.message("promo", "t-promo", {"From": "Deals <deals@shop.example>", "To": BOX,
+                                                       "Subject": "Sale"}, body="50% off.",
+                                  labels=("INBOX", "CATEGORY_PROMOTIONS"), epoch_ms=now - 2 * 3_600_000)
+    store["invite"] = fake.message("invite", "t-invite", {"From": "Ben <ben@partner.example>", "To": BOX,
+                                                         "Subject": "Invite"},
+                                   parts=[fake.part("text/plain", "Join us."),
+                                          fake.part("text/calendar", "BEGIN:VCALENDAR\r\nEND:VCALENDAR")],
+                                   labels=("INBOX", "CATEGORY_SOCIAL"), epoch_ms=now - 3_600_000)
+    store["ics"] = fake.message("ics", "t-ics", {"From": "Cal <cal@vendor.example>", "To": BOX, "Subject": "Meeting"},
+                                parts=[fake.part("text/plain", "See attached."),
+                                       fake.part("application/octet-stream", filename="meeting.ics", size=120)],
+                                epoch_ms=now - 1_800_000)
+    aid = automate(api, {"id": "sort", "type": "filter", "rules": [{"when": [{"field": "message.subject",
+                                                                             "op": "contains", "value": "zz-never"}],
+                                                                  "then": [{"do": "archive"}]}]})
+    assert computer.sync() == len(store)
+    with api.app.state.store.read() as c:
+        seen = {r["trigger_ref"].rsplit(":", 1)[-1]: json.loads(r["saved_state"])["payload"]["message"]
+                for r in c.execute("SELECT trigger_ref, saved_state FROM automation_runs WHERE automation_id=?", (aid,))}
+    assert set(seen) == set(store)
+    assert seen["reply"]["known_sender"] is True and seen["reply"]["from_domain"] == "customer.example"
+    assert seen["early"]["known_sender"] is False            # the owner wrote to this sender only after it arrived
+    assert seen["sent-1"]["known_sender"] is False
+    assert seen["promo"]["category"] == "promotions" and seen["promo"]["is_calendar_invite"] is False
+    assert seen["invite"]["category"] == "social" and seen["invite"]["is_calendar_invite"] is True
+    assert seen["ics"]["is_calendar_invite"] is True and seen["ics"]["attachments"] == ["meeting.ics"]
+
+
+# ---------------------------------------------------------------------------------------------- unsubscribe
+UNSUB_URL = "https://news.example.org/unsub?token=abc"
+UNSUBSCRIBE = {"id": "unsub", "type": "action", "do": "unsubscribe", "args": {}}
+UNSUB_THEN_ARCHIVE = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
+    {"do": "unsubscribe"}, {"do": "archive"}]}]}
+
+
+@pytest.fixture
+def unsubscriber(monkeypatch):
+    """The sender's one-click endpoint: every POST is recorded and answered 202. The message's own link is given, since
+    the fake Gmail keeps no raw copy to find it in; nobody is on the people roster."""
+    posts = []
+    monkeypatch.setattr(mail_actions, "_one_click_url", lambda ctx, mid: UNSUB_URL)
+    monkeypatch.setattr(unsub, "post", lambda url: posts.append(url) or 202)
+    monkeypatch.setattr(access, "roster_mailboxes", lambda roster=None: [])
+    return posts
+
+
+def test_unsubscribe_runs_on_the_mailboxs_computer_and_keeps_the_mail_in_the_inbox(api, computer, unsubscriber):
+    aid = automate(api, UNSUBSCRIBE)
+    computer.sync()
+    assert last_run(api, aid)["status"] == "waiting"
+    assert computer.worker.mail_action_tick() == 1
+    assert unsubscriber == [UNSUB_URL]
+    assert "INBOX" in computer.gmail.store["m1"]["labelIds"]
+    run = last_run(api, aid)
+    assert run["status"] == "ok" and run["steps"][0]["outputs"]["detail"] == "unsubscribed"
+    assert computer.worker.mail_action_tick() == 0 and len(unsubscriber) == 1
+
+
+def test_the_computer_runs_an_unsubscribe_then_an_archive_in_one_pass(api, computer, unsubscriber):
+    aid = automate(api, UNSUB_THEN_ARCHIVE)
+    computer.sync()
+    assert computer.worker.mail_action_tick() == 2
+    assert unsubscriber == [UNSUB_URL]
+    assert "INBOX" not in computer.gmail.store["m1"]["labelIds"]
+    run = last_run(api, aid)
+    assert run["status"] == "ok"
+    assert [a["detail"] for a in run["steps"][0]["outputs"]["actions"]] == ["unsubscribed", "archived"]
+
+
+def test_a_refused_unsubscribe_fails_the_run_and_the_archive_after_it_never_runs(api, computer, unsubscriber):
+    aid = automate(api, UNSUB_THEN_ARCHIVE)
+    computer.gmail.store["m1"]["labelIds"] = ["INBOX", "UNREAD", "STARRED"]
+    computer.sync()
+    assert computer.worker.mail_action_tick() == 1
+    assert unsubscriber == [] and "INBOX" in computer.gmail.store["m1"]["labelIds"]
+    assert claim(api, computer.token)["actions"] == []
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT state FROM automation_mail_actions ORDER BY created_at, rowid")] == [
+            "failed", "skipped"]
+    run = last_run(api, aid)
+    assert run["status"] == "failed" and run["steps"][0]["status"] == "failed"
+    assert [a["detail"] for a in run["steps"][0]["outputs"]["actions"]] == [
+        "not unsubscribing: the message is starred", "skipped: an earlier action on this message failed"]
+
+
+def test_a_chain_is_claimed_one_action_at_a_time_and_in_order(api, computer, unsubscriber):
+    aid = automate(api, UNSUB_THEN_ARCHIVE)
+    computer.sync()
+    first, = claim(api, computer.token)["actions"]
+    assert first["action"] == "unsubscribe"
+    assert claim(api, computer.token)["actions"] == []        # the archive waits: the unsubscribe is out, not done
+    post(api, f"automations/mail-actions/{first['id']}/result", {"ok": True, "detail": "unsubscribed"}, computer.token)
+    second, = claim(api, computer.token)["actions"]
+    assert second["action"] == "archive"
+    post(api, f"automations/mail-actions/{second['id']}/result", {"ok": True, "detail": "archived"}, computer.token)
+    run = last_run(api, aid)
+    assert run["status"] == "ok"
+    assert [a["detail"] for a in run["steps"][0]["outputs"]["actions"]] == ["unsubscribed", "archived"]
+
+
+def test_a_chained_unsubscribe_whose_lease_runs_out_is_claimed_again(api, computer, unsubscriber):
+    aid = automate(api, UNSUB_THEN_ARCHIVE)
+    computer.sync()
+    first, = claim(api, computer.token)["actions"]
+    with later(6):
+        again, = claim(api, computer.token)["actions"]
+    assert (again["id"], again["action"]) == (first["id"], "unsubscribe")
+    assert claim(api, computer.token)["actions"] == []        # the archive still waits for it
+    assert last_run(api, aid)["status"] == "waiting"
+
+
+def test_a_chained_unsubscribe_that_never_reports_fails_the_run_and_skips_the_archive(api, computer, unsubscriber):
+    aid = automate(api, UNSUB_THEN_ARCHIVE)
+    computer.sync()
+    for n in range(3):
+        with later(6 * n):
+            assert [a["action"] for a in claim(api, computer.token)["actions"]] == ["unsubscribe"]
+    with later(18):
+        assert claim(api, computer.token)["actions"] == []
+    run = last_run(api, aid)
+    assert run["status"] == "failed"
+    assert [a["detail"] for a in run["steps"][0]["outputs"]["actions"]] == [
+        "no result after 3 tries", "skipped: an earlier action on this message failed"]
+    assert unsubscriber == []
+
+
+def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_claims(api, computer):
+    """1,100 actions chained on one message: a failed head skips all of them (the walk is a work list, not recursion),
+    and the mailbox's next claim is not held up by them."""
+    computer.sync()
+    with api.app.state.store.transaction() as c:
+        for i in range(1100):
+            c.execute('INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,'
+                      'created_at,attempts,step,"after") VALUES(?,?,?,?,?,?,?,?,?,0,?,?)',
+                      (f"chain_{i:04d}", "auto_x", "run_x", BOX, "m1", "archive", "{}", "queued",
+                       f"2026-10-28T00:00:00.{i:06d}Z", "gate", f"chain_{i - 1:04d}" if i else None))
+    head, = claim(api, computer.token)["actions"]
+    assert head["id"] == "chain_0000"
+    post(api, f"automations/mail-actions/{head['id']}/result", {"ok": False, "detail": "refused", "retry": False},
+         computer.token)
+    with api.app.state.store.read() as c:
+        states = {r[0]: r[1] for r in c.execute(
+            "SELECT state, COUNT(*) FROM automation_mail_actions WHERE automation_id='auto_x' GROUP BY state")}
+    assert states == {"failed": 1, "skipped": 1099}
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,"
+                  "created_at,attempts) VALUES('free','auto_y',NULL,?,'m1','archive','{}','queued',"
+                  "'2026-10-28T01:00:00.000000Z',0)", (BOX,))
+    assert [a["id"] for a in claim(api, computer.token)["actions"]] == ["free"]

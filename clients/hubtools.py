@@ -3580,7 +3580,7 @@ _AUTO_FIELDS = {
                              "{type: action, do, args}; args by do: draft_reply and send_reply body (or text), to, bot "
                              "(Slack send); forward to, body, webhook; label name (or tag); create_task title, body, owner, due (a date; a due trigger's day by default); "
                              "assign owner, text; note text (or note), bot; wake_bot bot, text; post_update to ([updates, market]), text (none posts what the bot_turn before it wrote); "
-                             "call_webhook webhook, type, data; archive and leave_for_you take none"},
+                             "call_webhook webhook, type, data; archive, leave_for_you and unsubscribe take none"},
 }
 
 
@@ -4217,7 +4217,7 @@ def bot_branch(api, args):
       "list; one fresh commit, not its history). Its notes and memory are left out unless `with_memory`. No credential, .env or secret is "
       "ever copied: the credentials the original's tools need are granted to the copy when the person is a credential administrator, and "
       "the rest come back as `needs credential X` for you to ask for. Nothing stays linked. Runs on this computer, in its workspace.",
-      {"bot": _s("The bot to copy"), "slug": _s("The copy's slug; <bot>-copy by default"), "name": _s("What people call the copy"),
+      {"bot": _s("The bot to copy"), "slug": _s("The copy's slug; the original's with the next free number (builder-2) by default"), "name": _s("What people call the copy"),
        "with_memory": {"type": "boolean", "default": False, "description": "Also copy the original's memory, notes and state"},
        "computer": _s("A computer's label or id to put the copy on; leave out to place it later")},
       required=("bot",), writes=True, local=True)
@@ -5175,8 +5175,9 @@ def support_file(api, args):
 
 
 
-@tool("hub_support_report", "Report a Tico bug to the Tico team (the maintainers): drafts it for a person, who sees the whole "
-      "message in Needs you and approves or declines it. Nothing leaves this install until then; afterwards send it with "
+@tool("hub_support_report", "Report a Tico bug to the Tico team (the maintainers). When the team lets bots send reports without "
+      "asking, it is sent at once and this returns the ticket. Otherwise it drafts it for a person, who sees the whole message "
+      "in Needs you and approves or declines it: nothing leaves this install until then, and afterwards send it with "
       "hub_support_send. Write it self-contained: what failed, since when, the exact error, what you tried. No secrets, "
       "tokens or customer data. Don't hand the person a copy-and-paste task instead.",
       {"message": _s("The whole report, plain text, up to 4000 characters"),
@@ -5188,6 +5189,10 @@ def support_report(api, args):
     if args.get("include_ids") is False:
         payload["include_ids"] = False
     row = api.post("approvals", {"kind": "support", "payload": payload}, key=_key(args))
+    if row.get("sent"):
+        # The team rule let it go at once (backend/support.py send_by_rule): filed as the install's default person.
+        return {"ticket": row.get("ticket"), "sent": True, "filed_as": row.get("filed_as"),
+                "next": "Sent to the Tico team without a person's approval. Replies reach the person it was filed as."}
     return {"approval": row.get("id"), "decision": row.get("decision"),
             "next": "A person must approve it in Needs you. Then send it: hub support send --approval "
                     f"{row.get('id')} (hub_support_send). Until then nothing is sent."}

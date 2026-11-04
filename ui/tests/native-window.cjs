@@ -8,7 +8,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
 const VISUAL = 'https://visuals.acme-files.example', NEXT_VISUAL = 'https://next.acme-files.example';
 const TOKEN = 'YQ.' + 'a'.repeat(43);
-const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/main.rs'), 'utf8')
+const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/bridge.rs'), 'utf8')
   .match(/const BRIDGE_SCRIPT: &str = r#"([\s\S]*?)"#;/)[1];
 
 // Browser fixture of the actual bridge wrapper and app, not proof of native WebView navigation/IPC.

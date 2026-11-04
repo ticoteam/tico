@@ -13,7 +13,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools", "macos-private-api"] }
+tauri = { version = "2", features = ["devtools", "macos-private-api", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
@@ -25,6 +25,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 reqwest-updater = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["time", "rt-multi-thread", "macros", "sync"] }
 url = "2"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting"] }
 log = { version = "0.4", features = ["std"] }
 tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-process = "2"

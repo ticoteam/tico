@@ -2163,6 +2163,7 @@ class AccessRules(Contract):
     admin_sql: bool | None = None
     member_tokens: bool | None = None
     health_monitor_reports: bool | None = None
+    bot_reports_direct: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
     stale_review: bool | None = None
