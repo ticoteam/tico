@@ -442,10 +442,10 @@ change reads as On. **Replay a day** on the settings card judges one past day's 
 items with your settings and your plate as it was then, so you can see what On would have done before you turn it
 on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
 "chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
-judged against your plate as it was just before it. **Unreleased:** a bot's handoff of a task to you is also listed
-when the filter was Off at the time, since no ask row was written; Replay reads it from the task's owner history. A
-person's handoff is not listed, and each handoff appears once, on the day it was handed to you. An owner or admin
-replaying someone else's day sees only the titles they may read.
+judged against your plate as it was just before it. A bot's handoff of a task to you is also listed when the filter was
+Off at the time, because no ask row was written. Replay reads it from the task's owner history. A handoff by a person
+is not listed. Each handoff appears once, on the day it was handed to you. An owner or admin replaying someone else's
+day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
 `GET /api/v2/ask-ingest/filtered?hours=24`,
