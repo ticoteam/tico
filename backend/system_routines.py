@@ -100,8 +100,6 @@ ACTIONS = {
     "check_stale": ("check stale tickets", ("stale", "tasks", "finished", "forgotten", "done")),
     "suggest_owner": ("suggest to each owner: mark done, close or check it",
                       ("suggest", "done", "close", "owner", "decide")),
-    "ask_still_wanted": ("ask a task's person once whether a task idle for a week is still wanted",
-                         ("idle", "tasks", "ask", "remind")),
     "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
@@ -200,9 +198,6 @@ JOBS = [
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
         CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",), then=("check_stale", "suggest_owner")),
-    Job("still_wanted", "Still wanted?",
-        "Asks a task's person once whether a task idle for a week is still wanted.",
-        CHECKS, "Daily", 86400, control=True, then=("ask_still_wanted",)),
     Job("kpi_asks", "KPI stale asks",
         "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS, "Hourly", 3600, control=True, then=("ask_kpi_keeper", "ask_goal_owner")),
@@ -375,7 +370,6 @@ class Control:
 
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
-    "still_wanted": Control(presets=EVERY_PRESET, preset=DAILY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
@@ -395,7 +389,7 @@ CONTROLS = {
 }
 
 
-QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
+QUICK_KEYS = ("kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "bookkeeper_check", "bookkeeper_watch",
               "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention",
               "task_roundup")   # last runs read by backend/scheduler.py (QUICK and FIXED)

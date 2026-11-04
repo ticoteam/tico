@@ -18,7 +18,7 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
+TIMED = {"stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
          "bookkeeper_check", "memory_tidy", "auto_dream", "task_roundup"}   # the jobs with a schedule preset
 
 
@@ -36,7 +36,7 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
     for key, job in jobs.items():
         if job["needed"]:
             assert not job["switch"] and not job["presets"] and not job["can_change"], key
-    assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["still_wanted"]["schedule"] == "Daily at 09:00"
+    assert jobs["stale_review"]["schedule"] == "Hourly" and "still_wanted" not in jobs
     assert jobs["learnings"]["on"] is True and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     assert jobs["auto_dream"]["on"] is True and jobs["auto_dream"]["schedule"] == "Nightly at 02:00"
 
@@ -48,7 +48,7 @@ def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(ap
     assert [p["key"] for p in jobs["kpi_asks"]["presets"]] == ["15m", "hourly", "4h", "daily"]
     put(api, "system-routines/stale_review", {"preset": "15m"}, expected=422)
     put(api, "system-routines/learnings", {"preset": "hourly"}, expected=422)
-    put(api, "system-routines/still_wanted", {"preset": "daily", "at": "25:00"}, expected=422)
+    put(api, "system-routines/task_roundup", {"preset": "daily", "at": "25:00"}, expected=422)
     put(api, "system-routines/cleanup", {"on": False}, expected=404)        # housekeeping has no controls
 
 
@@ -251,8 +251,8 @@ def test_run_now_on_a_plain_job_lands_its_result_on_the_row_and_is_refused_while
     reply = post(api, "system-routines/ask_deadlines/run", {}, token="ben-test")
     assert reply["running"] is False
     assert reply["job"]["last"]["result"] == "No asks past their deadline"
-    put(api, "system-routines/still_wanted", {"on": False}, token="ben-test")
-    post(api, "system-routines/still_wanted/run", {}, token="ben-test", expected=409)
+    put(api, "system-routines/kpi_asks", {"on": False}, token="ben-test")
+    post(api, "system-routines/kpi_asks/run", {}, token="ben-test", expected=409)
     post(api, "system-routines/topic_fresh/run", {}, token="ben-test", expected=422)
 
 

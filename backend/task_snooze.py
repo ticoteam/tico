@@ -4,7 +4,7 @@ A snoozed task says "nobody plans to get to this until then". It keeps its statu
 `snoozed_until` (and `snoozed_by`) are set. Until that moment:
 
 - it is left out of the board, task lists (`GET /api/v2/tasks` unless `snoozed=all|only`), Needs you and Decide;
-- nothing automatic moves it: the task roundup skips it (backend/task_roundup.py), and no "Still wanted?" ask or "Due:"
+- nothing automatic moves it: the task roundup skips it (backend/task_roundup.py), and no "Due:"
   reminder goes out (`H.not_yet_due`). The keeper's notices about it reach its owner bot quietly (`H._wake`), as does
   another bot's comment (`H.comment_wakes`). A person's comment and Run now still reach the bot, and notices to anyone else
   (a requester bot handed it for review) are as usual.

@@ -18,7 +18,7 @@ bot after two business days (backend/still_needed.py).
    subtask an ask becomes) closes when the person has not touched it in EXPIRE_DAYS, unless it is due later or waits on
    someone else, and the bot hears why when it closes.
 
-A task with nobody's ask on it is "Still wanted?" (backend/still_wanted.py), which only a person's answer closes.
+Nothing asks a person about a quiet task: a bot's quiet task is a line on its roundup (backend/task_roundup.py).
 """
 
 from . import hubdb as H

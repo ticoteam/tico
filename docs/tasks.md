@@ -476,14 +476,10 @@ Waiting work is not starved: a bot's queued jobs are claimed oldest first (a per
 still goes ahead), so a newer task never jumps one that has been waiting. Task ranks stay as people
 set them.
 
-A task still on the board with no activity for 7 days (no update, comment or checkpoint, no run
-going, and no question already waiting on someone) gets one **Still wanted?** question with
-**Keep** and **Close**: to its requester when a person asked for it, otherwise to its owner when a
-person owns it; a task only bots are on is left alone. It shows in that person's Needs you and
-Decide. **Keep** restarts the clock; **Close** closes the task as theirs with a note. Nothing
-closes without the answer, and the task is asked again only after new activity and another idle
-week (`stale_asked_at`). While the team has **Stale ticket review** on, these questions stop: its
-suggestions cover the quiet week.
+A task still on the board with no activity for a day (no update, comment or checkpoint, and no run going) is quiet.
+Tico asks nobody about a quiet task. A quiet task owned by a bot that sweeps is a line on that bot's roundup, and it
+comes back on the roundup only after a week. A quiet task a person owns gets no line from Tico. A **Still wanted?**
+question put before this change still takes **Keep** or **Close** from the person it went to.
 
 ### Stale ticket review
 
@@ -522,9 +518,6 @@ can mark a task done, and its requester or another authorized person can close i
 is refused. If the task changed after the card showed it, that row is refused and stays on the card,
 so open the task to see what changed. **Accept all** applies only the rows you saw: a row that
 arrived since stays on the card.
-
-**Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
-**Still wanted?** questions described above: its suggestions cover the quiet week.
 
 ### The question card
 
@@ -745,8 +738,7 @@ Until that moment:
 - it is off the board, the Open list, Needs you, Decide and `hub task list`. The **Snoozed** tab on
   the Tasks page (shown while something is snoozed), `hub task list --snoozed only|all` and
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
-- nothing automatic moves it: no stall wake or status check, no
-  **Still wanted?** question and no **Due:** reminder. Tico's notices about it reach its owner bot
+- nothing automatic moves it: no stall wake or status check and no **Due:** reminder. Tico's notices about it reach its owner bot
   deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
   A person's comment still reaches the bot as usual, **Run now** still runs it, and notices to
   anyone else on it (a requester bot it is handed to for review) arrive as usual. A snooze survives
@@ -878,7 +870,7 @@ that an owner may reopen Done with doing or open (with a note for open). The tas
 no Done, Close or Reopen on them. A task that should not
 be on the board is deleted instead. Working statuses still change without a step (a bot's ask sets
 waiting), and filing a task onto the type and the keeper's own automation are unaffected. Such tasks
-are not asked "Still wanted?", their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
+get no question from Tico: their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
 rather than marking them done or closed. Without steps only, a bare status lands the task in the first step
 with that status, which on a board is rarely the one anyone meant.
 

@@ -44,15 +44,6 @@ def remind(c, row, at):
 
 # The controlled system routines' blocks (backend/system_routines.py CONTROLS), shared by the scheduler and Run now: a
 # manual run goes through the same code, so the same limits.
-def run_still_wanted(store, auth, at, failures=None):
-    # A task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
-    with SR.recording(store, "still_wanted", failures) as run:
-        from . import still_wanted
-        with store.transaction() as c:
-            asked = still_wanted.ask_idle(c, stamp(at))
-        run.did(SR.words_of(asked, "task asked about", "No idle tasks"))
-
-
 def run_kpi_asks(store, auth, at, failures=None):
     # A KPI that went stale as time passed becomes its owner's task here (backend/goal_asks.py). Its own transaction: a
     # failure here never undoes the goal colours.
@@ -200,7 +191,7 @@ def run_task_roundup(store, auth, at, failures=None):
         run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
 
 
-QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
+QUICK = {"kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "bookkeeper_check": run_bookkeeper_check,
          "task_roundup": run_task_roundup}
@@ -651,7 +642,7 @@ class Scheduler:
             except Exception as exc:
                 failures.append({"strategy_bot": type(exc).__name__})
         # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
-        # (hourly by default), Still wanted? (daily) and ask go-ahead.
+        # (hourly by default) and ask go-ahead.
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)

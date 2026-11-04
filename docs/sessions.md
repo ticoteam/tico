@@ -109,8 +109,8 @@ long DMs cheaper and on topic. An owner or an admin turns this on or off in **Se
 the topic changes** (off by default). It never happens in task threads or group threads, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
-Nothing closes on its own. A task with no activity for 7 days gets one **Still wanted?** question, with **Keep** and
-**Close**, to the person who asked for it (or the person who owns it). See [Picking work back up](tasks.md#picking-work-back-up).
+Nothing closes on its own. A quiet task is never closed or asked about: a bot's quiet task is a line on its roundup.
+See [Picking work back up](tasks.md#picking-work-back-up).
 
 ## Task progress
 

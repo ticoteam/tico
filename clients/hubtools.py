@@ -800,7 +800,7 @@ def task_check_back(api, args):
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
-      "wakes its bot about it (no Still wanted? or Due reminder; a person's comment still does) until "
+      "wakes its bot about it (no Due reminder; a person's comment still does) until "
       "then, when it is back and its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover. "
       "Snoozing again moves the date. `note` says what to check when the snooze ends: it comes back in the wake "
       "(at most 500 characters).",

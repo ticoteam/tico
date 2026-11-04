@@ -2,7 +2,7 @@
 import json
 from datetime import timedelta
 
-from backend import still_wanted, task_check_backs, task_roundup
+from backend import task_check_backs, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.test_api import api, get, hold, post  # noqa: F401
@@ -58,7 +58,6 @@ def test_nothing_automatic_wakes_a_snoozed_task_but_a_person_still_reaches_it(ap
         H.TS.snooze(c, "human:ana", row["id"], ahead(30))
         assert notices(c, row["id"], "Snoozed until") == 1 and jobs(c) == 0             # told, not run
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-9), row["id"]))
-        assert row["id"] not in [t["id"] for t in still_wanted.idle_tasks(c)]
         assert "ops" not in task_roundup.run(c)["woke"], "a snooze in force is on no roundup list"
         H.task_update(c, H.human_actor("ana"), row["id"], status="open")
         assert notices(c, row["id"], "Open:") == 1 and jobs(c) == 0, "news about it waits for the bot's next run"
