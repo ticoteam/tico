@@ -1926,6 +1926,10 @@ def signed_in_by_lapsed_plan(ready, check, covers):
     if not runtime or runtime in (covers or {}) or check.get("profile") or bot_keyed(runtime):
         return False
     row = (ready.get("runtimes") or {}).get(runtime) or {}
+    # The bot's own login's row, as the runner's preflight reads it: the runtime row is the worst of its profiles, so
+    # another profile signed out would read as this login missing.
+    own = (row.get("profiles") or {}).get("")
+    row = own if isinstance(own, dict) else row
     return check.get("sign_in") == "ready" and row.get("authenticated") == "missing"
 
 

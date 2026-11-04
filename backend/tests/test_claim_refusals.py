@@ -240,6 +240,18 @@ def test_a_sign_in_read_as_ready_for_a_plan_that_no_longer_covers_it(api):
     says(api, machine, "sign_in_missing")
 
 
+def test_another_profile_signed_out_does_not_refuse_a_bot_on_its_own_ready_login(api):
+    # An older runner's runtime row is the worst of its profiles: one signed-out profile must not hold a bot whose own
+    # login (the unnamed profile) is signed in.
+    machine = task_bot(api, lanes=True)
+    new_task(api, "first")
+    readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {
+        "installed": True, "authenticated": "missing",
+        "profiles": {"": {"authenticated": "ready"}, "acme-team": {"authenticated": "missing"}}}},
+        "bots": {"ops": {"ready": True, "runtime": "codex", "profile": "", "sign_in": "ready"}}})
+    assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is not None
+
+
 def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
