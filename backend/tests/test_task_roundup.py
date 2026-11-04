@@ -880,6 +880,29 @@ def test_an_unanswered_question_goes_back_to_the_bot_that_asked_as_one_roundup_l
         assert sum("no answer in two business days" in found for found in lists(c)) == 1, "listed once, not resent"
 
 
+def test_a_still_needed_event_the_base_sent_as_a_message_is_not_relisted_on_upgrade(api):
+    """Before the roundup, the weekday batch posted its questions to the bot as a message and recorded that message on the
+    `ask.still_needed` event. Those events are already delivered, so an upgrade does not list their questions again."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = task(c, "Renew the parking permit")
+        settle(c, mine["id"], "finance", ago(days=8))
+        conv = H.task(c, mine["id"])["conversation_id"]
+        delivered = H.say(c, "bot:finance", "human:ana", "Which permit number do I use?", kind="ask",
+                          conversation_id=conv, refs={"task": mine["id"]})
+        pending = H.say(c, "bot:finance", "human:ana", "Which renewal fee applies?", kind="ask",
+                        conversation_id=conv, refs={"task": mine["id"]})
+        for question in (delivered, pending):
+            c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=8), question["id"]))
+        H.event(c, H.KEEPER, still_needed.ACTION, "bot:finance", {"asks": [delivered["id"]], "message": H.new_id()})
+        H.event(c, H.KEEPER, still_needed.ACTION, "bot:finance", {"asks": [pending["id"]]})
+        complete_jobs(c)
+        assert "finance" in task_roundup.run(c, NOON)["woke"]
+        found = " ".join(lists(c))
+        assert "Which renewal fee applies?" in found, "a question the roundup's own event names is listed"
+        assert "Which permit number do I use?" not in found, "a question already sent as a message is not relisted"
+
+
 def test_a_list_cut_at_its_cap_keeps_its_group_order_and_counts_the_rest(api, monkeypatch):
     store = api.app.state.store
     monkeypatch.setattr(task_roundup, "MAX_LINES", 2)

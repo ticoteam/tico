@@ -115,7 +115,7 @@ def _candidates(c, at, shared):
     actors = {row[0] for row in c.execute(
         "SELECT DISTINCT owner_id FROM tasks WHERE status IN (" + _marks() + ")", tuple(H.ACTIVE_STATUSES))}
     actors |= {row[0] for row in c.execute(
-        "SELECT DISTINCT target FROM events WHERE action=? AND created_at>?",
+        "SELECT DISTINCT target FROM events WHERE action=? AND created_at>? AND json_extract(detail, '$.message') IS NULL",
         (still_needed.ACTION, H.shift(at, days=-ASK_DAYS)))}
     actors |= {item["to"] for item in _shared(shared, "late", lambda: step_age.late_items(c, at))}
     actors |= {H.bot_actor(manager) for _, manager in _shared(shared, "types", lambda: _engineering_types(c))}
@@ -305,10 +305,12 @@ def _list(c, slug, at, shared):
 
 
 def _asks_back(c, slug, actor, at):
-    """Questions this bot asked a person that went back unanswered (backend/still_needed.py): one line each, listed once."""
+    """Questions this bot asked a person that went back unanswered (backend/still_needed.py): one line each, listed once.
+    An event with a `message` was sent to the bot as a chat message before the roundup, so it is not listed again."""
     from . import still_needed
     found = c.execute("SELECT e.created_at, j.value FROM events e, json_each(e.detail, '$.asks') j "
-                      "WHERE e.action=? AND e.target=? AND e.created_at>? ORDER BY e.created_at, j.key",
+                      "WHERE e.action=? AND e.target=? AND e.created_at>? AND json_extract(e.detail, '$.message') IS NULL "
+                      "ORDER BY e.created_at, j.key",
                       (still_needed.ACTION, actor, H.shift(at, days=-ASK_DAYS))).fetchall()
     out = []
     for when, ask_id in found:
