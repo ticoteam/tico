@@ -91,6 +91,9 @@ commands! {
     set_chat_private(private: bool) => |app| app.set_chat_private(private);
     send_meeting(id: String, destination: String, paused_confirmed: Option<bool>) => |app| app.send_meeting_confirmed(&id, &destination, paused_confirmed.unwrap_or(false));
     delete_recording(id: String) => |app| app.delete(&id);
+    share_live(destination: String, team: bool, actors: Vec<String>) => |app| app.share_live(&destination, team, actors);
+    save_meeting(id: String, destination: String, audience: String, title: String) => |app| app.save(&id, &destination, &audience, &title);
+    keep_local(id: String) => |app| app.keep_local(&id);
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
     sign_in(address: String) => |app| app.sign_in(&address);
@@ -162,7 +165,7 @@ fn meeting_link(
     (|| -> anyhow::Result<Value> {
         let record = store.get(&id)?;
         let context = store.context(&id)?;
-        anyhow::ensure!(!context.live_discarded, "This meeting was discarded; its recording stays local");
+        anyhow::ensure!(!context.live_discarded || context.live_removed, "This meeting was discarded; its recording stays local");
         anyhow::ensure!(context.live_destination.is_empty() || context.live_destination == destination, "Choose this meeting's Tico");
         let tico = tico_recorder_native::network::Tico::saved(&config, &destination)?;
         let browser = tico.browser_url()?;
@@ -372,6 +375,9 @@ fn main() {
             set_chat_private,
             send_meeting,
             delete_recording,
+            share_live,
+            save_meeting,
+            keep_local,
             save_settings,
             set_audio,
             sign_in,

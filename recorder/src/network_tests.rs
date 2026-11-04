@@ -2250,3 +2250,127 @@ fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
     assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
     worker.join().unwrap();
 }
+
+#[test]
+fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let team = transcript(&store, "Standup");
+    let narrow = transcript(&store, "Comp review");
+    let live = transcript(&store, "Live sync");
+    store
+        .update_context(&live.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &live.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "filed-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"team-fixture"})),
+        Some(who.clone()),
+        Some(json!({"status":422,"error":"Extra inputs are not permitted"})),
+        Some(who),
+        Some(json!({"id":"filed-fixture","review_state":"live"})),
+    ]);
+    assert_eq!(
+        tico.send_to(&store, &team.id, false, "team").unwrap(),
+        "team-fixture"
+    );
+    let refused = tico
+        .send_to(&store, &narrow.id, false, "participants")
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("participants only"), "{refused}");
+    tico.send_to(&store, &live.id, false, "participants").unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[1].0.contains("meetings/import"));
+    assert_eq!(calls[1].1["private"], false);
+    assert!(calls[1].1.get("audience").is_none());
+    assert_eq!(calls[3].1["private"], true);
+    assert_eq!(calls[3].1["audience"], "participants");
+    assert!(calls[5].0.contains("/meetings/filed-fixture/review"));
+    assert_eq!(
+        calls[5].1,
+        json!({"action":"approve","private":true,"audience":"participants"})
+    );
+    assert_eq!(store.get(&narrow.id).unwrap().deliveries[0].status, "failed");
+    assert!(store.get(&narrow.id).unwrap().deliveries[0].meeting_id.is_empty());
+}
+
+#[test]
+fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let kept = transcript(&store, "Kept here");
+    let older = transcript(&store, "Older Tico");
+    for (id, state) in [(&kept.id, "ended"), (&older.id, "live")] {
+        store
+            .update_context(id, |c| {
+                c.live_id = format!("live-{state}");
+                c.live_destination = "synthetic".into();
+                c.live_state = state.into();
+                Ok(())
+            })
+            .unwrap();
+    }
+    // Finish had already filed the shared transcript for review.
+    store
+        .delivery(
+            &kept.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "pending-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"ok":true})),
+        Some(json!({"id":"live-ended","state":"ended","discarded":true})),
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"local-fixture"})),
+        Some(json!({"status":404})),
+        Some(json!({"id":"live-live","state":"ended"})),
+    ]);
+    tico.keep_local(&store, &kept.id).unwrap();
+    let context = store.context(&kept.id).unwrap();
+    assert!(context.live_discarded && context.live_removed);
+    assert!(store.get(&kept.id).unwrap().deliveries.is_empty());
+    // Saved to Tico later, it is a meeting recorded on this computer.
+    assert_eq!(
+        tico.send_to(&store, &kept.id, false, "team").unwrap(),
+        "local-fixture"
+    );
+    let error = tico.keep_local(&store, &older.id).unwrap_err().to_string();
+    assert!(error.contains("keeps the live transcript"), "{error}");
+    let context = store.context(&older.id).unwrap();
+    assert!(context.live_discarded && !context.live_removed);
+    assert_eq!(context.live_state, "ended");
+    assert!(tico.send_to(&store, &older.id, false, "team").is_err());
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[0].0.contains("/api/v2/meetings/pending-fixture/delete"));
+    assert!(calls[1].0.contains("/api/v2/live-meetings/live-ended/discard"));
+    assert!(calls[3].0.contains("meetings/import"));
+    assert_eq!(calls[3].1["external_id"], json!(kept.id));
+    assert!(calls[5].0.contains("/live-meetings/live-live/control"));
+    assert_eq!(calls[5].1, json!({"action":"end"}));
+}
