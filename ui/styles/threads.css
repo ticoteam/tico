@@ -95,7 +95,7 @@ button.th-quote:hover{color:var(--ink);border-left-color:var(--accent)}
 .th-status-act{flex:none;margin-left:auto}
 a.th-status-act:hover{text-decoration:none}
 .th-status-cant_reply{background:var(--wait-bg)}
-.th-status-cant_reply .th-status-word{color:var(--wait);font-weight:600}
+.th-status-cant_reply .th-status-word{color:var(--wait-ink);font-weight:600}
 
 .th-reacts{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
 .th-react{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-xs);cursor:pointer}
