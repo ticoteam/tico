@@ -35,32 +35,29 @@ pub(crate) fn build_server_window(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// The runtime capability for one org's page. It names that page's webview and no window: a window grant would
-/// match every child webview in "main", so one org's grant would reach the others. The remote URL confines it to
-/// the org's own origin.
-pub(crate) fn server_capability(hub: &url::Url, label: &str) -> Value {
+/// The runtime capability for one org's pages. It names that org's page webviews (`org-<id>-*`, see
+/// `new_page_label`) and no window: a window grant would match every child webview in "main", so one org's grant
+/// would reach the others. The remote URL confines it to the org's own origin. One per org, granted once: Tauri keeps
+/// every capability it is given for the rest of the run, so a grant per page would grow with every switch. No
+/// dialogs here: a page's `alert` and `confirm` go through `page_dialog`, which only the page on screen may use.
+pub(crate) fn server_capability(hub: &url::Url, id: &str) -> Value {
     let mut capability: Value = serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
-    capability["identifier"] = Value::from(label);
+    capability["identifier"] = Value::from(format!("org-{id}"));
     capability["windows"] = serde_json::json!([]);
-    capability["webviews"] = serde_json::json!([label]);
+    capability["webviews"] = serde_json::json!([page_pattern(id)]);
     capability["remote"] = remote_of(hub);
     capability
 }
 
-/// What an org's page may show once it is on screen: the dialogs the page's `alert` and `confirm` become (the dialog
-/// plugin). Granted apart, when the page is first shown, so that a page built hidden for a prefetch cannot put a
-/// dialog over the open org. Capabilities cannot be taken back, so each page webview has a label of its own
-/// (`new_page_label`): a later prefetch of the same org never inherits an earlier page's grant.
-pub(crate) fn dialog_capability(hub: &url::Url, label: &str) -> Value {
-    serde_json::json!({
-        "identifier": format!("{label}-dialogs"),
-        "description": "Dialogs for one org's page while it is on screen.",
-        "windows": [],
-        "webviews": [label],
-        "permissions": ["dialog:allow-ask", "dialog:allow-message", "dialog:allow-confirm"],
-        "remote": remote_of(hub),
-        "local": false,
-    })
+/// The glob (Tauri matches capability webviews as globs) for every page label of org `id`. Ids hold no `-`, so it
+/// never matches another org's labels; glob characters in an id are matched literally.
+pub(crate) fn page_pattern(id: &str) -> String {
+    let mut pattern = String::from("org-");
+    for ch in id.chars() {
+        if matches!(ch, '*' | '?' | '[' | ']') { pattern.push('['); pattern.push(ch); pattern.push(']'); } else { pattern.push(ch); }
+    }
+    pattern.push_str("-*");
+    pattern
 }
 
 fn remote_of(hub: &url::Url) -> Value {
@@ -79,7 +76,7 @@ fn remote_of(hub: &url::Url) -> Value {
 mod capability_tests {
     use super::*;
 
-    const ORG: &str = "org-o_7f3a0001";
+    const ORG: &str = "o_7f3a0001";
 
     #[test]
     fn ipc_is_confined_to_selected_origin_and_its_own_webview() {
@@ -102,9 +99,9 @@ mod capability_tests {
                           "blob:https://team.example.com/opaque"] {
                 assert!(!matcher.test(&url::Url::parse(other).unwrap()), "{pattern} accepted {other}");
             }
-            assert_eq!(capability["identifier"], ORG);
+            assert_eq!(capability["identifier"], "org-o_7f3a0001");
             assert_eq!(capability["windows"], serde_json::json!([]));
-            assert_eq!(capability["webviews"], serde_json::json!([ORG]));
+            assert_eq!(capability["webviews"], serde_json::json!(["org-o_7f3a0001-*"]));
             assert_eq!(capability["local"], false);
         }
         let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
@@ -113,9 +110,9 @@ mod capability_tests {
     #[test]
     fn two_orgs_pages_cannot_reach_each_other() {
         let (acme, tidy) = (url::Url::parse("https://acme.example.com/").unwrap(), url::Url::parse("https://tidy.example.com/").unwrap());
-        let (a, b) = (server_capability(&acme, "org-o_aaaaaaaa"), server_capability(&tidy, "org-o_bbbbbbbb"));
-        assert_eq!(a["webviews"], serde_json::json!(["org-o_aaaaaaaa"]));
-        assert_eq!(b["webviews"], serde_json::json!(["org-o_bbbbbbbb"]));
+        let (a, b) = (server_capability(&acme, "o_aaaaaaaa"), server_capability(&tidy, "o_bbbbbbbb"));
+        assert_eq!(a["webviews"], serde_json::json!(["org-o_aaaaaaaa-*"]));
+        assert_eq!(b["webviews"], serde_json::json!(["org-o_bbbbbbbb-*"]));
         let own: tauri::utils::acl::RemoteUrlPattern = a["remote"]["urls"][0].as_str().unwrap().parse().unwrap();
         let other: tauri::utils::acl::RemoteUrlPattern = b["remote"]["urls"][0].as_str().unwrap().parse().unwrap();
         assert!(own.test(&acme) && !own.test(&tidy));
@@ -124,16 +121,35 @@ mod capability_tests {
         // any target) and list every window and webview, which name the other orgs.
         let permissions: Vec<&str> = a["permissions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(permissions.iter().all(|p| !p.starts_with("core:")), "{permissions:?}");
-        assert!(permissions.contains(&"allow-bridge"));
-        // Dialogs only in their own grant, for one page webview, at that org's origin.
+        assert!(permissions.contains(&"allow-bridge") && permissions.contains(&"allow-page-dialog"));
+        // No dialog plugin: a hidden (prefetched) page could put a dialog over the open org. `page_dialog` checks.
         assert!(permissions.iter().all(|p| !p.starts_with("dialog:")), "{permissions:?}");
-        let dialogs = dialog_capability(&acme, "org-o_aaaaaaaa-7");
-        assert_eq!(dialogs["identifier"], "org-o_aaaaaaaa-7-dialogs");
-        assert_eq!(dialogs["webviews"], serde_json::json!(["org-o_aaaaaaaa-7"]));
-        assert_eq!(dialogs["windows"], serde_json::json!([]));
-        assert_eq!(dialogs["remote"], a["remote"]);
-        let granted: Vec<&str> = dialogs["permissions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert_eq!(granted, ["dialog:allow-ask", "dialog:allow-message", "dialog:allow-confirm"]);
+    }
+
+    #[test]
+    fn page_patterns_name_one_org_and_take_glob_characters_literally() {
+        assert_eq!(page_pattern("o_aaaaaaaa"), "org-o_aaaaaaaa-*");
+        assert_eq!(page_pattern("o_*?[]"), "org-o_[*][?][[][]]-*");
+    }
+
+    #[test]
+    fn switching_back_and_forth_grants_one_capability_per_org() {
+        let (acme, tidy) = (url::Url::parse("https://acme.example.com/").unwrap(), url::Url::parse("https://tidy.example.com/").unwrap());
+        let mut granted = std::collections::HashSet::new();
+        for _ in 0..500 {
+            for (hub, id) in [(&acme, "o_aaaaaaaa"), (&tidy, "o_bbbbbbbb")] {
+                let label = new_page_label(id);
+                let capability = server_capability(hub, id);
+                let pattern = capability["webviews"][0].as_str().unwrap();
+                // Every new page's label is one the org's single grant names.
+                assert!(label.starts_with(pattern.trim_end_matches('*')) && org_of(&label) == Some(id), "{label} {pattern}");
+                let identifier = capability["identifier"].as_str().unwrap();
+                if first_grant(&granted, identifier) {
+                    granted.insert(identifier.to_string());
+                }
+            }
+        }
+        assert_eq!(granted.len(), 2);
     }
 
     #[test]
@@ -197,7 +213,8 @@ fn build_main(app: &App) -> tauri::Result<Window> {
 }
 
 /// A label for a new page webview of org `id`: `org-<id>-<n>`, never used before in this run. Ids are never reused,
-/// so a label never names two orgs, and no two pages of one org share one (see `dialog_capability`).
+/// so a label never names two orgs, and a page closing never takes a newer page's label with it. The org's one
+/// capability names them all (`page_pattern`).
 pub(crate) fn new_page_label(id: &str) -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     format!("org-{id}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
@@ -308,10 +325,7 @@ pub(crate) fn first_page(usual: url::Url, hub: &url::Url, sign_in: bool) -> url:
 fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> {
     let (Some(window), Some(home)) = (main_window(app), Home::of(org)) else { return Ok(()) };
     let label = new_page_label(&home.id);
-    grant(app, server_capability(&home.hub, &label))?;
-    if on_screen {
-        grant(app, dialog_capability(&home.hub, &label))?;
-    }
+    grant(app, server_capability(&home.hub, &home.id))?;
     timing::mark(app, &home.id, "granted");
     let config = Config::new(home.hub.clone());
     // A prefetch that is never shown leaves the flag for the page that is.
@@ -356,21 +370,34 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<()> 
     Ok(())
 }
 
-/// Adds a capability for one page webview, once. Labels are never reused, so a grant never reaches another page.
+/// Adds an org's capability, once a run: one per org however many pages it opens.
 fn grant(app: &App, capability: Value) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let mut granted = state.granted.lock().unwrap();
-    let identifier = capability["identifier"].as_str().unwrap_or_default().to_string();
-    if !granted.contains(&identifier) {
+    let identifier = capability["identifier"].as_str().unwrap_or_default();
+    if first_grant(&granted, identifier) {
         app.add_capability(capability.to_string())?;
-        granted.insert(identifier);
+        granted.insert(identifier.to_string());
     }
     Ok(())
+}
+
+/// Whether a capability is new to this run. Tauri keeps (and scans, on every call) each one it is given.
+pub(crate) fn first_grant(granted: &std::collections::HashSet<String>, identifier: &str) -> bool {
+    !granted.contains(identifier)
 }
 
 /// Whether org `id`'s page is the one on screen: the last shown, and not a prefetch waiting to be.
 pub(crate) fn on_screen(shown: &[String], prefetched: Option<&str>, id: &str) -> bool {
     shown.last().is_some_and(|last| last == id) && prefetched != Some(id)
+}
+
+/// Whether org `id`'s page is the one on screen now.
+pub(crate) fn page_on_screen(app: &App, id: &str) -> bool {
+    let state = app.state::<AppState>();
+    let prefetched = state.prefetch.lock().unwrap().org.clone();
+    let shown = state.shown.lock().unwrap();
+    on_screen(&shown, prefetched.as_deref(), id)
 }
 
 /// How many org pages stay open: the open one only, so a switch closes the previous page once the new one is on
@@ -425,7 +452,6 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
         build_window(app)?;
         show_when_painted(app);
     } else if let Some(page) = &live {
-        grant(app, dialog_capability(&home.hub, page.label()))?;
         layout(app);
         let _ = page.show();
         let _ = page.set_focus();
@@ -479,6 +505,13 @@ impl Prefetch {
         self.serial == ticket
     }
 
+    /// The rest with `ticket` builds `id`'s page: `None` when a leave or another rest came in since (nothing to
+    /// build), otherwise the org whose prefetched page this one replaces. Checked and recorded in one step, so a
+    /// leave from here on finds the org recorded and schedules the page's close (`left`).
+    pub(crate) fn claim(&mut self, ticket: u64, id: &str) -> Option<Option<String>> {
+        self.is_latest(ticket).then(|| self.org.replace(id.to_string()))
+    }
+
     /// The pointer left: a rest still waiting to build is called off, and a page already built gets the ticket for its
     /// close.
     pub(crate) fn left(&mut self) -> Option<u64> {
@@ -507,9 +540,6 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let ticket = state.prefetch.lock().unwrap().rest();
     let _changing = state.changing.lock().unwrap();
-    if !state.prefetch.lock().unwrap().is_latest(ticket) {
-        return Ok(());
-    }
     let org = {
         let list = state.orgs.lock().unwrap();
         if list.active().is_some_and(|org| org.id == id) {
@@ -527,7 +557,10 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
         if prefetch.org.as_deref() == Some(id) && built {
             return Ok(());
         }
-        prefetch.org.replace(id.to_string())
+        // The ticket is checked and the org recorded under one lock: a leave before this calls the build off, and a
+        // leave after it (during the build, say) finds the org and schedules the page's close.
+        let Some(replaced) = prefetch.claim(ticket, id) else { return Ok(()) };
+        replaced
     };
     if let Some(old) = replaced.filter(|old| old != id) {
         close_unused(app, &old);
@@ -536,7 +569,15 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
         return Ok(());
     }
     timing::hover(app, id);
-    open_org_webview(app, &org, false)
+    let opened = open_org_webview(app, &org, false);
+    if opened.is_err() {
+        // No page to wait for its click.
+        let mut prefetch = state.prefetch.lock().unwrap();
+        if prefetch.org.as_deref() == Some(id) {
+            prefetch.org = None;
+        }
+    }
+    opened
 }
 
 /// The pointer left the org it rested on: its prefetched page closes unless a click (or another rest on it) comes
@@ -670,6 +711,25 @@ mod page_tests {
         assert!(!prefetch.take("c"));
         assert!(prefetch.take("b") && prefetch.org.is_none());
         assert!(!prefetch.is_latest(close), "clicked: the close is off");
+    }
+
+    #[test]
+    fn a_leave_while_the_build_waits_or_runs_is_never_lost() {
+        // A leave while the rest waits (for `changing`, or for the org list): the claim fails, nothing is built.
+        let mut prefetch = Prefetch::default();
+        let rest = prefetch.rest();
+        assert_eq!(prefetch.left(), None);
+        assert_eq!(prefetch.claim(rest, "b"), None);
+        assert_eq!(prefetch.org, None);
+        // A leave once the claim is made (the build is under way): the org is recorded, so the close is scheduled.
+        let rest = prefetch.rest();
+        assert_eq!(prefetch.claim(rest, "b"), Some(None));
+        let close = prefetch.left().expect("the built page gets a close");
+        assert!(prefetch.is_latest(close));
+        // A rest on another org replaces this one, and hands back the page to close.
+        let rest = prefetch.rest();
+        assert_eq!(prefetch.claim(rest, "c"), Some(Some("b".into())));
+        assert!(!prefetch.is_latest(close));
     }
 
     #[test]

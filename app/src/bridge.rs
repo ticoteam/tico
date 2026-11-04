@@ -3,6 +3,7 @@
 use serde_json::Value;
 use tauri::webview::Webview;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::orgs;
@@ -35,6 +36,19 @@ const ORG_SCRIPT: &str = r#"
 })();
 "#;
 
+/// The page's `alert` and `confirm`, as the dialog plugin makes them (`alert` returns at once, `confirm` returns a
+/// promise of true for OK), but through `page_dialog`, which shows them only for the page on screen. Org pages have
+/// no dialog plugin permission; this runs after the plugin's own script, so it is the one that stays.
+const DIALOG_SCRIPT: &str = r#"
+(() => {
+  if (!window.__TAURI__ || !window.__TAURI__.core) return;
+  const invoke = window.__TAURI__.core.invoke;
+  const text = message => message === undefined ? '' : String(message);
+  window.alert = message => { invoke('page_dialog', {confirm: false, message: text(message)}).catch(() => {}); };
+  window.confirm = message => invoke('page_dialog', {confirm: true, message: text(message)}).catch(() => false);
+})();
+"#;
+
 /// The bridge plus this shell's version, which Settings shows beside the server's.
 pub(crate) fn bridge_script(app: &App) -> String {
     script_for(&app.package_info().version.to_string(), orgs::multi_org_build())
@@ -44,7 +58,7 @@ pub(crate) fn bridge_script(app: &App) -> String {
 fn script_for(version: &str, several_orgs: bool) -> String {
     let version = serde_json::to_string(version).unwrap_or_else(|_| "\"\"".into());
     let extra = if several_orgs { ORG_SCRIPT } else { "" };
-    format!("{BRIDGE_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
+    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
 }
 
 // ----------------------------------------------------------------------------- bridge
@@ -156,6 +170,24 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         _ => {}
     }
     Ok(bridge_reply(&name, org_count(&app)))
+}
+
+/// The page's `alert` (`confirm` false) or `confirm`: a dialog over the main window, for the open org's page while
+/// it is on screen only, so a page built hidden for a prefetch never puts one over another org. Answers whether OK
+/// was chosen. Async, so it waits off the main thread, as the dialog plugin's own command does.
+#[tauri::command]
+pub(crate) async fn page_dialog(app: App, webview: Webview, confirm: bool, message: String) -> Result<bool, String> {
+    let shown = org_of(webview.label()).is_some_and(|id| crate::windows::page_on_screen(&app, id));
+    if !shown || !from_server(&app, &webview) {
+        return Err("Only the page on screen may show a dialog.".into());
+    }
+    let mut dialog = app.dialog().message(message).parent(&webview.window());
+    if confirm {
+        dialog = dialog.buttons(MessageDialogButtons::OkCancel);
+    }
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    dialog.show_with_result(move |result| { let _ = answer.send(result); });
+    Ok(confirm && matches!(answered.await, Ok(MessageDialogResult::Ok)))
 }
 
 /// The open org's name and email from its page, kept for that org alone. Missing fields are blank.
@@ -377,5 +409,14 @@ mod visual_bridge_tests {
             assert_eq!(script.contains("'multiOrg'"), several);
         }
         assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
+    }
+
+    #[test]
+    fn a_page_alert_and_confirm_go_through_the_on_screen_check() {
+        for several in [false, true] {
+            let script = script_for("0.5.0", several);
+            assert!(script.contains("window.alert =") && script.contains("window.confirm ="));
+            assert!(script.contains("invoke('page_dialog'") && !script.contains("plugin:dialog"));
+        }
     }
 }

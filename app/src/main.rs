@@ -53,8 +53,8 @@ struct AppState {
     orgs: Mutex<Orgs>,
     // The windows an org opened (hub files, meetings) as (window label, org id): removing the org closes them.
     owned: Mutex<Vec<(String, String)>>,
-    // The capabilities granted to page webviews, by identifier. Page labels are never reused, so a grant never has
-    // to be taken back.
+    // The org capabilities granted this run, by identifier: one per org (see windows::server_capability). Org ids
+    // are never reused, so a grant never has to be taken back.
     granted: Mutex<HashSet<String>>,
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
@@ -124,7 +124,7 @@ fn main() {
         .plugin(autostart_plugin(identifier))
         // The real list is read in setup, once the app's folders are known.
         .manage(AppState::new(Orgs::new(Document::default(), None), None))
-        .invoke_handler(tauri::generate_handler![app_log, bridge, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_hover, rail_add, rail_menu, signin::tico_signin])
+        .invoke_handler(tauri::generate_handler![app_log, bridge, bridge::page_dialog, connect_server, server_address, setup_info, cancel_setup, rail_orgs, rail_switch, rail_hover, rail_add, rail_menu, signin::tico_signin])
         .setup(move |app| {
             match applog::attach(log_dir(app.handle()).as_deref()) {
                 Some(path) => log::info!("{} {} starting; this log is {}", config::app_name(), app.package_info().version, applog::shown(&path)),
