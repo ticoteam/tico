@@ -17,7 +17,7 @@ from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machin
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
-from .run_diagnostics import RUNNER_STOPS
+from .run_diagnostics import RUNNER_STOPS, clean_stop_reported
 from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
@@ -703,12 +703,16 @@ LEGACY_OUTSIDE_PROGRAMS = {
 
 
 def restart_reported(c, attempt_id):
-    """Only the computer's own terminal report that it stopped the turn (a restart, or its clean stop: RUNNER_STOPS)
-    relaxes generic tool uncertainty; a lost lease does not."""
+    """Only the computer's own report that it stopped the turn relaxes generic tool uncertainty; a lost lease does not.
+    The report is a restart's or a clean stop's completion text (RUNNER_STOPS), or, for a clean stop, the diagnostic the
+    runner saved when it stopped (`clean_stop_reported`), which still counts when its completion never reached the hub."""
     row = c.execute("SELECT state,result FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    result = json.loads(row['result'] or '{}') if row else {}
-    return bool(row and row['state'] in ('interrupted', 'expired') and result.get('outcome') == 'interrupted'
-                and result.get('text') in RUNNER_STOPS)
+    if not row or row['state'] not in ('interrupted', 'expired'):
+        return False
+    result = json.loads(row['result'] or '{}')
+    if result.get('outcome') == 'interrupted' and result.get('text') in RUNNER_STOPS:
+        return True
+    return clean_stop_reported(c, attempt_id) is not None
 
 
 # Tico's update, or any restart of the hub, cuts the runs live then, mostly with no report from their computer, so each

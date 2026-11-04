@@ -458,7 +458,7 @@ def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, st
     """A Claude-style run that says it reports its tool calls, made `calls` ((name, parent) pairs) and was cut off:
     by a runner restart that reported it interrupted, or by a lapsed lease. `hop`: it then fell back to a host that
     does not report its calls (`tool_events: false`, runner-rs execute.rs). `stopped`: the computer's clean stop
-    ("Runner stopped during execution") instead of a restart."""
+    (its saved "Runner stopped during execution" diagnostic, with an empty reply) instead of a restart."""
     machine, message, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'restarted'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]
@@ -470,10 +470,13 @@ def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, st
     if hop:
         events.append({'seq': len(events) + 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': False}})
     events.append({'seq': len(events) + 1, 'kind': 'message', 'payload': {'text': 'Reading the notes.'}})
+    if stopped:
+        # As the runner saves a clean stop (runner-rs drive.rs): a diagnostic naming it, and no reply in its completion.
+        events.append({'seq': len(events) + 1, 'kind': 'diagnostic',
+                       'payload': {'end_reason': 'Runner stopped during execution'}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
     if reported:
-        text = ('Runner stopped during execution' if stopped else 'Runner restarted during execution' if restart
-                else 'Execution interrupted')
+        text = '' if stopped else 'Runner restarted during execution' if restart else 'Execution interrupted'
         post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': len(events),
              'text': text}, machine['token'])
     else:
@@ -2296,4 +2299,21 @@ def test_a_clean_stop_run_that_consumed_an_approval_is_still_held(api):
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute("INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+
+
+def test_a_clean_stop_whose_completion_never_reached_the_hub_still_resumes(api):
+    """The runner shut down after saving its clean stop, before its completion arrived: the attempt expired, but its
+    diagnostic says the computer stopped the turn itself, so a run that used a shell resumes like a restart."""
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], stopped=True, reported=False)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    assert claim(api, machine)['job_id'] == attempt['job_id']
+
+
+def test_a_lapse_with_no_stop_report_and_a_shell_stays_held(api):
+    """No restart, no clean-stop diagnostic: a lost lease keeps the conservative rule and the shell run is held."""
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], reported=False, stopped=False)
+    aged(api, attempt['id'], grace=True)
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'

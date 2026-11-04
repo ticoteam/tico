@@ -14,6 +14,16 @@ CAP_EVENT = 'attempt.max-run-cap'
 # What a computer reports when it stopped the turn itself: a restart of the computer, or its clean stop. Both are the
 # computer's own report, so they relax generic tool uncertainty alike (execution.restart_reported); a lost lease is not.
 RUNNER_STOPS = ('Runner restarted during execution', 'Runner stopped during execution')
+
+
+def clean_stop_reported(c, attempt_id):
+    """The end reason of a stop the computer reported in its own diagnostic (the runner saves it as an event when it
+    stops a turn: runner-rs drive.rs), or None. A clean stop reaches the hub this way, not as the completion's text,
+    which is the reply and usually empty, and it stays readable when the completion never arrived."""
+    found = c.execute("SELECT json_extract(payload,'$.end_reason') FROM attempt_events WHERE attempt_id=? "
+                      "AND kind='diagnostic' AND json_extract(payload,'$.end_reason') IN (?,?) "
+                      "ORDER BY seq DESC LIMIT 1", (attempt_id, *RUNNER_STOPS)).fetchone()
+    return found[0] if found else None
 TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
@@ -65,6 +75,10 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         return stopped_by(c, row) or 'Canceled by ' + row['stop_requested_at']
     if outcome in ('completed', 'ok'):
         return 'Finished'
+    # The computer said it stopped the turn itself (its clean stop), even when its completion never reached the hub.
+    stopped = clean_stop_reported(c, row['id'])
+    if stopped:
+        return stopped
     if row['state'] == 'expired':
         capped = c.execute("SELECT detail FROM events WHERE target=? AND action=? LIMIT 1",
                            (row['id'], CAP_EVENT)).fetchone()

@@ -258,3 +258,13 @@ def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_i
                     headers=headers(machine['token']))
     assert late.status_code == 200
     assert listed(api, a['id'])['end_reason'] == 'Finished'
+
+
+def test_a_clean_stop_reports_its_saved_diagnostic_even_with_no_reply(api):
+    """A clean stop sends an empty reply; its end reason is the computer's saved diagnostic, not the completion's text."""
+    machine, _, a = start(api)
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'diagnostic', 'payload': {'end_reason': 'Runner stopped during execution'}}]}, machine['token'])
+    post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'text': '', 'last_seq': 1}, machine['token'])
+    assert listed(api, a['id'])['end_reason'] == 'Runner stopped during execution'
+
