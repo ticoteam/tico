@@ -673,11 +673,17 @@ def test_a_private_subtask_or_blocker_its_bot_cannot_read_is_neither_counted_nor
             H.history_event(c, "task", hidden["id"], H.human_actor("ben"), "status", "doing", "done", "")
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?,?) AND new='done'",
                   (ago(hours=1), child["id"], blocker["id"]))
+        # A private blocker taken off the public parent by Ben: the removal row names the blocker's id, which Finance cannot read.
+        taken = H.task_create(c, H.human_actor("ben"), "Confidential budget memo", "Keep it quiet three.", H.human_actor("ben"),
+                              lint=False, private=True)
+        H.history_event(c, "task", parent["id"], H.human_actor("ben"), "blocked_by", taken["id"], None, "")
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='blocked_by'",
+                  (ago(hours=1), parent["id"]))
         complete_jobs(c)
         assert "finance" in task_roundup.run(c, DAY)["woke"]
         body = only_list(c)
         assert f"- {parent['id'][:8]} Ship the kiosk: Quiet for 2 days, nothing waiting on anyone" in body
-        for secret in ("subtask", "blocker", "Confidential", "merger", "term sheet", "Ben", "Keep it quiet"):
+        for secret in ("subtask", "blocker", "Confidential", "merger", "term sheet", "budget", "taken off", "Ben", "Keep it quiet"):
             assert secret not in body, secret
 
 

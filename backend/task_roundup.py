@@ -67,9 +67,6 @@ _LATEST_HIST = f"subject_type='task' AND subject_id=? AND kind IN ({_TASK_KINDS_
 _MISSED_HIST = (f"subject_type='task' AND subject_id=? AND kind IN ({_TASK_KINDS_SQL},'comment') "
                 "AND NOT (kind IN ('status','step') AND old IS NULL AND created_at<=?) AND created_at>? "
                 "AND actor_id IS NOT NULL AND actor_id<>? AND (actor_id<>? OR kind='status')")
-# A blocker taken off the task: the relation removal writes a blocked_by row with no new value. Args: the task, the base, the bot.
-_UNBLOCKED = ("subject_type='task' AND subject_id=? AND kind='blocked_by' AND new IS NULL AND created_at>? "
-              "AND actor_id IS NOT NULL AND actor_id<>?")
 # A message's news time is when it was written or last edited. Args: the conversation, the bot, Tico, the base, the base.
 _WHEN = "max(created_at, coalesce(edited_at, created_at))"
 _FROM_OTHERS = ("deleted_at IS NULL AND sender_id IS NOT NULL AND sender_id<>? AND sender_id<>? "
@@ -302,8 +299,13 @@ def _news(c, row, actor, base):
                                (conv, actor, H.KEEPER, base, base)).fetchone()
     hist = c.execute(f"SELECT count(*) FROM history_events WHERE {_MISSED_HIST}",
                      (tid, horizon, base, actor, H.KEEPER)).fetchone()[0]
-    gone = H._rows(c.execute(f"SELECT created_at, actor_id FROM history_events WHERE {_UNBLOCKED} "
-                             "ORDER BY created_at DESC", (tid, base, actor)))
+    # A blocker taken off the task: a blocked_by row with no new value and the blocker's id as its old value. It is news
+    # only when the bot can read that blocker; a blocker that no longer exists has no row here, so it is not news.
+    gone = _readable(c, actor, H._rows(c.execute(
+        "SELECT h.created_at, h.actor_id, t.id, t.owner_id, t.requester_id, t.private FROM history_events h "
+        "JOIN tasks t ON t.id=h.old WHERE h.subject_type='task' AND h.subject_id=? AND h.kind='blocked_by' "
+        "AND h.new IS NULL AND h.created_at>? AND h.actor_id IS NOT NULL AND h.actor_id<>? ORDER BY h.created_at DESC",
+        (tid, base, actor))))
     # A blocker that finished and whose relation is still there (a roadmap item keeps its finished Dev tickets). A related
     # task the bot cannot read is neither counted nor described: its finish is not news on this list.
     retired = _readable(c, actor, H._rows(c.execute(
