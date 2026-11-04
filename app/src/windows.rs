@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent, PageLoadPayload, Webview, WebviewBuilder};
 use tauri::window::{Window, WindowBuilder};
-use tauri::{LogicalPosition, LogicalSize, Manager, Rect, WebviewUrl, WebviewWindowBuilder};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
 use uuid::Uuid;
@@ -832,12 +832,20 @@ fn keep_title_bar_reachable(app: &App, window: &Window) {
         return;
     }
     let Some(monitor) = window.primary_monitor().ok().flatten().or_else(|| monitors.into_iter().next()) else { return };
-    // In points (logical pixels): the window's own scale converts them back on every platform.
+    // Fitted in the primary display's points (logical pixels).
     let (area, scale) = (monitor.work_area(), monitor.scale_factor().max(f64::EPSILON));
     let (fx, fy, fw, fh) = fallback_frame((area.position.x as f64 / scale, area.position.y as f64 / scale,
                                            area.size.width as f64 / scale, area.size.height as f64 / scale));
-    let _ = window.set_size(LogicalSize::new(fw, fh));
-    let _ = window.set_position(LogicalPosition::new(fx, fy));
+    if POINTS {
+        // macOS points are one space across every display.
+        let _ = window.set_size(LogicalSize::new(fw, fh));
+        let _ = window.set_position(LogicalPosition::new(fx, fy));
+    } else {
+        // Elsewhere a logical value is converted with the window's own scale, which is the display the plugin put it
+        // on, not the primary one. Physical pixels on the primary display land where they are meant to.
+        let _ = window.set_size(PhysicalSize::new((fw * scale).round() as u32, (fh * scale).round() as u32));
+        let _ = window.set_position(PhysicalPosition::new((fx * scale).round() as i32, (fy * scale).round() as i32));
+    }
 }
 
 /// The window-state plugin tracks only the main window. Org pages, meetings and the setup window keep no frame.
