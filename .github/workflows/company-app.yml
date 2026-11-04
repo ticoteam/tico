@@ -112,6 +112,7 @@ jobs:
 
   publish:
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}

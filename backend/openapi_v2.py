@@ -71,8 +71,10 @@ EVENTS_DESCRIPTION = (
     "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
-    "since `base` (null when more than 100 moved: read the list whole); read the changed items with "
+    "With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
+    "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
+    "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
+    "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
@@ -1061,6 +1063,10 @@ SCHEMAS = {
                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
                                   "answered by their Assistant, and the total"},
         count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
+        by_kind={"type": "object", "additionalProperties": {"type": "integer"},
+                 "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds"},
+        folded_task_ids={"type": "array", "items": {"type": "string"},
+                         "description": "Unique task ids folded or merged into other cards in the whole list, including unread pages"},
         next={"type": ["string", "null"], "description": "With limit or cursor: pass as cursor for the next page; "
                                                          "null on the last page"},
         bots={"type": "object", "additionalProperties": {"type": "integer"},
