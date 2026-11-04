@@ -12,9 +12,8 @@ const TYPES = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 
   const browser = await chromium.launch();
   try {
     const o = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations/au_task',
-      tweak: fx => fx.automations.push(JSON.parse(JSON.stringify(TASK_AU)))});
+      tweak: fx => { fx.automations.push(JSON.parse(JSON.stringify(TASK_AU))); fx.task_types = TYPES; }});
     const {page, errors, writes} = o;
-    await page.evaluate(types => { TASK_TYPES = types; }, TYPES);
     await page.locator('.au-trig[data-open="trigger"]').click();
     await page.waitForSelector('.au-ed:not([hidden]) select[data-b="stepPick"]');
     // Nothing chosen: Save names the step and writes nothing.
