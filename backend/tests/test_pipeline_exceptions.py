@@ -176,6 +176,9 @@ def test_an_exception_is_one_line_on_the_managers_roundup_list_and_no_wake_of_it
         assert "coo" not in task_roundup.run(c)["woke"], "nothing on the list: no turn"
         ticket(c, typ, "Fix Cursor", minutes=50)
         assert "coo" in task_roundup.run(c)["woke"]
+        assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
+                         "AND j.state='queued' AND json_extract(m.refs,'$.wake')='task_roundup'").fetchone()[0] == 1, \
+            "the list is the manager's one queued wake"
         listing = ("SELECT body FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.wake')='task_roundup' "
                    "ORDER BY created_at")
         [(first,)] = c.execute(listing).fetchall()
@@ -251,7 +254,6 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_no_owner_and_is_listed
         assert unheld_jobs(c, "ops") == before
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]
-        assert rules.EVENTS["exceptions"]
 
 
 def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_manager_and_wake_any_other(api):

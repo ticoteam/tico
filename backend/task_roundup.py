@@ -41,8 +41,8 @@ force hides the task (task_snooze.snoozed) until it ends.
 
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
-profile has its stall sweeps off (rules.sweeps_on) gets no line about its own tasks; a manager's late, exception
-and backlog lines and its own unanswered questions still reach it. Only bots are listed: a person a line would name is never
+profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) gets no list at all; a
+manager gets one with its own tasks, its late, exception and backlog lines and its own unanswered questions. Only bots are listed: a person a line would name is never
 told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
@@ -122,6 +122,7 @@ def _candidates(c, at, shared):
 def discover(c, at=None):
     """The bots to visit for the run at `at`: active bots with a line to list that were not sent a list in this run. Read
     only. send builds each list again from the live database."""
+    from . import rules
     from .hubdb import _has_table
     if not _has_table(c, "jobs"):       # a hub without jobs has no wakes to send: nothing is listed
         return []
@@ -130,7 +131,7 @@ def discover(c, at=None):
     wanted = _candidates(c, at, shared)
     for bot in H._rows(c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")):
         slug = bot["id"]
-        if slug not in wanted or _sent_before(c, slug, at):
+        if slug not in wanted or _sent_before(c, slug, at) or not rules.sweeps_on(c, slug):
             continue
         if _list(c, slug, at, shared)[0]:
             plans.append({"slug": slug, "at": at})
@@ -142,9 +143,9 @@ def send(c, plan):
     the bot), and the bot is sent only if it was not already sent one this run. A bot with nothing to list gets no message.
     The run's time, each line's registry key, the consumed follow-ups and the events are written only once the message is
     delivered. Returns how many lines the list named, or 0 when nothing was sent."""
-    from . import run_triggers as RT, task_check_backs
+    from . import rules, run_triggers as RT, task_check_backs
     slug, at = plan["slug"], plan["at"]
-    if _sent_before(c, slug, at) or not _active(c, slug):
+    if _sent_before(c, slug, at) or not _active(c, slug) or not rules.sweeps_on(c, slug):
         return 0
     built = _later(at, _built_at())        # stamped before the read: an update racing it is listed again, never missed
     text, count, shown = _list(c, slug, at, {})
@@ -154,10 +155,8 @@ def send(c, plan):
     with isolated(c, WAKE, slug):
         try:
             # no_mentions: a task's title may say "@ana", which is text in the list, not a mention, so no person is delivered it.
-            # A list with an exception on it wakes its manager as one (rules.event_of); the rest waits as a note.
-            refs = {"wake": WAKE, "no_mentions": True, "roundup_exceptions": any(item["exception"] for item in shown)}
-            message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice", RT.stamp(refs, WAKE),
-                                       None, None)
+            message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice",
+                                       RT.stamp({"wake": WAKE, "no_mentions": True}, WAKE), None, None)
         except H.Refused:
             return 0                    # not told this run: a later run may try again
         if not _delivered(c, slug, message):
@@ -232,22 +231,22 @@ def _shared(shared, name, make):
     return shared[name]
 
 
-def _item(tid, line, key, *, due=False, event=None, exception=False):
+def _item(tid, line, key, *, due=False, event=None):
     """One line on a list: the task it names (None when it names none), its text, the registry key it is recorded under
     once sent, whether it consumes a due follow-up, and an event written with it (action, target, detail) or None."""
-    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event, "exception": exception}
+    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event}
 
 
 def _list(c, slug, at, shared):
     """The bot's list as one message's text, how many lines it has, and the items shown on it (each with the registry key it
     is recorded under once sent). (None, 0, []) when nothing needs a look."""
-    from . import rules, task_snooze as TS
+    from . import task_snooze as TS
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
     cutoff = now - timedelta(hours=QUIET_HOURS)
     relist = now - timedelta(days=RELIST_DAYS)
     groups = {group: [] for group in range(QUIET + 1)}
-    rows = [] if not rules.sweeps_on(c, slug) else H._rows(c.execute(
+    rows = H._rows(c.execute(
         "SELECT * FROM tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
                              (actor, *H.ACTIVE_STATUSES)))
     for row in rows:
@@ -389,7 +388,7 @@ def _exceptions(c, slug, actor, at, shared):
             else:
                 subject = entry.get("bot") or entry.get("step") or entry["kind"]
                 line, tid = f"- {subject}: {entry['cause']}, since {since}", None
-            out.append((EXCEPTIONS, entry["since"], _item(tid, line, key, exception=True)))
+            out.append((EXCEPTIONS, entry["since"], _item(tid, line, key)))
     return out
 
 
@@ -584,16 +583,12 @@ def _running(c, slug, row):
 
 
 def _delivered(c, slug, message):
-    """Whether the written message reached its bot. A bot run by a computer is woken by the job its message started
-    (backend/enqueue.py), or else the rules hold it as a quiet note the bot reads on its next run (wake_rules.hold): that is
-    delivered too, so a manager's lines without an exception wait there and are not written again each run. An external
-    inbox (hermes and the other external harnesses, with no computer) gets no job: it reads its inbox, so a message written
-    there is delivered."""
-    from . import wake_rules
-    if _external(c, slug) or _queued(c, message["id"]):
+    """Whether the written message reached its bot. A bot run by a computer is woken only by the job its message started
+    (backend/enqueue.py). An external inbox (hermes and the other external harnesses, with no computer) gets no job: it reads
+    its inbox, so a message written there is delivered."""
+    if _external(c, slug):
         return True
-    refs = message.get("refs") if isinstance(message, dict) else None
-    return bool(isinstance(refs, dict) and refs.get(wake_rules.MARK))
+    return _queued(c, message["id"])
 
 
 def _external(c, slug):

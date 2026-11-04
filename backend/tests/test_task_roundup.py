@@ -726,6 +726,48 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
         assert "Late in In Progress: 7 days" in lists(c, "coo")[-1]
 
 
+def queued_roundups(c, slug):
+    return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
+                     "AND json_extract(m.refs,'$.wake')='task_roundup'", (slug,)).fetchone()[0]
+
+
+def late_manager_ticket(c):
+    typ = dev_type(c)
+    c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
+    row = H.task_create(c, H.human_actor("ana"), "Fix the connection", "Build.", "bot:cpo", type=typ["id"],
+                        step="In Progress", lint=False)
+    c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (ago(hours=5), row["id"]))
+    c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(hours=5), ago(hours=5), row["id"]))
+    return row
+
+
+def test_a_manager_whose_list_has_only_a_late_line_gets_one_queued_list_per_run(api):
+    with api.app.state.store.transaction() as c:
+        late_manager_ticket(c)
+        assert "coo" in task_roundup.run(c, DAY)["woke"]
+        assert queued_roundups(c, "coo") == 1 and len(lists(c, "coo")) == 1, "one list, one queued wake"
+        assert "coo" not in task_roundup.run(c, NOON)["woke"], "the late line is not listed again"
+        assert len(lists(c, "coo")) == 1
+
+
+def test_a_list_held_as_a_note_is_not_sent_and_its_lines_are_listed_again_next_run(api, monkeypatch):
+    from backend import rules
+    real = rules.judge
+
+    def held(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
+        if (refs or {}).get("wake") == "task_roundup":
+            return rules.Decision(rules.NOTE, rules.MANAGER_NOTE, rules.HOLD_ROW)
+        return real(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+
+    with api.app.state.store.transaction() as c:
+        late_manager_ticket(c)
+        monkeypatch.setattr(rules, "judge", held)
+        assert "coo" not in task_roundup.run(c, DAY)["woke"], "a held note is not a sent list"
+        monkeypatch.setattr(rules, "judge", real)
+        assert "coo" in task_roundup.run(c, NOON)["woke"], "its line was not consumed: it is listed again next run"
+        assert "Late in In Progress" in lists(c, "coo")[-1]
+
+
 def test_a_late_ticket_its_manager_cannot_read_is_not_listed(api):
     store = api.app.state.store
     with store.transaction() as c:

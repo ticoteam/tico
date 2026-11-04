@@ -122,7 +122,7 @@ WAKE_EVENTS = {
     "stall": "a task has gone quiet and nothing is set to move it",
     "status_check": "a quiet task's status check",
     "stall_check": "a stall or status check",
-    "task_roundup": "the task roundup lists a bot's tasks with a missed update, gone quiet, or a follow-up time come",
+    "task_roundup": "the task roundup lists a bot's tasks, asks, late tickets, exceptions or backlogs",
     "routine": "a routine ran",
     "schedule": "a scheduled run",
     "due": "a task's due date came",
@@ -148,7 +148,6 @@ WAKE_EVENTS = {
     "backlog": "updates held for the bot while it was away",
     "feed": "a Slack channel's messages were handed to the bot to read",
     "digest": "the bot's held updates were let go as one digest",
-    "exceptions": "the task roundup lists one of the type manager's exceptions",
 }
 # Events that wait as a note when no rule says otherwise: the next run carries them. A row may wake on any of them.
 NOTE_EVENTS = {
@@ -209,6 +208,10 @@ def _profile_rules():
         for event, words in which:
             add(profile, f"profile_{profile}_{event}", event, WAKE, words)
 
+    # The task roundup is one grouped wake per bot per run, whatever its profile: each profile that gets one (the sweeping
+    # ones: doer, manager, custom; profiles.SPEC) wakes on it, ahead of its catch-all note.
+    for profile in ("doer", "manager", "custom"):
+        add(profile, f"profile_{profile}_roundup", "task_roundup", WAKE, "the task roundup lists its tasks and lines")
     add("reviewer", "profile_reviewer_assignment", "assignment", WAKE, "a review or QA request was filed for it")
     add("reviewer", "profile_reviewer_request", "review_request", WAKE, "a review, QA or Security request")
     add("reviewer", "profile_reviewer_handback", "review_handback", WAKE, "a task it asked for came back for its review")
@@ -233,7 +236,6 @@ def _profile_rules():
     # steps, its subtasks' results, checks, verdicts and late or backlog notices wait for that run.
     add("manager", "profile_manager_assignment", "assignment", WAKE, "a task was given to it")
     add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
-    add("manager", "profile_manager_exceptions", "exceptions", WAKE, "the roundup lists one of its exceptions")
     timers("manager", OWN_TIMERS + OWN_WORK)
     add("manager", MANAGER_NOTE, "*", NOTE, "anything else: ticket news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
@@ -260,8 +262,8 @@ def profile_of(conn, bot):
 
 
 def sweeps_on(conn, bot):
-    """Whether the task roundup and the legacy stall and status checks (the sweeps) apply to this bot: False for a reviewer, lead, manager, responder
-    and monitor, and for a custom profile that turned them off. Fails open: a bot whose profile cannot be read is
+    """Whether the task roundup applies to this bot (its sweeps): False for a reviewer, lead, responder and monitor, and for a
+    custom profile that turned them off. A manager and a doer get one. Fails open: a bot whose profile cannot be read is
     swept."""
     try:
         from . import profiles
@@ -407,8 +409,6 @@ def event_of(actor, kind, refs, body, floor=None):
     key = wake_rules.awaited(refs)
     if key:
         return AWAITED_EVENTS[key][0]
-    if refs.get("roundup_exceptions") is True and refs.get("wake") == "task_roundup":
-        return "exceptions"             # a manager's roundup list with one of its exceptions wakes it as one
     wake = refs.get("wake")
     if isinstance(wake, str):
         wake = WAKE_ALIASES.get(wake, wake)

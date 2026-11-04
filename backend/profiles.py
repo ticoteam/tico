@@ -8,8 +8,8 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
-    manager    people, work given to it, its timers,   note                 no                no      any
-               its exceptions list
+    manager    people, work given to it, its timers,   note                 no                yes     any
+               its roundup
     responder  people                                  note                 no                no      none
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
@@ -65,10 +65,10 @@ SPEC = {
     LEAD: {**BASE, "label": "Lead", "pulls": "none", "sweeps": False, "digest_hour": DIGEST_HOUR, "batch_scope": "bot",
            "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day."},
     # A type's manager that works by exception (backend/pipeline_exceptions.py): ticket news is a note for its next run.
-    MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": False, "batch_scope": "bot",
-              "description": "Works from one exceptions list, sent about hourly when it has a new entry. Wakes for people, "
-                             "work given to it and its own timers; ticket news, verdicts and subtask results wait for "
-                             "its next run."},
+    MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": True, "batch_scope": "bot",
+              "description": "Works by exception from its task roundup: late tickets, exceptions and backlogs. Wakes for people, "
+                             "work given to it, its roundup and its own timers; ticket news, verdicts and subtask results "
+                             "wait for its next run."},
     RESPONDER: {**BASE, "label": "Responder", "pulls": "none", "sweeps": False, "takes": "none",
                 "description": "Answers people in chat. Wakes for people only and takes no tasks."},
     MONITOR: {**BASE, "label": "Monitor", "sweeps": False, "takes": "watcher",
@@ -190,7 +190,8 @@ def config_of(c, bot):
 
 
 def sweeps_on(c, bot):
-    """Whether a stall or status check may wake this bot's tasks (rules.sweeps_on)."""
+    """Whether the task roundup lists this bot (rules.sweeps_on): a reviewer, lead, responder or monitor gets none, and a
+    custom profile with sweeps off gets none."""
     spec = spec_of(config_of(c, bot))
     return True if spec is None else bool(spec["sweeps"])
 

@@ -229,11 +229,11 @@ def test_health_counts_a_keepers_ordinary_task_for_a_reviewer_but_not_its_pool_r
 def test_sweeps_follow_the_profile_and_a_custom_bot_reads_its_own_setting(api):
     with api.app.state.store.transaction() as c:
         for slug, name, options in (("d", P.DOER, {}), ("r", P.REVIEWER, {}), ("l", P.LEAD, {}), ("m", P.MONITOR, {}),
-                                    ("c1", P.CUSTOM, {}), ("c2", P.CUSTOM, {"sweeps": False})):
+                                    ("mg", P.MANAGER, {}), ("c1", P.CUSTOM, {}), ("c2", P.CUSTOM, {"sweeps": False})):
             add_bot(c, slug)
             put(c, slug, name, **options)
-        assert [R.sweeps_on(c, "bot:" + s) for s in ("d", "r", "l", "m", "c1", "c2", "ops")] == [
-            True, False, False, False, True, False, True]
+        assert [R.sweeps_on(c, "bot:" + s) for s in ("d", "r", "l", "m", "mg", "c1", "c2", "ops")] == [
+            True, False, False, False, True, True, False, True]
 
 
 def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
