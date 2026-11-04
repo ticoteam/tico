@@ -5,6 +5,7 @@ A schema change that persists is a file in this directory, numbered: `NNNN_name.
 in order. Each one runs in its own transaction together with its `schema_migrations` row, so a failure leaves neither
 behind and the next start tries it again. An applied file is never edited: its checksum is recorded, and a start refuses
 a database whose recorded checksum no longer matches its file.
+CI requires each PR-added migration to have a unique number above the current base branch tip's newest migration.
 
 `hubdb.migrate` (every hubdb.connect) calls `apply` right after hubdb's numbered steps and before its own startup schema
 code and the module schema code in `Store.initialize` (the SCHEMA scripts, ensure_schema and add_column calls), so a
