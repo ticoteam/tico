@@ -9,7 +9,7 @@ const AU_STEP_ICONS = {filter: 'filter_alt', decide: 'account_tree', llm: 'auto_
   paths: 'alt_route', action: 'arrow_forward'};
 const AU_ACTIONS = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
   create_task: 'Create task', label: 'Label', forward: 'Forward', wake_bot: 'Wake a bot', note: 'Note', post_update: 'Post update',
-  call_webhook: 'Call a webhook', assign: 'Assign'};
+  call_webhook: 'Call a webhook', assign: 'Assign', unsubscribe: 'Unsubscribe'};
 const AU_FIND = {mail: 'Mail', tasks: 'Tasks', prs: 'Pull requests', listening: 'Listening', docs: 'Docs'};
 const AU_OPS = {is: '=', is_not: '≠', '>=': '≥', '<=': '≤', contains: 'has', matches: 'matches'};
 const AU_MAX_PATHS = 10, AU_MAX_DEPTH = 3;
@@ -42,7 +42,7 @@ function auQuestionIds(s) {
 const auActionArgs = s => {
   const a = s.args || {};
   const who = a.owner || a.to || a.bot;
-  return who ? 'to ' + auActorName(String(who).includes(':') ? who : 'bot:' + who) : a.label || a.endpoint || '';
+  return who ? 'to ' + auActorName(String(who).includes(':') ? who : 'bot:' + who) : a.name || a.label || a.webhook || a.endpoint || '';
 };
 
 // Finding steps: a step by id anywhere in the tree, and a container ("root", "<paths id>:<i>", "<paths id>:other").
@@ -91,7 +91,7 @@ function auStepCard(s) {
   if (s.type === 'filter') {
     const rules = s.rules || [];
     body = rules.map(r => `<div class="au-rule"><span>${esc(auCondsText(r.when, r.match) || 'Always')}</span><span class="nav-icon" aria-hidden="true">arrow_forward</span>
-      ${auThenWords(r.then).map(x => `<span class="au-c1">${esc(x)}</span>`).join('')}</div>`).join('');
+      ${[...auThenWords(r.then), ...(r.to ? [auDestName(r.to)] : [])].map(x => `<span class="au-c1">${esc(x)}</span>`).join('')}</div>`).join('');
   } else if (s.type === 'decide') {
     const ids = auQuestionIds(s);
     body = `<div class="au-chips">${ids.map(q => `<span class="au-c1">${esc(q)}</span>`).join('') || '<span class="muted">No questions</span>'}</div>`;
@@ -140,6 +140,8 @@ function auAboutHTML(a) {
     ${a.readonly ? '<p class="au-lock"><span class="nav-icon" aria-hidden="true">lock</span>Built-in: can’t be edited or deleted</p>' : ''}</div>`;
 }
 function auFlowHTML(a) {
+  const b = auBoardShape(a);
+  if (b) return auBoardHTML(a, b);
   return `<div class="au-track">${auAboutHTML(a)}${auTriggerCard(a)}${auStepsHTML(a.steps, 'root')}</div>`;
 }
 
@@ -201,7 +203,12 @@ async function auStepToggle(id, on) {
   const steps = auClone(AU.cur.steps), hit = auFind(steps, id);
   if (!hit) return;
   hit.step.enabled = on;
-  await auWrite({steps: auCleanSteps(steps)}, out => `${AU_STEP_WORDS[hit.step.type]} ${on ? 'on' : 'off'} · v${out.version}`);
+  await auWrite(auFlowBody(steps), out => `${AU_STEP_WORDS[hit.step.type]} ${on ? 'on' : 'off'} · v${out.version}`);
+}
+// A steps write: the flow's destinations go back as they are, so a step saved from the list never drops them.
+function auFlowBody(steps) {
+  const dests = AU.cur?.destinations;
+  return {steps: auCleanSteps(steps), ...(Array.isArray(dests) ? {destinations: auClone(dests)} : {})};
 }
 // What is written back: a Decide step on a saved set sends the set only (its questions came along read-only).
 function auCleanSteps(steps) {
@@ -210,4 +217,250 @@ function auCleanSteps(steps) {
     if (s.type === 'paths') [...(s.paths || []), s.otherwise || {steps: []}].forEach(p => auCleanSteps(p.steps));
   }
   return steps;
+}
+
+/* The board: a flow shaped as rules → questions → LLM → destinations reads as one board (the inbox board). It is a view
+   over ordinary steps: an optional filter of rules; a Decide step of yes/no questions and the filter that pairs question i
+   with rule i; then the LLM, either Sort (a Decide step with one choice over the destination ids and the filter that
+   routes each answer) or an llm step with `choose` (draft or reply); and the flow's destinations. auBoardShape reads
+   those parts out of a flow, or null for any other flow, which keeps its step list; auBoardFlow writes them back. */
+const AU_DEST_COLORS = ['amber', 'orange', 'violet', 'green', 'blue', 'teal', 'pink', 'gray', 'red'];
+const AU_ACTION_ICONS = {create_task: 'task_alt', wake_bot: 'chat', leave_for_you: 'inbox', archive: 'archive', label: 'label',
+  star: 'star', forward: 'forward_to_inbox', draft_reply: 'reply', send_reply: 'reply', unsubscribe: 'unsubscribe',
+  call_webhook: 'webhook', post_update: 'dynamic_feed', note: 'sticky_note_2', assign: 'person', end: 'block', move: 'south'};
+// The board's action words, mail actions first: they queue on the message, the rest run at once.
+const AU_MAIL_ACTS = ['archive', 'label', 'star', 'leave_for_you', 'forward', 'draft_reply', 'send_reply', 'unsubscribe'];
+const AU_BOARD_ACTS = {archive: 'Archive', label: 'Label', star: 'Star', leave_for_you: 'Leave in inbox', forward: 'Forward',
+  draft_reply: 'Draft reply', send_reply: 'Reply', unsubscribe: 'Unsubscribe', create_task: 'Create a task', wake_bot: 'Message a bot',
+  assign: 'Assign', note: 'Note', post_update: 'Post update', call_webhook: 'Call webhook'};
+const AU_MAIL_ONLY = ['archive', 'star', 'leave_for_you', 'draft_reply', 'send_reply', 'unsubscribe'];
+const AU_BOARD_OPS = {is: 'is', is_not: 'is not', contains: 'contains', matches: 'matches', '>=': '≥', '<=': '≤'};
+const AU_Q_MIN = 0.75, AU_SORT_MIN = 0.5;
+// Star is a label (STARRED); the board shows it as its own action.
+function auActKey(x) {
+  const d = auThenDo(x), a = (x && typeof x === 'object' && x.args) || {};
+  return d === 'label' && /^starred$/i.test(String(a.name ?? a.tag ?? '')) ? 'star' : d;
+}
+// Where a rule goes after its chain: end, rule (move on to the next rule) or step; a rule with a destination ends.
+const auRuleNext = r => r?.to ? 'end' : r?.next || (r?.stop === true ? 'end' : 'step');
+const auDestColor = (d, i = 0) => `var(--au-${AU_DEST_COLORS.includes(d?.color) ? d.color : AU_DEST_COLORS[i % AU_DEST_COLORS.length]})`;
+const auDestIcon = d => (d?.then || []).length ? AU_ACTION_ICONS[auActKey(d.then[0])] || 'bolt' : 'block';
+function auDestName(id, dests = AU?.cur?.destinations) { return (dests || []).find(d => d.id === id)?.name || id; }
+
+function auBoardShape(flow) {
+  const dests = flow?.destinations;
+  if (!Array.isArray(dests) || !dests.length || dests.some(d => !d || typeof d.id !== 'string' || !d.id)) return null;
+  const ids = new Set(dests.map(d => d.id)), steps = Array.isArray(flow.steps) ? flow.steps : [];
+  const copy = x => JSON.parse(JSON.stringify(x));
+  const toOk = r => r.to == null || r.to === '' || ids.has(r.to);
+  const inline = d => d?.type === 'decide' && !d.set && d.questions && typeof d.questions === 'object' && !Array.isArray(d.questions)
+    && typeof d.out === 'string' && d.out;
+  const one = (r, field, value) => {
+    const c = (r.when || [])[0];
+    return (r.when || []).length === 1 && c.field === field && (c.op || 'is') === 'is' && (c.value === value || (value === 'yes' && c.value === true));
+  };
+  const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}};
+  let i = 0;
+  if (steps[i]?.type === 'filter') {
+    const rules = steps[i].rules || [];
+    if (!rules.every(r => r && typeof r === 'object' && toOk(r) && ['end', 'rule'].includes(auRuleNext(r)))) return null;
+    b.src.rules = steps[i];
+    b.rules = rules.map(r => ({...copy(r), next: auRuleNext(r)}));
+    i++;
+  }
+  // Questions: every one yes/no, rule k testing question k (yes at its minimum) and ending.
+  const qd = steps[i], qf = steps[i + 1], qids = inline(qd) ? Object.keys(qd.questions) : [];
+  if (qids.length && qf?.type === 'filter' && qids.every(q => qd.questions[q]?.type === 'noul')) {
+    const rules = qf.rules || [];
+    if (rules.length !== qids.length) return null;
+    for (let k = 0; k < qids.length; k++) {
+      const r = rules[k], q = qd.questions[qids[k]];
+      if (!r || !one(r, `${qd.out}.${qids[k]}`, 'yes') || !toOk(r) || auRuleNext(r) !== 'end' || typeof q.instructions !== 'string') return null;
+      const min = r.when[0].min;
+      b.questions.push({id: qids[k], text: q.instructions, min: min == null || min === '' ? AU_Q_MIN : Number(min), then: copy(r.then || []), to: r.to || ''});
+    }
+    Object.assign(b.src, {qd, qf});
+    i += 2;
+  }
+  // The LLM: Sort (one choice over destination ids, each answer routed, the last rule the unsure default) or a turn.
+  const sd = steps[i], sf = steps[i + 1], sq = inline(sd) ? Object.keys(sd.questions) : [];
+  if (sq.length === 1 && sd.questions[sq[0]]?.type === 'choice' && sf?.type === 'filter') {
+    const q = sd.questions[sq[0]], opts = Array.isArray(q.criteria) ? q.criteria.map(String) : Object.keys(q.criteria || {});
+    const rules = sf.rules || [], last = rules[rules.length - 1], field = `${sd.out}.${sq[0]}`;
+    if (typeof q.instructions !== 'string' || !opts.length || rules.length !== opts.length + 1 || !opts.every(o => ids.has(o))) return null;
+    for (let k = 0; k < opts.length; k++) {
+      const r = rules[k];
+      if (!r || !one(r, field, opts[k]) || r.to !== opts[k] || (r.then || []).length || auRuleNext(r) !== 'end') return null;
+    }
+    if ((last.when || []).length || !ids.has(last.to) || (last.then || []).length) return null;
+    const min = rules[0].when[0].min;
+    b.llm = {mode: 'sort', prompt: q.instructions, to: opts, default: last.to, min: min == null || min === '' ? AU_SORT_MIN : Number(min), as: ''};
+    Object.assign(b.src, {sd, sf, sq: sq[0]});
+    i += 2;
+  } else if (sd?.type === 'llm' && sd.choose && typeof sd.choose === 'object') {
+    const c = sd.choose;
+    if (!['draft', 'reply'].includes(c.mode) || !Array.isArray(c.to) || !c.to.length || !c.to.every(id => ids.has(id)) || !ids.has(c.default)) return null;
+    b.llm = {mode: c.mode, prompt: String(sd.prompt || ''), to: [...c.to], default: c.default, as: sd.as || ''};
+    b.src.ls = sd;
+    i += 1;
+  } else return null;
+  return i === steps.length ? b : null;
+}
+
+// A board's parts back as a flow's steps and destinations: each step keeps its id and fields; a new one gets fresh ones.
+function auBoardFlow(b) {
+  const copy = x => JSON.parse(JSON.stringify(x)), used = new Set(), steps = [];
+  const keep = (s, type) => s ? copy(s) : {id: auNewId(), type, enabled: true};
+  const outName = (s, prefix) => {
+    if (s.out && !used.has(s.out)) { used.add(s.out); return s.out; }
+    let n = 1; while (used.has(prefix + n)) n++;
+    used.add(prefix + n); return prefix + n;
+  };
+  for (const s of [b.src.qd, b.src.sd, b.src.ls]) if (s?.out) used.add(s.out);
+  const rule = r => {
+    const x = {...copy(r), match: r.match || 'all', when: copy(r.when || []), then: copy(r.then || [])};
+    if (!x.to) delete x.to;
+    x.next = x.to ? 'end' : x.next === 'rule' ? 'rule' : 'end';
+    x.stop = x.next === 'end';
+    return x;
+  };
+  if (b.rules.length) steps.push({...keep(b.src.rules, 'filter'), rules: b.rules.map(rule)});
+  if (b.questions.length) {
+    const d = keep(b.src.qd, 'decide'), f = keep(b.src.qf, 'filter'), old = b.src.qd?.questions || {};
+    used.delete(d.out); delete d.set;
+    d.out = outName(d, 'd'); d.level ||= 'medium';
+    d.questions = Object.fromEntries(b.questions.map(q => [q.id, {...copy(old[q.id] || {}), type: 'noul', instructions: q.text}]));
+    f.rules = b.questions.map(q => rule({when: [{field: `${d.out}.${q.id}`, op: 'is', value: 'yes', min: q.min ?? AU_Q_MIN}],
+      match: 'all', then: q.then, to: q.to, next: 'end'}));
+    steps.push(d, f);
+  }
+  const L = b.llm;
+  if (L.mode === 'sort') {
+    const d = keep(b.src.sd, 'decide'), f = keep(b.src.sf, 'filter'), qid = b.src.sq || 'to';
+    const old = b.src.sd?.questions?.[qid] || {}, was = old.criteria && !Array.isArray(old.criteria) ? old.criteria : {};
+    used.delete(d.out); delete d.set;
+    d.out = outName(d, 'd'); d.level ||= 'high';
+    d.questions = {[qid]: {...copy(old), type: 'choice', instructions: L.prompt,
+      criteria: Object.fromEntries(L.to.map(id => [id, was[id] ?? auDestName(id, b.dests)]))}};
+    const field = `${d.out}.${qid}`;
+    f.rules = [...L.to.map(id => rule({when: [{field, op: 'is', value: id, min: L.min ?? AU_SORT_MIN}], match: 'all', then: [], to: id})),
+      rule({when: [], match: 'all', then: [], to: L.default})];
+    steps.push(d, f);
+  } else {
+    const s = keep(b.src.ls, 'llm');
+    used.delete(s.out);
+    Object.assign(s, {as: L.as || s.as, prompt: L.prompt, out: outName(s, 'l'), choose: {...(s.choose || {}), to: [...L.to], default: L.default, mode: L.mode}});
+    steps.push(s);
+  }
+  return {steps, destinations: copy(b.dests)};
+}
+
+// The board's pieces. A condition reads as its field and check in words, the value as code; a payload's field is code too.
+function auBoardCond(c, code) {
+  const f = auField(c.field), op = AU_BOARD_OPS[c.op || 'is'] || c.op || 'is';
+  const v = c.value === true ? 'yes' : c.value === false ? 'no' : c.value ?? '';
+  return (code ? `<code>${esc(f)}</code><span class="f">${esc(op)}</span>` : `<span class="f">${esc(f)} ${esc(op)}</span>`) + `<code>${esc(v)}</code>`;
+}
+const auBoardConds = (r, code) => (r.when || []).length
+  ? r.when.map(c => auBoardCond(c, code)).join(`<span class="f">${r.match === 'any' ? 'or' : 'and'}</span>`) : '<span class="f">Always</span>';
+// An action as a chip's words: who or what it names, else the action.
+function auActChip(x) {
+  const k = auActKey(x), a = (x && typeof x === 'object' && x.args) || {};
+  const who = k === 'create_task' || k === 'assign' ? a.owner : k === 'wake_bot' ? a.bot : '';
+  if (who) return auActorName(String(who).includes(':') ? who : 'bot:' + who);
+  if (k === 'label' && (a.name || a.tag)) return 'label ' + (a.name || a.tag);
+  if (k === 'forward' && a.to) return String(a.to);
+  if (k === 'call_webhook' && a.webhook) return String(a.webhook);
+  return AU_BOARD_ACTS[k] || AU_ACTIONS[k] || k;
+}
+// A destination's first action as a line: "Task, Legal Lead", "Leave in inbox"; nothing reads "Do nothing".
+function auActLine(x) {
+  if (!x) return 'Do nothing';
+  const k = auActKey(x), a = (x && typeof x === 'object' && x.args) || {}, name = w => auActorName(String(w).includes(':') ? w : 'bot:' + w);
+  if (k === 'create_task') return a.owner ? 'Task, ' + name(a.owner) : 'Task';
+  if (k === 'assign') return a.owner ? 'Assign to ' + name(a.owner) : 'Assign';
+  if (k === 'wake_bot') return a.bot ? 'Message ' + name(a.bot) : 'Message the bot';
+  if (k === 'label') return a.name || a.tag ? 'Label ' + (a.name || a.tag) : 'Label';
+  if (k === 'forward') return a.to ? 'Forward to ' + a.to : 'Forward';
+  if (k === 'post_update') return 'Post to Updates';
+  return AU_BOARD_ACTS[k] || AU_ACTIONS[k] || k;
+}
+const auChip = (icon, words, c, mv = false, last = false) => `<span class="au-bchip${mv ? ' mv' : ''}" style="--c:${c}"><span class="nav-icon" aria-hidden="true">${icon}</span>${mv ? esc(words) : `<b>${esc(words)}</b>`}${mv && last ? '<span class="nav-icon au-bdown" aria-hidden="true">south</span>' : ''}</span>`;
+// A row's chain: its actions in order, then its destination; a move-on chain is dashed and points down; none says End.
+function auChainHTML(then, to, next, dests) {
+  const di = to ? dests.findIndex(d => d.id === to) : -1, d = dests[di], c = d ? auDestColor(d, di) : 'var(--au-gray)', mv = !d && next === 'rule';
+  const chips = (then || []).map((x, j, all) => auChip(AU_ACTION_ICONS[auActKey(x)] || 'bolt', auActChip(x), c, mv, j === all.length - 1 && !d));
+  if (d) chips.push(auChip(auDestIcon(d), d.name || d.id, c));
+  if (!chips.length) chips.push(mv ? auChip('south', 'Move on', c, true) : auChip('block', 'End', c));
+  return {c: mv ? 'var(--g4)' : c, mv, html: chips.join('<span class="nav-icon au-bsep" aria-hidden="true">arrow_forward</span>')};
+}
+function auBoardRow(key, cond, chain, cls = '') {
+  const sel = AU.ed?.kind === 'board' && `${AU.ed.part}:${AU.ed.i}` === key;
+  return `<div class="au-br${cls}${sel ? ' sel' : ''}" role="button" tabindex="0" data-board="${key}" style="--c:${chain.c}">
+    <div class="au-bc">${cond}</div><span class="au-bw${chain.mv ? ' mv' : ''}" aria-hidden="true"></span><div class="au-bch">${chain.html}</div></div>`;
+}
+const auBoardAdd = (key, words) => AU.cur?.can_edit ? `<button class="linkish au-badd" type="button" data-board="${key}:new">+ ${esc(words)}</button>` : '';
+// The LLM's modes: Sort, then Sort + draft and Sort + reply (Sort + note and Sort + act off mail). A group's flow has no
+// one to run a turn as, so it sorts only.
+function auBoardModes(a) {
+  const mail = a.trigger?.type === 'message';
+  return [['sort', 'Sort'], ...(auOwnerAs(a) ? [['draft', mail ? 'Sort + draft' : 'Sort + note'], ['reply', mail ? 'Sort + reply' : 'Sort + act']] : [])];
+}
+// Who a draft or reply turn runs as: a person's Assistant, or the owning bot.
+function auOwnerAs(a) {
+  const o = String(a?.owner_id || a?.owner || '');
+  if (/^(person|human):/.test(o)) return 'assistant:' + o.split(':').slice(1).join(':');
+  if (o.startsWith('bot:')) return o;
+  return '';
+}
+function auBoardHTML(a, b) {
+  const t = a.trigger || {}, code = t.type !== 'message', edit = !!a.can_edit, dests = b.dests;
+  const src = t.type === 'message' ? t.inbox || AU_TRIGGER_WORDS.message : [AU_TRIGGER_WORDS[t.type] || auCap(t.type), auSource(t)].filter(Boolean).join(' · ');
+  const rules = b.rules.map((r, i) => auBoardRow(`rule:${i}`, auBoardConds(r, code), auChainHTML(r.then, r.to, r.next, dests))).join('');
+  const qs = b.questions.map((q, i) => auBoardRow(`q:${i}`, `<span>${esc(q.text)}</span>`, auChainHTML(q.then, q.to, 'end', dests), ' q')).join('');
+  const sec = (label, n, title, rows, add) => !rows && !edit ? '' : `<section class="au-bsec" aria-label="${esc(label)}">
+      <div class="au-bh${rows ? '' : ' solo'}"><span class="au-tag">${n} · ${esc(label)}</span><b>${esc(title)}</b>${add}</div>${rows}</section>`;
+  const L = b.llm, modes = auBoardModes(a);
+  const seg = `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
+    `<button type="button" data-bmode="${k}" aria-pressed="${L.mode === k}"${edit ? '' : ' disabled'}>${esc(w)}</button>`).join('')}</span>`;
+  const dsel = i => AU.ed?.kind === 'board' && AU.ed.part === 'dest' && AU.ed.i === i ? ' sel' : '';
+  return `<div class="au-board">${auAboutHTML(a)}
+    <div class="au-btrig${AU.ed?.kind === 'trigger' ? ' sel' : ''}" role="button" tabindex="0" data-open="trigger"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[t.type] || 'schedule'}</span><b>${esc(src)}</b></div>
+    <div class="au-bsp"></div>
+    ${sec('Rules', 1, 'Match exactly', rules, auBoardAdd('rule', 'Rule'))}
+    ${rules || edit ? '<div class="au-bsp"><span>no match: move on</span></div>' : ''}
+    ${sec('Questions', 2, 'Ask a small model, in order', qs, auBoardAdd('q', 'Question'))}
+    ${qs || edit ? '<div class="au-bsp"><span>all no: move on</span></div>' : ''}
+    <section class="au-bllm${AU.ed?.kind === 'board' && AU.ed.part === 'llm' ? ' sel' : ''}" aria-label="LLM">
+      <div class="au-bh"><span class="au-tag acc">3 · LLM</span><b>Read what’s left, pick one below</b>${seg}</div>
+      <div class="au-bllm-b" role="button" tabindex="0" data-board="llm"><div class="au-bpr">${L.prompt ? esc(L.prompt) : '<span class="muted">No instructions</span>'}</div>
+        <span class="au-bun">unsure → ${esc(auDestName(L.default, dests))}</span></div>
+    </section>
+    <svg class="au-branch" height="48" aria-hidden="true" fill="none" stroke-width="1.5"></svg>
+    <div class="au-dests">${dests.map((d, i) => `<div class="au-dest${dsel(i)}" role="button" tabindex="0" data-board="dest:${i}"${L.to.includes(d.id) ? ` data-to="${esc(d.id)}"` : ''} style="--c:${auDestColor(d, i)}">
+      <b>${esc(d.name || d.id)}</b><span><span class="nav-icon" aria-hidden="true">${auDestIcon(d)}</span> ${esc(auActLine((d.then || [])[0]))}${(d.then || []).length > 1 ? ` +${d.then.length - 1}` : ''}</span></div>`).join('')}
+      ${edit ? '<button class="au-dest au-dest-add" type="button" data-board="dest:new">+ Destination</button>' : ''}</div>
+  </div>`;
+}
+// The branch from the LLM into the destinations it may pick: drawn from where the boxes are, so it holds at any width
+// (a wrapped row branches into its first line only), and again whenever the board's width changes.
+function auBoardWire(pane) {
+  AU.branchRO?.disconnect();
+  const board = pane.querySelector('.au-board');
+  if (!board) return;
+  const draw = () => {
+    const svg = board.querySelector('.au-branch'), llm = board.querySelector('.au-bllm');
+    if (!svg || !llm) return;
+    const box = svg.getBoundingClientRect(), w = Math.round(box.width), lr = llm.getBoundingClientRect();
+    const all = [...board.querySelectorAll('.au-dest[data-to]')], top = all.length ? Math.min(...all.map(el => el.getBoundingClientRect().top)) : 0;
+    const drops = all.filter(el => Math.abs(el.getBoundingClientRect().top - top) < 4)
+      .map(el => { const r = el.getBoundingClientRect(); return {x: Math.round(r.left + r.width / 2 - box.left) + .5, c: el.style.getPropertyValue('--c')}; });
+    const x0 = Math.round(lr.left + lr.width / 2 - box.left) + .5, xs = [x0, ...drops.map(d => d.x)];
+    svg.setAttribute('viewBox', `0 0 ${w} 48`);
+    svg.setAttribute('width', String(w));
+    svg.innerHTML = !drops.length ? '' : `<path d="M${x0} 0 V22 M${Math.min(...xs)} 22 H${Math.max(...xs)}" style="stroke:var(--g4)"/>`
+      + drops.map(d => `<path d="M${d.x} 22 V48 M${d.x - 4.5} 42 L${d.x} 48 L${d.x + 4.5} 42" style="stroke:${d.c}"/>`).join('');
+  };
+  draw();
+  if (typeof ResizeObserver === 'function') { AU.branchRO = new ResizeObserver(() => requestAnimationFrame(draw)); AU.branchRO.observe(board); }
 }

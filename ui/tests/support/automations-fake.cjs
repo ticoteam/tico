@@ -1,7 +1,7 @@
 // A stand-in hub for the Automations page scripts (ui/tests/automations-*.cjs): every /api/v2/automations route in
 // redesign CONTRACT §2 over ui/tests/fixtures/redesign-automations.json (the Acme example), the BotOps chat,
 // and the boot stubs. Writes change the copy a page reads back and are recorded in `writes`.
-// A flow save (steps or trigger) is a new version; a viewer without edit rights gets 403; a built-in's delete gets 409.
+// A flow save (steps, trigger or destinations) is a new version; a viewer without edit rights gets 403; a built-in's delete gets 409.
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./page.cjs');
@@ -11,6 +11,8 @@ const FIXTURE = path.join(__dirname, '../fixtures/redesign-automations.json');
 
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const clone = x => JSON.parse(JSON.stringify(x));
+// A version's flow: the trigger, the steps and (a board's) destinations.
+const flowOf = a => ({trigger: clone(a.trigger), steps: clone(a.steps), ...(a.destinations ? {destinations: clone(a.destinations)} : {})});
 
 // A bot's draft (`draft: true` in openAutomations): off, its version 1 pending until Turn on (CONTRACT §2).
 const DRAFT = {id: 'au_draft', name: 'Receipts to archive', owner_id: 'person:dana', enabled: false, builtin: false, version: 1,
@@ -70,7 +72,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   };
   for (const a of db.list) {
     const old = fx.versions[a.id] || [{n: a.version, actor: a.owner_id, at: '2026-10-27T15:00:00Z'}];
-    db.versions[a.id] = old.map(v => ({...v, status: v.status || 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}}));
+    db.versions[a.id] = old.map(v => ({...v, status: v.status || 'active', flow: flowOf(a)}));
   }
   if (proposal) {
     const a = db.list.find(x => x.id === 'au_inbox'), steps = clone(a.steps);
@@ -101,7 +103,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   const nextN = id => Math.max(...db.versions[id].map(v => v.n)) + 1;
   const newVersion = (a, actor = 'person:' + me.id) => {
     a.version = nextN(a.id);
-    db.versions[a.id].push({n: a.version, actor, at: new Date().toISOString(), status: 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}});
+    db.versions[a.id].push({n: a.version, actor, at: new Date().toISOString(), status: 'active', flow: flowOf(a)});
   };
 
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -181,9 +183,10 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       }
       if (!rest && method === 'PATCH') {
         for (const k of ['enabled', 'spend_cap', 'name']) if (k in body) { if (body[k] === null) delete a[k]; else a[k] = body[k]; }
-        if (body.steps || body.trigger) {
+        if (body.steps || body.trigger || body.destinations) {
           if (body.steps) a.steps = body.steps;
           if (body.trigger) a.trigger = body.trigger;
+          if (Array.isArray(body.destinations)) a.destinations = body.destinations;
           newVersion(a);
         }
         return json(full(a));
@@ -214,6 +217,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         const v = db.versions[a.id].find(x => x.n === +m[1]);
         if (!v) return refuse(404, 'not_found', 'No such version');
         a.trigger = clone(v.flow.trigger); a.steps = clone(v.flow.steps);
+        if (v.flow.destinations) a.destinations = clone(v.flow.destinations); else delete a.destinations;
         // A pending version turned on becomes the current one; an older one comes back as a new version. A draft (off,
         // no version live yet) is turned on by its first pending version.
         if (v.status === 'pending') {
