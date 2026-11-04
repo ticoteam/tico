@@ -72,11 +72,14 @@ your current DM stays in the list. Only you can list or reopen them, including w
 
 On Market, a question is answered from the market graph as it is at that moment (`POST /api/v2/market/ask {question}`,
 the same answer the Market page has always given, which needs no computer): the answer, then the organizations, people and
-pages it drew on, which open the note and light up on the graph. Docs and Market each keep their own thread while the page
-is open. The sentence is written by Gemini (`gemini-3.7-flash`) with the server's `GEMINI_API_KEY`; without a key, when the
-call fails, or in rehearsal, the answer is the rows that were pulled. Each model call is a `market.ask` event (the model,
-latency, how many excerpts and how long the question was; never its text) and counts per person per day under the decision
-caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
+pages it drew on, which open the note and light up on the graph. An entity or evidence row matches when it has any word of the
+question, and the rows that match more of the words come first. Docs and Market each keep their own thread while the page
+is open. The sentence is written by the company's model: Tico AI Gateway when it is connected and the model choices run on
+it, otherwise the company's own enabled provider whose key the server holds. Without a model, when the call fails, or in
+rehearsal, the answer is the rows that were pulled. Each model call is a `market.ask` event (the model, latency, how many
+excerpts and how long the question was, and the error when it failed: `unconfigured` when no model is set up, otherwise the
+error's type; never its text) and counts per person per day under the decision caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted
+apart from decisions); over the cap the ask is a 429.
 
 **Bots and the Assistant.** `hub doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
 `{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is an `ask` message to the Librarian, the ordinary
