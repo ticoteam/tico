@@ -35,7 +35,7 @@ def _before_the_move(path, extra=()):
         for statement in extra:
             c.execute(statement)
         # Every migration from 0062 on runs again: the runner refuses a number that sorts before one already applied, and
-        # 0063_home_merges is applied (its DDL is IF NOT EXISTS, so it runs again without change).
+        # 0063_thread_pins and 0064_home_merges are applied (their DDL is IF NOT EXISTS, so they run again without change).
         c.execute("DELETE FROM schema_migrations WHERE version>='0062_runner_states'")
 
 
