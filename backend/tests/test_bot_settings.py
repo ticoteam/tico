@@ -11,6 +11,7 @@ from pathlib import Path
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.config import Settings
+from backend.finance.store import tico as FIN
 from backend.store import Store
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -149,8 +150,9 @@ def test_migration_0061_gives_a_team_that_0068_moves_into_bot_settings(tmp_path)
 
 
 def test_the_migrations_that_read_the_column_skip_a_new_file():
-    """On a new file the migrations run before any module table exists: 0043, 0061 and 0068 find no bots, bot_config or
-    registry to read, so they change nothing and the store's own schema makes the tables in their new shape."""
+    """On an empty file the migrations run before any module table exists: 0043, 0061 and 0068 find no bots, bot_config
+    or registry, so they change nothing. On a real new file hubdb's first step has made bots, and 0068 makes bot_settings
+    beside it; the store's own schema makes bot_config in its new shape."""
     conn = sqlite3.connect(":memory:")
     for name in ("0043_drop_bot_legacy_columns", "0061_bot_team_from_manager", "0068_bot_settings"):
         _migration(name).up(conn)
@@ -185,7 +187,9 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
         assert c.execute("SELECT 1 FROM bot_settings WHERE bot_id='gone'").fetchone() is None
         triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert "old_reads_config" not in triggers
-        assert {"repository_new_bot_default", "wake_preset_hold", "fin_view_bot_update",
+        # The Finance trigger that moves when a bot's manager changes (backend/finance/store/tico.py ORG_TRIGGERS).
+        manager_trigger = next(name for name, when, _why in FIN.ORG_TRIGGERS if "reports_to ON bot_config" in when)
+        assert {"repository_new_bot_default", "wake_preset_hold", manager_trigger,
                 "changes_runner_bot_settings_update"} <= triggers
         _no_reader_of_the_column(c)
         # wake_presets.ensure gives every declaration its preset after the move, as it did inside config.

@@ -41,8 +41,7 @@ CREATE TABLE IF NOT EXISTS bot_config(
  description TEXT NOT NULL DEFAULT '', reports_to TEXT, repo TEXT NOT NULL DEFAULT '',
  thread_mode TEXT, definition_updated_at TEXT,
  definition_updated_by TEXT, goals TEXT NOT NULL DEFAULT '');
--- A bot's declared settings (backend/bot_settings.py, the only module that reads or writes them).
-""" + BS.TABLE + """;
+-- bot_settings (a bot's declared settings) is made by migration 0068, which runs before this schema: backend/bot_settings.py.
 CREATE TABLE IF NOT EXISTS bot_control(bot TEXT PRIMARY KEY REFERENCES bots(id), draining INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS bot_transitions(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,

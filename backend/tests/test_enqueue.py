@@ -6,6 +6,7 @@ lines, an external agent's inbox, an imported transcript) and records, for every
 and whether a job was queued for it. The expected rows were recorded while the `queue_bot_message` trigger did the
 queueing; `backend/enqueue.py` must queue exactly the same jobs.
 """
+import importlib
 import json
 
 import pytest
@@ -13,6 +14,9 @@ import pytest
 from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
+
+# The table's DDL: migration 0068 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0068_bot_settings").TABLE
 
 
 def _mark(c):
@@ -235,7 +239,7 @@ def _bare(trigger):
         conn.execute(_LEGACY_TRIGGER)
     else:
         conn.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY)")
-        conn.execute(BS.TABLE)
+        conn.execute(_BOT_SETTINGS_TABLE)
         for bot, config in _DECLARED:
             BS.write(conn, bot, config)
     return conn

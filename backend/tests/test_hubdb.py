@@ -22,6 +22,9 @@ from backend import task_relations as TR
 from backend import wake_presets as WP
 from backend import bot_settings as BS
 
+# The table's DDL: migration 0068 owns it (bot_settings.py has none).
+_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0068_bot_settings").TABLE
+
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
             "model": "gpt-6-astra", "reasoning_effort": "medium", "dir": "/tmp/emp-coo"},
@@ -453,7 +456,7 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
-        self.conn.execute(BS.TABLE)
+        self.conn.execute(_BOT_SETTINGS_TABLE)
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
         self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")

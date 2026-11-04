@@ -8,7 +8,9 @@ whose bot is gone has no settings row: bot_settings refers to bots(id).
 
 The triggers that read bot_config.config are dropped first (SQLite refuses to drop a column a trigger names);
 Store.initialize makes their new versions, which read bot_settings, right after the migrations. Then the column goes.
-On a new file bot_config does not exist yet and store.SCHEMA makes both tables in their new shape.
+This migration makes the table wherever bots or bot_config exists (hubdb's first step makes bots on every file), so
+bot_settings is made here on a new file too; store.SCHEMA does not make it. On a new file bot_config does not exist yet
+and store.SCHEMA makes it in its new shape. A rerun once the column is gone copies nothing.
 """
 import json
 import re
@@ -66,11 +68,12 @@ def split(text):
 
 
 def up(conn):
-    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_config'").fetchone():
-        return
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"bots", "bot_config"} & tables:
+        return      # an empty file: no bot for a declaration to belong to
     conn.execute(TABLE)
-    if "config" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_config)")}:
-        return
+    if "bot_config" not in tables or "config" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_config)")}:
+        return      # a new file (bot_config comes later, in its new shape), or a file where the column is already gone
     insert = (f"INSERT OR REPLACE INTO bot_settings(bot_id,{','.join(COLUMNS)},extra,updated_at) "
               f"VALUES(?,{','.join('?' * len(COLUMNS))},?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))")
     last = ""
