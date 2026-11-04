@@ -560,11 +560,10 @@ function auBoardOpen(key) {
   if (item.then) item.then = item.then.map(x => typeof x === 'string' ? {do: x, args: {}} : {...x, args: x.args || {}});
   auEdOpen({kind: 'board', part, i, item});
 }
-// The actions a chain offers: mail actions first on a message flow; off mail, those that need a message are left out.
+// The actions a chain offers: mail actions first on a message flow; off mail, none of them (there is no message).
 function auBoardActs() {
   const all = Object.entries(AU_BOARD_ACTS);
-  if (AU.cur?.trigger?.type === 'message') return all;
-  return [...all.filter(([k]) => !AU_MAIL_ACTS.includes(k)), ...all.filter(([k]) => AU_MAIL_ACTS.includes(k) && !AU_MAIL_ONLY.includes(k))];
+  return AU.cur?.trigger?.type === 'message' ? all : all.filter(([k]) => !AU_MAIL_ACTS.includes(k));
 }
 const auBoardNewAct = () => AU?.cur?.trigger?.type === 'message' ? {do: 'archive', args: {}} : {do: 'create_task', args: {title: ''}};
 const auBoardTa = (b, v, ph) => `<textarea data-b="${b}" rows="3" spellcheck="true" placeholder="${esc(ph)}" aria-label="${esc(ph)}"${auDis()}>${esc(v ?? '')}</textarea>`;
@@ -625,8 +624,9 @@ function auBoardEdHTML(ed) {
       + chain(false, false);
   } else if (ed.part === 'llm') {
     title = 'LLM';
-    body = auBox('Mode', `<span class="au-bseg" role="group" aria-label="Mode">${auBoardModes(AU.cur).map(([k, w]) =>
-        `<button type="button" data-op="bmode" data-v="${k}" aria-pressed="${it.mode === k}"${auDis()}>${esc(w)}</button>`).join('')}</span>`)
+    const modes = auBoardModes(AU.cur);
+    body = (modes.length < 2 ? '' : auBox('Mode', `<span class="au-bseg" role="group" aria-label="Mode">${modes.map(([k, w]) =>
+        `<button type="button" data-op="bmode" data-v="${k}" aria-pressed="${it.mode === k}"${auDis()}>${esc(w)}</button>`).join('')}</span>`))
       + auFld('Instructions', auTa('item.prompt', it.prompt, 6))
       + auBox('Destinations', `<div class="au-bto">${dests.map(d => `<label class="au-chk"><input type="checkbox" data-bto="${esc(d.id)}"${it.to.includes(d.id) ? ' checked' : ''}${auDis()}>${esc(d.name || d.id)}</label>`).join('')}</div>`)
       + auFld('Unsure', auSel('item.default', it.to.map(id => [id, auDestName(id, dests)]), it.default));

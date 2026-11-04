@@ -25,11 +25,15 @@ assert.deepEqual(plain(b.dests), fx.inbox.destinations);
 // Written back untouched: the same steps (ids, outs, levels) and the same destinations.
 assert.deepEqual(plain(flow(b)), {steps: fx.inbox.steps, destinations: fx.inbox.destinations});
 
-// The webhook board: one rule, no questions, a draft turn.
+// The webhook board: one rule, no questions, Sort. A draft or reply turn off mail is no board (it runs mail actions).
 const w = shape(fx.webhook);
 assert.ok(w, 'the webhook flow is a board');
-assert.deepEqual(plain(w.llm), {mode: 'draft', prompt: 'Sort the order event.', to: ['ops', 'log'], default: 'log', as: 'assistant:dana'});
+assert.deepEqual(plain(w.llm), {mode: 'sort', prompt: 'Sort the order event.', to: ['ops', 'log'], default: 'log', min: 0.5, as: ''});
 assert.deepEqual(plain(flow(w)), {steps: fx.webhook.steps, destinations: fx.webhook.destinations});
+const turn = {...clone(fx.webhook), steps: [clone(fx.webhook.steps[0]), {id: 'l1', type: 'llm', out: 'l1', as: 'assistant:dana', prompt: 'x',
+  choose: {to: ['ops', 'log'], default: 'log', mode: 'draft'}}]};
+assert.equal(shape(turn), null, 'no draft turn off mail');
+assert.ok(shape({...turn, trigger: {type: 'message', inbox: 'ops@acme.example'}}), 'a draft turn on mail is a board');
 
 // A rule moved on, a question added and Sort turned to a reply: still a board, read back as written.
 const c = shape(fx.inbox);
