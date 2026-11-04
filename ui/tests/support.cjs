@@ -277,8 +277,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
         messages: [{id: 1, created_at: atDay(3 * 24 * 60 - 4), from: 'staff', body: 'Yes.'}, {id: 2, created_at: atDay(3 * 24 * 60 - 5), from: 'person', body: 'Thanks'}]},
     ]});
     ({page} = v);
-    await page.waitForFunction(() => window.supportState().unread === 4);
-    // Replies that were waiting when the page opened: the chat opens by itself, once, with them.
+    // Replies that were waiting when the page opened: the chat opens by itself, once, with them. It reads them as it
+    // opens, so the count is not waited on (it passes through 4 and back to 0 before a wait could see it).
     const chat = page.locator('#support-pop');
     await chat.locator('.support-msg.them', {hasText: 'Anything else?'}).waitFor();
     const order = await chat.locator('[data-thread] > *').evaluateAll(els => els.map(el => el.matches('.support-day') ? 'day'
