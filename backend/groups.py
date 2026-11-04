@@ -613,8 +613,9 @@ def migrate(c, settings):
                 break
             seen.add(at)
             at = str(configs[at].get("reports_to") or "")
+    live = {row[0] for row in c.execute("SELECT id FROM bots")}      # a bot_config row with no bot has no declaration
     for slug, config in configs.items():
-        if slug not in archived and config.get("team") is None:      # a bot that names its group keeps it
+        if slug in live and slug not in archived and config.get("team") is None:   # a bot that names its group keeps it
             _set_bot(c, slug, "" if outside(settings, slug, config, helpers) else placed.get(slug, ""))
     doc["org_groups"] = {gid: {k: v for k, v in {"name": g["name"], "parent": g["parent"],
                                                   "reports_to": g["reports_to"]}.items() if v}
