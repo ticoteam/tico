@@ -76,7 +76,7 @@ Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.
 The owner has no bypass, and managers get nothing automatic on their reports' mail. Every mail command asks
 `GET /api/v2/mail/access` as its own credential (a bot's turn token, a person's own Tico token); `bot.yaml` gmail
 entries only narrow that answer (`read_only: true`, and `draft`/`send` only when `can:` lists them). `org_read` no
-longer does anything: the upgrade (migration 0082) turned each `org_read: true` into Read grants on the mailboxes
+longer does anything: the upgrade (migration 0092) turned each `org_read: true` into Read grants on the mailboxes
 below, so nobody lost access, and a manager's view of reports' mail is now a grant their reports give. This boundary
 applies to Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token
 limit on a two-user Docker runner.

@@ -1,4 +1,4 @@
-"""Migration 0082's backfill (backend/mailbox_access.py `backfill`): every access people and bots have today is written
+"""Migration 0092's backfill (backend/mailbox_access.py `backfill`): every access people and bots have today is written
 as mailboxes and grants, a second run writes nothing, and a company with no inbox bots (TIDY) upgrades to almost
 nothing. A manager's automatic view of their reports' mail is the one thing dropped."""
 
@@ -12,7 +12,7 @@ from backend.tests.test_api import api  # noqa: F401
 
 ANA, BEN, CARA = "ana@acme.example", "ben@acme.example", "cara@acme.example"
 SUPPORT = "support@acme.example"
-UP = importlib.import_module("backend.migrations.0082_mailboxes").up
+UP = importlib.import_module("backend.migrations.0092_mailboxes").up
 
 
 def tx(api):

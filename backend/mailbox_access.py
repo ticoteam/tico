@@ -1,6 +1,6 @@
 """Who may use which mailbox: the one check every mail call goes through.
 
-A mailbox (`mailboxes`, migration 0082) is one of:
+A mailbox (`mailboxes`, migration 0092) is one of:
 - personal: linked to a person by their verified primary email (`person_id`), never by name;
 - shared: no person; an admin made it shared;
 - awaiting person: a personal row whose person has not joined (`person_id` NULL). It is private: nobody has access, and
