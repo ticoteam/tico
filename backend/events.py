@@ -1150,11 +1150,14 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
-    last, kinds = {}, {}
+    last, kinds, public_before = {}, {}, {}
     for row in rows:
         if row["kind"] != "bulk":
             last[row["subject_id"]] = row
             kinds.setdefault(row["subject_id"], set()).add(row["kind"])
+            was = H._json(row["ref"], None) if row["kind"] in ("update", "delete") else None
+            if isinstance(was, list) and len(was) >= 3 and not was[2]:
+                public_before.setdefault(row["subject_id"], []).append(row["ref"])
     ids = list(last)
     if not ids:
         return out
@@ -1188,8 +1191,8 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
                 entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
             entry["gone"] = True
-        elif any(r["subject_id"] == task_id and r["kind"] in ("update", "delete")
-                 and task_reads._could_read(c, visible_sql, task_id, r["ref"]) for r in rows):
+        # A formerly public row can be removed; revoked private work stays completely silent.
+        elif any(task_reads._could_read(c, visible_sql, task_id, ref) for ref in public_before.get(task_id, ())):
             entry["gone"] = True
         else:
             continue
