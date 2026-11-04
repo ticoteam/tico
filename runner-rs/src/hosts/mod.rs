@@ -424,7 +424,7 @@ pub fn command_program(command: &str) -> String {
 fn hub_run(command: &str) -> Option<Vec<String>> {
     command_runs(command).into_iter().find_map(|run| {
         let words = shell_words(run)?;
-        let at = program_index(&words)?;
+        let at = program_index(run, &words)?;
         let program = words[at].rsplit('/').next().unwrap_or(&words[at]);
         (program == "hub").then(|| words[at..].to_vec())
     })
@@ -436,7 +436,7 @@ fn hub_run(command: &str) -> Option<Vec<String>> {
 /// trimmed). The result is the program's file name, then the words after it.
 fn first_program(command: &str) -> Option<Vec<String>> {
     let words = shell_words(command)?;
-    let at = program_index(&words)?;
+    let at = program_index(command, &words)?;
     if words[..=at].iter().any(|w| w.contains("$(") || w.contains('`') || w.contains("${")) {
         return None;
     }
@@ -517,8 +517,9 @@ fn starts_word(command: &str, i: usize) -> bool {
 }
 
 /// The index of a run's program word: the first word that is neither a `NAME=value` assignment nor a redirection. When a
-/// redirection's operator stands alone, its target (the next word) is skipped too.
-fn program_index(words: &[String]) -> Option<usize> {
+/// redirection's operator stands alone, its target (the next word) is skipped too. None when anything skipped was quoted
+/// or escaped in `text`: quoting hides where a redirection's target ends (`>'>' printf x`), so the program is unknown.
+fn program_index(text: &str, words: &[String]) -> Option<usize> {
     let mut at = 0;
     while let Some(word) = words.get(at) {
         if is_assignment(word) {
@@ -526,7 +527,8 @@ fn program_index(words: &[String]) -> Option<usize> {
         } else if let Some(alone) = redirection(word) {
             at += if alone { 2 } else { 1 };
         } else {
-            return Some(at);
+            let before = text.find(word.as_str()).map_or(text, |i| &text[..i]);
+            return (at == 0 || !before.contains(['\'', '"', '\\'])).then_some(at);
         }
     }
     None
@@ -1230,6 +1232,9 @@ mod tests {
         assert_eq!(command_program("cd /w && hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"), "hub automation create");
         assert_eq!(command_program("<<'EOF'\nhub approval approve\nEOF"), "");
         assert_eq!(command_program("<<EOF\ncustomer-private\nEOF"), "");
+        assert_eq!(command_program(">'>' printf customer-private"), "");
+        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "cd");
+        assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "cd");
     }
 
     #[test]
