@@ -20,7 +20,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
-from .judge import spent_this_month
+from .judge import spent_this_month, budget_cap
 
 OTHER_LABELS = "(other labels)"
 OTHER_QUESTIONS = "(other questions)"
@@ -193,7 +193,7 @@ def readout(c, settings, days=7, at=None):
         row["reconcile"] = recon
     calls = sum(r["calls"] for r in out)
     jev = sum(r["jev"] for r in out)
-    cap = float(settings.decisions_monthly_usd or 0)
+    cap = budget_cap(c, settings)
     spent = spent_this_month(c, stamp(end))
     data = {"from": stamp(start), "to": stamp(end), "days": days, "sets": out,
             "total": {"calls": calls, "jev": jev, "fallback": sum(r["fallback"] for r in out),
