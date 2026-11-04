@@ -636,7 +636,6 @@ function renderSettingsIssues() {
   el.querySelectorAll('[data-execution-review]').forEach(button => {
     button.onclick = () => executionReview(button.dataset.executionReview);
   });
-  bindRunnerRestart(el);
 }
 // The stopped-run card is the decision only (Chris, Oct 22: "remove 80%, give me clear action items"): one line
 // on what stopped, one recommendation with its button first, the rest under Details. `stopped` comes from

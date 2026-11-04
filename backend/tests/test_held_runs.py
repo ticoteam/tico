@@ -255,7 +255,7 @@ def uncertain_issue(api, token='ana-test'):
     return next(i for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
 
 
-def test_a_held_run_left_two_hours_without_a_decision_is_on_health_and_its_operators_needs_you(api):
+def test_a_held_run_left_two_hours_without_a_decision_is_on_health_not_in_the_status_dot(api):
     """Acceptance 9."""
     machine, message, attempt = held(api)
     stopped_two_hours(api, attempt['id'], minutes=119)
@@ -263,14 +263,14 @@ def test_a_held_run_left_two_hours_without_a_decision_is_on_health_and_its_opera
     assert 'saved 1 stopped run for later' in early['title'] and early['needs_person'] is False
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
     stopped_two_hours(api, attempt['id'])
-    issue = uncertain_issue(api)                                   # Ana operates ops: her Needs you shows it
+    issue = uncertain_issue(api)                                   # Ana operates ops: Health shows it, BotOps reviews it
     assert issue['title'] == 'ops has 1 stopped run waiting 2 h'
-    assert issue['needs_person'] is True and issue['action'] == 'review' and issue['severity'] == 'error'
+    assert issue['needs_person'] is False and issue['action'] == 'review' and issue['severity'] == 'error'
     assert issue['detail'].startswith('Nobody has decided it yet.')
     [check] = [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
     assert [item['text'] for item in check['items']] == ['ops: 1 stopped run waiting 2 h']
     assert check['items'][0]['bot'] == 'ops' and check['status'] == 'warn'
-    # Ben reads ops but does not operate it: Health and Settings name it; his Needs you does not interrupt him.
+    # Ben reads ops but does not operate it: Health and Settings name it for him too, and nothing is asked of him.
     ben = uncertain_issue(api, 'ben-test')
     assert ben['title'] == 'ops has 1 stopped run waiting 2 h' and ben['needs_person'] is False
     assert [ch for ch in get(api, 'health', token='ben-test')['checks'] if ch['id'] == 'stopped_runs']
