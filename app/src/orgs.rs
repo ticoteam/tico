@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn entries_that_cannot_be_opened_are_dropped_and_the_open_one_falls_back() {
         let text = r#"{"version":1,"active":"o_gone0000","orgs":[
-            {"id":"o_aaaaaaaa","url":"http://acme.example.com/"},
+            {"id":"o_aaaaaaaa","url":"ftp://acme.example.com/"},
             {"id":"o_bbbbbbbb","url":"https://tidy.example.com/","store":"not-a-uuid"},
             {"id":"nope","url":"https://other.example.com/"},
             {"id":"o_cccccccc","url":"https://tidy.example.com/"},
