@@ -272,7 +272,7 @@ function thvActsHTML(view) {
     : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
   return `${callHeadHTML(view)}
       ${people}
-      <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="menu" aria-expanded="false" aria-label="Thread menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
+      <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
 const thvPinnable = t => !!t?.me && 'pinned' in t.me && threadOnRail(t);
@@ -1152,7 +1152,7 @@ async function thvClick(view, ev) {
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
   if (t.closest('[data-thv-pin]')) { void thvPinToggle(view, t.closest('[data-thv-pin]')); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
-  if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
+  if (t.closest('[data-thv-menu]')) { threadSettingsOpen(view); return; }
   if (t.closest('[data-th-earlier]')) {
     const b = t.closest('[data-th-earlier]'); b.disabled = true;
     try { await threadEarlierOpen(view, b.dataset.thEarlier); }
@@ -1283,8 +1283,7 @@ let THV_MENU = null;
 function thvMenuShow(button, items, pick, cls = '') {
   const menu = document.createElement('div');
   menu.className = 'p-menu thv-pop' + (cls ? ' ' + cls : ''); menu.setAttribute('role', 'menu');
-  // A third value makes a choice among radios: true on the one in force.
-  menu.innerHTML = items.map(([k, label, on]) => `<button type="button" role="${on === undefined ? 'menuitem' : 'menuitemradio'}"${on === undefined ? '' : ` aria-checked="${on}"`} data-k="${esc(k)}">${esc(label)}</button>`).join('');
+  menu.innerHTML = items.map(([k, label]) => `<button type="button" role="menuitem" data-k="${esc(k)}">${esc(label)}</button>`).join('');
   document.body.append(menu);
   const r = button.getBoundingClientRect();
   menu.style.top = Math.min(innerHeight - menu.offsetHeight - 8, r.bottom + 4) + 'px';
