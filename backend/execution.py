@@ -2735,6 +2735,8 @@ class Execution:
         if reported != stored:
             state.update(version=body.version, capacity=body.capacity, readiness=reported[3], capabilities=reported[4])
         runner_states.save(c, who.runner_id, **state)
+        from . import cloud_machines
+        cloud_machines.checked_in(c, who.runner_id)
         if reported != stored:
             if not stored[1] and body.platform:
                 c.execute("UPDATE runners SET platform=? WHERE id=? AND coalesce(platform,'')=''",

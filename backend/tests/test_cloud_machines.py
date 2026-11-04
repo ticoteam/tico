@@ -358,7 +358,7 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     computers = {m["id"]: m for m in get(cloud.api, "operations")["computers"]}
     assert computers[enrolled["runner_id"]]["cloud_machine"]["bot"] == "ops"
     shown = employee(cloud.api)["cloud_machine"]
-    assert shown["mode"] == "cloud" and shown["state"] == "starting"
+    assert shown["mode"] == "cloud" and shown["state"] == "running"
 
 
 def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
@@ -1065,9 +1065,9 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
     assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
-        "bot": None, "shared": True, "size": "default", "state": "starting"}
+        "bot": None, "shared": True, "size": "default", "state": "running"}
     assert employee(cloud.api, "ops")["cloud_machine"] == {**employee(cloud.api, "ops")["cloud_machine"],
-                                                           "mode": "cloud", "placement": "shared", "state": "starting"}
+                                                           "mode": "cloud", "placement": "shared", "state": "running"}
     assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]
     # A bot joining while it is up is assigned there at the next look; nothing is started or made for it.
     adopt(cloud, "coo", "shared")

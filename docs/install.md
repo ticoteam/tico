@@ -1315,6 +1315,11 @@ records. **Remove computer** revokes its registration immediately. Its assigned 
 use **Reassign in Bots** to choose another computer. The page shows how to stop the Docker runner from that computer's
 install directory; this keeps its repositories and sign-in. Re-register it with a new code if you want to use it again.
 
+The hourly cleanup automatically revokes a self-hosted computer with no bots assigned after more than 24 hours
+without contact (or since enrollment if it never connected). The event records why it was retired. Computers with
+any bot assigned, cloud machines and computers seen in the last 24 hours are kept. Retired computers leave Health
+and the active computer list; they can be registered again with a new code.
+
 ## Operating it
 
 | | |
