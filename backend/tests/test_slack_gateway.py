@@ -1201,3 +1201,41 @@ def test_a_link_gets_no_preview_where_its_channel_cannot_be_checked_or_it_is_sti
     assert gateway.receive(shared([ticket], channel=DM)) == "unfurled"
     assert len(slack.unfurls) == 1
     assert len(rows(hub, "SELECT * FROM events WHERE action='slack.unfurl'")) == 1
+
+
+def test_a_done_notice_that_names_the_task_in_a_list_is_its_notice_for_the_same_status(hub):
+    """A saved completion notice whose refs.task lists the task after another id is still that task's notice. Reopening
+    and finishing it again with the same status sends no second one."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) "
+                  "WHERE json_extract(refs,'$.task_completion.notify')=1", ("00000000-0000-4000-8000-000000000000", made["id"]))
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted again")
+    with hub.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.task_completion.notify')=1").fetchone()[0] == 1
+
+
+def test_a_visual_from_before_a_list_notice_for_the_task_is_not_its_later_result(gateway, hub):
+    """A previous completion notice that names the task in a list (not first) marks the boundary too: the owner's visual
+    from before it is not announced again by the next notice."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        other = H.task_create(c, "human:ana", "Other work", "Unrelated.", "bot:legal", lint=False)
+        old = H.task_comment(c, "bot:legal", made["id"], "First cut.", extra_refs={"attachments": [visual(n=7)]})
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) "
+                  "WHERE json_extract(refs,'$.task_completion.notify')=1", (other["id"], made["id"]))
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_comment(c, "bot:legal", made["id"], "Not doing the rest.")
+        H.task_update(c, "bot:legal", made["id"], status="declined", note="Out of scope")
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    assert "visual" not in gateway.slack.posts[1]["text"] and old["id"] not in gateway.slack.posts[1]["text"]

@@ -1594,3 +1594,17 @@ class TurnLegacyUsageDropped(HubCase):
         migrations.apply(self.conn)
         totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT a.id, {WP.RUN_TOKENS} FROM attempts a")}
         self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})
+
+
+def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
+    """One predicate for both shapes of a task ref: the id itself, or an array holding it. Any other shape never matches,
+    and the same id is bound to both `?`."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE m(id INTEGER PRIMARY KEY, refs TEXT)")
+    shapes = {1: {"task": "T"}, 2: {"task": ["X", "T"]}, 3: {"task": ["X"]}, 4: {"task": "X"}, 5: {"task": {"id": "T"}},
+              6: {"task": []}, 7: {"task": [["T"]]}, 8: {"task_id": "T"}, 9: {}}
+    conn.executemany("INSERT INTO m VALUES(?,?)", [(i, json.dumps(refs)) for i, refs in shapes.items()])
+    sql = f"SELECT id FROM m WHERE {H.task_ref_sql('refs')} ORDER BY id"
+    assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
+    by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
+    assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]
