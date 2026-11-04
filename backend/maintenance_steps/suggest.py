@@ -1,4 +1,4 @@
-"""Suggest fetches count-only guidance once daily, with explicit install consent."""
+"""Suggest fetches guidance from local stats once daily, with explicit install consent."""
 
 from datetime import timedelta
 
@@ -32,6 +32,8 @@ def run(c, ctx):
         if not destination[0]:
             return _result("skipped", "Needs Tico Gateway")
         items = suggestions.fetch(store, destination)
+        if items is None:
+            return _result("skipped", "Privacy consent is off")
     except Exception as exc:
         return _result("failed", str(exc) if isinstance(exc, suggestions.GatewayError) else "Gateway connection failed")
     with store.transaction() as tx:

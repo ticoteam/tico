@@ -6,7 +6,7 @@ def up(conn):
                  "id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, owner_role TEXT NOT NULL, owner_bot_id TEXT, "
                  "title TEXT NOT NULL, body TEXT NOT NULL, condition TEXT NOT NULL, cooldown_days INTEGER NOT NULL, "
                  "status TEXT NOT NULL DEFAULT 'new' CHECK(status IN "
-                 "('new','sent','acted','dismissed','expired','condition_false')), update_batch_id TEXT, "
+                 "('new','sent','acted','dismissed','expired','condition_false')), update_batch_id TEXT, message_id TEXT, "
                  "delivered_at TEXT, cooldown_until TEXT, outcome TEXT CHECK(outcome IN "
                  "('delivered','acted','dismissed','expired','condition_false')), outcome_reported_at TEXT, "
                  "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")

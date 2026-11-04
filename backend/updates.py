@@ -447,8 +447,6 @@ def settle_sent(c, row):
     age = (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds()
     if job and job["state"] == "completed":
         learning_feedback(c, row)
-        from . import suggestions
-        suggestions.feedback(c, row["bot"], row["id"], settled=True)
     if job and job["state"] == "completed" and _delivery_only(row):
         # A delivery turn writes no update by design: its turn ending is the delivery. Never asked again.
         _finish(c, row, "delivered_without_update")
@@ -481,7 +479,8 @@ def learning_feedback(c, row, posted=None):
     seen = posted["suggestions_seen"] if posted is not None else []
     if isinstance(seen, str):
         seen = json.loads(seen)
-    suggestions.feedback(c, row["bot"], row["id"], seen or (), settled=posted is not None)
+    if "redo" not in row.keys() or not row["redo"]:
+        suggestions.feedback(c, row["bot"], row["id"], seen or (), settled=posted is not None)
     if saved is None:
         attempt = c.execute("SELECT a.final_text FROM learning_deliveries d "
                             "JOIN jobs j ON j.message_id=coalesce(d.feedback_message_id,d.message_id) AND j.bot_id=d.recipient "
@@ -495,7 +494,7 @@ def learning_feedback(c, row, posted=None):
         learnings.record_saved(c, row["bot"], row["id"], saved)
     if attempt:
         learnings.settle_delivery(c, row["bot"], row["id"])
-        suggestions.feedback(c, row["bot"], row["id"], settled=True)
+    suggestions.settle_delivery(c, row["bot"], row["id"])
 
 
 def settle_learnings(c):
@@ -509,10 +508,10 @@ def settle_learnings(c):
         learning_feedback(c, row)
     # Suggestions bound to a request whose turn completed and never got a post: delivered.
     from . import suggestions
-    for row in c.execute("SELECT DISTINCT q.id, q.bot FROM update_queue q JOIN jobs j ON j.message_id=q.message_id "
-                         "JOIN suggestions s ON s.update_batch_id=q.id AND s.owner_bot_id=q.bot "
+    for row in c.execute("SELECT DISTINCT s.update_batch_id AS id,s.owner_bot_id AS bot FROM suggestions s "
+                         "JOIN jobs j ON j.message_id=s.message_id AND j.bot_id=s.owner_bot_id "
                          "WHERE j.state='completed' AND s.status='sent' AND s.outcome IS NULL LIMIT 100").fetchall():
-        suggestions.feedback(c, row["bot"], row["id"], settled=True)
+        suggestions.settle_delivery(c, row["bot"], row["id"])
 
 
 def request_slots(c, bot, suggestion_items=None):
@@ -906,7 +905,7 @@ def send_request(c, row, assistant=None, delivery=False):
     if items:
         learnings.mark_sent(c, row["bot"], row["id"], message["id"], items)
     if suggestion_items:
-        suggestions.mark_sent(c, row["bot"], row["id"], suggestion_items)
+        suggestions.mark_sent(c, row["bot"], row["id"], message["id"], suggestion_items)
     return message
 
 
