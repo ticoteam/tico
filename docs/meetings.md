@@ -10,13 +10,20 @@
 `{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.
 `DELETE /api/v2/meetings/{id}/tasks/{task_id}` removes the pair. The linker, meeting owner, task owner or requester,
 or org owner may remove it. Writes require an `Idempotency-Key`.
-`GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first.
+`GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
+normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
 Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
 and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
 
 The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
 its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
 (or `hub task list --q ...`), under the task list's existing filters and access checks.
+
+Both sections apply link changes from task events without rereading the list or collapsing expanded pages.
+The meeting's task rows also follow title and status changes. Link events carry `kind: "meetings"` in `kind` or
+`kinds`, with `meeting_links` containing each changed `meeting_id`, its current `link` and meeting summary (both
+null after unlink). Delivery checks access to both resources for each viewer, so hidden meeting activity sends
+no link event or meeting reference. An ordinary task change carries no hidden link kinds or references.
 
 **Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
 have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools

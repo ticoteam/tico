@@ -190,6 +190,31 @@ def test_byte_cap_keeps_the_remaining_links_on_the_next_page(api):
     assert {t['task_id'] for t in collect(api, f'meetings/{rid}/tasks', 'tasks')} == set(ids)
 
 
+def test_task_meeting_cursors_order_offsets_and_fractional_seconds_in_utc(api):
+    t = task(api)
+    starts = ['2026-11-04T17:00:00Z', '2026-11-04T10:00:00-08:00',
+              '2026-11-04T18:00:00.000001Z', '2026-11-04T09:30:00-08:00',
+              '2026-11-04T18:00:00Z']
+    ids = []
+    for i, started in enumerate(starts):
+        rid = record(api)
+        ids.append(rid)
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE meetings SET metadata=json_set(metadata,'$.started',?) WHERE id=?", (started, rid))
+        link(api, rid, [t['id']])
+        with api.app.state.store.transaction() as c:
+            c.execute('UPDATE meeting_task_links SET id=? WHERE meeting_id=?', (f'ordered-link-{i}', rid))
+    path = f"tasks/{t['id']}/meetings"
+    ordered = collect(api, path, 'meetings', limit=2)
+    assert [m['meeting_id'] for m in ordered] == [ids[i] for i in (2, 4, 1, 3, 0)]
+    assert all(m['started_at'].endswith('Z') for m in ordered)
+    assert [m['started_at'] for m in ordered] == sorted((m['started_at'] for m in ordered), reverse=True)
+    first = get(api, path + '?limit=2')
+    continuation = path + '?' + urlencode({'cursor': first['next_cursor'], 'limit': 2})
+    assert get(api, continuation) == get(api, continuation)
+    assert [m['meeting_id'] for m in collect(api, path, 'meetings', limit=1)] == [m['meeting_id'] for m in ordered]
+
+
 def test_task_search_matches_title_words_and_numbers_with_existing_privacy(api):
     as_member(api, 'cara@acme.example')
     public = task(api, 'Review launch pricing', private=False)

@@ -166,9 +166,9 @@ _PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
 # skipped, and a trigger whose definition changed is replaced at the next start.
 TRIGGERS = [
     ("changes_meeting_task_links_insert", "INSERT", "meeting_task_links", None,
-     _row("tasks", "meetings", "NEW.task_id")),
+     _row("tasks", "meetings", "NEW.task_id", ref="NEW.meeting_id")),
     ("changes_meeting_task_links_delete", "DELETE", "meeting_task_links", None,
-     _row("tasks", "meetings", "OLD.task_id")),
+     _row("tasks", "meetings", "OLD.task_id", ref="OLD.meeting_id")),
     ("changes_tasks_insert", "INSERT", "tasks", None,
      _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_update", "UPDATE", "tasks", None,
@@ -1144,7 +1144,9 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
+    from . import meeting_task_links, task_reads
     c, who = view.c, view.who
+    rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
@@ -1182,10 +1184,21 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
         entry = {"id": task_id, "kind": row["kind"], "kinds": sorted(kinds[task_id])}
         if task_id in views:
             entry["task"] = views[task_id]
+            if task_id in meeting_links:
+                entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
+            entry["gone"] = True
+        elif any(r["subject_id"] == task_id and r["kind"] in ("update", "delete")
+                 and task_reads._could_read(c, visible_sql, task_id, r["ref"]) for r in rows):
             entry["gone"] = True
         else:
             continue
+        if entry.get("gone"):
+            ordinary = [r for r in rows if r["subject_id"] == task_id and r["kind"] != "meetings"]
+            if not ordinary:
+                continue
+            row = ordinary[-1]
+            entry.update(kind=row["kind"], kinds=sorted({r["kind"] for r in ordinary}))
         out.append((row, entry))
     return out
 

@@ -50,6 +50,43 @@ const {t} = require('./support/load.cjs');
         assert.deepEqual(errors, []);
       } finally { await page.context().close(); }
     }
+    const expanded = await call('POST', 'tasks', {title: 'Review recurring meetings', body: 'Review the plans.', owner: 'human:dana'});
+    let expandedTask = expanded.task || expanded;
+    const meetings = [];
+    for (let i = 0; i < 25; i++) {
+      const saved = await call('POST', 'meetings/import', {title: 'Planning ' + i, transcript: 'Dana: Review the plan.', review: 'live'});
+      meetings.push(saved);
+      await call('POST', `meetings/${saved.id}/tasks`, {task_ids: [expandedTask.id]});
+    }
+    for (const phone of [true, false]) {
+      const page = await pageAs(browser, hub, 'dana', {phone});
+      let reads = 0;
+      page.on('request', req => { if (req.method() === 'GET' && new URL(req.url()).pathname === `/api/v2/tasks/${expandedTask.id}/meetings`) reads++; });
+      try {
+        await page.goto(hub.url + '/#/task/' + expandedTask.id);
+        const list = page.locator('[data-task-meetings]');
+        await list.locator('[data-meetings-more]').click({timeout: t(20000)});
+        await page.waitForFunction(() => document.querySelectorAll('[data-meeting-id]').length === 25 && liveConnected(), null, {timeout: t(20000)});
+        const before = reads;
+        const retained = meetings[0].id;
+        await page.evaluate(id => { window.heldMeeting = document.querySelector(`[data-meeting-id="${id}"]`); }, retained);
+        const title = 'Review recurring plans ' + (phone ? 'on phone' : 'on desktop');
+        const changed = await call('POST', 'tasks/' + expandedTask.id, {version: expandedTask.version, title});
+        expandedTask = changed.task || changed;
+        await page.waitForFunction(({id, title}) => TASK_CHAT?.dialog?.liveTask?.id === id && TASK_CHAT.dialog.liveTask.title === title, {id: expandedTask.id, title}, {timeout: t(20000)});
+        assert.equal(await list.locator('[data-meeting-id]').count(), 25);
+        assert.equal(reads, before, 'an ordinary task update does not reread meetings');
+        const extra = await call('POST', 'meetings/import', {title: 'Extra planning', transcript: 'Dana: Review the plan.', review: 'live'});
+        await call('POST', `meetings/${extra.id}/tasks`, {task_ids: [expandedTask.id]});
+        await list.locator(`[data-meeting-id="${extra.id}"]`).waitFor({timeout: t(20000)});
+        assert.equal(await list.locator('[data-meeting-id]').count(), 26);
+        await call('DELETE', `meetings/${extra.id}/tasks/${expandedTask.id}`);
+        await list.locator(`[data-meeting-id="${extra.id}"]`).waitFor({state: 'detached', timeout: t(20000)});
+        assert.equal(await list.locator('[data-meeting-id]').count(), 25);
+        assert.equal(await page.evaluate(id => window.heldMeeting === document.querySelector(`[data-meeting-id="${id}"]`), retained), true, 'existing rows survive link changes');
+        assert.equal(reads, before, 'link events patch rows without rereading meetings');
+      } finally { await page.context().close(); }
+    }
     await request.close();
     console.log('task-meetings: ok');
   } finally { await browser?.close(); await hub.stop(); }

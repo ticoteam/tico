@@ -2,6 +2,7 @@
 import base64
 import binascii
 import json
+from datetime import timezone
 from typing import Literal
 from urllib.parse import quote
 
@@ -13,6 +14,47 @@ from .store import H, Problem
 from .views import human_only
 
 PAGE_BYTES = 64 * 1024
+
+
+def start_utc(started, created):
+    """Use one fixed-precision UTC key for ordering, output and continuation cursors."""
+    at = H.parse_ts(started) or H.parse_ts(created)
+    return at.replace(tzinfo=at.tzinfo or timezone.utc).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
+def meeting_summary(record, kind):
+    return {'meeting_id': record['id'], 'title': record['title'][:200],
+            'started_at': start_utc(record['metadata'].get('started'), record['created_at']),
+            'url': '#/meetings?meeting=' + quote(record['id'], safe=''), 'kind': kind}
+
+
+def event_changes(c, who, rows):
+    """Authorize link activity before task events are folded, using this delivery's viewer and snapshot."""
+    visible, links, records = [], {}, {}
+    for row in rows:
+        if row['kind'] != 'meetings':
+            visible.append(row)
+            continue
+        rid = row['ref']
+        if rid not in records:
+            try:
+                record = media.authorized(c, who, rid)
+                media.require_live(record)
+                records[rid] = record
+            except Problem as exc:
+                if exc.status not in (403, 404, 409):
+                    raise
+                records[rid] = None
+        record = records[rid]
+        if record is None:
+            continue
+        visible.append(row)
+        link = c.execute('SELECT kind,created_by FROM meeting_task_links WHERE meeting_id=? AND task_id=?',
+                         (rid, row['subject_id'])).fetchone()
+        links.setdefault(row['subject_id'], {})[rid] = {
+            'meeting_id': rid, 'link': dict(link) if link else None,
+            'meeting': meeting_summary(record, link['kind']) if link else None}
+    return visible, links
 
 
 class Link(M.Contract):
@@ -80,9 +122,10 @@ def task_meetings(c, auth, who, tid, limit=20, cursor=None):
     task = auth.task(c, who, auth.resolve_task(c, who, tid))
     scope = ('meetings', task['id'])
     after = after_cursor(cursor, scope)
-    rows = c.execute("SELECT l.*,coalesce(nullif(json_extract(m.metadata,'$.started'),''),m.created_at) AS sort_at "
+    c.create_function('meeting_start_utc', 2, start_utc, deterministic=True)
+    rows = c.execute("SELECT l.*,meeting_start_utc(json_extract(m.metadata,'$.started'),m.created_at) AS sort_at "
                      'FROM meeting_task_links l JOIN meetings m ON m.id=l.meeting_id WHERE l.task_id=? ' +
-                     ("AND (coalesce(nullif(json_extract(m.metadata,'$.started'),''),m.created_at),l.id)<(?,?) " if after else '') +
+                     ('AND (sort_at,l.id)<(?,?) ' if after else '') +
                      'ORDER BY sort_at DESC,l.id DESC', (task['id'], *(after or ())))
 
     def project(row):
@@ -94,8 +137,7 @@ def task_meetings(c, auth, who, tid, limit=20, cursor=None):
             return None
         if record.get('review_state', 'live') != 'live':
             return None
-        return {'meeting_id': record['id'], 'title': record['title'][:200], 'started_at': row['sort_at'],
-                'url': '#/meetings?meeting=' + quote(record['id'], safe=''), 'kind': row['kind']}
+        return meeting_summary(record, row['kind'])
     return page(rows, project, scope, limit)
 
 

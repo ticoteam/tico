@@ -68,6 +68,30 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_meeting_links_upgrade_a_database_at_main_history_indexes(tmp_path, monkeypatch):
+    known = migrations.files()
+    # Boot the real schema through main's last migration, without the new link table.
+    main = [m for m in known if not m.version.endswith('_meeting_task_links')]
+    assert main[-1].version == '0091_history_log_indexes'
+    path = tmp_path / 'main.sqlite'
+    with monkeypatch.context() as patch:
+        patch.setattr(migrations, 'files', lambda directory=None: main)
+        boot(path)
+    with sqlite3.connect(path) as c:
+        assert '0091_history_log_indexes' in _versions(c)
+        assert 'meeting_task_links' not in _tables(c)
+        before = c.execute('SELECT * FROM schema_migrations ORDER BY version').fetchall()
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert '0092_meeting_task_links' in _versions(c)
+        assert 'meeting_task_links' in _tables(c)
+        assert c.execute('PRAGMA foreign_key_check').fetchall() == []
+        assert c.execute("SELECT * FROM schema_migrations WHERE version!='0092_meeting_task_links' ORDER BY version").fetchall() == before
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:

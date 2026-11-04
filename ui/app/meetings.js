@@ -992,21 +992,47 @@ function meetLinkedTasksRender(state, id) {
   const slot = $('[data-linked-tasks]');
   if (!slot) return;
   const linked = state.linkedTasks?.[id];
-  slot.innerHTML = (linked?.tasks || []).map(t => `<div class="meet-item"><span class="t">${t.number ? '#' + esc(t.number) + ' ' : ''}${esc(t.title)} · ${esc(t.status)}</span><a href="#/task/${encodeURIComponent(t.task_id)}">Open</a></div>`).join('')
-    + (linked?.next_cursor ? '<button class="linkish" type="button" data-linked-more>More</button>' : '');
+  const held = new Map([...slot.querySelectorAll('[data-linked-task]')].map(row => [row.dataset.linkedTask, row]));
+  for (const task of linked?.tasks || []) {
+    let row = held.get(task.task_id);
+    held.delete(task.task_id);
+    if (!row) { row = document.createElement('div'); row.className = 'meet-item'; row.dataset.linkedTask = task.task_id; }
+    const html = `<span class="t">${task.number ? '#' + esc(task.number) + ' ' : ''}${esc(task.title)} · ${esc(task.status)}</span><a href="#/task/${encodeURIComponent(task.task_id)}">Open</a>`;
+    if (row.innerHTML !== html) row.innerHTML = html;
+    slot.append(row);
+  }
+  for (const row of held.values()) row.remove();
   const empty = $('[data-sec="task"] .meet-empty');
   if (empty) empty.hidden = !!linked?.tasks?.length;
-  const more = $('[data-linked-more]', slot);
+  let more = $('[data-linked-more]', slot);
+  if (!linked?.next_cursor) { more?.remove(); more = null; }
+  else {
+    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'linkish'; more.dataset.linkedMore = ''; more.textContent = 'More'; }
+    slot.append(more);
+  }
   if (more) more.onclick = () => { more.disabled = true; meetLinkedTasksLoad(state, id, linked.next_cursor); };
 }
 async function meetLinkedTasksLoad(state, id, cursor) {
+  const changes = new Map();
+  (state.linkedTaskChanges ||= {})[id] = changes;
   try {
-    const query = new URLSearchParams({limit: '20'});
-    if (cursor) query.set('cursor', cursor);
-    const result = await get(`/v2/meetings/${encodeURIComponent(id)}/tasks?${query}`);
-    if (MEET !== state) return;
+    const target = cursor ? 0 : Math.max(20, state.linkedTasks?.[id]?.tasks?.length || 0);
     const previous = cursor ? state.linkedTasks?.[id]?.tasks || [] : [];
-    state.linkedTasks = {...state.linkedTasks, [id]: {...result, tasks: [...previous, ...(result.tasks || [])]}};
+    const rows = new Map(previous.map(task => [task.task_id, task]));
+    let next = cursor, result;
+    do {
+      const query = new URLSearchParams({limit: '20'});
+      if (next) query.set('cursor', next);
+      result = await get(`/v2/meetings/${encodeURIComponent(id)}/tasks?${query}`);
+      if (MEET !== state || state.linkedTaskChanges[id] !== changes) return;
+      for (const task of result.tasks || []) rows.set(task.task_id, task);
+      next = result.next_cursor;
+    } while (!cursor && next && rows.size < target);
+    for (const [tid, task] of changes) {
+      if (task) rows.set(tid, task);
+      else rows.delete(tid);
+    }
+    state.linkedTasks = {...state.linkedTasks, [id]: {...result, tasks: [...rows.values()]}};
     meetLinkedTasksRender(state, id);
   } catch (e) {
     if (MEET === state && state.selected === id) {
@@ -1016,6 +1042,36 @@ async function meetLinkedTasksLoad(state, id, cursor) {
     }
   }
 }
+// The task event carries only links whose meeting and task this viewer can both read.
+liveOn('tasks', event => {
+  const state = MEET, id = state?.selected;
+  if (!state?.open || !id) return;
+  const linked = state.linkedTasks?.[id];
+  const change = event.meeting_links?.find(link => link.meeting_id === id);
+  const existing = linked?.tasks?.find(task => task.task_id === event.id);
+  const changes = (state.linkedTaskChanges ||= {});
+  const pending = (changes[id] ||= new Map());
+  const known = existing || pending.get(event.id);
+  if (event.bulk || ((event.kind === 'meetings' || event.kinds?.includes('meetings')) && !event.meeting_links)) {
+    liveSoon('meeting-tasks:' + id, () => { if (MEET === state && state.open && state.selected === id) meetLinkedTasksLoad(state, id); }, 200);
+    return;
+  }
+  if (!change && !known) return;
+  if (event.gone || (change && !change.link)) pending.set(event.id, null);
+  else if (event.task) {
+    pending.set(event.id, {...(change?.link || known), task_id: event.id, number: event.task.number,
+      title: String(event.task.title || '').slice(0, 200), status: event.task.status});
+  } else return;
+  const rows = new Map((linked?.tasks || []).map(task => [task.task_id, task]));
+  for (const [tid, task] of pending) { if (task) rows.set(tid, task); else rows.delete(tid); }
+  state.linkedTasks = {...state.linkedTasks, [id]: {...linked, tasks: [...rows.values()]}};
+  meetLinkedTasksRender(state, id);
+});
+liveOn('reset', () => {
+  if (!MEET?.open || !MEET.selected) return;
+  MEET.linkedTaskChanges = {};
+  meetLinkedTasksLoad(MEET, MEET.selected);
+});
 function meetItemsWire(state, rec) {
   if (!$('#meet-sections')) return;
   meetItemsRender(state, rec);
