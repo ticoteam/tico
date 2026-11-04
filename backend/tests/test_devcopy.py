@@ -42,7 +42,7 @@ def source_db(tmp_path):
             c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'text','{}',?)",
                       (aid, at))
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, job))
-        # A run recorded with no lease (migration 0060): history, kept in the window, with no token to revoke.
+        # A run recorded with no lease (migration 0072): history, kept in the window, with no token to revoke.
         c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger) VALUES('recorded','sales',?,?,'message')",
                   (now, now))
         c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES('t1','morgan','cli','th',?,'morgan')", (now,))
@@ -299,7 +299,7 @@ def test_a_lease_less_run_is_kept_only_once_settled(tmp_path):
     removed, loose = devcopy.build(source, dest, days=30)
     assert loose == []
     with closing(sqlite3.connect(dest)) as c:
-        assert {row[0] for row in c.execute("SELECT id FROM attempts")} == {"done", "chat-done"}
+        assert {row[0] for row in c.execute("SELECT id FROM attempts")} == {"done", "chat-done", "recorded"}
     assert removed["attempts"] == 3                                    # the running job, the old one and chat-open
 
 
