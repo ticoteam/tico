@@ -353,20 +353,9 @@ def _listing(c, sid=None):
                                f"FROM computer_subscriptions g {where} ORDER BY g.runner_id, g.runtime", args)):
         grants.setdefault(g["subscription_id"], []).append(g)
     computers = f"SELECT g.runner_id FROM computer_subscriptions g {where}"
-    import sqlite3 as _diag_sqlite  # DIAGNOSTIC: remove before merge
-    try:
-        runner_rows = H._rows(c.execute(
-            "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners "
-            f"WHERE revoked_at IS NULL AND id IN ({computers})", args))
-    except _diag_sqlite.OperationalError:
-        import sys as _diag_sys  # DIAGNOSTIC: remove before merge
-        for label, sql in (("main", "PRAGMA table_info(runners)"),
-                           ("temp", "SELECT type,name,sql FROM sqlite_temp_master"),
-                           ("master", "SELECT type,name,sql FROM sqlite_master WHERE name LIKE '%runner%'"),
-                           ("dbs", "PRAGMA database_list")):
-            print("DIAG", label, c.execute(sql).fetchall(), file=_diag_sys.stderr)  # DIAGNOSTIC
-        raise
-    runners = {r["id"]: r for r in runner_rows}
+    runners = {r["id"]: r for r in H._rows(c.execute(
+        "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners_with_state "
+        f"WHERE revoked_at IS NULL AND id IN ({computers})", args))}
     ready = {rid: readiness_document(r["readiness"]) for rid, r in runners.items()}
     profiles = {(r["runner_id"], r["profile"]): r["runtimes"] for r in H._rows(c.execute(
         f"SELECT runner_id,profile,runtimes FROM computer_profiles WHERE runner_id IN ({computers})", args))}

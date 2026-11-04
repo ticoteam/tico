@@ -1230,7 +1230,7 @@ def test_a_plan_says_why_it_shows_no_usage_yet(api):
     give(api, m, "claude", sid)
     assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", ("2000-01-01T00:00:00.000000Z", m["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", ("2000-01-01T00:00:00.000000Z", m["runner_id"]))
     assert usage_of(api, sid)["reason"] == "Its computers are offline"
     beat(api, m, {})
     with api.app.state.store.transaction() as c:
