@@ -118,6 +118,7 @@ def test_bot_reads_task_leaves_an_autocommit_connection_as_it_found_it(api):
 # Workspace account, so its hd claim is the domain. The Tico account issuer keeps the verified-email rule alone.
 def _issuer(issuer, domains=()):
     from backend import oidc as O
+
     oidc = O.Oidc.__new__(O.Oidc)
     oidc.issuer = issuer
     oidc.settings = SimpleNamespace(oidc_allowed_domains=tuple(domains))
@@ -130,20 +131,24 @@ TICO_ACCOUNT = "https://auth.tico.example"
 
 def test_a_domain_join_through_google_needs_the_company_hosted_domain():
     from backend.oidc import SignInError
+
     oidc = _issuer(GOOGLE)
     claims = {"email": "Ben@Acme.example", "email_verified": True, "hd": "acme.example"}
     assert oidc._email(claims, ["acme.example"]) == "ben@acme.example"
     with pytest.raises(SignInError):
-        oidc._email({**claims, "hd": None}, ["acme.example"])            # a consumer account at the domain
+        oidc._email({**claims, "hd": None}, ["acme.example"])  # a consumer account at the domain
     with pytest.raises(SignInError):
         oidc._email({**claims, "hd": "other.example"}, ["acme.example"])
     # Not a domain join: the address is not on a listed domain, so the hosted domain is not checked.
-    assert oidc._email({**claims, "email": "ben@partner.example", "hd": None}, ["acme.example"]) == "ben@partner.example"
+    assert (
+        oidc._email({**claims, "email": "ben@partner.example", "hd": None}, ["acme.example"]) == "ben@partner.example"
+    )
     assert oidc._email({**claims, "hd": None}) == "ben@acme.example"
 
 
 def test_a_domain_join_through_the_tico_account_keeps_the_verified_email_rule():
     from backend.oidc import SignInError
+
     oidc = _issuer(TICO_ACCOUNT)
     claims = {"email": "ben@acme.example", "email_verified": True}
     assert oidc._email(claims, ["acme.example"]) == "ben@acme.example"

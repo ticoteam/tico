@@ -925,9 +925,12 @@ def register(app, auth):
         jar = cookies(request.headers)
         try:
             from . import access
+
             with store.read() as c:
                 joined = access.load_access(c, settings)["allowed_domains"]
-            email, target, challenge, account = oidc.finish(dict(request.query_params), jar.get(oidc.login_cookie, ""), joined)
+            email, target, challenge, account = oidc.finish(
+                dict(request.query_params), jar.get(oidc.login_cookie, ""), joined
+            )
             with store.transaction() as c:
                 human = oidc.person(c, email, account)
                 if challenge:
