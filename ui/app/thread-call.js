@@ -21,14 +21,20 @@ const CALL_JOINING = new Map();
 // Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
 // Any leave settles it too, so the last Join cannot give it back twice.
 const CALL_OWED = new Set();
+// A leave stays settled until the last Join finishes, including for a Start response still on its way.
+const CALL_SETTLED = new Set();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
 const callCode = e => (typeof e?.body?.error === 'object' ? e.body.error?.code : e?.body?.error) || '';
 const callPath = id => '/v2/calls/' + encodeURIComponent(id);
 const callShareable = () => !!navigator.mediaDevices?.getDisplayMedia;
-function callSeatLeave(id) {
+function callSeatSettled(id) {
   CALL_OWED.delete(id);
+  if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
+}
+function callSeatLeave(id) {
+  callSeatSettled(id);
   post(callPath(id) + '/leave', {}, undefined, {keepalive: true}).catch(() => {});
 }
 function callViewsDraw(threadId) { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
@@ -79,8 +85,9 @@ async function callAction(view, kind) {
       // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
       // back, unless a Join of the same call (from the header the call's start redrew) is in it or on its way.
       if (kind === 'start' && call?.id) {
-        if (CALL_JOINING.get(call.id)) CALL_OWED.add(call.id);
-        else if (CALL?.id !== call.id) callSeatLeave(call.id);
+        if (CALL_JOINING.get(call.id)) {
+          if (!CALL_SETTLED.has(call.id)) CALL_OWED.add(call.id);
+        } else if (CALL?.id !== call.id) callSeatLeave(call.id);
       }
       return;
     }
@@ -114,6 +121,7 @@ async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
     if (left) CALL_JOINING.set(call.id, left);
     else {
       CALL_JOINING.delete(call.id);
+      CALL_SETTLED.delete(call.id);
       if (CALL_OWED.delete(call.id) && CALL?.id !== call.id) callSeatLeave(call.id);
     }
   }
@@ -200,7 +208,7 @@ async function callLeave({end = false} = {}) {
   } else {
     try { await post(callPath(here.id) + '/leave', {}); } catch {}
   }
-  CALL_OWED.delete(here.id);
+  callSeatSettled(here.id);
   callDone(here);
 }
 function callDone(here) {
