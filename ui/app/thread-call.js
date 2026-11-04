@@ -39,7 +39,10 @@ function callSeatSettled(id) {
 }
 function callPostLeave(id, opts) {
   const leave = post(callPath(id) + '/leave', {}, undefined,
-    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch(() => {});
+    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch(e => {
+    // Every leave is a new one: a kept request id would make the next leave (after a rejoin) replay this one.
+    if (e?.signature) pendingWrites.delete(e.signature);
+  });
   const pending = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
     if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
   });
