@@ -311,13 +311,13 @@ def _migration(name):
     return module
 
 
-def test_migration_0079_adds_the_columns_once_and_marks_old_updates_version_one():
+def test_migration_0081_adds_the_columns_once_and_marks_old_updates_version_one():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT, kind TEXT, day TEXT, headline TEXT, body TEXT, "
                  "created_at TEXT, updated_at TEXT)")
     conn.execute("CREATE TABLE update_queue(id TEXT PRIMARY KEY, bot TEXT, kind TEXT, day TEXT, rank INTEGER, state TEXT)")
     conn.execute("INSERT INTO updates VALUES('u','ops','daily','2026-09-28','h','- one','t','t')")
-    migration = _migration("0079_update_format_and_delivery")
+    migration = _migration("0081_update_format_and_delivery")
     migration.up(conn)
     migration.up(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(updates)")}
