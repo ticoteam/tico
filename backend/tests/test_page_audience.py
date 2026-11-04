@@ -247,3 +247,17 @@ def test_linking_a_restricted_page_to_a_readable_task_never_widens_it(api):
     post(api, 'pins', {'place': 'task:' + tid, 'item': 'page:' + fid}, token='cara-test', expected=404)
     edit(api, fid, None)
     assert fid in api.get('/api/v2/pages?task=' + tid, headers=headers('cara-test')).text
+
+
+def test_counsel_read_grant_cannot_validate_a_quote_outside_the_page_audience(api, monkeypatch):
+    from backend import counsel
+    from backend.store import H, Problem
+    fid, _ = promoted(api)
+    edit(api, fid, {'people': ['ben']})
+    monkeypatch.setattr(counsel, 'run_read', lambda c, who: {'file_id': fid, 'version': 1})
+    monkeypatch.setattr(counsel, 'version_text', lambda *a: pytest.fail('read a page outside the audience'))
+    with api.app.state.store.read() as c:
+        with pytest.raises(Problem) as refused:
+            counsel.check_cite(c, api.app.state.auth, Identity('bot:' + H.COUNSEL, 'bot', attempt_id='read-turn'),
+                               api.app.state.blobs, {'file_id': fid, 'version': 1, 'quote': 'Pipeline grew'})
+    assert refused.value.status == 404

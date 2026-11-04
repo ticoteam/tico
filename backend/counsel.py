@@ -590,6 +590,8 @@ def check_cite(c, auth, who, blobs, cite):
         if not row or not read or read["file_id"] != row["id"] or number != read["version"]:
             raise Problem("not_found", "Counsel cites only the document its run was asked to read, at the version its "
                           "task gives, and names that version", 404)
+        if not F.file_visible(c, auth, who, row, {}):
+            raise Problem("not_found", "That file is not one you can read", 404)
     elif who.role == "bot":
         raise Problem("forbidden", "Only Counsel cites a document; a bot's rule is written without a quote", 403)
     else:
