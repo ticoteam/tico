@@ -480,7 +480,7 @@ def reading_owner(c, runner_id, runtime, reported):
     return owners.pop() if len(owners) == 1 else None
 
 
-def owned(c, runner_id, runtime, reading, previous=None):
+def stamped(c, runner_id, runtime, reading, previous=None):
     """A computer's `reading` (one usage window, or None) with its `owner`: the same report `previous` already had keeps
     that owner, and a new one takes `reading_owner`. Whatever owner the computer sent is never kept."""
     if not reading:
@@ -493,7 +493,7 @@ def owned(c, runner_id, runtime, reading, previous=None):
 
 
 def stamp_readiness(c, runner_id, readiness, before):
-    """Each runtime's usage windows on a computer's readiness document (its own login's), owned (`owned`) against the
+    """Each runtime's usage windows on a computer's readiness document (its own login's), owned (`stamped`) against the
     document they replace (`before`)."""
     old = (before or {}).get("runtimes") or {}
     for runtime, row in ((readiness or {}).get("runtimes") or {}).items():
@@ -502,7 +502,7 @@ def stamp_readiness(c, runner_id, readiness, before):
         previous = old.get(runtime) if isinstance(old.get(runtime), dict) else {}
         for window in ("weekly", "five_hour"):
             if row.get(window):
-                row[window] = owned(c, runner_id, runtime, row[window], previous.get(window))
+                row[window] = stamped(c, runner_id, runtime, row[window], previous.get(window))
 
 
 def _plan_usage(c, sub, runtime, ctx):
@@ -512,7 +512,7 @@ def _plan_usage(c, sub, runtime, ctx):
     profile's windows for `runtime` are this plan's, but only a reading that is this plan's: taken since the plan was
     given to that computer or its credential was last replaced (`credential_at`: a new value may be another account; a
     rename, an owner change or a refresh of the same account is not), taken on a turn that signed in with this plan
-    (the reading's `owner`, `owned`), and, where the plan names its account, reported for that account. A window whose
+    (the reading's `owner`, `stamped`), and, where the plan names its account, reported for that account. A window whose
     reset has passed is no longer any reading.
     The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
     computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,

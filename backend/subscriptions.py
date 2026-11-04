@@ -214,7 +214,7 @@ def record(c, runner_id, profiles, readiness=None):
                 values = [v for v in (latest, older) if v]
                 value[window] = max(values, key=lambda v: datetime.fromisoformat(v['reported_at'].replace('Z', '+00:00'))) if values else None
                 # Whose login it is, from the turns that took it (backend/model_subscriptions.py), against what was stored.
-                value[window] = model_subscriptions.owned(c, runner_id, runtime, value[window],
+                value[window] = model_subscriptions.stamped(c, runner_id, runtime, value[window],
                                                           previous.get(runtime, {}).get(window))
             if not value.get('account'):
                 value.pop('account', None)
