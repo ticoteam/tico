@@ -103,6 +103,7 @@ impl Config {
         matches!(self.hub.host_str(), Some("localhost") | Some("127.0.0.1"))
     }
 
+    #[cfg(test)]
     pub fn host(&self) -> String {
         self.hub.host_str().unwrap_or("").to_string()
     }
