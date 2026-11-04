@@ -5,7 +5,7 @@
 #
 # Pairs per rule at generation:
 #   ASYNC109     1   owner: engineering
-#   B007        15   owner: engineering
+#   B007        14   owner: engineering
 #   B008         1   owner: engineering
 #   B018         8   owner: engineering
 #   B023        18   owner: engineering
@@ -16,11 +16,11 @@
 #   DTZ005       2   owner: engineering
 #   DTZ007       2   owner: engineering
 #   DTZ011       5   owner: engineering
-#   F401        29   owner: engineering
+#   F401        28   owner: engineering
 #   F402         1   owner: engineering
-#   F541         6   owner: engineering
+#   F541         5   owner: engineering
 #   F811         2   owner: engineering
-#   F841        19   owner: engineering
+#   F841        17   owner: engineering
 #   PLW1510     29   owner: engineering
 #   S110        33   owner: engineering
 
@@ -124,8 +124,7 @@
 "backend/sleep_idle.py" = ["BLE001", "S110"]
 "backend/sql.py" = ["BLE001", "F401"]
 "backend/stale_review.py" = ["BLE001"]
-"backend/stall_triage.py" = ["B007", "F401", "S110"]
-"backend/step_age.py" = ["F541"]
+"backend/stall_triage.py" = ["S110"]
 "backend/strategy_setup.py" = ["B018", "BLE001", "DTZ011"]
 "backend/strategy_suggest.py" = ["B023"]
 "backend/support.py" = ["BLE001"]
@@ -137,7 +136,6 @@
 "backend/task_relations.py" = ["BLE001"]
 "backend/task_rules.py" = ["BLE001"]
 "backend/task_trigger_rules.py" = ["BLE001"]
-"backend/tests/test_assigned_start.py" = ["F841"]
 "backend/tests/test_botops_evals.py" = ["F841"]
 "backend/tests/test_claim_refusals.py" = ["F841"]
 "backend/tests/test_credentials.py" = ["F841"]
@@ -151,7 +149,6 @@
 "backend/tests/test_report_managers.py" = ["F841"]
 "backend/tests/test_screen_relay_contract.py" = ["F841"]
 "backend/tests/test_source_outages.py" = ["F841"]
-"backend/tests/test_stall_triage.py" = ["F841"]
 "backend/tests/test_system_routines.py" = ["F841"]
 "backend/tests/test_task_manager_rights.py" = ["F841"]
 "backend/tests/test_triggers_incoming.py" = ["F841"]

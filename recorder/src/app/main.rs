@@ -94,6 +94,7 @@ commands! {
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
     sign_in(address: String) => |app| app.sign_in(&address);
+    sign_in_desktop() => |app| app.sign_in_desktop();
     make_default(id: String) => |app| app.make_default(&id);
     import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
@@ -374,6 +375,7 @@ fn main() {
             save_settings,
             set_audio,
             sign_in,
+            sign_in_desktop,
             sign_out,
             make_default,
             import_legacy,
@@ -391,7 +393,8 @@ fn main() {
     ticker(app.handle().clone(), &recorder);
     update::start(app.handle().clone(), recorder.clone(), updates);
     app.run(|handle, event| match event {
-        // `tico-recorder://connect?server=…` from Tico's Connect recorder button, also on a cold start.
+        // `tico-recorder://connect?server=…` from Tico's Connect recorder button, and `tico-recorder://open?server=…`
+        // from Record in the Tico desktop app, also on a cold start.
         RunEvent::Opened { urls } => {
             let state = handle.state::<Shared>();
             for url in urls {

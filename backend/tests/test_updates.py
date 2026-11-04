@@ -450,3 +450,40 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
     hers = get(api, "updates/tree?scope=all", token="cara-test")
     assert find(hers["roots"], "b:" + bid(api, "boss")) is None and "Planned the launch" not in str(hers)
     assert find(hers["roots"], "b:" + bid(api, "analyst"))["update"]["body"] == "- Sized the market"
+
+
+def test_the_feed_counts_replies_in_one_read_and_homes_card_shows_the_same_updates(api, monkeypatch):
+    """Nov 4 web pass: the feed counted each update's replies with its own scan of every message (40 a page, ~500 ms on
+    a busy hub), and Home's Updates card built the whole feed to show five headlines."""
+    from backend.tests.test_health_queries import counted
+    store = api.app.state.store
+    with store.transaction() as c:
+        bots = [bot_id(c, slug) for slug in ("ops", "finance", "product-design")]
+        made = [updates.post(c, b, f"- Shipped part {n}", kind="daily", day=f"2026-10-0{n + 1}")["id"] for n, b in enumerate(bots)]
+    assert len(made) == 3
+    for uid, n in zip(made, (2, 1, 0)):
+        for k in range(n):
+            post(api, f"updates/{uid}/reply", {"text": f"Thanks {k}"})
+    page = "/api/v2/updates?limit=40&include_archive=true"         # with history: older days of the same bots
+    feed, few = counted(api, monkeypatch, page)
+    assert {u["id"]: u["replies"] for u in feed["updates"]} == dict(zip(made, (2, 1, 0)))
+    get(api, "places/person:me")                                       # the first open saves the place
+    _, card_few = counted(api, monkeypatch, "/api/v2/places/person:me")
+    with store.transaction() as c:
+        now = H.now()
+        c.executemany("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,inputs,meetings) "
+                      "VALUES(?,?,'daily',?,?,'- x',?,?,'[]',0)",
+                      [(H.new_id(), bots[n % 3], f"2026-08-{n + 1:02d}", f"Older {n}", H.shift(now, days=-40 - n),
+                        H.shift(now, days=-40 - n)) for n in range(30)])
+    history, many = counted(api, monkeypatch, page)
+    assert len(history["updates"]) == 33 and many == few, "thirty more updates on the page take no more statements"
+    assert {u["id"]: u["replies"] for u in history["updates"] if u["id"] in made} == dict(zip(made, (2, 1, 0)))
+    feed = get(api, "updates")
+    home, card_many = counted(api, monkeypatch, "/api/v2/places/person:me")
+    assert card_many == card_few
+    card = next(p["card"]["data"] for p in home["pins"] if p.get("card", {}).get("template") == "updates")
+    shown = len(card["updates"])
+    assert shown and card["unread"] == feed["unread"]
+    assert card["updates"] == [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
+                                "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}
+                               for u in feed["updates"][:shown]]

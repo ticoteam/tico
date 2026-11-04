@@ -41,8 +41,7 @@ def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without
     assert after["status"] == "waiting" and after["note"] == "Needs the review of the receipt gate fix first."
     assert after["waiting_on"] is None                    # people's Needs you and needs_human are untouched
     assert H.wait_detail(c, after) == {"why": "an open blocker", "on": "bot:ops"}
-    # Held while it is open: the stranded sweep leaves it waiting, and nothing starts the builder on it.
-    H.sweep_stranded(c, at=H.shift(H.now(), hours=6))
+    # Held while it is open: nothing starts the builder on it.
     assert H.task(c, task["id"])["status"] == "waiting"
     assert jobs(c, "cpo") == []
 

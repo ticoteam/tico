@@ -599,6 +599,17 @@ def test_public_projection_moderation_and_no_label_enumeration(api):
     assert api.get(path, headers=ORIGIN).status_code == 404
 
 
+def test_a_public_comment_whose_task_ref_is_a_list_naming_the_task_is_shown(api):
+    task = public_setup(api)
+    public = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Team update', 'public': True})['comment']
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE messages SET refs=? WHERE id=?',
+                  (json.dumps({'task': ['00000000-0000-4000-8000-000000000000', task['id']], 'comment': 1}), public['id']))
+    response = api.get('/public/roadmaps/roadmap/tasks/' + task['id'], headers=ORIGIN)
+    assert response.status_code == 200, response.text
+    assert [c['text'] for c in response.json()['comments']] == ['Team update']
+
+
 def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     task = public_setup(api, limit=4)
     base = '/public/roadmaps/roadmap/tasks/' + task['id']

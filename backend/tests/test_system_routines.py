@@ -5,7 +5,7 @@ by `GET /api/v2/system-routines` for Settings > Routines. Spec acceptance tests 
 from datetime import datetime, timedelta, timezone
 
 from backend import judge as B
-from backend import still_wanted
+from backend import ask_deadlines
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.store import H
@@ -24,13 +24,15 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
-        "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "stall_triage", "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream",
+        "stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
+        "stall_triage", "bookkeeper_check", "memory_tidy", "auto_dream",
         "task_roundup"}
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage", "thread_routing", "thread_rank"}
     # Housekeeping is always on, except the one housekeeping job a person may switch (Task roundup).
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
     assert jobs["task_roundup"]["group"] == "housekeeping" and jobs["task_roundup"]["needed"] is False
+    assert jobs["thread_followups"]["name"] == "Earlier messages"
+    assert jobs["thread_followups"]["then"] == [SR.ACTIONS["tell_earlier_messages"][0]]
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"
@@ -43,11 +45,10 @@ def test_a_scheduler_tick_records_each_run_with_its_result_and_next_run(api):
     at = datetime.now(timezone.utc)
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
-    for key in ("still_wanted", "ask_deadlines", "approval_expiry", "stall_checks", "health_scan", "kpi_asks",
+    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "health_scan", "kpi_asks",
                 "due_reminders", "snooze_ends", "cleanup"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
-    assert jobs["still_wanted"]["last"]["result"] == "No idle tasks"
     nxt = H.parse_ts(jobs["ask_deadlines"]["next"])
     assert timedelta(minutes=59) < nxt - at <= timedelta(hours=1, seconds=5), "hourly: an hour after its last run"
     assert jobs["learnings"]["next"], "the nightly run's next 03:00 is known before it has ever run"
@@ -68,11 +69,11 @@ def test_a_failed_run_shows_failed_with_a_plain_reason_and_still_counts_as_a_sch
 
     def broken(conn, at=None):
         raise RuntimeError("Ana's private note text")
-    monkeypatch.setattr(still_wanted, "ask_idle", broken)
+    monkeypatch.setattr(ask_deadlines, "sweep", broken)
     result = Scheduler(store, api.app.state.execution).tick()
-    assert {"still_wanted": "RuntimeError"} in result["failures"]
+    assert {"ask_deadlines": "RuntimeError"} in result["failures"]
     jobs, _ = rows(api)
-    last = jobs["still_wanted"]["last"]
+    last = jobs["ask_deadlines"]["last"]
     assert last["ok"] is False and last["result"] == "Failed: unexpected error (RuntimeError)"
     assert "private" not in str(jobs), "an exception's own text never shows"
 
@@ -203,13 +204,13 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
         raise RuntimeError("x")
     for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "check"), (go_live, "expire"),
                          (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
-                         (billing_check, "read_later"), (still_wanted, "ask_idle")):
+                         (billing_check, "read_later")):
         monkeypatch.setattr(module, name, broken)
     from backend import gateway_connection
     monkeypatch.setattr(gateway_connection, "check_soon", broken)
     failures = Scheduler(store, api.app.state.execution).tick()["failures"]
     for name in ("goals", "goal_asks", "health_monitor", "go_live", "ask_deadlines", "approval_expiry",
-                 "still_needed", "billing_check", "still_wanted", "gateway"):
+                 "still_needed", "billing_check", "gateway"):
         assert {name: "RuntimeError"} in failures, name
     jobs, _ = rows(api)
     assert jobs["goal_colours"]["last"]["ok"] is False

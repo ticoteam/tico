@@ -25,8 +25,7 @@ def test_a_ticket_parked_by_hand_in_a_teams_waiting_step_stays_and_holds_never_l
     with api.app.state.store.transaction() as c:
         row = H.task(c, parked['id'])
         assert (row['step_id'], row['status'], row['blocked_kind']) == (step, 'waiting', 'manual')
-        # Neither the hourly sweep nor a restart moves it out: a person parked it.
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
+        # A restart does not move it out: a person parked it.
         H.migrate(c)
         assert H.task(c, parked['id'])['step_id'] == step
         assert any(s['id'] == step for s in H.type_get(c, parked['type_id'])['steps'])
@@ -136,19 +135,7 @@ def test_a_person_parking_a_held_ticket_in_a_teams_waiting_step_makes_the_hold_m
         assert (H.task(c, held['id'])['step_id'], H.task(c, held['id'])['status']) == (step, 'waiting')
 
 
-def test_the_stranded_sweep_leaves_a_ticket_a_person_parked_while_it_was_held(api):
-    held = ticket(api)
-    step = _park_step(api, held)
-    blocker = _held_on_a_blocker(api, held)
-    assert move(api, held, 'Waiting On Dependency').status_code == 200
-    with api.app.state.store.transaction() as c:
-        # The blocker finished without telling the ticket: only the sweep is left to notice.
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (blocker['id'],))
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
-        assert H.task(c, held['id'])['step_id'] == step
-
-
-def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board_and_the_sweep_leaves_it(api):
+def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board(api):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Content', [{'name': 'Drafting', 'status': 'doing'},
                                                      {'name': 'Waiting On Review', 'status': 'waiting'}])
@@ -160,7 +147,6 @@ def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board_and
         c.execute("UPDATE tasks SET status='waiting', step_id=? WHERE id=?", (step, task['id']))
         H.migrate(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
         assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')
 
 
@@ -197,8 +183,6 @@ def test_a_person_moving_a_bots_ticket_into_a_teams_blocked_step_on_a_content_bo
         assert (row['step_id'], row['status'], row['blocked_kind']) == (step, 'waiting', 'manual')
         H.task_update(c, H.KEEPER, blocker['id'], status='done')
         assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
-        assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')
 
 
 def test_an_upgrade_holds_a_bots_ticket_already_in_a_teams_blocked_step_on_a_content_board(api):
@@ -213,5 +197,4 @@ def test_an_upgrade_holds_a_bots_ticket_already_in_a_teams_blocked_step_on_a_con
         c.execute("UPDATE tasks SET status='waiting', step_id=? WHERE id=?", (step, task['id']))
         H.migrate(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1))
         assert (H.task(c, task['id'])['step_id'], H.task(c, task['id'])['status']) == (step, 'waiting')

@@ -435,7 +435,7 @@ def updates_card(ctx, s):
         return None
     readable = U.visible_authors(ctx.c, ctx.auth, ctx.who)
     found = U.listing(ctx.c, ctx.who.actor, readable, limit=s["count"], may_read=readable,
-                      meetings=U.meeting_reader(ctx.who))
+                      meetings=U.meeting_reader(ctx.who), brief=True)
     return {"unread": found["unread"],
             "updates": [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
                          "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}

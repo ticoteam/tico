@@ -996,7 +996,7 @@ def create_app(settings=None):
                           and "cache-control" in response.headers)
             if route_keeps or file_bytes:
                 pass                    # the route's own "private, max-age=…" stands
-            elif request.url.path in ui_bundle.PATHS and response.status_code in (200, 304) \
+            elif ui_bundle.is_part(request.url.path) and response.status_code in (200, 304) \
                     and "immutable" in str(response.headers.get("cache-control", "")):
                 pass                    # a hashed script or stylesheet (ui_bundle): kept for a year
             elif request.query_params.get("v") and response.status_code in (200, 304) \
@@ -1267,10 +1267,10 @@ def create_app(settings=None):
         value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
         value.pop("rule_due_id", None)          # the server's: the rule due date its run was fired for (rule_due.py)
         from .task_check_backs import view as check_back_view
-        value["check_back"] = check_back_view(row, c)
+        value["check_back"] = check_back_view(row)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
-        value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
+        value.pop("holds_cleared_at", None)     # task_holds' clock, for the server only
         # Most list rows have no accumulated clock; omit empty optional fields.
         for field in ("building_started_at", "building_seconds"):
             if not value.get(field):
@@ -1418,12 +1418,8 @@ def create_app(settings=None):
         step_since = step_age.since_map(c, rows)
         hold_marks = task_holds.marks(c, rows)
         result = []
-        from . import task_check_backs
-        check_backs_on = task_check_backs.enabled(c)
         for row in rows:
             value = task_view(row, pipelines=pipelines, hold_marks=hold_marks)
-            if value.get("check_back"):
-                value["check_back"]["enabled"] = check_backs_on
             value.pop("checkpoint", None)    # up to a page of text per task; the full task view carries it
             value.update({
                 "relations": relations[row["id"]],
@@ -8699,7 +8695,7 @@ def create_app(settings=None):
     # Only the frontend directory is served. No project root, runtime DB, or secrets.
     # The page loads its scripts and styles from /tico/ui/ (ui/index.html), so the same directory is
     # mounted there as well as at the root.
-    # One script and one stylesheet instead of ~80 files (backend/ui_bundle.py): index.html is served with
+    # A few scripts and stylesheets instead of ~190 files (backend/ui_bundle.py): index.html is served with
     # its bundle regions replaced by the versioned bundle tags. TICO_UI_BUNDLE=off serves the files as listed.
     if ui_bundle.enabled():
         ui_bundles = ui_bundle.shared(settings.ui_dir)
@@ -8718,17 +8714,16 @@ def create_app(settings=None):
                 return Response(status_code=304, headers=headers)
             return Response(body if request.method == "GET" else None, media_type=media_type, headers=headers)
 
-        @app.api_route("/tico/ui/app.bundle.js", methods=["GET", "HEAD"], include_in_schema=False)
-        @app.api_route("/tico/ui/app.bundle.css", methods=["GET", "HEAD"], include_in_schema=False)
-        async def ui_bundle_asset(request: Request):
+        @app.api_route("/tico/ui/app.bundle.{part}", methods=["GET", "HEAD"], include_in_schema=False)
+        async def ui_bundle_asset(request: Request, part: str):
             bundle = ui_bundles.get()
-            if bundle is None:
+            path = request.url.path
+            if bundle is None or path not in bundle.parts:
                 raise Problem("not_found", "Not found", 404)
-            js = request.url.path == ui_bundle.JS_PATH
-            return ui_reply(request, bundle.js if js else bundle.css,
+            js = path.endswith(".js")
+            return ui_reply(request, bundle.parts[path],
                             "text/javascript; charset=utf-8" if js else "text/css; charset=utf-8",
-                            bundle.etag[request.url.path], ui_bundle.IMMUTABLE,
-                            bundle.gz[request.url.path], bundle.gz_etag[request.url.path])
+                            bundle.etag[path], ui_bundle.IMMUTABLE, bundle.gz[path], bundle.gz_etag[path])
 
         @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
         @app.api_route("/index.html", methods=["GET", "HEAD"], include_in_schema=False)

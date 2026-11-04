@@ -345,8 +345,8 @@ def completion_result(c, notice):
         return None
     owner = notice["refs"]["task_completion"]["owner"]
     since = c.execute("SELECT MAX(created_at) FROM messages WHERE id<>? AND created_at<=? AND deleted_at IS NULL "
-                      "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.task_completion') IS NOT NULL",
-                      (notice["id"], notice["created_at"], task_id)).fetchone()[0] or ""
+                      f"AND {H.task_ref_sql('refs')} AND json_extract(refs,'$.task_completion') IS NOT NULL",
+                      (notice["id"], notice["created_at"], task_id, task_id)).fetchone()[0] or ""
     found = [m for m in H.task_comments(c, task_id) if m["sender_id"] == owner and since < m["created_at"] <= notice["created_at"]
              and visuals.elsewhere("", m)]
     return found[-1] if found else None
@@ -1565,7 +1565,8 @@ class Gateway:
             label = (f"#{task['number']} " if task.get("number") is not None else "") + str(task.get("title") or "").strip()
             url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task["id"], safe="")
             footer = f"(sent from {name} on <{slack_escape(url)}|{slack_escape(label[:80])}>)"
-            if task.get("check_back_at"):
+            from .task_roundup import follow_up
+            if follow_up(c, task):          # only a time a person or bot set, never a snooze's date (task_roundup)
                 footer += "\nFollow up by " + slack_escape(task["check_back_at"])
         else:
             footer = f"(sent from {name})"

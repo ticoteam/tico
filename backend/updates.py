@@ -1175,12 +1175,13 @@ def _only(bots, column="u.bot"):
 
 
 def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, limit=40,
-            archive=False, include_archive=False, may_read=None, meetings=False):
+            archive=False, include_archive=False, may_read=None, meetings=False, brief=False):
     """The feed, newest first, with this person's read state, reply counts, and the requests that
     ended without an update (so a silent bot shows). `readable` is the set of bots to show; `may_read`,
     all the authors they may read, decides a card's links, so My bots or direct reports narrow the
     cards but not what a card was written from. Without `meetings` (`meeting_reader`), an update
-    flagged `meetings` is left out, and so is any link to one."""
+    flagged `meetings` is left out, and so is any link to one. `brief`: the updates with their read state and the
+    unread count only, as Home's Updates card shows them (no inputs, replies, missed requests or today's queue)."""
     where, args = [_kept(meetings)], []
     if not readable:
         where.append("0")
@@ -1208,12 +1209,18 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
-        item = with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
+        item = _decode(row) if brief else with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
         item["read"] = bool(item.pop("read_at"))
         item["archived"] = bool(row["archived"])
-        item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.update')=?",
-                                    (row["id"],)).fetchone()[0]
         items.append(item)
+    if brief:
+        return {"updates": items, "unread": count_unread(c, actor, readable, kind, meetings)}
+    # Every row's replies in one pass over messages: a count a row read all of them once each, 40 times a page.
+    replies = dict(c.execute(
+        "SELECT json_extract(refs,'$.update') AS u, count(*) FROM messages WHERE json_extract(refs,'$.update') IN (%s) "
+        "GROUP BY u" % ",".join("?" * len(items)), [item["id"] for item in items]).fetchall()) if items else {}
+    for item in items:
+        item["replies"] = replies.get(item["id"], 0)
     missed = []
     if not unread and not before and not archive and not include_archive:
         for row in c.execute("SELECT bot, kind, day, reason, done_at FROM update_queue WHERE state='missed' "

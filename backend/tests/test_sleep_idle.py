@@ -254,9 +254,9 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     system_jobs(api, kpi_asks=("15m", "09:00"))                          # only the interval job left
     with api.app.state.store.read() as c:
         assert sleep_idle.wake_time(c, hq.clock[0]) is None and sleep_idle.busy(c, hq.clock[0]) == ""
-    system_jobs(api, still_wanted=("daily", "12:10"))                    # ten minutes away: it keeps the server up
+    system_jobs(api, kpi_asks=("daily", "12:10"))                    # ten minutes away: it keeps the server up
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('sr1','still_wanted',?)", (sleep_idle.stamp(hq.clock[0] - 3600),))
+        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('sr1','kpi_asks',?)", (sleep_idle.stamp(hq.clock[0] - 3600),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
 

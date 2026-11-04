@@ -3,7 +3,7 @@
 The card says what broke in one line ("Sales Bot can't reach Google (ana@acme.example).") and carries the fix: the
 person's own Connect Google, the computer's sign-in pop-up, or a credential card. The task waits on the card, a
 recorded wait like a milestone's (hubdb.wait_detail, wake_rules.parked): it is in the fixer's Needs you under
-connect (hubdb.needs_you), and no stall wake, stranded sweep or news spends turns on it meanwhile. It does not set
+connect (hubdb.needs_you), and no news spends turns on it meanwhile. It does not set
 `waiting_on`: a bot naming a person there asks in a subtask instead, and this card is that ask. When the account
 works again the card says "Reconnected" and the task's owner gets ONE wake on that task, through the one wake path
 (H._wake, refs `reconnected`, an AWAITED kind in backend/wake_rules.py).

@@ -307,7 +307,9 @@ jobs:
     if: ${{ !cancelled() }}
     needs: [plan, tests, caddy-linux, static, rust-lint, recorder-changes, recorder]
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
-    timeout-minutes: 3
+    # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below,
+    # and the gate after it must still run. A hang in the receipt canceled the whole job at three minutes on #2487.
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -318,7 +320,10 @@ jobs:
           pattern: results-*
           path: ci-results
           merge-multiple: true
+      # Cosmetic: a GitHub API error or hang here leaves the receipt incomplete and never fails or cancels the gate.
       - name: Per-job timings linked from the PR check
+        continue-on-error: true
+        timeout-minutes: 1
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

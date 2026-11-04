@@ -12,6 +12,7 @@ use tico_recorder_native::{
     assist,
     audio::Channel,
     capture,
+    desktop::{self, DesktopOrg},
     engine::RecordingHandle,
     live::{self, LiveSync},
     network::{self, Tico, Transcriber},
@@ -158,14 +159,40 @@ pub fn sent_to(deliveries: &[store::Delivery], destination: &str) -> bool {
 }
 /// The Tico address in a `tico-recorder://connect?server=…` link.
 pub fn connect_address(link: &str) -> Option<String> {
+    link_address(link, "connect")
+}
+/// The Tico address in a `tico-recorder://<action>?server=…` link: `connect` (Tico's Connect recorder button) or
+/// `open` (Record in the Tico desktop app, which opens the Recorder on that org and starts nothing).
+pub fn link_address(link: &str, action: &str) -> Option<String> {
     let url = reqwest::Url::parse(link).ok()?;
-    if url.scheme() != "tico-recorder" || url.host_str() != Some("connect") {
+    if url.scheme() != "tico-recorder" || url.host_str() != Some(action) {
         return None;
     }
     let server = url.query_pairs().find(|(key, _)| key == "server")?.1;
     settings::safe_url(&server).ok()
 }
-/// The server the Tico desktop app on this Mac uses, to fill in the sign-in address.
+/// The sign-in address to suggest for a first connection: the org open in the Tico desktop app on this Mac, or,
+/// when that app keeps no orgs.json (an older or single-server build), the server in its server.txt.
+pub fn suggested_address(
+    orgs: Option<&[DesktopOrg]>,
+    server_txt: impl FnOnce() -> String,
+) -> String {
+    let bare = |url: &str| {
+        url.trim()
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_owned()
+    };
+    match orgs {
+        Some(orgs) => orgs
+            .iter()
+            .find(|org| org.active)
+            .map(|org| bare(&org.url))
+            .unwrap_or_default(),
+        None => bare(&server_txt()),
+    }
+}
+/// The server.txt of the Tico desktop app on this Mac, from before it kept a list of orgs.
 fn tico_desktop_server() -> String {
     let Some(home) = std::env::var_os("HOME") else {
         return String::new();
@@ -173,13 +200,42 @@ fn tico_desktop_server() -> String {
     std::fs::read_to_string(
         std::path::Path::new(&home).join("Library/Application Support/team.tico.app/server.txt"),
     )
-    .map(|text| {
-        text.trim()
-            .trim_start_matches("https://")
-            .trim_end_matches('/')
-            .to_owned()
-    })
     .unwrap_or_default()
+}
+/// Signs in to the Tico at `address` (`signin::sign_in_through`) and saves the connection; answers its name.
+/// Signing in again to the same Tico renews that connection in place, keeping its id and position; a new one goes
+/// last, so the first connection is the default.
+fn sign_in_saving(
+    root: &std::path::Path,
+    address: &str,
+    open: impl FnOnce(&str) -> bool,
+) -> anyhow::Result<String> {
+    let (mut destination, access, grant) =
+        signin::sign_in_through(address, open, signin::open_browser)?;
+    let mut config = settings::read(root)?;
+    let existing = config
+        .destinations
+        .iter_mut()
+        .find(|row| row.base_url == destination.base_url);
+    if let Some(row) = &existing {
+        destination.id = row.id.clone();
+    }
+    signin::save(&destination.id, &access, &grant)?;
+    let name = destination.name.clone();
+    match existing {
+        Some(row) => *row = destination,
+        None => config.destinations.push(destination),
+    }
+    settings::write(root, &config)?;
+    Ok(name)
+}
+/// "Signed in to A", "Signed in to A and B", "Signed in to A, B and C".
+pub fn signed_in_message(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("Signed in to {one}"),
+        [rest @ .., last] => format!("Signed in to {} and {last}", rest.join(", ")),
+    }
 }
 /// A library row's status, only when it says something the date doesn't. Tones are
 /// `red`, `amber`, `muted` and `accent`.
@@ -279,6 +335,8 @@ pub struct Recorder {
     pub adding: Option<String>,
     pub destination: String,
     tico_url: String,
+    /// The Tico desktop app's orgs (its orgs.json), read again when that file changes. None in the demo library.
+    pub desktop: desktop::Watch,
     signing_in: bool,
     /// A Tico address from a Connect recorder link, waiting for the person to confirm.
     pub connect: Option<String>,
@@ -349,9 +407,10 @@ impl Recorder {
         } else {
             Some(LiveSync::start(store.clone()))
         };
-        // Suggest the Tico desktop app's server only for a first connection.
-        let tico_url = if config.destinations.is_empty() {
-            tico_desktop_server()
+        let mut desktop = desktop::Watch::new(if demo { None } else { desktop::path() });
+        // Suggest the Tico desktop app's open org only for a first connection.
+        let tico_url = if config.destinations.is_empty() && !demo {
+            suggested_address(desktop.orgs(), tico_desktop_server)
         } else {
             String::new()
         };
@@ -392,6 +451,7 @@ impl Recorder {
             chat_retry: String::new(),
             adding: None,
             tico_url,
+            desktop,
             signing_in: false,
             connect: None,
             microphones: vec![],
@@ -834,6 +894,10 @@ impl Recorder {
             let here = reply.meeting == self.meeting;
             if reply.kind == "signin" {
                 self.signing_in = false;
+                // Signing in to several orgs keeps the ones that worked when a later one fails.
+                self.config = settings::read(self.store.root()).unwrap_or(self.config.clone());
+                self.keep_destination();
+                self.services_at = None;
             }
             if reply.kind == "send" {
                 *self
@@ -961,10 +1025,6 @@ impl Recorder {
                             self.microphones = serde_json::from_value(value).unwrap_or_default()
                         }
                         "signin" => {
-                            self.config =
-                                settings::read(self.store.root()).unwrap_or(self.config.clone());
-                            self.keep_destination();
-                            self.services_at = None;
                             self.tico_url.clear();
                             self.say(value["message"].as_str().unwrap_or_default());
                         }
@@ -1973,24 +2033,77 @@ impl Recorder {
         self.signing_in = true;
         self.connect = None;
         self.job("signin", move || {
-            let (mut destination, access, grant) = signin::sign_in(&address, signin::open_browser)?;
-            let mut config = settings::read(&root)?;
-            // Signing in again to the same Tico renews that connection in place, keeping its id and position.
-            let existing = config
-                .destinations
-                .iter_mut()
-                .find(|row| row.base_url == destination.base_url);
-            if let Some(row) = &existing {
-                destination.id = row.id.clone();
+            let name = sign_in_saving(&root, &address, |url| {
+                signin::open_browser(url);
+                false
+            })?;
+            Ok(json!({"message": signed_in_message(&[name])}))
+        });
+    }
+    /// The Tico desktop app's orgs, each with whether the Recorder is signed in to it.
+    pub fn desktop_orgs(&mut self) -> Vec<Value> {
+        let destinations = &self.config.destinations;
+        self.desktop
+            .orgs()
+            .unwrap_or_default()
+            .iter()
+            .map(|org| {
+                json!({"name":org.name,"url":org.url,"email":org.email,"active":org.active,
+                    "connected":destinations.iter().any(|row| desktop::matches(&org.url, row))})
+            })
+            .collect()
+    }
+    /// Signs in to every Tico desktop org the Recorder has none for, one at a time, the one open there first (so it
+    /// is the default when the Recorder had none). Each approval page opens in the desktop app on that org, which
+    /// already has its sign-in, so the person only chooses Allow; the browser shows it when the desktop app can't.
+    /// A failure goes on to the next org, except a timeout: nobody is there to choose Allow.
+    pub fn sign_in_desktop(&mut self) {
+        if self.busy {
+            return;
+        }
+        let orgs = desktop::to_sign_in(
+            self.desktop.orgs().unwrap_or_default(),
+            &self.config.destinations,
+        );
+        if orgs.is_empty() {
+            return;
+        }
+        let root = self.store.root().to_path_buf();
+        self.signing_in = true;
+        self.connect = None;
+        self.job("signin", move || {
+            let (mut signed, mut failed) = (vec![], vec![]);
+            for org in orgs {
+                let opened = sign_in_saving(&root, &org.url, |authorize| {
+                    if desktop::approval_link(&org.url, authorize)
+                        .is_some_and(|link| desktop::open_in_app(&link))
+                    {
+                        return true;
+                    }
+                    signin::open_browser(authorize);
+                    false
+                });
+                match opened {
+                    Ok(name) => signed.push(name),
+                    Err(error) => {
+                        let timed_out = error.to_string() == signin::TIMED_OUT;
+                        failed.push(format!("{}: {error:#}", org.name));
+                        if timed_out {
+                            break;
+                        }
+                    }
+                }
             }
-            signin::save(&destination.id, &access, &grant)?;
-            let name = destination.name.clone();
-            match existing {
-                Some(row) => *row = destination,
-                None => config.destinations.push(destination),
-            }
-            settings::write(&root, &config)?;
-            Ok(json!({"message": format!("Signed in to {name}")}))
+            anyhow::ensure!(
+                failed.is_empty(),
+                "{}{}",
+                match signed_in_message(&signed) {
+                    message if message.is_empty() => message,
+                    message => format!("{message}. "),
+                },
+                failed.join(". ")
+            );
+            Ok(json!({"message": signed_in_message(&signed)}))
         });
     }
     /// Saves the form over the saved settings, so connection changes made meanwhile are kept.
@@ -2060,8 +2173,30 @@ impl Recorder {
             Ok(json!({"message":format!("Imported {count} recordings")}))
         });
     }
-    /// A link macOS delivered to the app.
+    /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
+    /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
+    /// Neither starts a recording.
     pub fn link(&mut self, link: &str) {
+        if let Some(address) = link_address(link, "open") {
+            let connected = self
+                .config
+                .destinations
+                .iter()
+                .find(|row| desktop::matches(&address, row))
+                .map(|row| row.id.clone());
+            match connected {
+                Some(id) => {
+                    if self.context.live_destination.is_empty() {
+                        self.destination = id;
+                        self.choosing_org = false;
+                        self.roster_for.clear();
+                    }
+                }
+                None if !self.signing_in => self.connect = Some(address),
+                None => {}
+            }
+            return;
+        }
         match connect_address(link) {
             Some(address) => self.connect = Some(address),
             None => self.error = "That link is not a Tico Recorder connect link".into(),
@@ -2102,7 +2237,8 @@ impl Recorder {
     /// Everything the window shows. Parts the window already has (by hash) come back as null.
     pub fn view(&mut self, have: &Have) -> Value {
         self.viewed = self.ui_version;
-        let mut out = json!({"status": self.status_view(), "live": self.live_view()});
+        let mut out = json!({"status": self.status_view(), "live": self.live_view(),
+            "desktop_orgs": self.desktop_orgs()});
         let parts: [(&str, &str, Value); 4] = [
             ("library", &have.library, self.library_view()),
             ("settings", &have.settings, self.settings_view()),

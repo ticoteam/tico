@@ -120,3 +120,39 @@ def test_no_two_files_declare_the_same_top_level_name():
                 seen.setdefault(name, []).append((path.name, kind))
     clashes = {n: d for n, d in seen.items() if len(d) > 1 and any(k in ("const", "let", "class") for _, k in d)}
     assert clashes == {}
+
+
+@served
+def test_the_bundle_is_cut_into_parts_a_webkit_cache_keeps(api):
+    # WebKit's disk cache keeps no response larger than an eighth of its capacity (NetworkResourceLoader
+    # maximumCacheBufferSize): the one 4.3 MB script was downloaded again on every open of the desktop app.
+    page = api.get("/", headers=AUTH).text
+    for kind in ("js", "css"):
+        tag = r'src="(/tico/ui/app\.bundle(?:\.\d+)?\.js)\?v=([0-9a-f]{16})"' if kind == "js" else \
+            r'href="(/tico/ui/app\.bundle(?:\.\d+)?\.css)\?v=([0-9a-f]{16})"'
+        parts = re.findall(tag, page)
+        assert [p for p, _ in parts] == [ui_bundle.part_path(kind, n) for n in range(len(parts))]
+        assert len({v for _, v in parts}) == 1                       # one build: every part names the whole bundle
+        whole = b""
+        for path, v in parts:
+            r = api.get(f"{path}?v={v}", headers={**AUTH, "Accept-Encoding": "identity"})
+            assert r.status_code == 200 and r.headers["cache-control"] == ui_bundle.IMMUTABLE
+            assert len(r.content) <= ui_bundle.PART_BYTES + 64 * 1024, path      # a file is never cut
+            assert api.get(path, headers={**AUTH, "Accept-Encoding": "identity", "If-None-Match": r.headers["etag"]}).status_code == 304
+            assert api.get(path).status_code == 401
+            if kind == "js":
+                assert r.text.startswith("'use strict';\n")             # each part is a strict script of its own
+            whole += r.content
+        assert v == ui_bundle._etag(whole)[1:17]
+    assert len(re.findall(r"app\.bundle(?:\.\d+)?\.js\?v=", page)) > 1      # today's 4 MB script is more than one part
+    assert api.get("/tico/ui/app.bundle.99.js", headers=AUTH).status_code == 404
+
+
+def test_parts_are_cut_between_files_in_order():
+    chunks = [b"a" * 300, b"b" * 300, b"c" * 700, b"d" * 10]
+    assert ui_bundle.split(chunks, limit=600) == [b"a" * 300 + b"b" * 300, b"c" * 700, b"d" * 10]
+    assert ui_bundle.split([b"x"], limit=600) == [b"x"]
+    assert [ui_bundle.part_path("js", n) for n in range(3)] == [
+        "/tico/ui/app.bundle.js", "/tico/ui/app.bundle.2.js", "/tico/ui/app.bundle.3.js"]
+    assert ui_bundle.is_part("/tico/ui/app.bundle.12.css") and not ui_bundle.is_part("/tico/ui/app.bundle.1.js")
+    assert not ui_bundle.is_part("/tico/ui/app.bundle.js.map")

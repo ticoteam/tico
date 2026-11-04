@@ -59,8 +59,10 @@ function bootTimingReport(settled) {
     const nav = performance.getEntriesByType('navigation')[0];
     if (nav) html = bootMs(nav.responseEnd);
     const resources = performance.getEntriesByType('resource');
-    const js = resources.find(r => new URL(r.name, location.href).pathname === '/tico/ui/app.bundle.js');
-    if (js && bootMs(js.duration) !== null) bundle = {bytes: Math.max(0, Math.round(js.transferSize || 0)), ms: bootMs(js.duration)};
+    // The script's parts (backend/ui_bundle.py): their bytes added up, and from the first one asked to the last one in.
+    const js = resources.filter(r => /^\/tico\/ui\/app\.bundle(?:\.\d+)?\.js$/.test(new URL(r.name, location.href).pathname));
+    const took = js.length ? bootMs(Math.max(...js.map(r => r.responseEnd)) - Math.min(...js.map(r => r.startTime))) : null;
+    if (took !== null) bundle = {bytes: Math.max(0, Math.round(js.reduce((n, r) => n + (r.transferSize || 0), 0))), ms: took};
     const until = marks['paint-fresh'] ?? Infinity;
     server = resources.filter(r => r.startTime <= until && bootPath(r.name) && bootMs(r.duration) !== null).slice(0, BOOT_SERVER_MAX)
       .map(r => ({path: bootPath(r.name), ms: bootMs(r.duration), app: bootServerMs(r, 'app'), auth: bootServerMs(r, 'auth')}));

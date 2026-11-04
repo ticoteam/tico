@@ -776,9 +776,7 @@ SCHEMAS = {
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester_id": "s", "owner_id": "s", "status": "s", "created_at": "s",
                  "updated_at": "s", "due_at": "n", "check_back_at": {"type": ["string", "null"]},
                  "check_back_note": {"type": ["string", "null"]}, "check_back": {"oneOf": [
-                     obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"},
-                         enabled={"type": "boolean", "description": "Whether follow-up delivery is enabled for this install"},
-                         delivery={"type": "string", "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"}),
+                     obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"}),
                      {"type": "null"}]},
                  "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
