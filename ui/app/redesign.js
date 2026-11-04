@@ -22,17 +22,21 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // A sign-out in any tab stops every tab writing, as the boot snapshot's epoch does (boot-snap.js): the kept entry
 // carries an `epoch` a sign-out (or another person's /me) moves on, each tab notes the epoch its /me read, and a tab
 // writes only while the entry still holds that epoch. The tab-wide sign-out message (SNAP_CHANNEL) drops the tab's
-// person too, so nothing is written there until its own next /me.
+// person too, so nothing is written there until its own next /me. The epoch is read as boot's reads go out, so a
+// sign-out elsewhere while they are out leaves this visit's /me keeping nothing.
 const RD_NAV_KEPT = 'tico.nav.kept';
 const RD_NAV_ROWS = {finance: 'nav-finance', welcome: 'nav-welcome'};
-let RD_NAV_WHO = '', RD_NAV_EPOCH = 0;     // whose answers are kept now ('' until /me answers), and the epoch its /me read
+let RD_NAV_WHO = '', RD_NAV_EPOCH = 0;     // whose answers are kept now ('' until /me answers), and the epoch boot read
+let RD_NAV_STOPPED = false;                // another tab signed out since boot's reads went out
 function rdNavKept() {
   try { const kept = JSON.parse(localStorage.getItem(RD_NAV_KEPT) || 'null'); return kept && typeof kept === 'object' ? kept : {}; }
   catch { return {}; }
 }
 const rdNavEpoch = kept => Number(kept.epoch) || 0;
 // Told another tab signed out: this one keeps nothing more until its own /me.
-function rdNavStop() { RD_NAV_WHO = ''; }
+function rdNavStop() { RD_NAV_WHO = ''; RD_NAV_STOPPED = true; }
+// Boot's reads go out: the epoch they answer for.
+function rdNavStart() { RD_NAV_EPOCH = rdNavEpoch(rdNavKept()); RD_NAV_STOPPED = false; }
 // Signed out, or someone else: what was kept goes, the epoch moves on (every other tab stops writing), and nothing more
 // is kept here until /me names who is here.
 function rdNavForget() {
@@ -55,13 +59,19 @@ function rdNavShow(name, shown) {
   if (rdNavEpoch(kept) !== RD_NAV_EPOCH) { RD_NAV_WHO = ''; return; }
   const mine = kept.who === RD_NAV_WHO;
   if (mine && kept[name] === shown) return;
+  // Not atomic with the check (no cross-tab lock): a sign-out in between keeps this answer until the next /me, as a switch without one does.
   try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({...(mine ? kept : {}), epoch: RD_NAV_EPOCH, who: RD_NAV_WHO, [name]: shown})); }
   catch { /* not kept */ }
 }
-// /me answered: someone else's answers go, and their rows with them, until this person's own come in.
+// /me answered: someone else's answers go, and their rows with them, until this person's own come in. A sign-out
+// anywhere since boot's reads went out (the epoch moved, or the stop came) leaves this visit keeping nothing.
 function rdNavWho(me) {
   const who = me ? snapWho(me) : '', kept = rdNavKept();
-  RD_NAV_EPOCH = rdNavEpoch(kept);
+  if (RD_NAV_STOPPED || rdNavEpoch(kept) !== RD_NAV_EPOCH) {
+    RD_NAV_WHO = '';
+    for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, false);
+    return;
+  }
   if (!who || kept.who !== who) {
     if (kept.who || !who) rdNavForget();
     for (const name of Object.keys(RD_NAV_ROWS)) rdNavPaint(name, false);

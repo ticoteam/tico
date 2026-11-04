@@ -29,6 +29,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   let configVersion = nativeVisualVersion();
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
+  rdNavStart();                       // the sidebar memory's epoch, before /me goes out (redesign.js)
   const employees = get('/employees'), meRead = get('/me');
   // A roster or /me that never answers (a stalled connection, a hub that hangs) ends in the error card below, with
   // Try again, rather than a page that waits for ever.

@@ -251,6 +251,26 @@ const newContext = (browser, phone) => browser.newContext({viewport: phone ? PHO
       await context.close();
     }
 
+    // A sign-out in another tab while this tab's boot reads are still out: its /me, once in, keeps nothing either.
+    {
+      const context = await newContext(browser, false);
+      const seed = await visit(context, {finance: 'yes', proxy: true});
+      await seed.page.close();
+      const late = await visit(context, {finance: 'yes', early: async () => {
+        const there = await visit(context, {finance: 'yes', proxy: true});
+        await there.page.locator('#account').click();
+        await there.page.locator('#sign-out').click();
+        await there.page.waitForURL('**/api/v2/logout');
+        await there.page.close();
+      }});
+      assert.equal(shows(late.settled, 'finance'), true, 'the late tab still draws its own answer');
+      await late.page.evaluate(() => renderTree());
+      const out = await kept(late.page);
+      assert.ok(!out.who && !('finance' in out) && !('welcome' in out), 'nothing kept by a boot that outlived a sign-out: ' + JSON.stringify(out));
+      await late.page.close();
+      await context.close();
+    }
+
     // A new install opening on the wizard, nothing kept: Ask tapped before /me answers stays shut over setup.
     {
       const context = await newContext(browser, false);
