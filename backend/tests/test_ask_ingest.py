@@ -1137,6 +1137,9 @@ def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
 
     with api.app.state.store.transaction() as c:
         # Let it through makes it theirs: it still counts on the day it was put on them, under the bot that asked.
+        # The handoff is an owner change, recorded in the history as the hub writes it, then the task's owner.
+        H.history_event(c, "task", kept["id"], "bot:ops", "owner", "bot:ops", "human:ben",
+                        created_at="2026-10-06T09:00:00")
         c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (kept["id"],))
         human = H.task_create(c, "human:priya", "Priya's task the bot handed on", "", "bot:ops", lint=False)
         c.execute("UPDATE tasks SET created_at='2026-10-05T11:00:00' WHERE id=?", (human["id"],))
@@ -1147,6 +1150,49 @@ def test_a_handoff_replays_on_the_day_it_was_put_on_them(gate):
         tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
     assert not [i for i in monday if i["kind"] == "task"]
     assert [(i["ref"], i["asker"]) for i in tuesday if i["kind"] == "task"] == [(kept["id"], "bot:ops"), (human["id"], "bot:ops")]
+
+
+def test_a_task_filed_while_the_filter_was_off_counts_on_its_day_and_again_on_a_later_handoff(gate):
+    """Filed for Ben on Oct 5 with the filter Off (no ask row), moved to the bot that evening, and handed back to Ben on
+    Oct 6 with the filter On (an ask row). The filing still counts on Oct 5 and the handoff on Oct 6: the handoff does
+    not hide the filing."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
+    tid = file(api, token, "Renew the vendor contract")["task"]["id"]
+    assert not [i for i in items(api) if i["ref"] == tid], "Off asks nothing, so the filing has no ask row"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created_at='2026-10-05T10:00:00.000000Z' WHERE id=?", (tid,))
+        H.history_event(c, "task", tid, "human:ben", "owner", "human:ben", "bot:ops",
+                        created_at="2026-10-05T18:00:00.000000Z")
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (tid,))
+        H.history_event(c, "task", tid, "bot:ops", "owner", "bot:ops", "human:ben",
+                        created_at="2026-10-06T09:00:00.000000Z")
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
+        c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,created_at) "
+                  "VALUES('ai3','human:ben','bot:ops','task',?,'on','sent_back','sent_back','',0,"
+                  "'2026-10-06T09:00:00.000000Z')", (tid,))
+        monday = A.replay_items(c, "human:ben", "2026-10-05T00:00:00", "2026-10-06T00:00:00")
+        tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
+    shown = [(i["ref"], i["created_at"]) for i in monday if i["kind"] == "task"]
+    assert shown == [(tid, "2026-10-05T10:00:00.000000Z")]
+    shown = [(i["ref"], i["created_at"]) for i in tuesday if i["kind"] == "task"]
+    assert shown == [(tid, "2026-10-06T09:00:00.000000Z")]
+
+
+def test_a_task_filed_with_the_filter_on_is_listed_once(gate):
+    """The gate judges a task in the request that files it, so its ask row lands within PLACED_WITH_CREATE_SECONDS of
+    the creation: its day lists it once, from the ask row, not again from the task."""
+    api, model, token = gate
+    tid = file(api, token)["task"]["id"]
+    [row] = [i for i in items(api) if i["ref"] == tid]
+    with api.app.state.store.transaction() as c:
+        task = H.task(c, tid)
+        apart = abs((H.parse_ts(row["created_at"]) - H.parse_ts(task["created_at"])).total_seconds())
+        assert apart <= A.PLACED_WITH_CREATE_SECONDS
+        day = task["created_at"][:10]
+        listed = A.replay_items(c, "human:ben", f"{day}T00:00:00", A._next_day(day))
+    assert [i["ref"] for i in listed if i["kind"] == "task"] == [tid]
 
 
 @pytest.mark.parametrize("actor,role,via,expected", [

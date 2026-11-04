@@ -812,28 +812,41 @@ _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AN
               "AND COALESCE(snoozed_until,'')<=?")
 
 
+# The owner then is the old owner of the task's first owner change (its history, hubdb `_task_event`), and today's owner
+# where it never changed hands. An ask row within PLACED_WITH_CREATE_SECONDS of the task's creation is the filing the
+# filter judged in that same request; one later is a handoff to the person, and the creation day still stands.
+PLACED_WITH_CREATE_SECONDS = 60
+_OWNER_THEN = ("COALESCE((SELECT h.old FROM history_events h WHERE h.subject_type='task' AND h.subject_id=t.id "
+               "AND h.kind='owner' ORDER BY h.created_at, h.rowid LIMIT 1), t.owner_id)")
+
+
 def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
-    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then. A task
-    the filter acted on (sent back, FYI or merged) stays with its bot, so it is found by its ask row for this person as
-    well: a replay counts what On would have kept off, not only what landed. A question carries its structured questions
-    (refs.questions); a task row carries none, its questions are the ask messages replayed beside it."""
+    filed for them and questions asked of them (on a task or loose). The owner then comes from the owner history
+    (`_OWNER_THEN`), today's owner where a task never changed hands. A task the filter acted on (sent back, FYI or
+    merged) stays with its bot, so it is found by its ask row for this person as well: a replay counts what On would
+    have kept off, not only what landed. A question carries its structured questions (refs.questions); a task row
+    carries none, its questions are the ask messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
-    # A task the filter saw for them counts on the day it was put on them (its ask row, with the bot that asked), wherever
-    # it was created and whoever owns it now (Let it through makes it theirs); any other task filed on them, on the day it
-    # was filed.
+    # A task counts on the day it was filed for them, while they owned it. If the filter judged it in that same request
+    # (an ask row within PLACED_WITH_CREATE_SECONDS of the creation, either side), the second branch lists it on that
+    # day instead, so it is not listed twice. A task the filter saw for them later (a handoff, or Let it through) counts
+    # on the day its earliest ask row was written, under the bot that asked, wherever it was created and whoever owns
+    # it now.
     out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
             "asked": None, "created_at": r["at"]}
            for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
-                              "WHERE t.owner_id=? AND t.created_at>=? AND t.created_at<? AND t.requester_id LIKE 'bot:%' "
-                              "AND t.requester_id<>? AND NOT EXISTS (SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id "
-                              "AND i.person=? AND i.kind='task') "
+                              f"WHERE {_OWNER_THEN}=? AND t.created_at>=? AND t.created_at<? "
+                              "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
+                              "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
+                              "AND ABS(julianday(i.created_at)-julianday(t.created_at))<=?/86400.0) "
                               "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
                               "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
                               "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? AND i.created_at=(SELECT "
                               "MIN(f.created_at) FROM ask_ingest_items f WHERE f.ref=i.ref AND f.person=i.person "
                               "AND f.kind='task')",
-                              (person, start, end, skip, person, person, start, end, skip))]
+                              (person, start, end, skip, person, PLACED_WITH_CREATE_SECONDS,
+                               person, start, end, skip))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
