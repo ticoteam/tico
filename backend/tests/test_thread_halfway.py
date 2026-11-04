@@ -78,7 +78,7 @@ def test_a_reply_target_must_be_in_the_same_roots_open_subtree(api):
     for target in (there["id"], "no-such-message"):
         r = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "x", "in_reply_to": target},
                      headers=headers())
-        assert r.status_code == 422 and r.json()["error"] == "reply_target_invalid", r.text
+        assert r.status_code == 422 and r.json()["error"]["code"] == "reply_target_invalid", r.text
     both = api.post(f"/api/v2/threads/{thread['id']}/messages",
                     json={"text": "x", "in_reply_to": top["id"], "parent_message_id": top["id"]}, headers=headers())
     assert both.status_code == 422, both.text
@@ -102,7 +102,7 @@ def test_an_unreadable_target_is_refused_and_its_quote_is_hidden(api, monkeypatc
                         else real(c, v, m))
     r = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "x", "in_reply_to": secret["id"]},
                  headers=headers("ben-test"))
-    assert r.status_code == 422 and r.json()["error"] == "reply_target_invalid", r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "reply_target_invalid", r.text
     [shown] = [m for m in timeline(api, thread["id"], "ben-test")["messages"] if m["id"] == reply["id"]]
     assert shown["reply_to"] == {"id": secret["id"], "hidden": True}
     assert "Salary" not in str(shown)
