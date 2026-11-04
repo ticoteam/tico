@@ -26,7 +26,8 @@
 .ask-peek:not(.ask-on){display:none}   /* a class, not `hidden` (askOn) */
 /* Docked above a thread's composer (askPeekDock): a row of its own in the column, the words never under it. */
 .ask-peek.ask-peek-row{position:static;width:fit-content;max-width:100%;bottom:auto;left:auto;box-shadow:none;background:var(--surface2)}
-.ask-peek.ask-peek-row.ask-on{animation-name:ask-rise}
+/* It is part of the column, so it does not fly in: the page around it does not move twice. */
+.ask-peek.ask-peek-row.ask-on{animation:none}
 .ask-peek-go{flex:1;min-width:0;height:100%;display:flex;align-items:center;padding:0 2px 0 14px;border:0;border-radius:999px 0 0 999px;
   background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
 .ask-peek-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
