@@ -23,22 +23,26 @@ window.addEventListener('load', () => {
   sw.register('/sw.js?v=41', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 });
 (async () => {
+  bootMark('boot');
   let configVersion = nativeVisualVersion();
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
   const roster = Promise.all([get('/employees'), get('/me'), get('/humans').catch(() => ({people: []}))]);
   updPrefetch();
+  dashPrefetch();
   // Health and sidebar counts enrich the page; a slow diagnostic must not hold up opening a chat or task.
   const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; cloudAccessFromStatus(); });
   const counts = v2Refresh();
   try {
     const [emps, me, people] = await roster;
+    bootMark('roster');
     if (authenticatedConfigPerson(me)) {
-      const applied = applyAuthenticatedConfig(me.config, configVersion);
-      configVersion = nativeVisualVersion();
-      const accepted = await applied;
-      if (!accepted || SESSION.out || accepted.version !== nativeVisualVersion()) return;
-      configVersion = accepted.version;  // the helper may have queued its own timeout clear
+      if (SESSION.out || configVersion !== nativeVisualVersion()) return;
+      // The page opens on this config now. Only trust for visual frames waits for the desktop app's answer: until
+      // it, a visual is a file chip or an Open card (visual-cards.js), and an accepted answer applies the config
+      // again and redraws the open threads with it (state.js applyAuthenticatedConfig, nativeVisualRepaint).
+      applyConfig(me.config);
+      void applyAuthenticatedConfig(me.config, configVersion).then(done => { if (done) bootMark('native-ack'); });
     } else {
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
       const cleared = clearNativeVisualOrigin();
@@ -74,6 +78,8 @@ window.addEventListener('load', () => {
   // A team that has never been set up opens on its first run, not on an empty Chat.
   if (BOOT_DEFAULT_ROUTE && S.config.onboarding_needed) history.replaceState(null, '', WELCOME);
   route(); renderHeartbeat(); renderAccount();
+  bootMark('route');
+  bootPaintWatch();                  // marks the first screen with data and reports the open (boot-timing.js)
   sessionResume();                   // back from signing in: the task that was open opens again (session.js)
   void Promise.all([status, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();

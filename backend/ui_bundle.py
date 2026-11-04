@@ -7,6 +7,11 @@ when the page is asked for (again only when a file changed) and serves index.htm
 replaced by a single tag whose URL carries the content hash. The bundle is immutable for that URL, so a
 browser fetches it once per release; index.html itself is revalidated on every load.
 
+The scripts the page loads on their own (theme.js in the head, marked) are named by their content too: the page's tag
+gets `?v=<hash of the file>`, and the server keeps that URL for a year (backend/app.py, `versioned`), so an open
+needs no round trip to revalidate them. The bundle's first statement marks `tico:bundle-start` for the boot timing
+(ui/app/boot-timing.js).
+
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
@@ -23,6 +28,10 @@ PATHS = (JS_PATH, CSS_PATH)
 IMMUTABLE = "public, max-age=31536000, immutable"
 REGION = re.compile(r"[ \t]*<!-- bundle:(js|css):start -->\n(.*?)[ \t]*<!-- bundle:\1:end -->\n?", re.S)
 REF = re.compile(r'(?:src|href)="([^"]+)"')
+# The scripts outside the bundle, by the URL path the page names them with: the file under ui/ each one serves.
+STANDALONE = {"/tico/ui/theme.js": "theme.js", "/vendor/marked.min.js": "vendor/marked.min.js"}
+# Where the boot timing starts counting the bundle's own run (ui/app/boot-timing.js).
+BUNDLE_MARK = "try { performance.mark('tico:bundle-start'); } catch { /* no User Timing */ }\n"
 
 
 class BundleError(Exception):
@@ -38,8 +47,10 @@ def _tag(kind, url):
 
 
 class Bundle:
-    def __init__(self, page, js, css):
+    def __init__(self, page, js, css, versions=None):
         self.page, self.js, self.css = page, js, css
+        # STANDALONE path -> the `?v=` the page names it with.
+        self.versions = dict(versions or {})
         self.etag = {JS_PATH: _etag(js), CSS_PATH: _etag(css)}
         # Sent to a browser that accepts it (the server has no other compression); its own strong ETag.
         self.gz = {JS_PATH: gzip.compress(js, 6, mtime=0), CSS_PATH: gzip.compress(css, 6, mtime=0)}
@@ -70,7 +81,7 @@ def build(ui_dir):
         raise BundleError("index.html has no bundle regions")
     # One script is one scope for 'use strict': a directive only counts at the top of a script, so the
     # bundle opens with it once, and every file must already be strict.
-    js = ["'use strict';\n"]
+    js = ["'use strict';\n" + BUNDLE_MARK]
     for name, path in files["js"]:
         text = path.read_text()
         if not re.search(r"^'use strict';", text, re.M):
@@ -79,8 +90,17 @@ def build(ui_dir):
     css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n" for name, path in files["css"]]
     js_b, css_b = "\n".join(js).encode(), "\n".join(css).encode()
     urls = {"js": f"{JS_PATH}?v={_etag(js_b)[1:17]}", "css": f"{CSS_PATH}?v={_etag(css_b)[1:17]}"}
-    page = REGION.sub(lambda m: _tag(m.group(1), urls[m.group(1)]), html).encode()
-    return Bundle(page, js_b, css_b), [p for kind in files.values() for _, p in kind] + [ui_dir / "index.html"]
+    page = REGION.sub(lambda m: _tag(m.group(1), urls[m.group(1)]), html)
+    versions, standalone = {}, []
+    for url, name in STANDALONE.items():
+        path, tag = ui_dir / name, f'src="{url}"'
+        if tag not in page or not path.is_file():
+            continue
+        versions[url] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        page = page.replace(tag, f'src="{url}?v={versions[url]}"')
+        standalone.append(path)
+    listed = [p for kind in files.values() for _, p in kind] + standalone + [ui_dir / "index.html"]
+    return Bundle(page.encode(), js_b, css_b, versions), listed
 
 
 class UiBundle:
@@ -130,6 +150,15 @@ def build_id(ui_dir):
         return ""
     bundle = shared(ui_dir).get()
     return bundle.build if bundle else ""
+
+
+def versioned(ui_dir, path, v):
+    """Whether `path?v=<v>` names a standalone script as the page served now names it: kept for a year then. Another
+    `v` (a page from before an edit) is the file as it is now, revalidated like any other."""
+    if not v or path not in STANDALONE or not enabled():
+        return False
+    bundle = shared(ui_dir).get()
+    return bool(bundle) and bundle.versions.get(path) == v
 
 
 if __name__ == "__main__":

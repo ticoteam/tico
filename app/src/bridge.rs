@@ -20,7 +20,7 @@ const BRIDGE_SCRIPT: &str = r#"
   window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
   // What this build's bridge answers beyond the first three, so a page never posts into a
   // shell too old to hear it.
-  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles', 'orgInfo'];
+  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles', 'orgInfo', 'bootTiming'];
   // The shell's version and the end of its log ({version, lines}), for Support diagnostics.
   window.ticoNativeLog = () => invoke('app_log');
 })();
@@ -114,6 +114,12 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
         "showLog" => show_log(&app),
         // The open org's name and email, as its page reports them: kept for the rail and the org menu.
         "orgInfo" => org_info(&app, webview.label(), body.as_ref())?,
+        // How long the page took to open (ui/app/boot-timing.js), once per load: one line in the app's log, with how
+        // long it has been since this shell built the page's webview (its first report only; a reload has none).
+        "bootTiming" => {
+            let since = app.state::<AppState>().page_opened.lock().unwrap().remove(webview.label()).map(|at| at.elapsed().as_millis());
+            log::info!("{}", boot_line(body.as_ref(), since)?);
+        }
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
         "showOrgMenu" => if orgs::multi_org_build() { popup_orgs(&app) },
         "addOrg" => {
@@ -150,6 +156,80 @@ fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> 
     Ok(())
 }
 
+/// The most a `bootTiming` report may be, as JSON: its marks and at most BOOT_READS reads come to well under this.
+const BOOT_TIMING_MAX: usize = 4096;
+const BOOT_READS: usize = 16;
+/// The marks a report may carry, in the order an open passes them (ui/app/boot-timing.js BOOT_MARKS).
+const BOOT_MARKS: [&str; 7] = ["head", "bundle-start", "boot", "roster", "route", "native-ack", "paint-fresh"];
+/// No time in a report is longer than ten minutes.
+const BOOT_MS_MAX: u64 = 600_000;
+
+/// The page's `bootTiming` report as one log line. Only its known fields reach the log: whole milliseconds of at most
+/// ten minutes, the page as `#/word`, and API paths of plain characters. Anything else refuses the whole report, so
+/// a page can neither add lines to the log nor fill it.
+pub(crate) fn boot_line(body: Option<&Value>, since_built: Option<u128>) -> Result<String, String> {
+    let refuse = || "The open's timing is not in the expected form.".to_string();
+    let body = body.and_then(Value::as_object).ok_or_else(refuse)?;
+    if Value::Object(body.clone()).to_string().len() > BOOT_TIMING_MAX {
+        return Err("The open's timing is too long.".into());
+    }
+    if !body.keys().all(|key| ["route", "settled", "marks", "html", "bundle", "server"].contains(&key.as_str())) {
+        return Err(refuse());
+    }
+    let ms = |value: &Value| value.as_u64().filter(|n| *n <= BOOT_MS_MAX).ok_or_else(refuse);
+    let maybe_ms = |value: Option<&Value>| match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => ms(value).map(Some),
+    };
+    let route = match body.get("route") { None | Some(Value::Null) => "", Some(value) => value.as_str().ok_or_else(refuse)? };
+    let word = |text: &str| text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if route.len() > 34 || !(route.is_empty() || route.strip_prefix("#/").is_some_and(word)) {
+        return Err(refuse());
+    }
+    let settled = match body.get("settled") { None | Some(Value::Null) => false, Some(value) => value.as_bool().ok_or_else(refuse)? };
+    let mut line = format!("org page open: {}, {}", if route.is_empty() { "no page" } else { route },
+                           if settled { "settled" } else { "not settled" });
+    let mut times = Vec::new();
+    if let Some(html) = maybe_ms(body.get("html"))? { times.push(format!("html {html}")); }
+    let marks = match body.get("marks") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_object().ok_or_else(refuse)?),
+    };
+    if let Some(marks) = marks {
+        if !marks.keys().all(|key| BOOT_MARKS.contains(&key.as_str())) { return Err(refuse()); }
+        for name in BOOT_MARKS {
+            if let Some(at) = marks.get(name) { times.push(format!("{name} {}", ms(at)?)); }
+        }
+    }
+    if !times.is_empty() { line += &format!("; {} ms", times.join(", ")); }
+    match body.get("bundle") {
+        None | Some(Value::Null) => {}
+        Some(bundle) => {
+            let bundle = bundle.as_object().filter(|b| b.keys().all(|key| key == "bytes" || key == "ms")).ok_or_else(refuse)?;
+            let bytes = bundle.get("bytes").and_then(Value::as_u64).filter(|n| *n <= 1 << 30).ok_or_else(refuse)?;
+            let took = ms(bundle.get("ms").ok_or_else(refuse)?)?;
+            line += &if bytes == 0 { format!("; bundle cached ({took} ms)") } else { format!("; bundle {} KB in {took} ms", bytes.div_ceil(1024)) };
+        }
+    }
+    let reads = match body.get("server") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(value) => value.as_array().filter(|reads| reads.len() <= BOOT_READS).ok_or_else(refuse)?.iter().map(|read| -> Result<String, String> {
+            let read = read.as_object().filter(|r| r.keys().all(|key| ["path", "ms", "app", "auth"].contains(&key.as_str())))
+                .ok_or_else(refuse)?;
+            let path = read.get("path").and_then(Value::as_str).filter(|path| path.len() <= 96 && path.starts_with("/api/")
+                && path.chars().all(|c| c.is_ascii_alphanumeric() || "/:-_.".contains(c))).ok_or_else(refuse)?;
+            let mut text = format!("{path} {} ms", ms(read.get("ms").ok_or_else(refuse)?)?);
+            let server: Vec<String> = [("app", maybe_ms(read.get("app"))?), ("auth", maybe_ms(read.get("auth"))?)].into_iter()
+                .filter_map(|(name, at)| at.map(|at| format!("{name} {at}"))).collect();
+            if !server.is_empty() { text += &format!(" ({})", server.join(", ")); }
+            Ok(text)
+        }).collect::<Result<Vec<_>, String>>()?,
+    };
+    if !reads.is_empty() { line += &format!("; reads: {}", reads.join(", ")); }
+    if let Some(since) = since_built { line += &format!("; {since} ms since the webview was built"); }
+    Ok(line)
+}
+
 fn show_log(app: &App) {
     let Some(dir) = log_dir(app) else { return };
     let file = dir.join(applog::FILE_NAME);
@@ -163,6 +243,54 @@ pub(crate) fn app_log(app: App, webview: Webview) -> Result<Value, String> {
     if !from_server(&app, &webview) { return Err("Only the selected server's page may read the app's log.".into()); }
     let lines = log_dir(&app).map(|dir| applog::tail(&dir.join(applog::FILE_NAME), LOG_LINES)).unwrap_or_default();
     Ok(serde_json::json!({"version": app.package_info().version.to_string(), "lines": lines}))
+}
+
+#[cfg(test)]
+mod boot_timing_tests {
+    use super::*;
+
+    #[test]
+    fn a_report_is_one_line_of_its_known_fields() {
+        let body = serde_json::json!({
+            "route": "#/home", "settled": true, "html": 182,
+            "marks": {"head": 190, "bundle-start": 236, "boot": 402, "roster": 1180, "route": 1194, "native-ack": 1201, "paint-fresh": 1690},
+            "bundle": {"bytes": 0, "ms": 4},
+            "server": [{"path": "/api/employees", "ms": 412, "app": 380, "auth": 2}, {"path": "/api/v2/places/:id", "ms": 300, "app": null, "auth": null}],
+        });
+        assert_eq!(boot_line(Some(&body), Some(2020)).unwrap(),
+            "org page open: #/home, settled; html 182, head 190, bundle-start 236, boot 402, roster 1180, route 1194, \
+             native-ack 1201, paint-fresh 1690 ms; bundle cached (4 ms); reads: /api/employees 412 ms (app 380, auth 2), \
+             /api/v2/places/:id 300 ms; 2020 ms since the webview was built");
+        let fetched = serde_json::json!({"route": "", "settled": false, "bundle": {"bytes": 1_300_000, "ms": 230}});
+        assert_eq!(boot_line(Some(&fetched), None).unwrap(), "org page open: no page, not settled; bundle 1270 KB in 230 ms");
+        let empty = serde_json::json!({});
+        assert_eq!(boot_line(Some(&empty), None).unwrap(), "org page open: no page, not settled");
+    }
+
+    #[test]
+    fn anything_else_refuses_the_whole_report() {
+        let read = |path: &str| serde_json::json!({"server": [{"path": path, "ms": 1}]});
+        let many: Vec<Value> = (0..17).map(|_| serde_json::json!({"path": "/api/me", "ms": 1})).collect();
+        for body in [
+            Value::Null, serde_json::json!("text"), serde_json::json!([]),
+            serde_json::json!({"other": 1}),
+            serde_json::json!({"route": "#/home\nforged line"}), serde_json::json!({"route": "#/Bot"}),
+            serde_json::json!({"route": "home"}), serde_json::json!({"route": format!("#/{}", "a".repeat(40))}),
+            serde_json::json!({"settled": "yes"}),
+            serde_json::json!({"marks": {"made-up": 1}}), serde_json::json!({"marks": {"boot": -1}}),
+            serde_json::json!({"marks": {"boot": 1.5}}), serde_json::json!({"marks": {"boot": 600_001}}),
+            serde_json::json!({"html": "fast"}),
+            serde_json::json!({"bundle": {"bytes": 1}}), serde_json::json!({"bundle": {"bytes": 1, "ms": 1, "url": "x"}}),
+            read("/api/me\n"), read("/api/me?token=1"), read("/other"), read(&format!("/api/{}", "a".repeat(100))),
+            serde_json::json!({"server": many}),
+            serde_json::json!({"server": [{"path": "/api/me", "ms": 1, "body": "x"}]}),
+        ] {
+            assert!(boot_line(Some(&body), None).is_err(), "{body}");
+        }
+        assert!(boot_line(None, None).is_err());
+        let long = serde_json::json!({"route": "#/home", "pad": "x".repeat(BOOT_TIMING_MAX)});
+        assert_eq!(boot_line(Some(&long), None), Err("The open's timing is too long.".into()));
+    }
 }
 
 #[cfg(test)]
@@ -304,7 +432,7 @@ mod visual_bridge_tests {
         let state = AppState::new(Orgs::new(doc, None), None);
         assert_eq!(state.orgs.lock().unwrap().orgs().len(), 2);
         // Every reply the page can get, with two orgs open in the shell, carries none of the other org's details.
-        for name in ["orgInfo", "multiOrg", "showOrgMenu", "addOrg", "openWindow", "visualOrigin", "checkForUpdates", "showLog", "appLog"] {
+        for name in ["orgInfo", "multiOrg", "showOrgMenu", "addOrg", "openWindow", "visualOrigin", "checkForUpdates", "showLog", "appLog", "bootTiming"] {
             let reply = bridge_reply(name, 2).to_string();
             for secret in secrets {
                 assert!(!reply.contains(secret), "{name} replied with {secret}");

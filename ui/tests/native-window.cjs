@@ -23,8 +23,9 @@ async function visualHandshake(browser) {
     (() => {
     if (window.top !== window) return;
     window.EventSource = undefined;
-    window.__calls = []; window.__pending = []; window.__nativeOrigin = '';
+    window.__calls = []; window.__pending = []; window.__nativeOrigin = ''; window.__boot = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
+      if (command === 'bridge' && args.name === 'bootTiming') window.__boot.push(args.body);
       if (command !== 'bridge' || args.name !== 'visualOrigin') return Promise.resolve(null);
       window.__calls.push(args.body);
       return new Promise((resolve, reject) => window.__pending.push({resolve, reject, origin:args.body.origin}));
@@ -94,6 +95,20 @@ async function visualHandshake(browser) {
   await page.locator('iframe.vcard-frame[src]').waitFor();
   await firstRead;
   assert.ok(reads.includes(VISUAL));
+  // The open's timing goes to the shell once, as the page and kinds of read, never the bot, task or person.
+  await page.waitForFunction(() => window.__boot.length > 0, null, {timeout:25000});
+  const [boot, ...again] = await page.evaluate(() => window.__boot);
+  assert.deepEqual(again, [], 'one report per load');
+  assert.equal(boot.route, '#/bot');
+  for (const name of ['boot', 'roster', 'route']) assert.ok(Number.isInteger(boot.marks[name]), name);
+  assert.ok(boot.marks.boot <= boot.marks.roster && boot.marks.roster <= boot.marks.route);
+  assert.ok(boot.server.some(read => read.path === '/api/employees'));
+  for (const read of boot.server) {
+    assert.match(read.path, /^\/api\/[a-z0-9:/-]*$/);
+    assert.doesNotMatch(read.path, /ops|ana|t1/, read.path);
+    assert.ok(Number.isInteger(read.ms));
+  }
+  assert.ok(JSON.stringify(boot).length < 4096, "within the shell's cap");
   await page.evaluate(task => taskModalShow(task), task);
   await page.locator('#task-modal iframe.vcard-frame[src]').waitFor();
   await page.locator('#task-modal textarea[aria-label="Message"]').fill('Keep this draft');
@@ -389,6 +404,10 @@ let browser;
   posted.push(...await page.evaluate(() => window.__posted));
   assert.deepEqual(posted.filter(([name]) => name === 'windowMode'), [], 'the page no longer asks the shell for a window mode');
   assert.deepEqual(posted.filter(([name]) => name === 'visualOrigin'), [], 'older shells never receive the new command');
+  assert.deepEqual(posted.filter(([name]) => name === 'bootTiming'), [], "nor the open's timing");
+  const timing = await page.evaluate(() => window.ticoBootTiming);
+  assert.equal(timing.route, '#/tasks', 'it stays in the page');
+  assert.ok(timing.settled && timing.marks['paint-fresh'] >= timing.marks.route, 'the tasks page settles');
   assert.deepEqual(errors, []);
   await visualHandshake(browser);
   await hostedHandshake(browser, true);

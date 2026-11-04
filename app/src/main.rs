@@ -17,7 +17,7 @@ mod signin;
 mod windows;
 
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -56,6 +56,9 @@ struct AppState {
     // Held while the open org changes or an org goes, so a switch and a removal never interleave. Never taken on
     // the main thread: a switch waits on it for webview work.
     pub(crate) changing: Mutex<()>,
+    // When each org page's webview was built, by its label: its first `bootTiming` report says how long the open
+    // took from there (bridge.rs). Taken alone, never while another lock is held.
+    page_opened: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl AppState {
@@ -68,6 +71,7 @@ impl AppState {
             owned: Mutex::new(Vec::new()),
             granted: Mutex::new(HashSet::new()),
             changing: Mutex::new(()),
+            page_opened: Mutex::new(HashMap::new()),
         }
     }
 }
