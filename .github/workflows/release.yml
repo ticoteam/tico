@@ -172,8 +172,8 @@ jobs:
           persist-credentials: false
       - name: Download the validated runner binaries and image digests
         run: |
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-linux-*' -D "$RUNNER_TEMP/runner"
-          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
+          bash scripts/ci/retry.sh --clear "$RUNNER_TEMP/runner" -- gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-linux-*' -D "$RUNNER_TEMP/runner"
+          bash scripts/ci/retry.sh --clear "$RUNNER_TEMP/images" -- gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
           mkdir -p dist/runner
           find "$RUNNER_TEMP/runner" -name '*.gz' -exec mv {} dist/runner/ \;
           for platform in linux-x86_64 linux-arm64; do
@@ -188,7 +188,7 @@ jobs:
         env:
           PREVIOUS: ${{ needs.runner-changes.outputs.previous }}
         run: |
-          gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -D dist/runner \
             -p 'tico-runner-macos-*.gz' -p 'tico-screen-relay-macos-*.gz'
           for platform in macos-arm64 macos-x86_64; do
             for name in tico-runner tico-screen-relay; do
@@ -326,8 +326,15 @@ jobs:
           merge-multiple: true
       - name: Add the Mac binaries and their checksums to the release
         run: |
-          mkdir -p dist/sums
-          gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -D dist/sums -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS
+          # No checkout in this job, so the retry is inline (scripts/ci/retry.sh's schedule): 8 attempts, 30s to 120s apart.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            rm -rf dist/sums && mkdir -p dist/sums
+            gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -D dist/sums -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS && break
+            [ "$attempt" -lt 8 ] || { echo "::error::gh release download failed on all 8 attempts"; exit 1; }
+            wait_s=$((attempt * 30)); [ "$wait_s" -gt 120 ] && wait_s=120
+            echo "::warning::download attempt $attempt/8 failed; retrying in ${wait_s}s"
+            sleep "$wait_s"
+          done
           for name in tico-runner tico-screen-relay; do
             for platform in macos-arm64 macos-x86_64; do
               test -s "dist/mac/$name-$platform.gz" || { echo "::error::no $name-$platform.gz was built"; exit 1; }
@@ -423,7 +430,7 @@ jobs:
           PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
         run: |
           mkdir -p dist/desktop
-          gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
           # Tico-Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
           # overwrite a newer recorder build of this tag.
@@ -516,7 +523,7 @@ jobs:
           PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           mkdir -p dist/recorder
-          gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico-Recorder*' \
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico-Recorder*' \
             --pattern recorder-latest.json
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
       - name: Add the recorder files to the release
