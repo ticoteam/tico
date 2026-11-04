@@ -538,7 +538,16 @@
       host._googleCheck = {html: causesHtml(going)};
       if (going) {
         clearTimeout(watch.timer);
-        watch.timer = setTimeout(() => { if (watchable(host) && host._googleWatch === watch) void check(host, true); }, CHECK_EVERY_MS);
+        watch.timer = setTimeout(() => {
+          watch.timer = null;
+          if (host._googleWatch !== watch) return;
+          if (watchable(host)) void check(host, true);
+          else {
+            watch.paused = true;
+            host._googleCheck = {html: causesHtml(false)};
+            paintCheck(host);
+          }
+        }, CHECK_EVERY_MS);
       }
       return paintCheck(host);
     }
@@ -753,6 +762,22 @@
       paint(host);
     }
     bind(host);
+    // Returning to a paused check keeps its original deadline, including the time spent away.
+    const watch = host._googleWatch;
+    if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())) {
+      clearTimeout(watch.timer);
+      watch.timer = null;
+      watch.paused = false;
+      watch.ended = watch.until <= Date.now();
+      if (watch.ended) {
+        host._googleCheck = {html: causesHtml(false)};
+        paintCheck(host);
+      } else {
+        host._googleCheck = {html: '<p class="muted">Checking…</p>'};
+        paintCheck(host);
+        void check(host, true);
+      }
+    }
     const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status);
     // Polls for the whole replacement, and while a live command waits for a first key.
     const waitingForKey = !!g.can_admin && (replacing || (isLive && !active));
