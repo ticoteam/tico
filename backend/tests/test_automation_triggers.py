@@ -413,6 +413,33 @@ def test_a_run_is_found_by_its_automation_and_trigger_ref_through_an_index(api):
     assert "automation_runs_trigger" in plan
 
 
+def test_the_claim_counts_an_automations_slots_through_its_indexes(api):
+    """The per-automation count the claim makes reads only that automation's active runs and holds, by index."""
+    with api.app.state.store.read() as c:
+        plan = " ".join(row[-1] for row in c.execute(
+            "EXPLAIN QUERY PLAN " + automations.OCCUPIED, {"aid": "aut_x", "cutoff": "2026-10-28T11:30:00Z"}))
+    assert "automation_runs_active" in plan and "automation_holds_of" in plan
+
+
+def test_a_long_mailbox_keeps_each_message_distinct_and_each_runs_once(api):
+    """A 194-character mailbox leaves the 200-character ref no room for the message id: the stored ref keeps a digest
+    of the whole, so two messages from it are two runs, and a message offered again is still one."""
+    box = "ana." + "x" * 177 + "@acme.example"
+    assert len(box) == 194
+    aid = make(api, {"type": "message", "inbox": box}, [NOOP])
+
+    def offer(msg_id):
+        payload = {"message": {"source": "mail", "mailbox": box, "id": msg_id}}
+        fire(api, automations.fire, "message", payload, f"mail:{box}:{msg_id}", lambda t: True, lambda row: True)
+
+    offer("m1")
+    offer("m2")
+    offer("m1")
+    with api.app.state.store.read() as c:
+        refs = [r[0] for r in c.execute("SELECT trigger_ref FROM automation_runs WHERE automation_id=?", (aid,))]
+    assert len(refs) == 2 and len(set(refs)) == 2 and max(map(len, refs)) <= 200
+
+
 def test_a_sync_stamped_with_an_offset_sets_the_watch_at_the_same_instant_as_utc(api):
     with api.app.state.store.read() as c:
         utc = automations.mail_watch(c, "ana@acme.example", "2026-10-28T12:00:00+00:00")

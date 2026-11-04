@@ -35,6 +35,7 @@ The run state keeps every step's outputs for 30 days; after that `prune` keeps t
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import threading
@@ -1067,6 +1068,16 @@ def _no_input(c, row, settings, at, zone):
         return None
 
 
+def _stored_ref(ref):
+    """A run's trigger ref as the table keeps it, for both the insert and the dedupe lookup. A ref over 200 characters
+    (a long mailbox leaves no room for its message id) keeps its first 183 and the first 16 hex of its sha256, so two
+    refs that share a long prefix stay distinct and each finds its own run."""
+    text = str(ref or "")
+    if len(text) <= 200:
+        return text
+    return text[:183] + ":" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
@@ -1080,14 +1091,15 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         return None
     if not manual and _absorbed(c, row):
         return None
-    if str(ref).startswith("due:") and c.execute(
+    stored = _stored_ref(ref)
+    if stored.startswith("due:") and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' LIMIT 1",
-            (row["id"], str(ref)[:200])).fetchone():
+            (row["id"], stored)).fetchone():
         # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
-    if str(ref).startswith(("slack:", "mail:")) and c.execute(
+    if stored.startswith(("slack:", "mail:")) and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
-            (row["id"], str(ref)[:200])).fetchone():
+            (row["id"], stored)).fetchone():
         # One Slack or mail message, one run: a message offered again (its mail row swept, or a label change exported
         # it again) starts nothing new. The run stays after its message's row goes (automation_runs_trigger).
         return None
@@ -1107,7 +1119,7 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         rid = "run_" + H.new_id()
         state = E.start(payload, manual=manual)
         c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
-                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
+                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], stored, H.now(),
                                               "held" if on_hold else "queued", json.dumps(state, default=str),
                                               json.dumps(list(chain))))
         _count(c, row["id"], "runs")
@@ -1950,6 +1962,17 @@ class HubServices:
         self._write(work)
 
 
+# An automation's slots taken: its runs in flight (running, or waiting on a turn or a mail computer, not a batch time)
+# plus the turn holds still inside their slot window whose run is not already counted. Served by automation_runs_active
+# (migration 0080) and automation_holds_of, so it reads only this automation's rows. Counted once per automation per
+# claim pass (Hub.claim), not once per queued candidate.
+OCCUPIED = ("SELECT (SELECT count(*) FROM automation_runs f WHERE f.automation_id=:aid "
+            "AND f.status IN ('running','waiting') AND f.wake_at IS NULL) "
+            "+ (SELECT count(*) FROM automation_holds h WHERE h.automation_id=:aid AND h.created_at>:cutoff "
+            "AND h.run_id NOT IN (SELECT f.id FROM automation_runs f WHERE f.automation_id=:aid "
+            "AND f.status IN ('running','waiting') AND f.wake_at IS NULL))")
+
+
 class Hub:
     """What draining needs: the store, the settings and the app's judge."""
 
@@ -1971,19 +1994,23 @@ class Hub:
         # TURN_SLOT_MINUTES so a turn that never reports cannot block the automation.
         cutoff = H.shift(H.now(), minutes=-TURN_SLOT_MINUTES)
         with self.store.transaction() as c:
-            row = c.execute(
-                "SELECT r.id FROM automation_runs r WHERE r.status='queued' AND "
-                "((SELECT count(*) FROM automation_runs f WHERE f.automation_id=r.automation_id "
-                "AND f.status IN ('running','waiting') AND f.wake_at IS NULL) "
-                "+ (SELECT count(*) FROM automation_holds h WHERE h.automation_id=r.automation_id AND h.created_at>? "
-                "AND h.run_id NOT IN (SELECT f.id FROM automation_runs f WHERE f.automation_id=r.automation_id "
-                "AND f.status IN ('running','waiting') AND f.wake_at IS NULL)))<? "
-                "ORDER BY r.started_at LIMIT 1", (cutoff, MAX_IN_FLIGHT)).fetchone()
-            if not row:
+            occupied = {}                     # automation id -> slots taken, counted once for this pass
+            pick = None
+            queued = c.execute("SELECT id, automation_id FROM automation_runs WHERE status='queued' "
+                               "ORDER BY started_at")
+            for r in queued:
+                aid = r["automation_id"]
+                if aid not in occupied:
+                    occupied[aid] = c.execute(OCCUPIED, {"aid": aid, "cutoff": cutoff}).fetchone()[0]
+                if occupied[aid] < MAX_IN_FLIGHT:
+                    pick = r["id"]
+                    break
+            queued.close()                    # the write below must not run under a read still open on the table
+            if pick is None:
                 return None
             c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",
-                      (H.now(), row["id"]))
-            return row["id"]
+                      (H.now(), pick))
+            return pick
 
     def drain(self, limit=200):
         """Run queued runs until none is left (or `limit`, so one request never drains forever)."""
