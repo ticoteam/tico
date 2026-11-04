@@ -756,7 +756,7 @@ SCHEMAS = {
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
                          "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). "
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "
-                                        "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
+                                        "`tool` is a short label such as \"Filing a task\" or \"Ran npm\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
                          "created_at": "s", "last_message_at": "s", "closed_at": "n"}),
     "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",

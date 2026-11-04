@@ -503,7 +503,7 @@ first:
  "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null}
 ```
 - `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
-  "Writing a reply", "Starting").
+  "Writing a reply", "Thinking", "Starting").
 - `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
   reads that task or thread, else "Busy with other work".
 - `cant_reply`, `fix` set: paused or draining → "Paused" (bot Info); its computer offline or none → "Its computer is

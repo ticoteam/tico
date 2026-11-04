@@ -290,7 +290,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
   again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
   `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`
   is the same run as a list of `{"kind", "text", "at"}`: `reply` (what the bot wrote), `progress` (what it wrote just
-  before a tool call) and `tool` (a short label such as `Ran hub task create`, never the call's arguments; Claude and
+  before a tool call) and `tool` (a short label such as `Filing a task` or `Ran npm`, never the call's arguments; Claude and
   Codex do not report tools, so their pieces are all `reply`). `text` joins the bot's messages with a blank line and leaves
   the tool labels out.
 - **Resume.** The stream ends after about fifteen minutes by design; `event: ready`

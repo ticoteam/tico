@@ -478,7 +478,9 @@ THREAD_TRIGGERS = [
      _bot_status(_RUN_ROOT.format(aid="NEW.id"))),
     ("changes_threads_bot_status_jobs", "UPDATE", "jobs", _changed("state"),
      _bot_status(_MESSAGE_ROOT.format(mid="NEW.message_id"))),
-    ("changes_threads_bot_status_steps", "INSERT", "attempt_events", "NEW.kind IN ('tool','message')",
+    # A thought is a step too: it moves the chat's "Thinking" line, so it wakes the status like a tool or a message.
+    ("changes_threads_bot_status_steps", "INSERT", "attempt_events",
+     "NEW.kind IN ('tool','message') OR (NEW.kind='delta' AND json_extract(NEW.payload,'$.delta_kind')='thought')",
      _bot_status(_RUN_ROOT.format(aid="NEW.attempt_id"), _STATUS_QUIET)),
     ("changes_threads_bot_status_refusals_insert", "INSERT", "registry_metadata", "NEW.key LIKE 'queue-refusal:%'",
      _bot_status_roots("'bot:'||substr(NEW.key,15)")),
