@@ -303,7 +303,7 @@ let browser = null;
     assert.equal(await page.locator('section.needs-you').isVisible(), true);
     await page.evaluate(() => catchUpOpen());
     await page.locator('.cu-card[data-thread="t-note"]').waitFor();
-    assert.equal(await page.locator('.cu-card h3').textContent(), 'Ops');
+    assert.equal(await page.locator('.cu-card h3 > span:not(.nav-icon)').last().textContent(), 'Ops');
     assert.equal(await page.locator('.cu-reply input').getAttribute('placeholder'), 'Message Ops');
     assert.equal(await page.locator('section.needs-you').isVisible(), false, 'the sheet is not over the dialog');
     await page.keyboard.press('Escape');
