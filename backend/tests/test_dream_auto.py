@@ -191,6 +191,10 @@ def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     assert verdict(api, "ops", now() + timedelta(days=2)).status == "busy", "an open dream blocks a new one"
     close(api, "ops")
     assert verdict(api, "ops", now() + timedelta(hours=1)).status == "paced", "48 hours since the last dream's start"
+    # The wake limiter's ledger is real time, so the first start's wake is 49 hours old by the second start.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE events SET created_at=? WHERE actor=? AND action=?",
+                  (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION))
     later = now() + timedelta(hours=49)
     assert verdict(api, "ops", later).status == "due"
     assert len(run(api, later)) == 1
