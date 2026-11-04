@@ -123,7 +123,8 @@ def test_an_existing_file_moves_on_boot_and_booting_again_changes_nothing(tmp_pa
         for statement in OLD:
             c.execute(statement)
         fill(c)
-        c.execute("DELETE FROM schema_migrations WHERE version='0064_history_events'")
+        # 0065_home_merges is applied after 0064 too; the loader will not run 0064 behind it, so both come off.
+        c.execute("DELETE FROM schema_migrations WHERE version IN ('0064_history_events', '0065_home_merges')")
     boot(path)
     with sqlite3.connect(path) as c:
         assert not set(SOURCES) & {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
