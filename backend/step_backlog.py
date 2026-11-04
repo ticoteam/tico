@@ -67,7 +67,7 @@ def _targets(c, rule, row, owner):
     from .lifecycle import _manager_actor
     from .pipeline_exceptions import reads_list
     out = []
-    for who in rule["notify"]:
+    for who in rule.get("notify") or ["manager"]:
         if who == "manager":
             # A manager that works from its exceptions list reads the backlog there, not as a notice.
             # task_types.manager holds the manager's slug (roadmap_flow.LEGACY_MANAGERS); its actor is the bot's id.
