@@ -451,6 +451,7 @@ mod tests {
     fn a_replaced_lock_is_restored_instead_of_unlinked() {
         let root = std::env::temp_dir().join(format!("tico-race-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let lock = root.join("index.lock");
         std::fs::write(&lock, "old lock").unwrap();
         let before = lock.metadata().unwrap();
