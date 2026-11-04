@@ -2058,17 +2058,13 @@ def install(app, store, auth, task_views, task_view):
                         beat.start()
                         yield ": keepalive\n\n"
                         if beat.pending:
-                            try:
-                                await asyncio.shield(beat.pending)
-                            except Problem:
-                                for topic, data in watch.drain():
-                                    yield _frame(None, topic, data)
-                                yield "event: expired\ndata: {}\n\n"
-                                return
-                            except Exception:
-                                pass
+                            await asyncio.wait({beat.pending})
+                        refused = beat.refused()
                         for topic, data in watch.drain():
                             yield _frame(None, topic, data)
+                        if refused:
+                            yield "event: expired\ndata: {}\n\n"
+                            return
                         quiet_since = time.monotonic()
             finally:
                 leave()

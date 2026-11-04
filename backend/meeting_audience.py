@@ -27,7 +27,7 @@ def audience(c, auth, *, record=None, live=None):
                 media.authorized(c, identity, record['id'])
                 allowed.add(actor)
             except Problem:
-                pass
+                continue
     if record is not None:
         allowed.update('bot:' + row[0] for row in c.execute(
             "SELECT b.bot FROM live_meeting_bots b JOIN live_meetings m ON m.id=b.meeting_id "

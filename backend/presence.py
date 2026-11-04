@@ -22,8 +22,8 @@ def authorized(c, auth, who, place):
             return media.authorized(c, who, ident)
         if sep and ident and kind == 'task':
             return auth.task(c, who, ident)
-    except Problem:
-        pass
+    except Problem as exc:
+        raise Problem('not_found', 'Place not found', 404) from exc
     raise Problem('not_found', 'Place not found', 404)
 
 
