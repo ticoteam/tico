@@ -4,8 +4,8 @@
 - `per: step` counts the open tickets at the step; `per: owner` counts each owner's open tickets there, and warns for
   each owner over `over` separately.
 - `notify` names who hears it, each one of: `manager` (the bot that manages the type), `owner` (the owner over, with
-  `per: owner`, when the owner is a bot), `owner_manager` (one level up from that owner on the org chart), or a named bot
-  (`bot:<slug>` or a bare bot slug). A person is never named: a notify that names one is refused.
+  `per: owner`), `owner_manager` (one level up from that owner on the org chart), or a named bot or person
+  (`bot:<slug>`, `human:<id>`, or a bare bot slug).
 - `every_hours` (default EVERY_HOURS): one warning per step (and owner) at most this often while it stays over.
 
 The warning is written into the room of the oldest ticket waiting there, as a `blocker` wake, which a Lead's profile
@@ -45,14 +45,15 @@ def clean(c, actor, raw):
             if who != "manager" and per != "owner":
                 H.refuse(c, actor, "kind", f"A step's backlog notifies {who} only when it counts per owner")
         else:
-            if who.startswith("human:"):
-                H.refuse(c, actor, "kind", "A step's backlog tells bots only: a person is never named in notify")
-            if not who.startswith("bot:"):
+            if not who.startswith(("bot:", "human:")):
                 who = "bot:" + who
-            known = H.resolve_bot(c, H.actor_id(who))
+            if who.startswith("bot:"):
+                known = H.resolve_bot(c, H.actor_id(who))
+                who = "bot:" + known["id"] if known else who
+            else:
+                known = H.human(c, H.actor_id(who))
             if not known:
                 H.refuse(c, actor, "not-found", f"{who} is nobody a step's backlog can notify")
-            who = "bot:" + known["id"]
         if who not in out:
             out.append(who)
     every = raw.get("every_hours", EVERY_HOURS)
@@ -72,7 +73,7 @@ def _targets(c, rule, row, owner):
             found = H.resolve_bot(c, H.type_manager(c, row)) or {}
             who = H.bot_actor(found["id"]) if found and not reads_list(c, found["id"]) else ""
         elif who == "owner":
-            who = owner if per_owner(rule) and H.is_bot(owner) else ""
+            who = owner if per_owner(rule) else ""
         elif who == "owner_manager":
             who = _manager_actor(c, H.actor_id(owner)) if per_owner(rule) and H.is_bot(owner) else ""
         if who and who not in out:

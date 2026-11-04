@@ -93,27 +93,19 @@ def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits(api
         assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 
-def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(api):
+def test_unanswered_questions_stay_on_the_persons_needs_you_and_no_bot_is_woken(api):
     friday = "2026-10-16T17:00:00.000000Z"              # 10:00 Pacific
     with api.app.state.store.transaction() as c:
         tasks = [H.task_create(c, ANA, f"Pick a {what}", "x", OPS) for what in ("venue", "caterer", "date")]
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
         c.executemany("UPDATE messages SET created_at=? WHERE id=?", [(friday, a["id"]) for a in asks])
         assert still_needed.crossed_at(friday).isoformat().startswith("2026-10-20T10:00")    # the weekend skipped
-        monday, tuesday, wednesday = ("2026-10-19T17:00:00.000000Z", "2026-10-20T15:30:00.000000Z",
-                                      "2026-10-21T15:30:00.000000Z")      # Mon 10:00, Tue 8:30, Wed 8:30 Pacific
-        assert still_needed.sweep(c, monday) == {} and still_needed.sweep(c, tuesday) == {}
+        monday, wednesday = ("2026-10-19T17:00:00.000000Z", "2026-10-21T15:30:00.000000Z")   # Mon 10:00, Wed 8:30 Pacific
+        assert still_needed.sweep(c, monday) == {} and still_needed.sweep(c, wednesday) == {}
         assert all(listed(c, t["id"]) for t in tasks)
-        sent = still_needed.sweep(c, wednesday)
-        assert list(sent) == [OPS] and set(sent[OPS]) == {a["id"] for a in asks}
-        assert not any(listed(c, t["id"]) for t in tasks)
-        wake = c.execute("SELECT id, body FROM messages WHERE recipient_id=? AND body LIKE 'Still needed?%'", (OPS,)).fetchall()
-        assert len(wake) == 1 and all(f"Which {t['title'][7:]}?" in wake[0]["body"] for t in tasks)
-        assert wakes(c, wake[0]["id"]) == 1
-        assert still_needed.sweep(c, "2026-10-21T18:00:00.000000Z") == {}      # once a morning
-        again = pick(c, tasks[0]["id"], "Which venue? The Hall or the Barn.")     # re-asked; the other two dropped
-        assert [t["id"] for t in tasks if listed(c, t["id"])] == [tasks[0]["id"]]
-        assert H.open_task_asks(c, H.task(c, tasks[0]["id"]))[0]["id"] == again["id"]
+        assert [H.open_task_asks(c, H.task(c, t["id"]))[0]["id"] for t in tasks] == [a["id"] for a in asks]
+        assert c.execute("SELECT COUNT(*) FROM messages WHERE recipient_id=? AND body LIKE 'Still needed?%'",
+                         (OPS,)).fetchone()[0] == 0
         assert H.ask_clock(H.message(c, again["id"])) > friday
 
 
@@ -238,5 +230,5 @@ def test_still_needed_keeps_the_wait_while_another_question_to_the_same_person_i
                            "other": True, "options": [{"label": "Low", "description": ""},
                                                       {"label": "High", "description": ""}]}], "who": ANA})
         c.execute("UPDATE messages SET created_at=? WHERE id=?", ("2026-10-21T15:00:00.000000Z", fresh["id"]))
-        assert still_needed.sweep(c, "2026-10-21T15:30:00.000000Z") == {OPS: [old["id"]]}
+        assert still_needed.sweep(c, "2026-10-21T15:30:00.000000Z") == {}
         assert H.task(c, work["id"])["waiting_on"] == ANA and listed(c, work["id"])

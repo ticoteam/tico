@@ -1,5 +1,5 @@
-"""Find stuck (backend/maintenance_steps/find_stuck.py): each kind it lists (due, missed, blocked, unanswered, restate, stale,
-quiet) gets one grouped list per bot per run; a task a person holds is never listed by the kinds that are plain code's own,
+"""Find stuck (backend/maintenance_steps/find_stuck.py): each kind it lists (due, missed, blocked, restate, stale, quiet)
+gets one grouped list per bot per run; a task a person holds is never listed by the kinds that are plain code's own,
 under any hold kind; a hold the reader cannot see keeps a task off; the blocker's bot is woken, not the owner; a re-armed
 follow-up is listed again; nothing is relisted without a change; at most ten bots a run, oldest first; no re-arm text; no
 person is messaged; and the Still wanted card migration (migrations/0080). Synthetic fixtures only."""
@@ -167,7 +167,7 @@ def test_a_blocked_task_wakes_its_blocker_bot_not_its_owner(api):
     assert lists(store, "finance") == [], "the owner is not woken about its blocked task"
 
 
-def test_an_unanswered_question_to_a_person_goes_back_to_its_bot_at_the_weekday_morning(api):
+def test_an_unanswered_question_to_a_person_stays_with_the_person_and_wakes_no_bot(api):
     store = api.app.state.store
     with store.transaction() as c:
         tid = task(c, "Pick a venue")["id"]
@@ -175,14 +175,11 @@ def test_an_unanswered_question_to_a_person_goes_back_to_its_bot_at_the_weekday_
         H.task_update(c, H.bot_actor("finance"), tid, status="waiting", waiting_on=H.human_actor("ana"), note="Which venue?")
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (ago(days=6), said["id"]))
         complete_jobs(c)
-    assert step(store, DAY)["details"]["woken"] == [], "the batch is for the morning, not before it"
-    assert step(store, NOON)["details"]["woken"] == ["finance"]
-    body = only_list(store)
-    assert f'- To ana on "Pick a venue"' in body and '"Which venue?"' in body
+    step(store, NOON)
+    assert all("To ana" not in body for body in lists(store)), "nothing takes the question back to its bot"
     with store.read() as c:
-        assert c.execute("SELECT superseded_at FROM messages WHERE id=?", (said["id"],)).fetchone()[0] is not None, \
-            "taken back off the person's list"
-    assert step(store, NOON)["details"]["woken"] == [], "not again"
+        assert c.execute("SELECT superseded_at FROM messages WHERE id=?", (said["id"],)).fetchone()[0] is None, \
+            "the question stays on the person's list"
 
 
 def test_a_waiting_note_without_a_plain_ask_gets_one_restate_request(api):
@@ -358,6 +355,36 @@ def test_find_stuck_never_messages_a_person(api):
     with store.read() as c:
         recipients = {row[0] for row in c.execute("SELECT recipient_id FROM messages WHERE refs LIKE '%find_stuck%'")}
     assert recipients == {"bot:finance"}
+
+
+def test_a_delivered_list_is_one_limiter_record_with_every_task_it_named(api, monkeypatch):
+    store = api.app.state.store
+    calls = []
+    monkeypatch.setattr(FS.LIMITS, "record", lambda c, bot_id, task_ids=(): calls.append((bot_id, list(task_ids))))
+    with store.transaction() as c:
+        for title in ("Draft the grant report", "Renew the budget"):
+            settle(c, task(c, title)["id"], "finance", ago(days=3))
+        complete_jobs(c)
+    assert step(store)["details"]["woken"] == ["finance"]
+    assert len(calls) == 1 and calls[0][0] == "finance" and len(calls[0][1]) == 2, calls
+
+
+def test_a_blocked_task_already_listed_for_its_update_is_not_read_again(api, monkeypatch):
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = task(c, "Finish the menu", "ops")["id"]
+        mine = task(c, "Print the menu")["id"]
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+    assert step(store)["details"]["woken"] == ["ops"]
+    reads = []
+    real_holds = FS.TH.holds
+    monkeypatch.setattr(FS.TH, "holds", lambda c, row: reads.append(row["id"]) or real_holds(c, row))
+    with store.transaction() as c:
+        assert FS._blocked(c, H.shift(DAY, hours=2), {"ops", "finance"}) == []
+    assert reads == [], "a task listed for its current update is skipped before its holds are read"
 
 
 def test_the_still_wanted_card_migration_withdraws_only_open_still_wanted_questions(api):

@@ -45,14 +45,14 @@ def test_a_step_over_its_backlog_tells_the_types_manager_once_per_stretch(api):
         assert told(c) == [("bot:coo", "Backlog: 4 tickets wait at Inbox")] * 2
 
 
-def test_per_owner_counts_each_owner_and_tells_the_owner_one_level_up(api):
+def test_per_owner_counts_each_owner_and_tells_the_owner_one_level_up_and_a_named_person(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='coo' WHERE bot='ops'")
-        typ = board(c, {"over": 2, "per": "owner", "notify": ["owner", "owner_manager"]})
+        typ = board(c, {"over": 2, "per": "owner", "notify": ["owner", "owner_manager", "human:ana"]})
         tickets(c, typ, "bot:ops", 3)
         tickets(c, typ, "bot:cpo", 2)
         [(step, owner, n, who)] = SB.sweep(c, later(0))
-        assert (step, owner, n, who) == ("Inbox", "bot:ops", 3, ["bot:ops", "bot:coo"])
+        assert (step, owner, n, who) == ("Inbox", "bot:ops", 3, ["bot:ops", "bot:coo", "human:ana"])
 
 
 def test_a_private_ticket_changes_nothing_a_warning_says(api):
@@ -114,8 +114,7 @@ def test_per_owner_a_private_ticket_never_makes_an_owner_over(api):
 
 
 @pytest.mark.parametrize("backlog", [{"over": -1}, {"over": 3, "per": "team"}, {"over": 3, "notify": ["owner"]},
-                                     {"over": 3, "notify": ["bot:nobody"]}, {"over": 3, "notify": ["human:ana"]},
-                                     {"over": 3, "every_hours": 0}])
+                                     {"over": 3, "notify": ["bot:nobody"]}, {"over": 3, "every_hours": 0}])
 def test_a_backlog_setting_that_cannot_work_is_refused(api, backlog):
     with api.app.state.store.transaction() as c:
         with pytest.raises(H.Refused):

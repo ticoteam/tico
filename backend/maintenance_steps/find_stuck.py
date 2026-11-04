@@ -12,24 +12,23 @@ The kinds, in the order a list shows them:
 - blocked: a bot's waiting task whose every hold is on a bot (task_holds.holds). Each bot a hold is on is woken about the
   task; the task's owner is not. A hold on a person, on nobody, on a private task, or on a bot that cannot read the task
   keeps the task off the list.
-- unanswered: a bot's question to a person with no answer for two business days (still_needed). Delivered once; the question
-  then goes back to its bot and off the person's Needs you.
 - restate: a bot set a task waiting on a person without a plain ask. Its bot is asked once to restate it (restate_asks).
 - stale: a bot-owned task that stale_review's candidate rule finds, while the team's stale_review rule is on. Chosen in code;
   no model judges it.
 - quiet: today's rule (task_roundup): nothing has happened on the task for a day and nothing holds it.
 
+An unanswered question to a person is not a kind here: it stays on the person's Needs you (backend/still_needed.py).
+
 Rules for every kind:
 - Nothing goes to a person. A list is written to the bot's own notice room with Tico, where no person is a member.
-- A task a person holds is never listed by due, missed, blocked, stale or quiet, under any hold kind. Two kinds are the
-  bot's own correction and are folded in from still_needed and restate_asks, so they name a task waiting on a person once
-  each: unanswered (the bot's question to a person, after two business days, then taken back) and restate (the bot's
-  waiting note with no plain ask, once).
+- A task a person holds is never listed by due, missed, blocked, stale or quiet, under any hold kind. restate is the bot's
+  own correction and the one kind that names such a task: once ever per task, so the person's card reads plainly.
 - A task is listed once per appointment. The key is (task, kind, appointment) in maintenance_listings, where the
   appointment is the follow-up time (due), the snooze or deferred time (missed), the task's updated_at with the blocked
   bot (blocked), or the task's updated_at (stale and quiet). A stale, quiet or blocked task is also not listed again to the
   same bot until it changes after its last listing, whichever of those kinds listed it.
-- A bot is woken only through backend/maintenance_limits.py (allow, then record for each task listed).
+- A bot is woken only through backend/maintenance_limits.py: `allow` per item, then one `record` per delivered list with
+  every task it named.
 """
 
 import sqlite3
@@ -37,7 +36,7 @@ from datetime import timedelta
 
 from .. import hubdb as H
 from .. import maintenance_limits as LIMITS
-from .. import restate_asks, rules, run_triggers as RT, stale_review, still_needed, task_check_backs
+from .. import restate_asks, rules, run_triggers as RT, stale_review, task_check_backs
 from .. import task_holds as TH
 from .. import task_roundup as TRU
 from .. import task_snooze as TS
@@ -57,7 +56,7 @@ ACTIVE = H.ACTIVE_STATUSES
 LISTINGS = ("CREATE TABLE IF NOT EXISTS maintenance_listings("
             "task_id TEXT NOT NULL, kind TEXT NOT NULL, appointment TEXT NOT NULL, bot_id TEXT NOT NULL, "
             "listed_at TEXT NOT NULL, PRIMARY KEY(task_id, kind, appointment))")
-KINDS = ("due", "missed", "blocked", "unanswered", "restate", "stale", "quiet")
+KINDS = ("due", "missed", "blocked", "restate", "stale", "quiet")
 RANK = {kind: n for n, kind in enumerate(KINDS)}
 # The kinds a task is not listed again to the same bot for until it changes.
 CHANGE_KINDS = ("blocked", "stale", "quiet")
@@ -101,7 +100,6 @@ def _gather(c, at):
             items += _own(c, slug, row, at, now)
     items += _missed(c, at, awake)
     items += _blocked(c, at, awake)
-    items += _unanswered(c, at, awake)
     items += _restate(c, awake)
     items += _stale(c, at, awake)
     return items, checked
@@ -165,10 +163,17 @@ def _missed(c, at, awake):
 
 
 def _blocked(c, at, awake):
-    """Waiting tasks every one of whose holds is on a bot: each such bot is woken about the task, not the owner."""
+    """Waiting tasks owned by an awake bot whose every hold is on a bot: each such bot is woken about the task, not the
+    owner. A task already listed for its current update is not read again."""
+    if not awake:
+        return []
+    owners = [H.bot_actor(slug) for slug in sorted(awake)]
+    marks = ",".join("?" for _ in owners)
     out = []
-    for row in H._rows(c.execute("SELECT * FROM " + H.TASKS + " tasks WHERE status='waiting' ORDER BY updated_at")):
-        if not H.is_bot(row["owner_id"]) or TS.snoozed(row, at):
+    rows = H._rows(c.execute("SELECT * FROM " + H.TASKS + " tasks WHERE status='waiting' AND owner_id IN (" + marks
+                             + ") ORDER BY updated_at", owners))
+    for row in rows:
+        if TS.snoozed(row, at) or _listed_for_update(c, row):
             continue
         found = TH.holds(c, row)
         if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"])
@@ -185,22 +190,6 @@ def _blocked(c, at, awake):
             line = TRU._line(row, "Waiting on you" + (f": {what}" if what else ""), private)
             out += _new_item(c, "blocked", slug, row["id"], f"{slug}|{row['updated_at']}", row["updated_at"] or "", line,
                              updated=row["updated_at"] or "")
-    return out
-
-
-def _unanswered(c, at, awake):
-    """Bot questions to people, unanswered two business days, on the weekday morning batch (still_needed)."""
-    if not still_needed.batch_due(at):
-        return []
-    out = []
-    for asked, task in still_needed.crossed(c, at):
-        slug = H.actor_id(asked["sender_id"]) if H.is_bot(asked["sender_id"]) else None
-        if slug not in awake:
-            continue
-        private = bool(task) and H.task_private(c, task)
-        key = task["id"] if task else asked["id"]
-        line = still_needed._line(asked, None if private else task)
-        out += _new_item(c, "unanswered", slug, key, asked["id"], asked["created_at"], line, asks=[(asked, task)])
     return out
 
 
@@ -240,6 +229,13 @@ def _stale(c, at, awake):
 def _person_held(c, row):
     """Whether a person holds the task: a hold on a person, on nobody, or on a task the reader cannot see."""
     return any(h["on"] is None or H.is_human(h["on"]) or h["kind"] == "private" for h in TH.holds(c, row))
+
+
+def _listed_for_update(c, row):
+    """Whether the task was already listed as blocked for its current update, to any bot."""
+    updated = row["updated_at"] or ""
+    return any(appointment.split("|", 1)[-1] == updated for (appointment,) in c.execute(
+        "SELECT appointment FROM maintenance_listings WHERE task_id=? AND kind='blocked'", (row["id"],)).fetchall())
 
 
 def _received(c, row, since):
@@ -312,6 +308,7 @@ def _send(c, slug, items, at):
             return 0                    # no job was queued for the bot, so it was not woken: a later run may try again
         for item in shown:
             _record(c, slug, item, at)
+        LIMITS.record(c, slug, [item["task"] for item in shown])
         H.event(c, H.KEEPER, EVENT, slug, {"at": at, "items": len(shown),
                                            "kinds": sorted({item["kind"] for item in shown})})
         return len(shown)
@@ -319,15 +316,12 @@ def _send(c, slug, items, at):
 
 
 def _record(c, slug, item, at):
-    """What a delivered line leaves behind: its listing, the limiter's count, and the one-time effect of its kind."""
+    """What a delivered line leaves behind: its listing and the one-time effect of its kind. The limiter is counted once
+    per list in _send, not per line."""
     c.execute("INSERT OR IGNORE INTO maintenance_listings(task_id, kind, appointment, bot_id, listed_at) "
               "VALUES(?,?,?,?,?)", (item["task"], item["kind"], item["appointment"], slug, at))
-    LIMITS.record(c, slug, item["task"])
     if item["kind"] == "due":
         task_check_backs.consume(c, item["task"], H.KEEPER)
-    elif item["kind"] == "unanswered":
-        still_needed.take_back(c, item["asks"])
-        H._recount(c, H.bot_actor(slug))
     elif item["kind"] == "restate":
         restate_asks.mark_asked(c, item["row"])
 

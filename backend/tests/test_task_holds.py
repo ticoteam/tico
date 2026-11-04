@@ -2,7 +2,7 @@
 person lives and dies with its own task, and its asker hears when it is withdrawn (backend/task_holds.py, Dev 627)."""
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.store import H
-from backend import approval_expiry, still_needed, task_holds
+from backend import approval_expiry, task_holds
 from backend.tests.hold_rows import set_holds
 
 
@@ -73,19 +73,6 @@ def test_ending_the_question_s_own_task_tells_the_asker_whether_the_person_saw_i
         H.task_update(c, "bot:ops", own, status="done", note="Picked indoor")
         assert H.message(c, third["id"])["superseded_at"]
         assert len(notices(c, "bot:ops")) == 2
-
-
-def test_still_needed_returns_the_question_and_reopens_its_bot_task_without_a_second_notice(api):
-    with api.app.state.store.transaction() as c:
-        ana = task_holds.name(c, "human:ana")
-        tid = bot_task(c, "Order the mail key")
-        question = ask(c, tid, "Which mailbox gets the key?")
-        wait(c, tid)
-        still_needed.send_back(c, "bot:ops", [(H.message(c, question["id"]), H.task(c, tid))])
-        assert withdrawn_label(c, question["id"]).startswith(f"Withdrawn before {ana} saw it: no answer in two")
-        row = H.task(c, tid)
-        assert row["status"] == "open" and "nothing left to wait on" in row["note"]
-        assert notices(c, "bot:ops") == []      # still needed? sent its own one notice
 
 
 def test_the_last_child_finishing_reopens_a_bot_task_and_one_of_two_keeps_it_waiting_on_the_other(api):
