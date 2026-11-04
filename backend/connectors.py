@@ -410,6 +410,9 @@ def install_connectors(app, store, execution, mutate):
             return {"ok": not failing}
         return mutate(request, body, work)
 
+    CALENDAR_OFF = ("The company turned Create and change calendar events off in Tico (Settings > Google > What Tico "
+                    "may do), so Tico will not add the event")
+
     @app.post("/api/v2/connectors/calendar/actions/claim")
     def claim_calendar_action(request: Request):
         """Claim once: an uncertain provider result is never retried into a duplicate invite."""
@@ -425,6 +428,19 @@ def install_connectors(app, store, execution, mutate):
                           "WHERE id=? AND status='running'",
                           ("The connector did not confirm the provider result", now, now, row["id"]))
                 H.event(c, row["requested_by"], "calendar.schedule.unknown", row["id"], {})
+            if not workspace.permissions(c)["change_calendar"]:
+                # What Tico may do has Change calendar off: what this computer would claim fails now rather than
+                # lands later. Calendars it may not act for wait for their own computer, which fails them the same way.
+                now = H.now()
+                for row in c.execute("SELECT id,requested_by,calendar_email FROM calendar_actions "
+                                     "WHERE status='pending'").fetchall():
+                    if google_rights.refusal(c, runner["id"], named, row["calendar_email"], owned) is not None:
+                        continue
+                    c.execute("UPDATE calendar_actions SET status='failed',error=?,updated_at=?,finished_at=? "
+                              "WHERE id=? AND status='pending'", (CALENDAR_OFF, now, now, row["id"]))
+                    H.event(c, row["requested_by"], "calendar.schedule.failed", row["id"],
+                            {"calendar": row["calendar_email"], "event_id": ""})
+                return {"action": None}
             # The first pending action on a calendar this computer may act for (plan v3 B): never the whole queue.
             row = next((found for found in c.execute("SELECT * FROM calendar_actions WHERE status='pending' "
                                                      "ORDER BY created_at,id").fetchall()
@@ -523,6 +539,8 @@ def install_connectors(app, store, execution, mutate):
         def work(c):
             person, address = calendar_person(c, body.calendar)
             calendar_allowed(c, who, address, person)
+            if not workspace.permissions(c)["change_calendar"]:
+                raise Problem("company_off", CALENDAR_OFF, 403)
             start = instant(body.start)
             if start.astimezone(timezone.utc) < datetime.now(timezone.utc):
                 raise Problem("start", "Calendar appointments must start in the future", 422)
@@ -568,6 +586,7 @@ def install_connectors(app, store, execution, mutate):
             runner, named, owned = reader(c, request.state.identity)
             targets = google_rights.visible(c, runner["id"], named, owned=owned)
             freshness = {row["address"]: row for row in c.execute("SELECT * FROM mail_mailboxes")}
+            company = workspace.permissions(c)
         mailboxes = []
         for target in targets:
             address, person_id = target["address"], target["person_id"]
@@ -580,8 +599,10 @@ def install_connectors(app, store, execution, mutate):
                 "synced_at": row["synced_at"] if row else None,
                 "error": row["error"] if row else None,
             })
+        # What Tico may do (Settings > Google), which the mail CLI the runner runs checks every write against
+        # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {"mailboxes": mailboxes, "batch": MAIL_BATCH,
-                "retention_days": store.settings.mail_retention_days}
+                "retention_days": store.settings.mail_retention_days, "company": company}
 
     @app.post("/api/v2/connectors/mail/messages")
     def mail_publish(request: Request, body: MailPublish):

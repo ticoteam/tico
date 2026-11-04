@@ -529,6 +529,36 @@ def require(granted, capability, mailbox, what):
                   f"can add one scope with `google connect --allow {capability}`).")
 
 
+# The company's What Tico may do (Settings > Google, backend/google_workspace.py PERMISSIONS) for each write. A draft
+# is the first step of every send, so Send mail on allows one with Organize mail off.
+COMPANY_NEEDS = {"labels": ("organize_mail",), "drafts": ("organize_mail", "send_mail"), "send": ("send_mail",),
+                 "calendar-write": ("change_calendar",)}
+COMPANY_NAMES = {"organize_mail": "Organize mail", "send_mail": "Send mail",
+                 "change_calendar": "Create and change calendar events"}
+
+
+def company_allows(company, capability, mailbox, what):
+    """Refuse a write the company turned off in Tico, whatever credential the run holds (a local service-account key,
+    a standalone grant or a server token): Google's scopes alone cannot tell Organize mail from Send mail.
+
+    `company` is the run's {permission: bool} (policy.company), a callable returning it, None when Tico said nothing
+    of it (an older server), or "unread" when Tico could not be asked: no write goes to Google then, since a lookup
+    that failed must not hand back what the company turned off."""
+    company = company() if callable(company) else company
+    if company == "unread":
+        raise Failure("Tico couldn't check the company's mail settings; try again",
+                      f"Nothing was sent to Google for {mailbox}. Reading mail still works.")
+    if not isinstance(company, dict):
+        return
+    needs = COMPANY_NEEDS[capability]
+    if any(company.get(name) is not False for name in needs):
+        return
+    names = " or ".join(COMPANY_NAMES[n] for n in needs)
+    raise Refused(f"the company turned {names} off in Tico (Settings > Google > What Tico may do), so Tico will not "
+                  f"{what} in {mailbox}; nothing was sent to Google",
+                  "An admin turns it back on there.")
+
+
 def refresh_failed_hint(mailbox):
     return ("The connection was removed at Google (myaccount.google.com/permissions), expired, or the password "
             f"changed. Reconnect: {connect_command(mailbox)}. Tico does not fall back to a service account.")

@@ -139,6 +139,21 @@ class Chain(Stage2):
             d = self.decide([STRANGER], approval=approval)
             self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
 
+    def test_with_the_company_send_mail_off_no_bot_sends_whatever_its_switch_or_an_approval(self):
+        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
+        hub(owner_order())
+        on = self.confirmed_setting("inbox")                            # sending on, ME a forward target
+        pl.SERVER_GET = lambda slug: dict(on, bot=slug, company_send=True)
+        self.assertTrue(self.decide([ME]).allowed)
+        for approval in (None, "77", ORDER):
+            pl.SERVER_GET = lambda slug: dict(on, bot=slug, company_send=False)
+            d = self.decide([ME] if approval is None else [STRANGER], approval=approval)
+            self.assertEqual((d.allowed, d["gate"]), (False, "company"), d)
+            self.assertIn("Settings > Google", d["reason"])
+        # A server from before the setting sends no company_send: the bot's own switch decides, as before.
+        pl.SERVER_GET = lambda slug: dict(on, bot=slug)
+        self.assertTrue(self.decide([ME]).allowed)
+
     def test_a_run_that_cannot_read_the_stage_sends_nothing_even_with_a_matching_approval(self):
         # No credential, Tico unreachable or a bad answer: the run cannot tell an onboarding bot from an Active one.
         pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")

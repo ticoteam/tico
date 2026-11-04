@@ -2656,7 +2656,7 @@
         ]
       },
       "post": {
-        "summary": "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending)",
+        "summary": "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
         "operationId": "createAutomation",
         "requestBody": {
           "required": true,
@@ -11445,7 +11445,10 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "x-task-event-schema": {
+              "$ref": "#/components/schemas/TaskEvent"
+            },
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -12251,7 +12254,7 @@
     },
     "/api/v2/files/search": {
       "get": {
-        "summary": "Search the files the caller may read by title and text, best first, each with an excerpt",
+        "summary": "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt",
         "operationId": "searchFiles",
         "parameters": [
           {
@@ -12272,6 +12275,16 @@
               "type": "integer",
               "default": 20,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Kind"
             }
           }
         ],
@@ -22380,6 +22393,234 @@
         ]
       }
     },
+    "/api/v2/maintenance": {
+      "get": {
+        "summary": "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it",
+        "operationId": "getMaintenance",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      },
+      "patch": {
+        "summary": "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes",
+        "operationId": "saveMaintenance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceUpdate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/maintenance/run": {
+      "post": {
+        "summary": "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one",
+        "operationId": "runMaintenance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceRunRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/maintenance/runs": {
+      "get": {
+        "summary": "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`",
+        "operationId": "listMaintenanceRuns",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
     "/api/v2/me": {
       "get": {
         "summary": "The signed-in caller",
@@ -23142,6 +23383,18 @@
                     ],
                     "title": "Private"
                   },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "const": "participants",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Audience"
+                  },
                   "review": {
                     "anyOf": [
                       {
@@ -23312,6 +23565,18 @@
                       }
                     ],
                     "title": "Private"
+                  },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "const": "participants",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Audience"
                   },
                   "review": {
                     "anyOf": [
@@ -25500,7 +25765,7 @@
         ]
       },
       "get": {
-        "summary": "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task",
+        "summary": "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task (filed on or pinned to it)",
         "operationId": "listPages",
         "parameters": [
           {
@@ -25777,7 +26042,7 @@
     },
     "/api/v2/pins": {
       "post": {
-        "summary": "Pin page:<file id> or card:<id> at a place: a bot its own, to its sidebar or task; a person who arranges the Dashboard or a team page there",
+        "summary": "Pin page:<file id> or card:<id> at a place: a bot its own, to its sidebar or task; any person who may read a task there, without widening page access; a person who arranges the Dashboard or a team page there",
         "operationId": "addPin",
         "requestBody": {
           "content": {
@@ -25908,7 +26173,7 @@
         ]
       },
       "delete": {
-        "summary": "Unpin; a card pinned nowhere else goes with it",
+        "summary": "Unpin; on a task, whoever pinned it, its owner or requester, or the org owner; a card pinned nowhere else goes with it",
         "operationId": "removePin",
         "parameters": [
           {
@@ -40153,6 +40418,68 @@
         ]
       }
     },
+    "/api/v2/usage/queues/purge": {
+      "post": {
+        "summary": "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it (scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own act, stay queued. A run that has already started finishes (owner and bot administrators)",
+        "operationId": "purgeAutomaticQueue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueuePurge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuePurgeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Usage"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/webhooks": {
       "get": {
         "summary": "Your outgoing endpoints (an admin sees all) with 7-day delivered, failed and pending counts; paged",
@@ -42929,6 +43256,16 @@
           "enabled": {
             "type": "boolean"
           },
+          "action": {
+            "type": "object",
+            "description": "Assistant Message create: the pending Confirm card"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "needs_confirm": {
+            "type": "boolean"
+          },
           "trigger": {
             "type": "object"
           },
@@ -43138,6 +43475,16 @@
             "type": "string"
           },
           "enabled": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "object",
+            "description": "Assistant Message create: the pending Confirm card"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "needs_confirm": {
             "type": "boolean"
           },
           "trigger": {
@@ -57634,6 +57981,195 @@
         ],
         "additionalProperties": true
       },
+      "MaintenanceRunRequest": {
+        "properties": {
+          "step": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "collect",
+                  "clean_up",
+                  "check_health",
+                  "find_stuck",
+                  "learn",
+                  "suggest",
+                  "update",
+                  "dream"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MaintenanceRunRequest",
+        "description": "Run now: every step, or the one named (backend/maintenance.py run_now)."
+      },
+      "MaintenanceStepChange": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "collect",
+              "clean_up",
+              "check_health",
+              "find_stuck",
+              "learn",
+              "suggest",
+              "update",
+              "dream"
+            ],
+            "title": "Key"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "frequency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "run",
+                  "day",
+                  "week",
+                  "custom"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency"
+          },
+          "custom_every": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 999.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Every"
+          },
+          "custom_unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "hours",
+                  "days"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Unit"
+          },
+          "max_bots": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Bots"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "title": "MaintenanceStepChange",
+        "description": "One step's switch, frequency or bot limit (backend/maintenance.py save_step); only what is sent changes."
+      },
+      "MaintenanceUpdate": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "hourly",
+                  "2h",
+                  "3h",
+                  "6h",
+                  "12h",
+                  "daily"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule"
+          },
+          "paused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused"
+          },
+          "monthly_cap_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap Usd"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MaintenanceStepChange"
+                },
+                "type": "array",
+                "maxItems": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MaintenanceUpdate",
+        "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
+      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -59707,6 +60243,10 @@
           "can_edit": {
             "type": "boolean"
           },
+          "can_link": {
+            "type": "boolean",
+            "description": "Task places: whether the reader may link a readable page; does not grant card or pin management"
+          },
           "month": {
             "type": "string",
             "description": "growth: the month its cards read (YYYY-MM)"
@@ -59747,6 +60287,10 @@
                 },
                 "card": {
                   "$ref": "#/components/schemas/Card"
+                },
+                "can_unpin": {
+                  "type": "boolean",
+                  "description": "Task pins: whether this reader may unlink it"
                 },
                 "page": {
                   "type": "object",
@@ -60621,6 +61165,45 @@
         ],
         "additionalProperties": true
       },
+      "QueuePurge": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Scope",
+            "default": "company"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "QueuePurge",
+        "description": "`company`, or `group:<id>` for that group and the groups nested under it."
+      },
+      "QueuePurgeResult": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "company, or group:<id>"
+          },
+          "cancelled": {
+            "type": "integer"
+          },
+          "kept_people": {
+            "type": "integer"
+          },
+          "still_running": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cancelled",
+          "kept_people",
+          "scope",
+          "still_running"
+        ],
+        "additionalProperties": true
+      },
       "RanOn": {
         "type": "object",
         "properties": {
@@ -61327,6 +61910,22 @@
               }
             ],
             "title": "Send To"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "team",
+                  "participants",
+                  "private"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
           }
         },
         "additionalProperties": false,
@@ -66909,6 +67508,53 @@
           "has_more",
           "messages",
           "task"
+        ],
+        "additionalProperties": true
+      },
+      "TaskEvent": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The last change kind for this task in the batch"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true,
+            "description": "All change kinds for this task in the batch; files invalidates files and linked pages"
+          },
+          "task": {
+            "$ref": "#/components/schemas/Task"
+          },
+          "gone": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actor",
+          "at",
+          "id",
+          "kind",
+          "kinds",
+          "seq"
         ],
         "additionalProperties": true
       },

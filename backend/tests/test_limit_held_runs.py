@@ -145,7 +145,7 @@ def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_fin
         assert H.status(c, "ops")["focus"] == "Tico dismissed 1 held run a later run already covered"
 
 
-def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
+def test_a_hop_that_used_an_approval_resumes_with_a_named_check_after_four_hours(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
     post(api, "tasks", {"owner": "ops", "title": "Pay the invoice", "body": "Please pay it."})
@@ -156,8 +156,15 @@ def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
                   (H.new_id(), "spend", message, "bot:ops", H.now(), H.now()))
     hop_fails(api, machine, first)
     assert job_state(api, first["job_id"]) == "uncertain"
-    at(monkeypatch, "2026-10-26T20:01:00.000000Z", api)
+    # Held for review until HELD_REVIEW_HOURS (4) after the run stopped at 19:54Z, then resumed once, its consumed
+    # approval named for the check-first note.
+    at(monkeypatch, "2026-10-21T23:50:00.000000Z", api)
     assert sweep(api) == [] and job_state(api, first["job_id"]) == "uncertain"
+    at(monkeypatch, "2026-10-22T00:00:00.000000Z", api)
+    assert [d["state"] for d in sweep(api)] == ["queued"]
+    with api.app.state.store.read() as c:
+        note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (first["job_id"],)).fetchone()[0]
+    assert "consumed approval (spend)" in note
 
 
 def test_a_run_held_after_a_limit_resumes_when_the_bot_moves_to_another_model(api, monkeypatch):

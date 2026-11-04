@@ -60,6 +60,8 @@ PAGES = {
     "replay": page("replay", "items", **{"from": WEEK_AGO.isoformat(), "to": NOW.isoformat()}),
     "changelog": page("changelog", "entries"),
     "settings": page("bots"),
+    # History reuses the runs, task changes and decisions the existing demo sections record.
+    "settings-history": page("history", "items"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
 }
@@ -95,3 +97,11 @@ def test_page_has_demo_data(api, name):
     body = response.json()
     items = body if key is None else body.get(key)
     assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
+
+
+def test_task_pages_have_demo_data(api):
+    pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
+    shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
+    task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
+    pins = api.get("/api/v2/places/" + task_place).json()["pins"]
+    assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)

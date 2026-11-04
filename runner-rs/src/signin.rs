@@ -104,6 +104,8 @@ pub struct SignIn {
     /// while it runs the regular key fetch and key login leave the runtime's key alone, and a fetch that began
     /// before it writes nothing. Locked after `keys`, never before.
     changes: Mutex<HashMap<String, (u64, bool)>>,
+    /// This process's environment as it started: the terminal's keys, read by `hand`. A test replaces it.
+    pub(crate) process_env: Env,
 }
 
 /// What a Switch to API key may change for one runtime on this computer, as it was before it began: its marks and
@@ -157,6 +159,7 @@ impl SignIn {
             keys: Mutex::new(HashMap::new()),
             key_login_ended: Condvar::new(),
             changes: Mutex::new(HashMap::new()),
+            process_env: std::env::vars().collect(),
         }
     }
 
@@ -507,7 +510,7 @@ impl SignIn {
     }
 
     fn hand(&self) -> Env {
-        let mut env: Env = std::env::vars().collect();
+        let mut env: Env = self.process_env.clone();
         env.extend(read_env(&self.secrets.join(HAND_KEYS_FILE)));
         env
     }
