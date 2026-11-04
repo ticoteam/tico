@@ -213,7 +213,11 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.equal((await active(page)).inPop, true);
     // Esc closes it and gives focus back to the ?; words typed but not sent are there again on reopening.
     await box.fill('half a thought');
+    // The close event (which hands focus back to the ?) is dispatched after Escape: wait for it, so it cannot take focus
+    // from a field the test focuses later.
+    await page.evaluate(() => { window.__closed = new Promise(done => document.getElementById('support-pop').addEventListener('close', done, {once: true})); });
     await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__closed);
     await page.locator('#support-pop').waitFor({state: 'hidden'});
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'support-open');
     // A reply while the person is typing in another field: the ? gets its dot and the chat waits. It opens by itself once
