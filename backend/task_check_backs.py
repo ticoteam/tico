@@ -414,8 +414,8 @@ def _unchanged_wakes(c, row):
 
 def explicit(c, row):
     """Whether a person or bot set the current due time itself; the keeper's defaults, repairs and re-parks are not."""
-    last = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='check_back_at' "
-                     "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    last = c.execute("SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? "
+                     "AND kind='check_back_at' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
     return bool(last) and last["actor"] != _H().KEEPER
 
 
@@ -424,8 +424,8 @@ def changed(c, row):
     changed, and so does a notice a moved due time canceled before delivery: the bot never received it. A message on the
     task counts too, even a comment: stand() skips the owner's messages, and a comment writes no task event."""
     H = _H()
-    seen = c.execute("SELECT created_at,new FROM task_events WHERE task_id=? AND field='check_back_wake' "
-                     "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    seen = c.execute("SELECT created_at,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                     "AND kind='check_back_wake' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
     if not seen or seen["new"] != stand(c, row):
         return True
     last = c.execute("SELECT j.state FROM task_check_back_wakes w JOIN jobs j ON j.message_id=w.message_id "
@@ -435,8 +435,9 @@ def changed(c, row):
     if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>=? AND deleted_at IS NULL "
                  "AND sender_id NOT IN (?,?) LIMIT 1", (row["conversation_id"], seen["created_at"], actor_for(row), H.KEEPER)).fetchone():
         return True
-    return bool(c.execute("SELECT 1 FROM task_events WHERE task_id=? AND created_at>=? AND field NOT LIKE 'check_back%' "
-                          "AND actor IS NOT ? LIMIT 1", (row["id"], seen["created_at"], actor_for(row))).fetchone())
+    return bool(c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND created_at>=? "
+                          "AND kind NOT LIKE 'check_back%' AND actor_id IS NOT ? LIMIT 1",
+                          (row["id"], seen["created_at"], actor_for(row))).fetchone())
 
 
 def quiet(c, row, at):
@@ -445,8 +446,8 @@ def quiet(c, row, at):
     H = _H()
     state = stand(c, row)
     count = 0
-    for r in c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field IN ('check_back_quiet','check_back_wake') "
-                       "ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)):
+    for r in c.execute("SELECT kind AS field,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                       "AND kind IN ('check_back_quiet','check_back_wake') ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)):
         if r["field"] == "check_back_wake" or r["new"] != state:
             break
         count += 1

@@ -730,8 +730,8 @@ def test_quiet_repeats_never_feed_the_stall_gate_so_a_later_reply_still_wakes(fo
         for _ in range(3):  # nothing new: the keeper's repeats back off without waking the bot or counting as repairs
             due(c, H.task(c, row["id"]))
             assert CB.sweep(c)["woke"] == []
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='check_back_repair'",
-                         (row["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='check_back_repair'", (row["id"],)).fetchone()[0] == 0
         H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == [row["id"]]
