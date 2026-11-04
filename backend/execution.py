@@ -3947,9 +3947,12 @@ class Execution:
                              [item["id"] for item in carried] + own, [item["id"] for item in notes],
                              job=row["id"], current=msg["id"]),
             tasks=len(carried), notes=len(notes))
-        from .views import roster
-        people = roster(c)
-        inbox = P.inbox_person(row["bot_id"], people)
+        # The mailboxes this turn may ask its runner for mail access to (backend/mailbox_access.py): the bot's own, or
+        # for a person's own Assistant turn, exactly that person's. `mailboxes` is the list older runners read.
+        from . import mailbox_access
+        attempt_row = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+        acting = self.auth.assistant_principal(c, attempt_row) if attempt_row else None
+        mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
@@ -3977,9 +3980,7 @@ class Execution:
                             "browser_exit": browser_exit.for_turn(c, row["bot_id"]),
                             # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
                             "onboarding": (parked["onboarding_state"] if parked else "") or "",
-                            # The mailboxes an inbox bot's turn may ask its runner for mail access to: the one it declares
-                            # (its person's email when it declares none), then the people below them.
-                            "mailboxes": routines.token_mailboxes(c, row["bot_id"], people) if inbox else [], "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot_id"], "lane": lane,
+                            "mailboxes": list(mail_levels), "mailbox_levels": mail_levels, "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot_id"], "lane": lane,
                             "credential_vault": bool(subscriptions) or c.execute(
                                 "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
                                 ("bot:" + row["bot_id"],)).fetchone() is not None,

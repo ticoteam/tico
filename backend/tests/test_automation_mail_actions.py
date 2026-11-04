@@ -76,11 +76,11 @@ class Computer:
         return answer
 
     def action(self, action):
-        return run_cli(["mail-action", "--as", access.OWNER, "--json"], json.dumps(action))[1]
+        return run_cli(["mail-action", "--as", access.CONNECTOR, "--json"], json.dumps(action))[1]
 
     def event(self, action):
         """ConnectorPublisher.calendar_event, in this process: exit 2 is a refusal before Google was asked."""
-        rc, answer = run_cli(["connector-event", "--as", access.OWNER, "--json"], json.dumps(action))
+        rc, answer = run_cli(["connector-event", "--as", access.CONNECTOR, "--json"], json.dumps(action))
         if rc == 2:
             raise CalendarRefused("Tico refused the calendar event before calling Google")
         assert rc == 0, answer
@@ -105,10 +105,14 @@ def computer(api, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "open_db", lambda: db.connect(tmp_path / "mail.db"))
     monkeypatch.setattr(audit_log, "AUDIT_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(access, "PROJECTS", tmp_path)
-    # The CLI runs as the owner and reads What Tico may do from the hub as this runner (policy.runner_company). The
+    # The CLI runs as the connector and reads What Tico may do from the hub as this runner (policy.runner_company). The
     # registration lives where TICO_RUNNER_CONFIG says, with none in the home, as a custom install has it: nothing the
     # runner runs looks for one.
     monkeypatch.setattr(pl, "RUNNER_GET", lambda path: box.worker.client.get(path))
+    # The CLI's connector principal reads the mailboxes this computer acts for as the worker does (its mail targets;
+    # here the mailbox it was given).
+    monkeypatch.setattr(access, "RUNNER_ACCESS", lambda: {**box.worker.client.get("connectors/mail/targets"),
+                                                          "mailboxes": [{"address": a} for a in box.worker.mail_boxes]})
     monkeypatch.setattr(cli, "open_calendar", lambda mailbox: box.calendar)
     (tmp_path / "home").mkdir()
     (tmp_path / "elsewhere").mkdir()
@@ -710,6 +714,11 @@ def bot_ops(api):
     r = runner(api, label="Bot Mac")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
+    # ana let ops use her mailbox (Settings > Mailboxes): a bot's automation acts on a mailbox it was given.
+    from backend import mailbox_access
+    with api.app.state.store.transaction() as c:
+        bot = H.resolve_bot(c, "ops")["id"]
+        mailbox_access.give(c, mailbox_access.ensure_mailbox(c, BOX), "bot", bot, "read_write", "human:ana")
     return r
 
 

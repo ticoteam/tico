@@ -1,8 +1,11 @@
 """Human read API over the server-stored mail copy.
 
-People browse `mail_messages`, never live Gmail. The owner sees every mailbox; anyone else
-sees their own address plus the people who report to them (`people.mailboxes_below`). Bots
-and runners are refused. Every thread or message body read is audited as `mail.read`.
+People browse `mail_messages`, never live Gmail: the mailboxes they hold a level on (backend/mailbox_access.py), the
+owner and managers included, with no bypass. Bots and runners are refused here. Every thread or message body read is
+audited as `mail.read`.
+
+`GET /api/v2/mail/access` is the mail CLI's question (connectors/mail/access.py): what the caller, a person or a bot's
+turn, may do on each mailbox it holds.
 """
 
 import json
@@ -11,8 +14,8 @@ import sqlite3
 
 from fastapi import Request
 
-from . import routines
-from .store import H, P, Problem
+from . import google_workspace, mailbox_access, routines
+from .store import H, Problem
 from .views import human_only, roster
 
 FTS_TOKEN = re.compile(r"[A-Za-z0-9_@.+'-]+")
@@ -30,30 +33,10 @@ def sanitize_fts(q):
 
 
 def visible_addresses(c, who):
-    """Mailbox addresses this person may browse, in a stable order."""
-    people = roster(c)
-    if who.role == "owner":
-        seen, out = set(), []
-        for person in people.get("people") or []:
-            addr = str(person.get("email") or "").strip().lower()
-            if addr and "@" in addr and addr not in seen:
-                seen.add(addr)
-                out.append(addr)
-        for row in c.execute("SELECT address FROM mail_mailboxes ORDER BY address"):
-            addr = str(row["address"] or "").strip().lower()
-            if addr and addr not in seen:
-                seen.add(addr)
-                out.append(addr)
-        return out
-    if who.role != "human":
+    """Mailbox addresses this person may browse, their own first: the ones they hold a level on."""
+    if who.role not in ("owner", "human"):
         return []
-    boxes = routines.message_bot_mailboxes(c, people)
-    addrs = list(dict.fromkeys(routines.mailbox_of(p, boxes) for p in P.below(H.actor_id(who.actor), people)
-                               if "@" in routines.mailbox_of(p, boxes)))
-    if addrs:
-        return addrs
-    email = str(who.email or "").strip().lower()
-    return [email] if email and "@" in email else []
+    return [box["address"] for box in mailbox_access.mailboxes_for(c, who)]
 
 
 def can_access(c, who):
@@ -147,6 +130,23 @@ def mailbox_view(c, address, people, who, auth):
 
 
 def install_mail(app, store, auth):
+    @app.get("/api/v2/mail/access")
+    def mail_access(request: Request, mailbox: str = ""):
+        """What the caller may do: on every mailbox it holds, and on `mailbox` when named. A person (their Assistant
+        included, which is them) or a bot's turn; a computer asks /api/v2/connectors/mail/targets instead."""
+        who = request.state.identity
+        if who.role not in ("owner", "human", "bot"):
+            raise Problem("identity", "Mail access is answered for a person or a bot's turn", 403)
+        with store.read() as c:
+            principal = mailbox_access.principal(c, who)
+            out = {"principal": principal.ref, "mailboxes": mailbox_access.mailboxes_for(c, principal),
+                   "company": google_workspace.permissions(c)}
+            addr = str(mailbox or "").strip().lower()
+            if addr:
+                out.update({"mailbox": addr, "level": mailbox_access.level(c, principal, addr),
+                            "may": mailbox_access.may(c, principal, addr)})
+            return out
+
     @app.get("/api/v2/mail/mailboxes")
     def mailboxes(request: Request):
         who = request.state.identity
