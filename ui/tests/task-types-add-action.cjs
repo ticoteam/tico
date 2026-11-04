@@ -62,7 +62,7 @@ const types = [{id: 'dev', name: 'Dev tickets', steps: [], roles: []}, {id: 'gen
     assert.deepEqual(errors, [], 'no page errors');
     // A person who may not change Task types sees no Add action and no Edit on the rows.
     mover = false;
-    await page.reload();
+    await page.goto('https://tico-ui.test/?no-cache=1#/settings/tasks');   // a new document, so the page opens on Settings
     await page.locator('.task-type-row', {hasText: 'Dev tickets'}).waitFor();
     assert.equal(await page.locator('[data-add-action]').count(), 0, 'no Add action without the right');
     assert.equal(await page.locator('[data-edit-type]').count(), 0, 'no Edit without the right');

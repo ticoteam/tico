@@ -51,7 +51,7 @@ const TYPES = [{id: 'dev', name: 'Dev tickets', steps: [{id: 'st_review', name: 
     await cold.page.locator('.au-trig[data-open="trigger"]').click();
     await cold.page.waitForFunction(() => document.querySelectorAll('select[data-b="stepPick"] option').length > 1);
     const coldSteps = await cold.page.locator('select[data-b="stepPick"] option').allInnerTexts();
-    assert.deepEqual(coldSteps.filter(Boolean), ['Review 1', 'In QA'], 'step choices on a cold open');
+    assert.deepEqual(coldSteps.filter(x => x && x !== 'Choose a step'), ['Review 1', 'In QA'], 'step choices on a cold open');
     await cold.page.close();
     // Switching the event away from "enters a step" drops the step filter: the saved trigger does not keep it (Dev 666).
     const stale = {...JSON.parse(JSON.stringify(TASK_AU)), id: 'au_stale', name: 'Stale step',

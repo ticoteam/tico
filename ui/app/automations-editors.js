@@ -271,7 +271,8 @@ function auEdWire(box) {
       if (!ed.evCustom) ed.trigger.name = v;
       else if (AU_EVENTS[ed.trigger.name] || AU_EVENT_MORE[ed.trigger.name]) ed.trigger.name = '';
       // The step filter belongs to "enters a step" only: another event drops it, so it cannot narrow that event (Dev 666).
-      if (ed.trigger.name !== 'task.step_changed') ed.trigger.filters = (ed.trigger.filters || []).filter(f => f.field !== AU_STEP_FIELD);
+      if (ed.trigger.name !== 'task.step_changed' && (ed.trigger.filters || []).some(f => f.field === AU_STEP_FIELD))
+        ed.trigger.filters = ed.trigger.filters.filter(f => f.field !== AU_STEP_FIELD);
       auDrawSide();
       if (ed.evCustom) box.querySelector('[data-b="trigger.name"]')?.focus();
       return;
