@@ -459,8 +459,7 @@ impl Tico {
             .iter()
             .find(|entry| entry.destination_id == self.destination.id);
         ensure!(
-            filed
-                .is_none_or(|entry| entry.status == "partial" && entry.receipt["approved"] != true),
+            !filed.is_some_and(saved_in_tico),
             "This meeting is already saved to Tico"
         );
         // Durable first, so recovery cannot file it while the requests run.
@@ -1670,4 +1669,10 @@ pub fn shared_transcript(store: &Store, record: &Recording, recording: bool) -> 
         );
     }
     Some(json!({"id": record.id, "live": recording, "shared": true, "blocks": blocks}))
+}
+
+/// Whether a delivery left the meeting saved in Tico for its audience: sent, or approved there even if a later step
+/// failed. A Save that failed before approval (or is still partial) is not: This Mac and Delete still clean it up.
+pub fn saved_in_tico(entry: &crate::store::Delivery) -> bool {
+    entry.status == "sent" || entry.receipt["approved"] == true
 }

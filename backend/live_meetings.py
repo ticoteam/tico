@@ -459,6 +459,10 @@ def _turn_conversation(c, rid, slug, title):
     return conv
 
 
+# What a bot's meeting conversation says once the meeting was kept on the recorder's computer.
+DISCARDED = "Removed: this meeting was kept on the recorder's computer."
+
+
 def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     """Put one scoped reply request on the existing durable runner job queue, in this bot's meeting conversation. A
     request that arrives while the bot's reply in this meeting runs is a follow-up in that conversation: a runtime that
@@ -1655,7 +1659,8 @@ def install_live_meetings(app, store, auth, write):
     def discard(request: Request, rid: str, body: Join):
         """The connector kept the meeting on their own computer: it ends here and what was said leaves Tico.
 
-        Turns stay (they hold no words, and the privacy index reads them to keep the bots' replies private).
+        Turns stay (they hold no words, and the privacy index reads them to keep the bots' replies private); the
+        messages in each bot's meeting conversation keep their place but lose their text.
         """
         who = request.state.identity
         def work(c):
@@ -1669,6 +1674,11 @@ def install_live_meetings(app, store, auth, write):
             for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",
                           "live_meeting_chat", "live_meeting_windows", "live_meeting_events"):
                 c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (rid,))
+            # Each bot's turns carried the transcript and chat into its meeting conversation: those copies go too.
+            for (conv,) in c.execute("SELECT id FROM conversations WHERE room_key=?",
+                                     ("live-meeting:" + rid,)).fetchall():
+                c.execute("UPDATE messages SET body=? WHERE conversation_id=?", (DISCARDED, conv))
+                c.execute("UPDATE conversations SET closed_at=COALESCE(closed_at,?) WHERE id=?", (H.now(), conv))
             _event(c, rid, "meeting.state", {"state": "ended", "by": who.actor, "action": "discard"})
             return {"id": rid, "state": "ended", "discarded": True}
         result = mutate(request, body, work)

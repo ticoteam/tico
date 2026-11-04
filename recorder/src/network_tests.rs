@@ -2390,3 +2390,109 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
     assert!(calls[5].0.contains("/live-meetings/live-live/control"));
     assert_eq!(calls[5].1, json!({"action":"end"}));
 }
+
+fn live_delivery(store: &Store, id: &str, status: &str, receipt: Value) {
+    store
+        .update_context(id, |c| {
+            c.live_id = format!("live-{id}");
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: format!("filed-{id}"),
+                status: status.into(),
+                error: String::new(),
+                receipt,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_retried_save_applies_the_audience_chosen_now_and_sends_a_title_changed_here() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    // Approved for the Team, then a later step failed; the retry is Participants only.
+    let narrowed = transcript(&store, "Narrowed");
+    live_delivery(
+        &store,
+        &narrowed.id,
+        "failed",
+        json!({"source":"live","approved":true,"audience":"team","tico_title":"Narrowed"}),
+    );
+    // Tico filed it with the live room's title; Finish renamed it here.
+    let renamed = transcript(&store, "Renamed here");
+    live_delivery(&store, &renamed.id, "partial", json!({"source":"live"}));
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"filed","review_state":"live"})),
+        Some(who),
+        Some(json!({"id":"filed","review_state":"live","title":"Live room"})),
+        Some(json!({"id":"filed","version":3,"title":"Live room"})),
+        Some(json!({"ok":true})),
+    ]);
+    tico.send_to(&store, &narrowed.id, false, "participants")
+        .unwrap();
+    tico.send_to(&store, &renamed.id, false, "team").unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[1]
+            .0
+            .contains(&format!("/meetings/filed-{}/review", narrowed.id))
+    );
+    assert_eq!(
+        calls[1].1,
+        json!({"action":"approve","private":true,"audience":"participants"})
+    );
+    assert!(
+        calls[5]
+            .0
+            .contains(&format!("/meetings/filed-{}/edit", renamed.id))
+    );
+    assert_eq!(calls[5].1, json!({"version":3,"title":"Renamed here"}));
+    let receipt = &store.get(&renamed.id).unwrap().deliveries[0].receipt;
+    assert_eq!(receipt["tico_title"], "Renamed here");
+}
+
+#[test]
+fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let failed = transcript(&store, "Failed save");
+    live_delivery(&store, &failed.id, "failed", json!({"source":"live"}));
+    let approved = transcript(&store, "Approved save");
+    live_delivery(
+        &store,
+        &approved.id,
+        "failed",
+        json!({"source":"live","approved":true}),
+    );
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"ok":true})),
+        Some(json!({"id":"live","state":"ended","discarded":true})),
+    ]);
+    tico.keep_local(&store, &failed.id).unwrap();
+    let error = tico
+        .keep_local(&store, &approved.id)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("already saved"), "{error}");
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[0]
+            .0
+            .contains(&format!("/meetings/filed-{}/delete", failed.id))
+    );
+    assert!(calls[1].0.contains("/discard"));
+    assert!(store.get(&failed.id).unwrap().deliveries.is_empty());
+    assert!(store.context(&failed.id).unwrap().live_removed);
+}

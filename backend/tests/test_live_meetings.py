@@ -1419,3 +1419,23 @@ def test_idle_screen_wait_does_not_fill_slow_request_diagnostics(live):
         assert route['max'] < 1000, route
     finally:
         live.app.state.timing.recorder = None
+
+
+def test_discard_removes_the_transcript_copies_sent_to_bots(live):
+    meeting = post(live, "live-meetings", {"title": "Kept here", "cooldown_seconds": 0})
+    attach(live, meeting["id"], "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, meeting["id"], 1, 0, 1000, "Ops, the synthetic codename is confidential")
+    turn = claimed_turn(live, machine)
+    assert "confidential" in turn["message"]["body"]
+    post(live, f"attempts/{turn['id']}/complete", {"outcome": "completed", "text": "Noted the codename.",
+                                                   "last_seq": 0}, token=machine["token"])
+    post(live, f"live-meetings/{meeting['id']}/discard", {})
+    with live.app.state.store.read() as c:
+        conv = turn["conversation"]["id"]
+        bodies = [row[0] for row in c.execute("SELECT body FROM messages WHERE conversation_id=?", (conv,))]
+        closed = c.execute("SELECT closed_at FROM conversations WHERE id=?", (conv,)).fetchone()[0]
+    assert bodies and not any("codename" in (body or "") for body in bodies)
+    assert closed

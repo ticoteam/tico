@@ -236,6 +236,18 @@ if (!only.length || only.includes('checks')) {
     await page.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 5000 });
     const row = await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm2'));
     if (row.title !== 'Weekly product sync (final)') errors.push('finish: title not saved');
+    if (row.audience !== 'participants') errors.push(`finish: saved for ${row.audience}, not participants`);
+  });
+  await check('finish-delete-recording', async (page) => {
+    await go(page, 'recording');
+    await open('m0')(page);
+    const id = 'm0';
+    await page.click('.topbar [data-act="finish-open"]');
+    await page.click('[data-act="finish-ask-delete"]');
+    await page.click('[data-act="finish-delete"]');
+    await page.waitForTimeout(300);
+    const left = await page.evaluate((rid) => ({ recording: window.__PREVIEW__.state.status.recording, row: window.__PREVIEW__.state.library.rows.some((r) => r.id === rid) }), id);
+    if (left.recording || left.row) errors.push('finish: Delete while recording left it recording or listed');
   });
   await check('finish-local', async (page) => {
     await go(page, 'library');

@@ -30,6 +30,26 @@ def participants_of(c, rid, record):
     return sorted(emails - {''})
 
 
+def restrict_source(c, who, rid):
+    """Participants only covers the live room it came from too: whoever joined keeps access, the rest of the Team
+    loses it."""
+    for (live,) in c.execute('SELECT id FROM live_meetings WHERE imported_meeting_id=? AND visibility<>?',
+                             (rid, 'private')).fetchall():
+        c.execute('INSERT OR IGNORE INTO live_meeting_access(meeting_id,actor,added_by,added_at) '
+                  'SELECT meeting_id,actor,?,? FROM live_meeting_humans WHERE meeting_id=?', (who.actor, H.now(), live))
+        c.execute('UPDATE live_meetings SET visibility=?,updated_at=? WHERE id=?', ('private', H.now(), live))
+
+
+def set_audience(c, who, rid, record, meta, audience):
+    if audience == 'team':
+        meta.update(private=False)
+        meta.pop('audience', None)
+        meta.pop('audience_emails', None)
+    elif audience == 'participants':
+        meta.update(private=True, audience='participants', audience_emails=participants_of(c, rid, record))
+        restrict_source(c, who, rid)
+
+
 class ReviewMany(M.Contract):
     action: Literal['approve_all', 'dismiss_all']
     ids: list[str] | None = None
@@ -65,18 +85,21 @@ def install_meeting_review(app, store, auth, mutate):
             meta['review_send_to'] = send_to
         target = {'approve': 'live', 'dismiss': 'dismissed', 'restore': 'pending'}[action]
         if meta['review_state'] == target:
+            # Approving again with another audience (the Recorder retrying a Save) re-files it for that audience.
+            current = meta.get('audience') or ('private' if meta.get('private') else 'team')
+            if action == 'approve' and audience and audience != current:
+                set_audience(c, who, rid, record, meta, audience)
+                media.save(c, meta, readable=record['transcript_readable'])
+                c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
+                H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action, 'audience': audience})
             return media.view(c, who, rid)
         meta['review_state'] = target
         if action == 'approve':
             meta['reviewed_at'] = H.now()
         if action == 'approve' and private is not None:
             meta['private'] = private
-        if action == 'approve' and audience == 'team':
-            meta.update(private=False)
-            meta.pop('audience', None)
-            meta.pop('audience_emails', None)
-        elif action == 'approve' and audience == 'participants':
-            meta.update(private=True, audience='participants', audience_emails=participants_of(c, rid, record))
+        if action == 'approve':
+            set_audience(c, who, rid, record, meta, audience)
         media.save(c, meta, readable=record['transcript_readable'])
         c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
         if action == 'approve':

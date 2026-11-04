@@ -65,6 +65,24 @@ def test_a_live_meeting_saved_for_participants_reads_to_who_was_added_or_joined(
          token="ben-test")
     assert readable(api, rid, "ben-test") and readable(api, rid, "cara-test") and readable(api, rid, "eve-test")
     assert not readable(api, rid, "ana-test") and not readable(api, rid, "fay-test")
+    # The ended live room it came from is held to the same people.
+    room = lambda token: api.get(f"/api/v2/live-meetings/{mid}", headers=headers(token)).status_code == 200
+    assert room("ben-test") and room("cara-test") and room("eve-test")
+    assert not room("fay-test") and not room("ana-test")
+
+
+def test_saving_again_for_participants_after_a_team_approval_narrows_it(api):
+    # A Save approved for the Team whose later step failed, retried as Participants only.
+    mid = live_meeting(api, visibility="team", joiner="cara")
+    post(api, f"live-meetings/{mid}/control", {"action": "end"}, token="ben-test")
+    rid = post(api, f"live-meetings/{mid}/finalize", {}, token="ben-test")["meeting_id"]
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": False, "audience": "team"},
+         token="ben-test")
+    assert readable(api, rid, "fay-test")
+    post(api, f"meetings/{rid}/review", {"action": "approve", "private": True, "audience": "participants"},
+         token="ben-test")
+    assert readable(api, rid, "cara-test") and not readable(api, rid, "fay-test")
+    assert api.get(f"/api/v2/live-meetings/{mid}", headers=headers("fay-test")).status_code == 404
 
 
 def test_a_live_meeting_saved_for_the_team_reads_to_everyone(api):

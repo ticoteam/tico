@@ -663,7 +663,11 @@ impl Tico {
                 delivery.receipt["audience"] = json!(audience);
                 store.delivery(id, &delivery)?;
             }
-            if live_source && delivery.receipt["approved"] != true {
+            // A retry after an approval applies the audience chosen now: Tico re-files an approved meeting for it.
+            if live_source
+                && (delivery.receipt["approved"] != true
+                    || delivery.receipt["audience"] != audience)
+            {
                 // The Recorder's own save skips the review queue, filed for who was chosen.
                 let (approve, key) = match audience {
                     "team" => (json!({"action":"approve","private":false}), "approve:team"),
@@ -673,12 +677,16 @@ impl Tico {
                     ),
                     _ => (json!({"action":"approve","private":true}), "approve"),
                 };
-                self.call(
-                    &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
-                    Some(&approve),
-                    &format!("recorder:{id}:{key}"),
-                )
-                .map_err(|error| refused_audience(error, audience))?;
+                let reviewed = self
+                    .call(
+                        &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
+                        Some(&approve),
+                        &format!("recorder:{id}:{key}"),
+                    )
+                    .map_err(|error| refused_audience(error, audience))?;
+                if let Some(title) = reviewed["title"].as_str() {
+                    delivery.receipt["tico_title"] = json!(title);
+                }
                 delivery.receipt["approved"] = json!(true);
                 delivery.receipt["audience"] = json!(audience);
                 store.delivery(id, &delivery)?;
@@ -691,21 +699,36 @@ impl Tico {
                 .unwrap_or(&context.notes)
                 .trim()
                 .to_owned();
-            if delivery.receipt["source"] == "live"
-                && !notes.is_empty()
-                && delivery.receipt["notes_saved"] != true
-            {
+            // It is filed with the live room's title, so a title changed here goes with the notes.
+            let save_notes = !notes.is_empty() && delivery.receipt["notes_saved"] != true;
+            let save_title = live_source
+                && delivery.receipt["tico_title"]
+                    .as_str()
+                    .is_some_and(|title| title != record.title);
+            if (delivery.receipt["source"] == "live" && save_notes) || save_title {
                 let meeting = self.call(
                     &format!("/api/v2/meetings/{}", delivery.meeting_id),
                     None,
                     "",
                 )?;
+                let mut edit = json!({"version":meeting["version"].as_u64().unwrap_or(1)});
+                if delivery.receipt["source"] == "live" && save_notes {
+                    edit["note"] = json!(notes);
+                }
+                if save_title {
+                    edit["title"] = json!(record.title);
+                }
                 self.call_meeting(
                     &format!("/meetings/{}/edit", delivery.meeting_id),
-                    Some(&json!({"version":meeting["version"].as_u64().unwrap_or(1),"note":notes})),
-                    &format!("recorder:{id}:notes"),
+                    Some(&edit),
+                    &format!("recorder:{id}:edit:{}", hash(&edit)),
                 )?;
-                delivery.receipt["notes_saved"] = json!(true);
+                if edit.get("note").is_some() {
+                    delivery.receipt["notes_saved"] = json!(true);
+                }
+                if save_title {
+                    delivery.receipt["tico_title"] = json!(record.title);
+                }
                 store.delivery(id, &delivery)?;
             }
             let path = format!("/meetings/{}/items", delivery.meeting_id);

@@ -401,7 +401,10 @@
       a.waiting = a.items.filter((i) => !i.sent).length;
       toast(`Task #${n} created`);
     },
+    // As the Recorder does: capture stops first, and a live share not saved to Tico leaves it too.
     delete_recording: ({ id }) => {
+      if (state.status.recording?.id === id) commands.stop_recording();
+      if (state.meetings[id]?.live && !state.meetings[id].sent) commands.keep_local({ id });
       state.library.rows = state.library.rows.filter((r) => r.id !== id);
       if (state.status.meeting === id) state.status.meeting = null;
     },
@@ -450,7 +453,7 @@
       toast('Kept on this Mac');
     },
     // Like the Rust side: stop, wait for the last words, end a live meeting, then file it where it was chosen.
-    save_meeting: ({ id, destination, title }) => {
+    save_meeting: ({ id, destination, audience, title }) => {
       const row = state.library.rows.find((r) => r.id === id);
       const m = state.meetings[id];
       if (title) { if (m) m.title = title; if (row) row.title = title; }
@@ -460,6 +463,7 @@
         state.status.meeting = null;
         return;
       }
+      if (!['team', 'participants'].includes(audience)) throw new Error('Choose who can see it');
       const org = orgs.find((o) => o.id === destination);
       const steps = [];
       if (state.status.recording?.id === id) steps.push('Stopping…', 'Transcribing…');
@@ -472,7 +476,8 @@
         state.status.sending = null;
         state.status.busy = false;
         if (m) Object.assign(m, { sent: true, live: null, live_state: 'ended', can_control: false, can_discard: false });
-        if (row) Object.assign(row, { status: { label: 'In Tico', tone: 'muted' }, sent: true, local: false, org: orgRef(destination), live_org: '' });
+        if (row) Object.assign(row, { status: { label: 'In Tico', tone: 'muted' }, sent: true, local: false, org: orgRef(destination), live_org: '', audience });
+        if (m) m.audience = audience;
         toast(`Saved to ${org.name}`);
       }, steps.length * 600);
     },

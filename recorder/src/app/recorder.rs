@@ -1936,13 +1936,11 @@ impl Recorder {
         paused_confirmed: bool,
     ) {
         let title: String = title.trim().chars().take(200).collect();
+        // A live-shared meeting is already in Tico; Save sends the new title there too.
         if let Ok(record) = self.store.get(id)
             && !title.is_empty()
             && title != record.title
-            && record
-                .deliveries
-                .iter()
-                .all(|row| row.meeting_id.is_empty())
+            && record.deliveries.iter().all(|row| row.status != "sent")
         {
             let result = self.store.mutate(id, |r| {
                 r.title = title;
@@ -2118,7 +2116,7 @@ impl Recorder {
             record
                 .deliveries
                 .iter()
-                .any(|row| row.status != "partial" || row.receipt["approved"] == true)
+                .any(tico_recorder_native::live::saved_in_tico)
         });
         // Shared live and not saved: it leaves Tico too. A meeting saved to Tico stays there.
         if !context.live_id.is_empty() && !context.live_removed && !filed {
@@ -2131,6 +2129,23 @@ impl Recorder {
             self.job_for("delete", Some(id.to_owned()), move || {
                 wait_stopped(&store, &job_id)?;
                 Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
+                store.delete(&job_id)?;
+                Ok(json!({"message":"Deleted"}))
+            });
+            if self.meeting.as_deref() == Some(id) {
+                self.meeting = None;
+                self.current = None;
+                self.context = Context::default();
+            }
+            return;
+        }
+        // Recording here: capture stops and its last audio lands before the files go.
+        if self.active.as_ref().is_some_and(|(active, _)| active == id) {
+            self.stop();
+            let store = self.store.clone();
+            let job_id = id.to_owned();
+            self.job_for("delete", Some(id.to_owned()), move || {
+                wait_stopped(&store, &job_id)?;
                 store.delete(&job_id)?;
                 Ok(json!({"message":"Deleted"}))
             });

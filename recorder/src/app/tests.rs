@@ -674,6 +674,28 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
 }
 
 #[test]
+fn delete_while_recording_here_stops_capture_then_deletes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Not wanted").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
+    .unwrap();
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    // Finish → Delete on a recording that was never shared.
+    app.delete(&recording.id);
+    settle(&mut app, |app| app.store.get(&recording.id).is_err());
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.get(&recording.id).is_err());
+    assert!(full_view(&mut app)["status"]["recording"].is_null());
+}
+
+#[test]
 fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
