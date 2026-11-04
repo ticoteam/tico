@@ -217,23 +217,3 @@ def test_close_budget_is_shared_by_two_due_rules(api, monkeypatch):
         assert receipts[second['key']] == (1, '30 tasks closed')
         notes = c.execute("SELECT note,count(*) FROM history_events WHERE subject_type='task' AND kind='status' AND new='closed' GROUP BY note").fetchall()
         assert dict(notes) == {"Closed by rule 'Close 24h after done'": 20, "Closed by rule 'Close after one day'": 30}
-
-
-def test_keeper_followup_repairs_do_not_postpone_done_untouched_cleanup(api, monkeypatch):
-    from backend import task_check_backs as CB
-    monkeypatch.setattr(CB, 'enabled', lambda c: True)   # the switch is off in production: this runs it on
-    old = R.SR._stamp(AT - timedelta(hours=48))
-    with monkeypatch.context() as m:
-        m.setattr(H, 'now', lambda: old)
-        with api.app.state.store.transaction() as c:
-            result = H.task_create(c, 'bot:finance', 'Inspect the returned export', 'Synthetic fixture', 'bot:ops', lint=False)
-            H.task_update(c, 'bot:ops', result['id'], status='done')
-    with monkeypatch.context() as m:
-        m.setattr(H, 'now', lambda: R.SR._stamp(AT))
-        with api.app.state.store.transaction() as c:
-            CB.repair(c, H.task(c, result['id']), H.now())
-            assert R.untouched(c, H.task(c, result['id']), 24, AT)
-            cutoff = R.SR._stamp(AT - timedelta(hours=24))
-            assert result['id'] in {r['id'] for r in c.execute(R.DUE_SQL, (cutoff, cutoff, cutoff, cutoff, cutoff, 50))}
-    assert not run(api)
-    assert task(api, result['id'])['status'] == 'closed'

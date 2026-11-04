@@ -130,16 +130,6 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
     assert first['job_id'] in named and second['job_id'] in named
 
 
-def capped(c, task):
-    """Past the day's stall wakes, as test_stall does it: the next check escalates."""
-    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), minutes=-120), task['id']))
-    for _ in range(H.STALL_WAKES_PER_DAY):
-        H.event(c, H.KEEPER, 'task.stall_wake', task['id'], {})
-    c.execute("UPDATE events SET created_at=? WHERE action='task.stall_wake' AND target=?",
-              (H.shift(H.now(), hours=-1), task['id']))
-    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
-
-
 def test_a_bot_renamed_while_its_review_is_open_gets_no_second_review(api):
     """The title carries the slug, so a lookup by title missed after a rename and BotOps got a second task for the bot."""
     machine, message, first = held(api)
@@ -151,8 +141,6 @@ def test_a_bot_renamed_while_its_review_is_open_gets_no_second_review(api):
         another = {**dict(job), 'id': 'job-after-the-rename'}
         msg = H.message(c, message['id'])
         api.app.state.execution._hand_to_maintainer(c, another, msg, None, ['Bash'])
-        row = H.task(c, review['id'])
-        assert H.held_review_bot(c, row) == job['bot_id']            # the stall check still reads it as this bot's
     assert [r['id'] for r in reviews(api)] == [review['id']]
     assert naming(api, review['id'], 'job-after-the-rename')
 
@@ -170,29 +158,7 @@ def test_the_next_bot_to_take_a_renamed_bots_slug_gets_a_review_of_its_own(api):
         execution._hand_to_maintainer(c, {**job, 'id': 'job-new', 'bot_id': 'b-new'}, msg, None, ['Bash'])
         rows = [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner_id=? AND title LIKE '%acme-ops%' "
                                            "ORDER BY rowid", (maintainer,))]
-        assert [H.held_review_bot(c, H.task(c, r['id'])) for r in rows] == [None, None]    # no run of theirs is held
     assert len(rows) == 2 and 'job-old' in rows[0]['body'] and 'job-new' in rows[1]['body']
-
-
-def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(api):
-    machine, message, attempt = held(api)
-    [review] = reviews(api)
-    with api.app.state.store.transaction() as c:
-        capped(c, H.task(c, review['id']))
-        assert review['id'] in H.wake_stalled(c)['escalated']
-        assert H.task(c, review['id'])['status'] == 'open'
-        kept = c.execute("SELECT json_extract(detail,'$.kept_open') FROM events "
-                         "WHERE action='task.stall_escalated' AND target=?", (review['id'],)).fetchall()
-        assert [k[0] for k in kept] == ['runs still held']
-    # Its positive twin: once the run is decided, the review is finished at save time, and the stall check leaves
-    # it be: nothing is held, so nothing keeps it open.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
-         'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM events WHERE action='task.stall_escalated' AND target=?", (review['id'],))
-        assert H.task(c, review['id'])['status'] == 'done'
-        assert review['id'] not in H.wake_stalled(c)['escalated']
-        assert H.task(c, review['id'])['status'] == 'done'
 
 
 def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_it(api):
@@ -221,29 +187,6 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
     assert 'BotOps has made no recovery decision' in reviews[0]['body']
     assert botops_reviews == 0
     assert 'Bot: ops.' in reviews[0]['body']
-    with api.app.state.store.transaction() as c:
-        H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
-        assert H.task(c, existing['id'])['status'] == 'open'
-        # Renamed after the review was filed, with another bot now under its old name: the title no longer leads to
-        # ops, and the review still stays open while its run is held.
-        c.execute("UPDATE bots SET display_name='Ops (renamed)' WHERE slug='ops'")
-        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('decoy', 'decoy', ?, 'active')", (display_name,))
-        H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
-        assert H.task(c, existing['id'])['status'] == 'open'
-        c.execute("DELETE FROM bots WHERE slug='decoy'")
-        c.execute("UPDATE bots SET display_name=? WHERE slug='ops'", (display_name,))
-    # A safe decision ends the held run, so the same stall check can close the review as usual.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
-         'note': 'The operator checked the request and it should not be repeated.',
-         'acknowledge_uncertain_effects': True})
-    with api.app.state.store.transaction() as c:
-        H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
-        assert H.task(c, existing['id'])['status'] == 'closed'
-    # The reused operator request closes only after a safe decision; no second task appears after settlement.
-    assert sweep(api) == []
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE title=? AND owner_id=?",
-                         (title, 'human:' + operator)).fetchone()[0] == 1
 
 
 def stopped_two_hours(api, attempt_id, minutes=121):

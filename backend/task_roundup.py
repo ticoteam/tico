@@ -1,23 +1,40 @@
 """The task roundup (Settings > Routines, "Task roundup"): each run gives each active bot at most one wake, with one grouped
-list of its tasks that have an update it may have missed, have gone quiet, or have a follow-up time that has come. Plain
-code: no model is called and no BotOps
-diagnostic is filed. It replaces the per-task wakes of the stall watcher and of the check-backs, which woke a bot one task
-at a time. Its schedule is a setting; the default is three times a day, at 6am, noon and 6pm company time.
+list of the tasks it needs to look at. Plain code: no model is called and no BotOps diagnostic is filed. It is the one
+place Tico tells a bot about its tasks on a schedule: the per-task wakes of the stall watcher, the check-backs, the late
+notices, the backlog warnings, the exceptions lines, the restate asks, the still-needed batch and the assigned-start
+recovery are all lines here now.
+Its schedule is a setting; the default is three times a day, at 6am, noon and 6pm company time.
 
-A task is on its bot's list when it is the bot's, live (H.ACTIVE_STATUSES), readable to it, not snoozed, not already being
-run for it (a queued, leased or running job in its conversation), and either:
-- a missed update: someone other than the bot and Tico did something on it since the later of the bot's last turn on it and
-  the last time it was listed. That is a message written or edited in its conversation; a change of the task itself (status,
-  owner, step, waiting_on, due, title, body or acceptance; a task's creation row is not news, but a step or status set later
-  on a task that had none is); a comment edited or deleted; a blocker taken off it; a blocker that finished (taken off by
-  Tico: "a blocker is done", or kept on a roadmap item); or a subtask that finished, by someone other than the bot. A status
-  change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank, checkpoints, its wake notices) never
-  counts. Or
-- gone quiet: nothing has changed on it for a day, and nothing holds it: it does not wait on someone (waiting_on), no live
-  blocker holds it, nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask), and no follow-up
-  time is still to come. A task left in
-  `waiting` that waits on nothing is quiet like any other. A quiet task is listed when it was never listed or was last
-  listed 7 or more days ago.
+A bot's list has these lines, in this order, MAX_LINES in all (the rest are counted), one line per task:
+- a follow-up time that has come, set by a person or a bot (below);
+- a question the bot asked a person that had no answer in two business days: it went back to the bot (backend/still_needed.py),
+  listed once;
+- an assignment the bot has not started an hour after it was given (backend/assigned_start.py): "Assigned, not started", listed
+  once, its ledger row written when it is sent;
+- a task the bot owns that waits on a person with no plain ask (H.lint_person_ask): asked to restate it, relisted after
+  RELIST_DAYS until it is restated;
+- a Dev ticket late at its step, on its manager's list (backend/step_age.py): "Late in <step>: N days", relisted after
+  RELIST_DAYS;
+- an engineering exception on a manager's list that reads the exceptions list (backend/pipeline_exceptions.py), relisted
+  after RELIST_DAYS;
+- a step's backlog over its limit (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there,
+  relisted after the step's every_hours;
+- a missed update, then a quiet task, on a task the bot owns (below).
+A task is named once on a list, whatever its reason.
+
+A missed update is a task the bot owns, live (H.ACTIVE_STATUSES), readable to it, not snoozed, not already being run for it
+(a queued, leased or running job in its conversation), where someone other than the bot and Tico did something on it since
+the later of the bot's last turn on it and the last time it was listed. That is a message written or edited in its conversation;
+a change of the task itself (status, owner, step, waiting_on, due, title, body or acceptance; a task's creation row is not
+news, but a step or status set later on a task that had none is); a comment edited or deleted; a blocker taken off it; a
+blocker that finished (taken off by Tico: "a blocker is done", or kept on a roadmap item); or a subtask that finished, by
+someone other than the bot. A status change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank,
+checkpoints, its wake notices) never counts.
+
+A task is quiet when nothing has changed on it for a day, and nothing holds it: it does not wait on someone (waiting_on), no
+live blocker holds it, nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask), and no follow-up
+time is still to come. A task left in `waiting` that waits on nothing is quiet like any other. A quiet task is listed when it
+was never listed or was last listed 7 or more days ago.
 
 A follow-up time (tasks.check_back_at) is set only by a person or a bot: its check_back_explicit history row names the
 time. When it has come, the task is listed first on its owner bot's list as "Follow-up time set by <who> has come: <note>"
@@ -25,17 +42,20 @@ time. When it has come, the task is listed first on its owner bot's list as "Fol
 task a person owns is on no bot's list. A date a snooze left behind is not a follow-up: it holds nothing, and a snooze in
 force hides the task (task_snooze.snoozed) until it ends.
 
-A private task is listed as "a private task <id>", without its title, its follow-up's who and note, or what changed: only
-that a follow-up time has come, that it has an update, or that it has gone quiet. A bot whose profile has its stall sweeps off (rules.sweeps_on) gets no
-list.
+A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
+only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
+profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
+its own follow-up times only: never an idle, late, exception, backlog, assigned or restate line. A manager and a doer get all
+of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
+a person a line would name is never told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
-list, and a bot already sent one since this run's time gets nothing more, so the roundup works at any cadence. Each task's
-last listing is kept (`task_roundup:task:<id>`) as the time its list was built, not the run's time, so an update that lands
-after the run's time but before the build is not listed again. Both are written only once the message is delivered: a bot
-run by a computer is delivered when its job is queued, and an external inbox (no computer, no job) when the message is
-written. A message a rule held is not counted as sent. The list is written to the bot's own notice room with Tico, where
-no person is a member, so the roundup never notifies a person.
+list, and a bot already sent one since this run's time gets nothing more, so the roundup works at any cadence. Each line's
+registry key is written as the time its list was built, not the run's time, so an update that lands after the run's time but
+before the build is not listed again. All are written only once the message is delivered: a bot run by a computer is
+delivered when its job is queued, and an external inbox (no computer, no job) when the message is written. A message a rule
+held is not counted as sent. The list is written to the bot's own notice room with Tico, where no person is a member, so the
+roundup never notifies a person.
 
 The scheduler selects the bots in one read transaction (discover), then sends each one in its own short transaction (send),
 which rebuilds that bot's list from the live database before it writes anything."""
@@ -51,12 +71,16 @@ EVENT = "task_roundup.sent"
 SENT_KEY = "task_roundup:"             # registry_metadata: the run's time a bot was last sent a list
 LISTED_KEY = "task_roundup:task:"      # registry_metadata: the run's time a task was last on a list
 HEADING = "Here is a list of tasks on your plate. You may want to look into them."
-MAX_LINES = 25                         # task lines in one list; the rest are counted
+MAX_LINES = 25                         # lines in one list; the rest are counted
 TITLE_CHARS = 80
 QUIET_HOURS = 24
 RELIST_DAYS = 7
-FOLLOW_UP_CHARS = 160             # a follow-up's note on its list line, trimmed to this
+FOLLOW_UP_CHARS = 160                  # a follow-up's note on its list line, trimmed to this
+ASK_CHARS = 120                        # a question's text on its line, trimmed to this
+ASK_DAYS = 30                          # an unanswered question is looked for this far back
 CREATED_WITHIN = 1                     # seconds: a status or step row this close to its task's creation is the creation
+# The lines' order on a list (a group sorts its own lines; a missed update newest first).
+DUE, ASKS, ASSIGNED, RESTATE, LATE, EXCEPTIONS, BACKLOG, MISSED, QUIET = range(9)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
 _TASK_KINDS_SQL = ",".join(f"'{kind}'" for kind in TASK_KINDS)
@@ -74,7 +98,7 @@ _FROM_OTHERS = ("deleted_at IS NULL AND sender_id IS NOT NULL AND sender_id<>? A
 
 
 def run(c, at=None):
-    """Discover and send in the caller's transaction (tests). Returns {"woke": [slugs], "listed": tasks named in them}."""
+    """Discover and send in the caller's transaction (tests). Returns {"woke": [slugs], "listed": lines named in them}."""
     woke, listed = [], 0
     for plan in discover(c, at):
         count = send(c, plan)
@@ -84,20 +108,35 @@ def run(c, at=None):
     return {"woke": woke, "listed": listed}
 
 
+def _candidates(c, at, shared):
+    """The bots a list could name this run: each that owns a live task, and each a shared line names (a late ticket's
+    manager, an exception's manager, a backlog's targets, a question's asker). Any other bot has no line to list."""
+    from . import still_needed, step_age, step_backlog
+    actors = {row[0] for row in c.execute(
+        "SELECT DISTINCT owner_id FROM tasks WHERE status IN (" + _marks() + ")", tuple(H.ACTIVE_STATUSES))}
+    actors |= {row[0] for row in c.execute(
+        "SELECT DISTINCT target FROM events WHERE action=? AND created_at>? AND json_extract(detail, '$.message') IS NULL",
+        (still_needed.ACTION, H.shift(at, days=-ASK_DAYS)))}
+    actors |= {item["to"] for item in _shared(shared, "late", lambda: step_age.late_items(c, at))}
+    actors |= {H.bot_actor(manager) for _, manager in _shared(shared, "types", lambda: _engineering_types(c))}
+    actors |= {who for warning in _shared(shared, "backlog", lambda: step_backlog.warnings(c)) for who in warning["targets"]}
+    return {H.actor_id(actor) for actor in actors if actor}
+
+
 def discover(c, at=None):
-    """The bots to visit for the run at `at`: active bots with something to list that were not sent a list in this run. Read
+    """The bots to visit for the run at `at`: active bots with a line to list that were not sent a list in this run. Read
     only. send builds each list again from the live database."""
-    from . import rules
     from .hubdb import _has_table
     if not _has_table(c, "jobs"):       # a hub without jobs has no wakes to send: nothing is listed
         return []
     at = at or H.now()
-    plans = []
+    shared, plans = {}, []
+    wanted = _candidates(c, at, shared)
     for bot in H._rows(c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")):
         slug = bot["id"]
-        if _sent_before(c, slug, at) or not _owns_live(c, slug) or not rules.sweeps_on(c, slug):
-            continue                    # no live task of its own: no list, and no per-task query for it
-        if _list(c, slug, at)[0]:
+        if slug not in wanted or _sent_before(c, slug, at):
+            continue
+        if _list(c, slug, at, shared)[0]:
             plans.append({"slug": slug, "at": at})
     return plans
 
@@ -105,14 +144,14 @@ def discover(c, at=None):
 def send(c, plan):
     """Send one bot its list in the caller's transaction. The list is rebuilt here from the live database (discover only chose
     the bot), and the bot is sent only if it was not already sent one this run. A bot with nothing to list gets no message.
-    The run's time, the tasks' listed times, the consumed follow-ups and the event are written only once the message is
-    delivered. Returns how many tasks the list named, or 0 when nothing was sent."""
-    from . import rules, run_triggers as RT, task_check_backs
+    The run's time, each line's registry key, the consumed follow-ups and the events are written only once the message is
+    delivered. Returns how many lines the list named, or 0 when nothing was sent."""
+    from . import run_triggers as RT, task_check_backs
     slug, at = plan["slug"], plan["at"]
-    if _sent_before(c, slug, at) or not _active(c, slug) or not _owns_live(c, slug) or not rules.sweeps_on(c, slug):
+    if _sent_before(c, slug, at) or not _active(c, slug):
         return 0
     built = _later(at, _built_at())        # stamped before the read: an update racing it is listed again, never missed
-    text, count, shown, due = _list(c, slug, at)
+    text, count, shown = _list(c, slug, at, {})
     if not text:
         return 0
     actor = H.bot_actor(slug)
@@ -125,16 +164,26 @@ def send(c, plan):
             return 0                    # not told this run: a later run may try again
         if not _delivered(c, slug, message):
             return 0                    # a rule held it, so no bot was woken: not sent, and a later run may try again
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (SENT_KEY + slug, at))
-        for tid in shown:
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                      (LISTED_KEY + tid, built))
-        for tid in due:
-            task_check_backs.consume(c, tid, H.KEEPER)
-        H.event(c, H.KEEPER, EVENT, slug, {"at": at, "tasks": count, "follow_ups": len(due)})
+        _set(c, SENT_KEY + slug, at)
+        for item in shown:
+            _set(c, item["mark"], built)
+            if item["event"]:
+                H.event(c, H.KEEPER, *item["event"])
+            if item["due"]:
+                task_check_backs.consume(c, item["tid"], H.KEEPER)
+        H.event(c, H.KEEPER, EVENT, slug, {"at": at, "tasks": count,
+                                           "follow_ups": sum(1 for item in shown if item["due"])})
         return count
     return 0
+
+
+def _set(c, key, value):
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+
+def _mark(c, key):
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
 
 
 def _sent_before(c, slug, at):
@@ -148,8 +197,18 @@ def _active(c, slug):
 
 
 def _listed(c, tid):
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (LISTED_KEY + tid,)).fetchone()
-    return row[0] if row else None
+    return _mark(c, LISTED_KEY + tid)
+
+
+def _stale(c, key, at, relist):
+    """Whether a line keyed `key` was last sent `relist` before `at`, or never: it is on the list again then."""
+    listed = _mark(c, key)
+    return listed is None or H.parse_ts(listed) <= H.parse_ts(at) - relist
+
+
+def _key(kind, slug, ref):
+    """The registry key of one line kind for one bot: a task, an ask, an exception or a backlog it is listed for."""
+    return f"{SENT_KEY}{kind}:{slug}:{ref}"
 
 
 def _later(*times):
@@ -158,7 +217,7 @@ def _later(*times):
 
 
 def _built_at():
-    """The time a list is built, stamped as the checkpoint of each task on it. Tests pin it (it is the wall clock otherwise)."""
+    """The time a list is built, stamped as the checkpoint of each line on it. Tests pin it (it is the wall clock otherwise)."""
     return H.now()
 
 
@@ -168,60 +227,245 @@ def _room(c, slug):
     return H._pair_conversation(c, H.KEEPER, H.bot_actor(slug), "notice", allow_held=True)
 
 
-def _list(c, slug, at):
-    """The bot's list as one message's text, how many tasks it names, the ids it names, and the ids of its follow-ups among
-    them (cleared once it is sent). A follow-up whose time has come goes first. (None, 0, [], []) when nothing needs a look."""
-    from . import task_snooze as TS
+def _shared(shared, name, make):
+    """A read the whole run shares: made once, by the first bot that needs it."""
+    if name not in shared:
+        shared[name] = make()
+    return shared[name]
+
+
+def _item(tid, line, key, *, due=False, event=None):
+    """One line on a list: the task it names (None when it names none), its text, the registry key it is recorded under
+    once sent, whether it consumes a due follow-up, and an event written with it (action, target, detail) or None."""
+    return {"tid": tid, "line": line, "mark": key, "due": due, "event": event}
+
+
+def _list(c, slug, at, shared):
+    """The bot's list as one message's text, how many lines it has, and the items shown on it (each with the registry key it
+    is recorded under once sent). (None, 0, []) when nothing needs a look."""
+    from . import rules, task_snooze as TS
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
     cutoff = now - timedelta(hours=QUIET_HOURS)
     relist = now - timedelta(days=RELIST_DAYS)
-    due, missed, quiet = [], [], []
-    rows = H._rows(c.execute("SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
+    # A bot with sweeps off is listed its questions and its own follow-up times only (the module's docstring).
+    sweeping = rules.sweeps_on(c, slug)
+    groups = {group: [] for group in range(QUIET + 1)}
+    rows = H._rows(c.execute(
+        "SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
                              (actor, *H.ACTIVE_STATUSES)))
     for row in rows:
         if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
             continue
         private = H.task_private(c, row)
-        follow = _follow_up(c, row)
+        follow = follow_up(c, row)
         if follow and H.parse_ts(row["check_back_at"]) <= now:
-            due.append((row["check_back_at"], row["id"], _line(row, _due_reason(follow, private), private)))
+            groups[DUE].append((row["check_back_at"], _item(row["id"], _line(row, _due_reason(follow, private), private),
+                                                           LISTED_KEY + row["id"], due=True)))
             continue
+        if not sweeping:
+            continue
+        person = _restate(c, row)
+        if person and _stale(c, _key("restate", slug, row["id"]), at, timedelta(days=RELIST_DAYS)):
+            groups[RESTATE].append((row["created_at"] or "", _item(row["id"], _line(
+                row, _restate_reason(row, person, private), private), _key("restate", slug, row["id"]))))
         last_turn = _last_turn(c, row, slug, actor)
         listed = _listed(c, row["id"])
         news = _news(c, row, actor, _later(last_turn, listed))
         if news:
             count, when, what = news
-            missed.append((when, row["id"], _line(row, _missed_reason(count, what, private), private)))
+            groups[MISSED].append((when, _item(row["id"], _line(row, _missed_reason(count, what, private), private),
+                                               LISTED_KEY + row["id"])))
             continue
         quiet_since = _later(row["updated_at"], last_turn, _latest(c, row))
         if H.parse_ts(quiet_since) <= cutoff and not _holds(c, row, at) and (listed is None or H.parse_ts(listed) <= relist):
             span = _days(now - H.parse_ts(quiet_since))
             reason = (f"Waiting on nothing for {span}" if row["status"] == "waiting"
                       else f"Quiet for {span}, nothing waiting on anyone")
-            quiet.append((quiet_since, row["id"], _line(row, reason, private)))
-    if not due and not missed and not quiet:
-        return None, 0, [], []
-    ordered = ([(tid, line) for _, tid, line in sorted(due)]
-               + [(tid, line) for _, tid, line in sorted(missed, reverse=True)]
-               + [(tid, line) for _, tid, line in sorted(quiet)])
+            groups[QUIET].append((quiet_since, _item(row["id"], _line(row, reason, private), LISTED_KEY + row["id"])))
+    sweep_lines = (_assigned(c, slug, actor, at) + _late(c, slug, actor, at, shared) + _exceptions(c, slug, actor, at, shared)
+                   + _backlogs(c, slug, actor, at, shared)) if sweeping else []
+    for group, sort, item in _asks_back(c, slug, actor, at) + sweep_lines:
+        groups[group].append((sort, item))
+    ordered, seen = [], set()
+    for group in range(QUIET + 1):
+        for _, item in sorted(groups[group], key=lambda found: found[0], reverse=group == MISSED):
+            if item["tid"] is not None:
+                if item["tid"] in seen:         # a task is named once on a list
+                    continue
+                seen.add(item["tid"])
+            ordered.append(item)
+    if not ordered:
+        return None, 0, []
     shown = ordered[:MAX_LINES]
-    total = len(ordered)
-    lines = [HEADING, *(line for _, line in shown)]
-    if total > len(shown):
-        lines.append(f"- and {total - len(shown)} more")
-    due_ids = {tid for _, tid, _ in due}
-    shown_ids = [tid for tid, _ in shown]
-    return "\n".join(lines), total, shown_ids, [tid for tid in shown_ids if tid in due_ids]
+    lines = [HEADING, *(item["line"] for item in shown)]
+    if len(ordered) > len(shown):
+        lines.append(f"- and {len(ordered) - len(shown)} more")
+    return "\n".join(lines), len(ordered), shown
 
 
-def _owns_live(c, slug):
-    """Whether the bot owns any live task: the cheap first look, before any per-task query. A bot with none has no list."""
-    return c.execute(f"SELECT 1 FROM tasks WHERE owner_id=? AND status IN ({_marks()}) LIMIT 1",
-                     (H.bot_actor(slug), *H.ACTIVE_STATUSES)).fetchone() is not None
+def _asks_back(c, slug, actor, at):
+    """Questions this bot asked a person that went back unanswered (backend/still_needed.py): one line each, listed once.
+    An event with a `message` was sent to the bot as a chat message before the roundup, so it is not listed again."""
+    from . import still_needed
+    found = c.execute("SELECT e.created_at, j.value FROM events e, json_each(e.detail, '$.asks') j "
+                      "WHERE e.action=? AND e.target=? AND e.created_at>? AND json_extract(e.detail, '$.message') IS NULL "
+                      "ORDER BY e.created_at, j.key",
+                      (still_needed.ACTION, actor, H.shift(at, days=-ASK_DAYS))).fetchall()
+    out = []
+    for when, ask_id in found:
+        key = _key("ask", slug, ask_id)
+        ask = c.execute("SELECT id, body, recipient_id, refs, conversation_id FROM messages WHERE id=?", (ask_id,)).fetchone()
+        if not ask or _mark(c, key) is not None:
+            continue
+        who = H.actor_name(c, ask["recipient_id"]) or H.actor_id(ask["recipient_id"])
+        # The task the question is about, as the message names it (its refs, else its task conversation): a question
+        # asked from a Home room names its task in refs only.
+        tid = H.message_task_id({"refs": H._json(ask["refs"], {})}, H.conversation(c, ask["conversation_id"]))
+        task = H.task(c, tid) if tid else None
+        # A task the bot may not read by every rule (H.bot_reads_task) is named nowhere, as the late lines are.
+        if task and not H.bot_reads_task(c, actor, task):
+            continue
+        if task and H.task_private(c, task):
+            line = (f"- a private task {task['id'][:8]}: a question to a person had no answer in two business days; "
+                    "ask again as a fresh question with a date, or drop it.")
+            out.append((ASKS, when, _item(task["id"], line, key)))
+            continue
+        reason = (f'no answer in two business days to "{_clip(ask["body"], ASK_CHARS)}" ({who}): ask again as a fresh '
+                  "question with a date, or drop it.")
+        out.append((ASKS, when, _item(task["id"] if task else None,
+                                      _line(task or {"id": ask["id"], "title": f"Question to {who}"}, reason, False), key)))
+    return out
 
 
-def _follow_up(c, row):
+def _restate(c, row):
+    """The person a waiting task of the bot's needs restated, or None: the note reads as no plain ask (H.lint_person_ask),
+    and no open question to that person already holds it."""
+    person = row.get("waiting_on") or ""
+    if row["status"] != "waiting" or not person.startswith("human:") or not H.lint_person_ask(row.get("note")):
+        return None
+    if any(a["recipient_id"] == person for a in H.open_task_asks(c, row)):
+        return None
+    return person
+
+
+def _restate_reason(row, person, private):
+    """The restate line's reason. A private task says no person's name."""
+    if private:
+        return ("Waiting on a person with no plain ask. Restate it, at most "
+                f"{H.LINT_ASK_WORDS} words, with: hub task update {row['id']} --status waiting --on <person> "
+                "--note \"<your ask>\".")
+    who = H.actor_id(person)
+    return (f"Waiting on {who} with no plain ask. Restate it in one or two plain sentences, at most {H.LINT_ASK_WORDS} words: "
+            f"what you need from {who} and what happens after. Set it with: hub task update {row['id']} --status waiting "
+            f"--on {who} --note \"<your ask>\".")
+
+
+def _assigned(c, slug, actor, at):
+    """The bot's open assignments no run has started and no list has named (backend/assigned_start.py), one line each, listed
+    once. The line writes the assignment's ledger row when it is sent, so the health check's "not started" still reads it."""
+    from . import assigned_start, task_snooze as TS
+    out = []
+    for row, key, since, _ in assigned_start.unstarted(c, at, owner=actor):
+        if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
+            continue
+        private = H.task_private(c, row)
+        event = (assigned_start.EVENT, row["id"], {"assignment": key, "assigned_at": since, "rewoken_at": at, "refusal": None})
+        out.append((ASSIGNED, since, _item(row["id"], _line(row, "Assigned, not started", private), LISTED_KEY + row["id"],
+                                           event=event)))
+    return out
+
+
+def _late(c, slug, actor, at, shared):
+    """Dev tickets late at their step, on their manager's list (backend/step_age.py), relisted after RELIST_DAYS."""
+    from . import step_age
+    out = []
+    for item in _shared(shared, "late", lambda: step_age.late_items(c, at)):
+        row = item["row"]
+        # A ticket its manager cannot read by its parties' bot access (H.bot_reads_task) is named nowhere, not even as private.
+        if (item["to"] != actor or not H.task_private_readable(c, actor, row) or not H.bot_reads_task(c, actor, row)
+                or _running(c, slug, row)):
+            continue
+        key = _key("late", slug, row["id"])
+        if not _stale(c, key, at, timedelta(days=RELIST_DAYS)):
+            continue
+        private = H.task_private(c, row)
+        reason = (f"Late at its step: {_span(item['hours'])}" if private
+                  else f"Late in {item['step']}: {_span(item['hours'])}")
+        out.append((LATE, item["since"], _item(row["id"], _line(row, reason, private), key)))
+    return out
+
+
+def _exceptions(c, slug, actor, at, shared):
+    """A manager's engineering exceptions (backend/pipeline_exceptions.py) on the list it reads; each is relisted after
+    RELIST_DAYS while it stands. A manager that does not read the list gets none."""
+    from . import pipeline_exceptions
+    if not pipeline_exceptions.reads_list(c, slug):
+        return []
+    out = []
+    for typ, manager in _shared(shared, "types", lambda: _engineering_types(c)):
+        if manager != slug:
+            continue
+        for entry in pipeline_exceptions.build(c, typ, at=at, reader=actor):
+            key = _key("exception", slug, entry["key"])
+            if not _stale(c, key, at, timedelta(days=RELIST_DAYS)):
+                continue
+            since = str(entry["since"])[:16].replace("T", " ") + "Z"
+            row = H.task(c, entry["ticket"]["id"]) if (entry.get("ticket") or {}).get("id") else None
+            if row:
+                private = H.task_private(c, row)
+                reason = (f"{entry['kind']} exception, since {since}" if private
+                          else f"{entry['cause']}, since {since}")
+                line, tid = _line(row, reason, private), row["id"]
+            else:
+                subject = entry.get("bot") or entry.get("step") or entry["kind"]
+                line, tid = f"- {subject}: {entry['cause']}, since {since}", None
+            out.append((EXCEPTIONS, entry["since"], _item(tid, line, key)))
+    return out
+
+
+def _engineering_types(c):
+    """(type, its manager's bot id) for each engineering type that has a manager."""
+    from .roadmap_flow import ENGINEERING
+    out = []
+    for typ in H._rows(c.execute("SELECT * FROM task_types WHERE role=? AND manager IS NOT NULL ORDER BY id", (ENGINEERING,))):
+        out.append((typ, (H.resolve_bot(c, typ["manager"]) or {}).get("id", typ["manager"])))
+    return out
+
+
+def _backlogs(c, slug, actor, at, shared):
+    """A step over its backlog (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there. Relisted
+    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing for its owner, as its wake did before."""
+    from . import step_backlog, task_snooze as TS
+    out = []
+    for warning in _shared(shared, "backlog", lambda: step_backlog.warnings(c)):
+        if actor not in warning["targets"]:
+            continue
+        first = warning["first"]
+        key = _key("backlog", slug, warning["key"])
+        snoozed_for_owner = actor == first.get("owner_id") and TS.snoozed(first, at)
+        if (not H.task_private_readable(c, actor, first) or H.task_private(c, first) or snoozed_for_owner
+                or not _stale(c, key, at, timedelta(hours=warning["every_hours"]))):
+            continue
+        event = (step_backlog.EVENT, first["id"], {"key": warning["key"], "step": warning["step"],
+                                                   "owner": warning["owner"], "count": warning["count"], "told": [actor]})
+        out.append((BACKLOG, first.get("created_at") or "", _item(first["id"], _line(first, warning["text"], False), key,
+                                                                  event=event)))
+    return out
+
+
+def _clip(text, limit):
+    return " ".join(str(text or "").split())[:limit]
+
+
+def _span(hours):
+    """How long a ticket has been at its step: hours under two days, then days."""
+    if hours < 48:
+        return f"{int(hours)} h"
+    return f"{int(hours // 24)} days"
+
+
+def follow_up(c, row):
     """(who set it, its note trimmed) when the task's follow-up time was set by a person or a bot (a check_back_explicit row
     names that time), else None: a time nobody set is not a follow-up."""
     if not row.get("check_back_at"):
@@ -271,7 +515,7 @@ def _holds(c, row, at):
     (a date nobody set, or one a snooze left behind, holds nothing), a live blocker, or a wait recorded for it (an unanswered
     ask included). A snooze in force is not here: _list skips the task while task_snooze.snoozed."""
     from . import task_relations as TR
-    later = bool(_follow_up(c, row) and H.parse_ts(row["check_back_at"]) > H.parse_ts(at))
+    later = bool(follow_up(c, row) and H.parse_ts(row["check_back_at"]) > H.parse_ts(at))
     return (bool(row.get("waiting_on")) or later
             or TR.live_blocker(c, row["id"], H.ACTIVE_STATUSES) is not None
             or H.recorded_wait(c, dict(row), at) is not None)

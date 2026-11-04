@@ -356,7 +356,7 @@ def candidates(c, at):
 
 
 def sweep(c, at, task_ids=None):
-    """Share the existing stall sweep; one private-safe age alert per blocked episode."""
+    """Runs each minute from the stall checks job (scheduler). One private-safe age alert per blocked episode, for Engineering tasks and gate holds blocked over four hours."""
     from . import hubdb as H
     scope, args = '', ()
     if task_ids is not None:

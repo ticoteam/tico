@@ -311,25 +311,3 @@ def test_the_deferral_hot_paths_reach_their_rows_by_index_not_scan(api):
             plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, params)]
             scans = [step for step in plan if step.startswith("SCAN") and step.split()[1] in ("deferrals", "d", "x")]
             assert scans == [], (sql, plan)
-
-
-def test_a_check_back_wake_naming_the_deferred_task_in_a_list_holds_its_deadline(api, monkeypatch):
-    """The task's owner already has a queued check-back for it, with refs.task a list naming the task after another id:
-    the deadline starts no run of its own. The same wake with a scalar ref holds the deadline too."""
-    from backend import task_check_backs
-    monkeypatch.setattr(task_check_backs, "enabled", lambda c: True)
-    setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "delivery": "defer"})
-    with api.app.state.store.transaction() as c:
-        owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
-        check_back_at = H.shift(H.now(), hours=1)
-        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (check_back_at, task["id"]))
-        wake = H.say(c, "human:ana", owner, "Check refunds.", refs={
-            "wake": "check_back", "check_back_at": check_back_at, "task": ["00000000-0000-4000-8000-000000000000", task["id"]]})["id"]
-        if not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (wake,)).fetchone():
-            c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
-                      ("job-list-wake", wake, "ops", "queued", H.now()))
-        c.execute("UPDATE jobs SET state='queued' WHERE message_id=?", (wake,))
-        c.execute("UPDATE deferrals SET due_at=? WHERE item=?", (H.shift(H.now(), hours=-1), task["id"]))
-    tick(api, 1)
-    assert fired(api) == []

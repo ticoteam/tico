@@ -837,6 +837,28 @@ def test_a_task_reply_with_no_follow_up_time_has_no_follow_up_line(gateway, hub)
                             f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)")
 
 
+def test_a_task_reply_shows_the_follow_up_line_only_for_a_time_a_person_set(gateway, hub):
+    """A check-back time nobody set explicitly is not a follow-up, so no line; once a person sets one, the line shows."""
+    link_task_requester(hub)
+    task, _ = task_reply(hub, False, [])
+    with hub.transaction() as c:
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), hours=3), task))
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [first] = gateway.slack.posts
+    assert "Follow up by" not in first["text"]
+    followup = set_follow_up(hub, task)
+    with hub.transaction() as c:
+        H.say(c, "bot:legal", "human:ana", "Still on it.", conversation_id=H.task(c, task)["conversation_id"])
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    assert gateway.slack.posts[-1]["text"] == ("Still on it.\n\n"
+                                               f"(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\n"
+                                               f"Follow up by {followup}")
+
+
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
     """The link would only open for the task's readers, but nothing of a private task goes out in the first place:
     not the text, not the line, not its ids."""

@@ -1,9 +1,9 @@
-"""Lost handoffs recover once; execution holds stay visible without bypassing them."""
+"""Lost handoffs are listed on the bot's roundup once; execution holds stay visible without bypassing them."""
 import json
 
 import pytest
 
-from backend import assigned_start as A, health, health_monitor, queue_refusals
+from backend import assigned_start as A, health, health_monitor, queue_refusals, task_roundup
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post  # noqa: F401
 from backend.tests.test_auto_tasks import deck, finish, set_cap, take
@@ -28,8 +28,34 @@ def advance(api, clock, hours):
 
 
 def sweep(api):
-    with api.app.state.store.transaction() as c:
-        return A.sweep(c)
+    """One roundup run now, as the scheduler runs it: the tasks it listed as assigned, not started (their ledger rows are
+    the ones it wrote)."""
+    store = api.app.state.store
+    # Diffed by event id: a task listed again (a reassignment) has the same target as its earlier ledger row.
+    with store.read() as c:
+        before = {r[0] for r in c.execute('SELECT id FROM events WHERE action=?', (A.EVENT,))}
+    with store.transaction() as c:
+        task_roundup.run(c, H.now())
+    with store.read() as c:
+        return sorted({r[1] for r in c.execute('SELECT id,target FROM events WHERE action=?', (A.EVENT,))
+                       if r[0] not in before})
+
+
+def roundups(api, slug='ops'):
+    """The bodies of the roundup messages the bot was sent, oldest first."""
+    with api.app.state.store.read() as c:
+        return [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%' "
+                                        "ORDER BY created_at", (H.bot_actor(slug),)).fetchall()]
+
+
+def record_all(store):
+    """Writes the ledger row the roundup writes for every unstarted assignment, as if each had been listed. Returns their ids."""
+    with store.transaction() as c:
+        found = list(A.unstarted(c, H.now()))
+        for row, key, since, _ in found:
+            H.event(c, H.KEEPER, A.EVENT, row['id'], {'assignment': key, 'assigned_at': since, 'rewoken_at': H.now(),
+                                                      'refusal': None})
+    return sorted(row['id'] for row, *_ in found)
 
 
 def cancel(api):
@@ -37,11 +63,10 @@ def cancel(api):
         c.execute("UPDATE jobs SET state='canceled'")
 
 
-@pytest.mark.parametrize('profile', ['lead', 'doer'])
-def test_canceled_assignment_rewakes_once_at_one_hour_and_can_start(api, clock, profile):
-    machine = task_bot(api, lanes=True)
+def test_canceled_assignment_is_listed_once_at_one_hour_and_clears_once_started(api, clock):
+    task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
-        put(c, 'ops', profile)
+        put(c, 'ops', 'doer')
     task = new_task(api, 'Lost assignment')
     cancel(api)
     advance(api, clock, 0.999)
@@ -49,16 +74,45 @@ def test_canceled_assignment_rewakes_once_at_one_hour_and_can_start(api, clock, 
     advance(api, clock, 0.001)
     assert sweep(api) == [task['id']]
     assert sweep(api) == []
-    attempt = claim(api, machine)
-    assert attempt['task']['id'] == task['id']
-    assert get(api, 'tasks/' + task['id'])['task']['status'] == 'doing'
+    assert len(roundups(api)) == 1
+    with api.app.state.store.transaction() as c:
+        H._set_status(c, H.KEEPER, H.task(c, task['id']), 'doing')
     advance(api, clock, 3)
     with api.app.state.store.read() as c:
         assert list(A.overdue(c)) == []
 
 
+def test_doer_assignment_is_one_roundup_line_and_writes_its_ledger_row_once(api, clock):
+    task_bot(api, lanes=True)
+    with api.app.state.store.transaction() as c:
+        put(c, 'ops', 'doer')
+    task = new_task(api, 'Roundup line for a lost start')
+    cancel(api)
+    advance(api, clock, 1)
+    assert sweep(api) == [task['id']]
+    [body] = roundups(api)
+    assert 'Roundup line for a lost start' in body and 'Assigned, not started' in body
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM events WHERE action=? AND target=?', (A.EVENT, task['id'])).fetchone()[0] == 1
+    advance(api, clock, 1)
+    assert sweep(api) == []
+    assert len(roundups(api)) == 1
+
+
+def test_reviewer_is_not_listed_assigned_not_started(api, clock):
+    """A profile whose roundup lists only its questions and follow-ups gets no assignment line."""
+    task_bot(api, lanes=True)
+    new_task(api, 'Review-only bot')
+    with api.app.state.store.transaction() as c:
+        put(c, 'ops', 'reviewer')
+    cancel(api)
+    advance(api, clock, 1)
+    assert sweep(api) == []
+    assert roundups(api) == []
+
+
 @pytest.mark.parametrize('hold', ['waiting', 'snoozed', 'blocked', 'question', 'attempt'])
-def test_intentional_waits_and_any_attempt_are_not_rewoken(api, clock, hold):
+def test_intentional_waits_and_any_attempt_are_not_listed(api, clock, hold):
     machine = task_bot(api, lanes=True)
     task = new_task(api, 'Held assignment')
     if hold == 'attempt':
@@ -85,7 +139,7 @@ def test_intentional_waits_and_any_attempt_are_not_rewoken(api, clock, hold):
 def test_still_unstarted_health_and_manager_needs_you_show_task_and_actual_reason(api, clock):
     task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
-        put(c, 'ops', 'lead')
+        put(c, 'ops', 'doer')
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
     task = new_task(api, 'Publish the daily report')
     cancel(api)
@@ -118,6 +172,9 @@ def test_private_assignment_reaches_the_bots_manager_and_no_one_else(api, clock)
     cancel(api)
     advance(api, clock, 1)
     assert sweep(api) == [task['id']]
+    # The bot's list names a private task by its id alone.
+    [body] = roundups(api)
+    assert f"a private task {task['id'][:8]}" in body and 'Private assigned work' not in body
     advance(api, clock, 2)
     assert get(api, f"tasks/{task['id']}", token='ben-test')['task']['title'] == 'Private assigned work'
     get(api, f"tasks/{task['id']}", token='cara-test', expected=404)
@@ -126,7 +183,7 @@ def test_private_assignment_reaches_the_bots_manager_and_no_one_else(api, clock)
 
 
 def test_reassignment_gets_its_own_hour_not_the_last_comment_time(api, clock):
-    task_bot(api, lanes=True)
+    task_bot(api, lanes=True, others=('finance',))
     task = new_task(api, 'Reassigned work')
     cancel(api)
     advance(api, clock, 1)
@@ -139,58 +196,70 @@ def test_reassignment_gets_its_own_hour_not_the_last_comment_time(api, clock):
     assert sweep(api) == [task['id']]
 
 
-def test_refused_recovery_is_recorded_once_instead_of_retried_each_tick(api, clock, monkeypatch):
+def test_refused_list_writes_no_ledger_row_and_a_later_run_lists_it(api, clock, monkeypatch):
     task_bot(api, lanes=True)
-    task = new_task(api, 'Assignment whose delivery refuses')
+    task = new_task(api, 'Assignment whose list refuses')
     cancel(api)
     advance(api, clock, 1)
-    calls = []
+    store = api.app.state.store
+    original = H._write_message
 
     def refused(*args, **kwargs):
-        calls.append(True)
         raise H.Refused('cap', 'Synthetic delivery cap')
 
-    monkeypatch.setattr(H, '_wake', refused)
-    assert sweep(api) == [] and sweep(api) == [] and len(calls) == 1
-    advance(api, clock, 2)
-    with api.app.state.store.read() as c:
-        [row] = A.overdue(c)
-        assert row['id'] == task['id'] and row['rewake_refusal'] == 'cap'
-
-
-def test_scheduler_restart_recovers_once_and_rehearsal_never_recovers(api, clock):
-    from backend.scheduler import Scheduler
-    task_bot(api, lanes=True)
-    task = new_task(api, 'Scheduler assignment')
-    cancel(api)
-    advance(api, clock, 1)
-    store = api.app.state.store
-    store.settings.rehearsal = True
-    Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.now()))
+    monkeypatch.setattr(H, '_write_message', refused)
+    assert sweep(api) == []
     with store.read() as c:
         assert not c.execute('SELECT 1 FROM events WHERE action=?', (A.EVENT,)).fetchone()
-    store.settings.rehearsal = False
-    for _ in range(2):
-        Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.now()))
-    with store.read() as c:
-        assert c.execute('SELECT count(*) FROM events WHERE action=? AND target=?', (A.EVENT, task['id'])).fetchone()[0] == 1
+    monkeypatch.setattr(H, '_write_message', original)
+    advance(api, clock, 1)
+    assert sweep(api) == [task['id']]
 
 
-def test_recovery_selection_is_bounded_and_rechecks_waits_under_the_write_lock(api, clock):
+def test_a_task_held_after_discover_is_not_listed_by_send(api, clock):
+    """send rebuilds the list from the live database in its own transaction, so a wait set after discover holds the line."""
     task_bot(api, lanes=True)
-    tasks = [new_task(api, 'Assigned item ' + str(n)) for n in range(4)]
+    task = new_task(api, 'Held between discover and send')
     cancel(api)
     advance(api, clock, 1)
     store = api.app.state.store
     with store.read() as c:
-        selected = A.due(c, H.now(), limit=2)
-    assert len(selected) == 2
+        plans = task_roundup.discover(c, H.now())
+    assert [plan['slug'] for plan in plans] == ['ops']
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (selected[0],))
-        assert A.sweep(c, H.now(), selected) == [selected[1]]
-        assert A.sweep(c, H.now(), []) == []
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
+    with store.transaction() as c:
+        assert task_roundup.send(c, plans[0]) == 0
     with store.read() as c:
-        assert len(A.due(c, H.now())) == 2
+        assert not c.execute('SELECT 1 FROM events WHERE action=?', (A.EVENT,)).fetchone()
+    assert roundups(api) == []
+
+
+def test_scheduler_queue_refusal_failure_does_not_skip_later_steps_and_other_bots(api, clock, monkeypatch):
+    from backend.scheduler import Scheduler
+    from backend import milestone_waits
+    task_bot(api, lanes=True, others=('finance',))
+    new_task(api, 'Ops refusal')
+    new_task(api, 'Finance refusal', owner='finance')
+    set_cap(api, 0)
+    store = api.app.state.store
+    original = queue_refusals.current
+    later = []
+
+    def one_bot(c, settings, bot):
+        assert not c.write_transaction, 'claim evaluation must not take the writer lock'
+        if bot == 'finance':
+            raise RuntimeError('Synthetic one bot failure')
+        return original(c, settings, bot)
+
+    monkeypatch.setattr(queue_refusals, 'current', one_bot)
+    monkeypatch.setattr(milestone_waits, 'reconcile', lambda *args: later.append(True))
+    result = Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.now()))
+    assert {'queue_refusals': 'finance', 'error': 'RuntimeError'} in result['failures']
+    assert later
+    with store.read() as c:
+        assert queue_refusals.state(c, 'ops')['reason'] == 'auto_start_off'
+        assert c.execute("SELECT 1 FROM service_health WHERE service='scheduler'").fetchone()
 
 
 def test_five_deck_tickets_progress_under_three_task_cap_without_lead_turns(api):
@@ -357,66 +426,6 @@ def test_reason_change_starts_a_new_clock_and_unchanged_pass_does_not_write(api,
         assert health.refused_queues(c, store.settings) == []
 
 
-def test_scheduler_selection_failure_does_not_skip_later_steps_and_other_bots(api, clock, monkeypatch):
-    from backend.scheduler import Scheduler
-    from backend import milestone_waits
-    task_bot(api, lanes=True, others=('finance',))
-    new_task(api, 'Ops refusal')
-    new_task(api, 'Finance refusal', owner='finance')
-    set_cap(api, 0)
-    store = api.app.state.store
-    original = queue_refusals.current
-    later = []
-
-    def broken(*args, **kwargs):
-        raise RuntimeError('Synthetic assignment selection failure')
-
-    def one_bot(c, settings, bot):
-        assert not c.write_transaction, 'claim evaluation must not take the writer lock'
-        if bot == 'finance':
-            raise RuntimeError('Synthetic one bot failure')
-        return original(c, settings, bot)
-
-    monkeypatch.setattr(A, 'due', broken)
-    monkeypatch.setattr(queue_refusals, 'current', one_bot)
-    monkeypatch.setattr(milestone_waits, 'reconcile', lambda *args: later.append(True))
-    result = Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.now()))
-    assert {'assigned_start': 'selection', 'error': 'RuntimeError'} in result['failures']
-    assert {'queue_refusals': 'finance', 'error': 'RuntimeError'} in result['failures']
-    assert later
-    with store.read() as c:
-        assert queue_refusals.state(c, 'ops')['reason'] == 'auto_start_off'
-        assert c.execute("SELECT 1 FROM service_health WHERE service='scheduler'").fetchone()
-
-
-def test_orphan_and_failed_delivery_are_recorded_once_and_do_not_starve_next_batch(api, clock, monkeypatch):
-    task_bot(api, lanes=True)
-    tasks = [new_task(api, 'Recovery item ' + str(n)) for n in range(3)]
-    cancel(api)
-    advance(api, clock, 1)
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute('UPDATE tasks SET conversation_id=NULL WHERE id=?', (tasks[0]['id'],))
-    original = H._wake
-
-    def one_bad(c, row, *args, **kwargs):
-        if row['id'] == tasks[1]['id']:
-            raise RuntimeError('Synthetic bad delivery')
-        return original(c, row, *args, **kwargs)
-
-    monkeypatch.setattr(H, '_wake', one_bad)
-    with store.transaction() as c:
-        for task in tasks:
-            A.sweep(c, H.now(), [task['id']])
-        assert A.due(c, H.now(), limit=2) == []
-    advance(api, clock, 2)
-    with store.read() as c:
-        rows = {r['id']: r for r in A.overdue(c)}
-        assert rows[tasks[0]['id']]['rewake_refusal'] == 'missing_conversation'
-        assert rows[tasks[1]['id']]['rewake_refusal'] == 'recovery_error'
-        assert rows[tasks[2]['id']]['rewake_refusal'] is None
-
-
 def test_queue_refusal_checks_the_observed_jobs_message_privacy_for_bot_readers(api, clock):
     from backend.auth import Identity
     task_bot(api, lanes=True)
@@ -451,7 +460,7 @@ def test_busy_health_ages_claim_priority_instead_of_oldest_free_job(api, clock, 
         assert bool([r for r in slow if r['bot'] == 'ops']) is expected
 
 
-def test_recovery_scan_advances_past_a_full_page_of_held_tasks_and_wraps(api, clock, monkeypatch):
+def test_recovery_scan_advances_past_a_full_page_of_held_tasks(api, clock, monkeypatch):
     task_bot(api, lanes=True)
     tasks = [new_task(api, 'Held page ' + str(n)) for n in range(5)]
     cancel(api)
@@ -461,12 +470,9 @@ def test_recovery_scan_advances_past_a_full_page_of_held_tasks_and_wraps(api, cl
     monkeypatch.setattr(A, 'SCAN_LIMIT', 2)
     with store.transaction() as c:
         c.executemany("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", [(tid,) for tid in ordered[:4]])
-    cursor = ['']
+    # Pages of two, each all held: the scan moves on to the next page until the free task.
     with store.read() as c:
-        assert A.due(c, H.now(), cursor=cursor) == [] and cursor == [ordered[1]]
-        assert A.due(c, H.now(), cursor=cursor) == [] and cursor == [ordered[3]]
-        assert A.due(c, H.now(), cursor=cursor) == [ordered[4]]
-        assert A.due(c, H.now(), cursor=cursor) == [] and cursor == ['']
+        assert [row['id'] for row, *_ in A.unstarted(c, H.now())] == [ordered[4]]
 
 
 def test_overdue_scopes_reader_before_its_row_budget(api, clock, monkeypatch):
@@ -524,7 +530,8 @@ def test_assignment_backlog_bounds_provenance_work_and_reuses_each_attempt(api, 
 
     monkeypatch.setattr(A.privacy, 'attempt_tasks', counted)
     with store.read() as c:
-        assert len(A.due(c, H.now(), limit=A.SCAN_LIMIT)) == A.SCAN_LIMIT - 1
+        # One page of candidates: the attempted assignment is excluded, the rest are the page's SCAN_LIMIT less one.
+        assert len(list(A.candidates(c, H.now(), recorded=False))) == A.SCAN_LIMIT - 1
         assert len(calls) == 1
 
 
@@ -540,7 +547,7 @@ def test_folded_attempt_provenance_still_excludes_unstarted_recovery(api, clock)
     assert sweep(api) == []
 
 
-def test_bad_candidate_does_not_pin_recovery_cursor_or_hide_later_tasks(api, clock, monkeypatch):
+def test_bad_candidate_is_skipped_and_does_not_hide_later_tasks(api, clock, monkeypatch):
     task_bot(api, lanes=True)
     tasks = [new_task(api, 'Row isolation ' + str(n)) for n in range(3)]
     cancel(api)
@@ -557,12 +564,8 @@ def test_bad_candidate_does_not_pin_recovery_cursor_or_hide_later_tasks(api, clo
     monkeypatch.setattr(A.auto_tasks, 'waiting', one_bad)
     # Every row is a wait suspect here, so waiting() runs for each one and its failure is what is isolated.
     monkeypatch.setattr(A.auto_tasks, 'maybe_waiting', lambda c, rows: {row['id'] for row in rows})
-    cursor, failures = [''], []
     with api.app.state.store.read() as c:
-        assert A.due(c, H.now(), cursor=cursor, failures=failures) == [ordered[1]]
-        assert cursor == [ordered[1]]
-        assert failures == [{'assigned_start': ordered[0], 'error': 'ValueError'}]
-        assert A.due(c, H.now(), cursor=cursor, failures=failures) == [ordered[2]]
+        assert [row['id'] for row, *_ in A.unstarted(c, H.now())] == ordered[1:]
 
 
 @pytest.mark.parametrize('excluded', ['attempted', 'waiting'])
@@ -626,7 +629,7 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     tasks = [new_task(api, f'Lost {i}') for i in range(n)]
     cancel(api)
     advance(api, clock, 1)
-    assert sorted(sweep(api)) == sorted(t['id'] for t in tasks)
+    assert record_all(api.app.state.store) == sorted(t['id'] for t in tasks)
     advance(api, clock, 2)
     found, seen = traced_overdue(api)
     assert sorted(row['id'] for row in found) == sorted(t['id'] for t in tasks)
@@ -689,58 +692,47 @@ def fleet(store, bots, tasks, attempts, *, days=30):
     return slugs
 
 
-def test_recovery_selection_primes_each_bots_attempt_provenance_in_fixed_statements(api):
-    """The scheduler's selection runs in one snapshot; each bot's runs are primed together, so no run costs its own
-    queries (the per-run statements of task_privacy._attempt_tasks)."""
-    store = api.app.state.store
-    fleet(store, 3, 30, 90)
+def traced_unstarted(store, at):
+    """The unstarted tasks `unstarted` yields, and every statement it ran (expanded values, as sqlite reports them)."""
     seen = []
     with store.read_transaction() as c:
         c.set_trace_callback(seen.append)
         try:
-            A.due(c, H.now(), cursor=[""])
+            found = [row['id'] for row, *_ in A.unstarted(c, at)]
         finally:
             c.set_trace_callback(None)
+    return found, seen
+
+
+def test_recovery_selection_primes_each_bots_attempt_provenance_in_fixed_statements(api):
+    """The selection runs in one snapshot; each bot's runs are primed together, so no run costs its own
+    queries (the per-run statements of task_privacy._attempt_tasks)."""
+    store = api.app.state.store
+    fleet(store, 3, 30, 90)
+    _, seen = traced_unstarted(store, H.now())
     per_run = ('SELECT m.* FROM attempts a JOIN jobs', 'SELECT id FROM tasks WHERE carried_by=?',
                'SELECT detail FROM events WHERE action IN')
     assert [s for s in seen if s.startswith(per_run)] == []
     assert any(s.startswith('SELECT a.id AS primed_attempt') for s in seen)
 
 
-def traced_due(store, at):
-    """The unstarted tasks `due` picks, and every statement it ran (expanded values, as sqlite reports them)."""
-    seen = []
-    with store.read_transaction() as c:
-        c.set_trace_callback(seen.append)
-        try:
-            found = A.due(c, at, limit=500, cursor=[""])
-        finally:
-            c.set_trace_callback(None)
-    return found, seen
-
-
-def test_repeated_selection_reads_the_page_runs_once_per_tick(api):
-    """The scheduler's tick calls `due` forever. Once each picked task has its ledger entry (what sweep writes), a later
-    tick still reads the page's runs in one statement: no per-bot or per-row attempts reads, and no process-level memo
-    to skip them. Its cost is bounded by the page, not by how many ticks have run."""
+def test_recorded_assignments_are_not_selected_again_and_read_no_run_per_task(api):
+    """Once a run's line is written to the ledger, the selection no longer returns that task, and a later selection reads
+    no per-run provenance (the runs are read per bot, not per task)."""
     store = api.app.state.store
     fleet(store, 3, 200, 900)
     at = H.now()
-    found, _ = traced_due(store, at)
+    found, _ = traced_unstarted(store, at)
     assert found
-    with store.transaction() as c:
-        A.sweep(c, at, found)
-    found, second = traced_due(store, at)
-    assert found == []
-    attempt_reads = [s for s in second if 'JOIN attempts a ON a.bot_id=f.bot' in s]
-    assert len(attempt_reads) == 1
-    # The page's own reads (rows, ledger, owners, waits), the one runs read and its priming: 32 measured on this change.
-    assert len(second) <= 35
+    assert record_all(store) == sorted(found)
+    again, second = traced_unstarted(store, at)
+    assert again == []
+    per_run = ('SELECT m.* FROM attempts a JOIN jobs', 'SELECT id FROM tasks WHERE carried_by=?')
+    assert [s for s in second if s.startswith(per_run)] == []
 
 
 def test_one_bots_unreadable_runs_do_not_block_the_other_bots_tasks(api, monkeypatch):
-    """A bot whose runs cannot be read takes its own rows to on_error. The page still yields every other bot's task, and
-    the cursor moves past the whole page, so one bad bot cannot pin the scheduler's cursor."""
+    """A bot whose runs cannot be read takes its own rows to on_error. The page still yields every other bot's task."""
     store = api.app.state.store
     fleet(store, 2, 4, 0)                                   # fleet-00 owns tasks 0 and 2, fleet-01 owns 1 and 3
     original = A._runs
@@ -751,13 +743,9 @@ def test_one_bots_unreadable_runs_do_not_block_the_other_bots_tasks(api, monkeyp
         return original(c, floors)
 
     monkeypatch.setattr(A, '_runs', unreadable)
-    cursor, failures = [''], []
     with store.read_transaction() as c:
-        found = A.due(c, H.now(), cursor=cursor, failures=failures)
+        found = [row['id'] for row, *_ in A.unstarted(c, H.now())]
     assert found == ['fleet-t-00001', 'fleet-t-00003']
-    assert sorted(f['assigned_start'] for f in failures) == ['fleet-t-00000', 'fleet-t-00002']
-    assert {f['error'] for f in failures} == {'ValueError'}
-    assert cursor == ['fleet-t-00003']
 
 
 def test_each_bots_runs_are_read_from_its_own_floor_on_the_bots_index(api, monkeypatch):
@@ -794,6 +782,6 @@ def test_a_bot_whose_only_candidate_is_waiting_has_no_runs_read(api, monkeypatch
 
     monkeypatch.setattr(A, '_runs', spy)
     with store.read_transaction() as c:
-        found = A.due(c, H.now(), cursor=[''])
+        found = [row['id'] for row, *_ in A.unstarted(c, H.now())]
     assert found == ['fleet-t-00001']
     assert read == [['fleet-01']]

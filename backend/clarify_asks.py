@@ -1,7 +1,7 @@
 """One-click clarify on a stale bot ask.
 
 A bot's question a person never answered goes stale after two business days (hubdb.ask_older): it stays on their
-list until the next weekday-morning batch sends it back to its bot (backend/still_needed.py). One tap on Clarify sends the
+list until the weekday-morning batch sends it back to its bot's task roundup (backend/still_needed.py). One tap on Clarify sends the
 asking bot the winning prompt of the clarifying-prompt experiment: say whether the request is still relevant, and
 if so restate it plainly. The ask itself stays open: the person has not answered, they have asked for a clearer
 question. One clarify per ask: a second tap is refused, so the bot hears it once.
@@ -32,7 +32,7 @@ def already_asked(conn, ask_id):
 
 
 def clarify(conn, actor, ask_id):
-    """Send the clarify prompt to the bot that asked `ask_id`. Returns the nudge it got."""
+    """Send the clarify prompt to the bot that asked `ask_id`. Returns where the prompt was sent: the bot, the task and the message."""
     asked = H.message(conn, ask_id)
     if not asked or asked["kind"] != "ask":
         raise Problem("not_found", "Question not found", 404)

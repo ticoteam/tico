@@ -212,7 +212,7 @@ def test_scheduler_clears_ci_hold_after_real_green_webhook(api, monkeypatch):
         assert H.task(c, task['id'])['step_id'] == task['step_id']
 
 
-def test_note_only_wait_reopens_but_explicit_owner_hold_stays(api):
+def test_note_only_wait_is_stranded_and_explicit_owner_hold_stays(api):
     from backend import task_blocked
     task = ticket(api)
     _team_blocked(api, task)
@@ -224,46 +224,21 @@ def test_note_only_wait_reopens_but_explicit_owner_hold_stays(api):
         set_holds(c, task['id'], blocked_since=None)
         task_blocked.backfill(c)
         assert H.task(c, task['id'])['blocked_kind'] == 'stranded'
-        assert H.sweep_stranded(c, H.shift(H.now(), hours=3)) == [(task['id'], 'open')]
         H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
-        assert H.sweep_stranded(c, H.shift(H.now(), hours=3)) == []
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
 
 
 @pytest.mark.parametrize('kind', ['gate', 'worktree'])
-def test_stranded_sweep_leaves_gate_and_worktree_holds_to_reconciliation(api, kind):
-    """Only reconciliation knows when a gate or worktree hold clears (fresh CI, no unlinked pushes): the stranded
-    sweep must neither reopen one nor overwrite its note with "nothing is outstanding"."""
+def test_gate_and_worktree_holds_are_waiting_and_their_api_cause_names_them(api, kind):
+    """Only reconciliation knows when a gate or worktree hold clears (fresh CI, no unlinked pushes), so the hold keeps
+    its kind, and the task's read names that kind as its cause."""
     from backend import task_blocked
     task = ticket(api)
     with api.app.state.store.transaction() as c:
         task_blocked.hold(c, task['id'], 'Review refused: CI failing', kind)
         held = H.task(c, task['id'])
         assert held['status'] == 'waiting' and held['blocked_kind'] == kind
-        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
-        after = H.task(c, task['id'])
-        assert (after['status'], after['note'], after['blocked_kind'], after['blocked_since']) == (
-            'waiting', held['note'], kind, held['blocked_since'])
     assert hold(get(api, 'tasks/' + task['id'])['task'])['cause'] == kind
-
-
-def test_stranded_sweep_preserves_general_worktree_hold(api):
-    """Unlinked pushes stay outstanding on General even without a remembered move."""
-    from backend import move_retry, review_gate
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, 'human:ana', 'Prepare the offsite plan', 'Write the plan.', 'bot:cpo')
-        assert task['type_id'] == H.GENERAL_TYPE
-        assert not review_gate.engineering(c, task)
-        # Worktree holds can remain after a ticket moves onto another board.
-        H.task_update(c, task['owner_id'], task['id'], status='waiting', note='Waiting for unlinked pushes')
-        set_holds(c, task['id'], blocked_kind='worktree', blocked_reason='Waiting for unlinked pushes')
-        held = H.task(c, task['id'])
-        assert held['blocked_since']
-        assert move_retry.remembered(c, held) is None
-        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
-        after = H.task(c, task['id'])
-        for field in ('status', 'note', 'blocked_kind', 'blocked_reason', 'blocked_since', 'version'):
-            assert after[field] == held[field], field
 
 
 @pytest.mark.parametrize('with_dependency', [False, True])
@@ -288,7 +263,6 @@ def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, w
         assert moved['status'] == 'waiting' and moved['blocked_kind'] == 'worktree'
         assert moved['blocked_from_step'] == held['blocked_from_step']
         assert not review_gate.engineering(c, moved)
-        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
         task_blocked.sweep(c, H.now())
         assert H.task(c, task['id'])['version'] == moved['version']
         assert H.task(c, task['id'])['note'] == moved['note']
@@ -383,15 +357,16 @@ def test_age_alert_skips_a_waiting_task_on_another_board(api, monkeypatch):
 
 
 def test_owner_blocked_move_is_a_manual_hold_that_never_reopens(api):
-    """The write's hint must match what happens: the owner's own Blocked move is a manual hold, which the stranded
-    sweep leaves alone, so it gets no "goes back to open" warning."""
+    """The write's hint must match what happens: the owner's own Blocked move is a manual hold, which nothing reopens by
+    itself, so it gets no "nothing will move it" hint."""
+    from backend import task_blocked
     task = ticket(api)
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
         parked = H.task_update(c, task['owner_id'], task['id'], step='Blocked', note='Waiting for a machine')
         assert H.task(c, task['id'])['blocked_kind'] == 'manual'
-        assert not any('goes back to open' in w for w in parked.get('warnings') or [])
-        H.sweep_stranded(c, at=H.shift(H.now(), hours=48))
+        assert not any('nothing will move it' in w for w in parked.get('warnings') or [])
+        task_blocked.sweep(c, H.shift(H.now(), hours=48))
         assert H.task(c, task['id'])['status'] == 'waiting'
 
 

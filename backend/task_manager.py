@@ -5,7 +5,7 @@ scheduler.py), and wakes the bot only when a department has something. Nothing t
 and no model call. Each department's report is built here from queries Tico already has:
 
 - tasks quiet longer than the stall gap with no wait set (`H.stalled_tasks`), with the class Decide gave from the task's
-  last messages where it read it (`stall_triage.class_of`: unsure or stuck);
+  last messages from an earlier read (`stall_triage.class_of`: unsure or stuck);
 - asks past their deadline, and questions a person has not answered for a business day (`ask_deadlines.open_asks`);
 - review and QA tickets with no linked pull request, or two open for one parent and step;
 - tickets whose pull request merged or whose release shipped but whose step did not move (`task_links`);
