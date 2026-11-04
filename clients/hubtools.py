@@ -25,7 +25,7 @@ import re
 import sys
 from urllib.parse import quote
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from clients import s3links
@@ -2305,6 +2305,19 @@ def market_resolve(api, args):
                      "applied_events": args.get("applied_events") or []}, key=_key(args))
 
 
+def market_day(value):
+    """last_verified_at takes a real calendar date as YYYY-MM-DD. A timestamp is refused, never cut down to its
+    date, and so is a day the calendar does not have (2026-02-31): the server keeps either as written."""
+    text = str(value)
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            date.fromisoformat(text)
+            return text
+    except ValueError:
+        pass
+    raise ValueError("last_verified_at must be a date (YYYY-MM-DD)")
+
+
 @tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
       {"id": _s("Insight id"), "source_url": _s("Source URL", default=""),
        "source_kind": _s("reddit, x, news, site, other", default="other"),
@@ -2313,10 +2326,12 @@ def market_resolve(api, args):
        "entity_id": _s("Existing entity to update"), "summary": _s("New summary"),
        "tier": _s("core, lookalike, phrase-stealer or secondary, for a new company", default=""),
        "new_id": _s("Id for a new entity when type/name-slug is wrong, e.g. company/self", default=""),
+       "last_verified_at": _s("Date the entity was last checked, YYYY-MM-DD: set on entity_id, or on a new entity", default=""),
        "edge_src": _s("Edge source entity"), "edge_rel": _s("One of the sixteen relations"),
        "edge_dst": _s("Edge destination entity")},
       required=("id",), writes=True)
 def market_apply(api, args):
+    verified = market_day(args["last_verified_at"]) if args.get("last_verified_at") else None
     body = {"evidence": {"source_url": args.get("source_url") or "", "source_kind": args.get("source_kind") or "other",
                          "quote": args.get("quote") or "", "our_read": args.get("our_read") or ""}}
     if args.get("entity_type") and args.get("entity_name"):
@@ -2325,10 +2340,16 @@ def market_apply(api, args):
             body["entity"]["tier"] = args["tier"]
         if args.get("new_id"):
             body["entity"]["id"] = args["new_id"]
+        if verified:
+            body["entity"]["last_verified_at"] = verified
     if args.get("entity_id"):
         body["entity_id"] = args["entity_id"]
         if args.get("summary") is not None:
             body["summary"] = args["summary"]
+        if verified:
+            body["last_verified_at"] = verified
+    if verified and "entity" not in body and "entity_id" not in body:
+        raise ValueError("last_verified_at needs entity_id, or entity_type and entity_name for a new entity")
     if args.get("edge_src") and args.get("edge_rel") and args.get("edge_dst"):
         body["edge"] = {"src": args["edge_src"], "rel": args["edge_rel"], "dst": args["edge_dst"]}
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))

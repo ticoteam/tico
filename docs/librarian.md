@@ -169,7 +169,7 @@ On an empty Market page the owner answers the Librarian's four questions (First-
 address with `hub doc fetch` (about 40 fetches in all), uses web search when the harness has it (`web-search` is declared in its
 `bot.yaml`), and writes what it finds with `hub market`: the team itself (`company/self`), competitors and lookalikes with
 their tier, segments, channels, people and rules as entities and edges, each with an evidence row (`hub market report`, then
-`hub market apply`, which takes `--tier` and `--new-id`), and the eight market pages (`hub market page`) with a source on every
+`hub market apply`, which takes `--tier`, `--new-id` and `--last-verified-at`), and the eight market pages (`hub market page`) with a source on every
 claim. It never invents a number: a size, price or share appears only when a source states it. It aims at ten minutes and stops at
 thirty, then finishes the task with a short note saying what it found and what it could not read.
 
