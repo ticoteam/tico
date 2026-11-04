@@ -8,7 +8,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import stale_review as SR
-from backend import still_wanted, team_rules
+from backend import team_rules
 from backend.tests.test_tasks_board import api, get, headers, post   # noqa: F401
 from clients import judge as J
 
@@ -40,10 +40,10 @@ def stale(api):
         with store.transaction() as c:
             row = H.task_create(c, requester, "Placeholder " + H.new_id(), "x", owner)
             when = H.shift(H.now(), days=-days_ago)
-            c.execute("UPDATE tasks SET title=?,status=?,updated=?,created=? WHERE id=?",
+            c.execute("UPDATE tasks SET title=?,status=?,updated_at=?,created_at=? WHERE id=?",
                       (title, status, when, when, row["id"]))
             if pr:
-                c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,pr_merged_at) "
+                c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,pr_merged_at) "
                           "VALUES(?,?,?,?,?,?,?,?,?)",
                           (H.new_id(), row["id"], "pr", "https://github.com/acme/site/pull/12", "PR", pr, "bot:ops",
                            when, "2026-10-16T10:00:00Z"))
@@ -54,13 +54,13 @@ def stale(api):
 def calls(store, label="stale-review@1"):
     with store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='judge.call' AND target=? ORDER BY rowid", (label,))]
+            "SELECT detail FROM events WHERE action='judge.call' AND target=? ORDER BY rowid", (label,))]
 
 
 def passes(store):
     with store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='stale_review.pass' ORDER BY rowid")]
+            "SELECT detail FROM events WHERE action='stale_review.pass' ORDER BY rowid")]
 
 
 def comments(store, task_id):
@@ -82,22 +82,22 @@ def shown(card):
 
 
 def start_turn(c, task_id):
-    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt and its turn, while the task
+    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt on the task, while the task
     row itself stays as it was."""
     other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
     H.task_comment(c, "human:ana", other["id"], "Please look at this")
-    job = c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY created DESC LIMIT 1").fetchone()[0]
-    c.execute("INSERT OR IGNORE INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
+    job = c.execute("SELECT id FROM jobs WHERE bot_id='ops' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+    c.execute("INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','r','ana','h','t')")
     aid = H.new_id()
-    c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+    c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
               "VALUES(?,?,'ops','r1',1,?,'running',?,?)", (aid, job, aid, H.shift(H.now(), seconds=600), H.now()))
-    c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES(?,'ops',?,?)", (aid, H.now(), task_id))
+    c.execute("UPDATE attempts SET trigger='task',task_id=? WHERE id=?", (task_id, aid))
 
 
 def an_hour_on(store):
     """The next hour, as the pass sees it: the last pass and this hour's calls are an hour old."""
     with store.transaction() as c:
-        c.execute("UPDATE events SET ts=? WHERE action='judge.call'", (hours(-1.01),))
+        c.execute("UPDATE events SET created_at=? WHERE action='judge.call'", (hours(-1.01),))
         SR._set_watermark(c, hours(-1.01))
 
 
@@ -115,11 +115,11 @@ def test_a_review_task_with_a_merged_pr_gets_one_stale_check_comment_to_its_bot(
     assert done["calls"] == 1 and done["suggested"] == 1
     assert comments(store, tid) == ["Stale check: PR #12 merged Oct 16. Suggest: mark done."]
     with store.read() as c:
-        said = c.execute("SELECT to_actor FROM messages WHERE body LIKE 'Stale check:%'").fetchone()[0]
+        said = c.execute("SELECT recipient_id FROM messages WHERE body LIKE 'Stale check:%'").fetchone()[0]
     assert said == "bot:ops", "addressed to the bot that owns the task, so it is woken on it"
     # Decide saw only the title, status, step, dates, the reason and the last comments.
     state = model.calls[0]["state"]["task"]
-    assert set(state) == {"title", "status", "step", "created", "updated", "due", "reason", "comments"}
+    assert set(state) == {"title", "status", "step", "created_at", "updated_at", "due_at", "reason", "comments"}
     assert state["reason"] == "PR #12 merged Oct 16" and model.calls[0]["label"] == "stale-review@1"
     (audit,) = calls(store)
     assert audit["task"] == tid and audit["verdict"] == {"value": "update", "confidence": 0.9}
@@ -177,7 +177,7 @@ def test_a_task_already_suggested_and_unchanged_gets_no_second_comment(stale):
     SR.run_pass(store, at=H.now(), engine=model)
     # Even past the week's limit, an unchanged task is not judged again.
     with store.transaction() as c:
-        c.execute("UPDATE stale_suggestions SET created=?", (H.shift(H.now(), days=-8),))
+        c.execute("UPDATE stale_suggestions SET created_at=?", (H.shift(H.now(), days=-8),))
     SR.run_pass(store, at=hours(2), engine=model)
     assert len(model.calls) == 1 and len(comments(store, tid)) == 1
 
@@ -188,7 +188,7 @@ def test_at_most_one_suggestion_a_week_even_when_the_task_changed(stale):
     model = FakeDecide("update")
     SR.run_pass(store, at=H.now(), engine=model)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), tid))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
     SR.run_pass(store, at=hours(2), engine=model)
     assert len(model.calls) == 1 and len(comments(store, tid)) == 1
 
@@ -237,7 +237,7 @@ def test_accept_all_cannot_change_a_task_the_person_could_not_change_by_hand(sta
     SR.run_pass(store, engine=FakeDecide("update"))
     # Handed to Ben after the suggestion: marking it done is his now, and Priya's team moves no one's tasks.
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (moved,))
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (moved,))
         version = H.task(c, moved)["version"]
     card = stale_card(api, "priya-test")
     by_hand = api.post(f"/api/v2/tasks/{moved}", json={"status": "done", "version": version},
@@ -289,7 +289,7 @@ def test_a_close_suggestion_is_closed_by_the_person_as_by_hand(stale):
          token="ben-test")
     with store.read() as c:
         row = H.task(c, tid)
-    assert row["status"] == "closed" and row["closed_by"] == "human:ben"
+    assert row["status"] == "closed" and row["closed_by_id"] == "human:ben"
 
 
 def test_recent_activity_and_an_open_pr_is_not_a_candidate(stale):
@@ -298,7 +298,7 @@ def test_recent_activity_and_an_open_pr_is_not_a_candidate(stale):
     task("Two PRs, one still open", status="review", days_ago=0, pr="merged")
     with store.transaction() as c:
         tid = c.execute("SELECT id FROM tasks WHERE title='Two PRs, one still open'").fetchone()[0]
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,created) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,created_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), tid, "pr", "https://github.com/acme/site/pull/13", "open", H.now()))
     model = FakeDecide()
     assert SR.run_pass(store, engine=model) == {"new": 0} and not model.calls
@@ -501,11 +501,16 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
         c.execute("INSERT INTO task_relations VALUES(?,?,'blocks','bot:ops',?)", (blocker, blocked, H.now()))
         c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (parent, blocker))
         ended = H.shift(H.now(), hours=-30)
-        c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO history_events(subject_type,id,subject_id,created_at,actor_id,kind,old,new,note) VALUES('task',?,?,?,?,?,?,?,?)",
                   (H.new_id(), snoozed, ended, H.KEEPER, "snoozed_until", ended, None, "snooze over"))
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (ended, snoozed))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ended, snoozed))
         found = {row["id"]: why for row, why in SR.candidates(c, H.now())}
     assert found[child] == "Its parent task is done"
+    # A company task under a private parent (a task filed from private work): the parent's state stays private.
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (parent,))
+        hidden = {row["id"]: why for row, why in SR.candidates(c, H.now())}
+    assert child not in hidden
     assert found[blocked] == "Everything it was blocked by is done"
     assert found[twin].startswith("Same title as an older open task of the same owner") and first not in found
     assert found[spaced].startswith("Same title as an older open task of the same owner")
@@ -554,12 +559,3 @@ def test_admins_turn_the_switch_members_cannot_and_the_environment_sets_only_the
     monkeypatch.setenv("TICO_STALE_REVIEW", "1")
     with store.read() as c:
         assert team_rules.load(c)["stale_review"] is False, "a saved choice wins over the environment"
-
-
-def test_still_wanted_stops_while_the_switch_is_on(stale):
-    api, store, task = stale
-    tid = task("Old chore", owner="human:ana", requester="human:ana", status="open", days_ago=9)
-    with store.transaction() as c:
-        assert still_wanted.ask_idle(c) == []
-        team_rules.save(c, "human:ana", {"stale_review": False})
-        assert still_wanted.ask_idle(c) == [tid]

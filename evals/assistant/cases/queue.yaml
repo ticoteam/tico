@@ -1,0 +1,244 @@
+# The queue: Needs you, bot-made tasks, the sources that file them, and undo. Case 1 is the real Nov 3 chat (split into
+# its four asks). The fictional company is Acme; the owner is Dana. Canned hub outputs are shaped like the real routes
+# (backend/hubdb.py needs_you, task_origin; clients/hubcli.py for the commands).
+#
+# Shared fixtures: the open board, read in several cases through the YAML anchor q_tasks.
+
+- id: queue-clear-old-tasks
+  group: queue
+  prompt: "can you clear old tasks?"
+  hub:
+    - match: '^task list'
+      out: &q_tasks
+        tasks:
+          - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
+          - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
+          - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
+          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
+          - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
+          - {id: 9f7e3a2c-1000-4000-8000-000000000010, title: "CEO Bot: which goals does it own?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "Two questions open.", created: "2026-10-27T11:00:00Z", updated: "2026-10-31T11:00:00Z"}
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+    - match: '^task bulk close'
+      out: {matched: 8, changed: 8, note: "closed as the person, via Assistant"}
+  must:
+    - '^task (bulk close|close)\b'
+  must_not:
+    - '^task (bulk close|close) .*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
+    - '^approval (approve|decline)'
+    - '^message send'
+  reply: |
+    Closes the bot-made items the record shows are finished, replaced or duplicates, in bulk, as Dana: the three "Docs for"
+    tasks already done, the three identical "[Health Monitor] test ping" tasks, and the v0.5.17 publish task replaced by
+    v0.5.20. These are closed directly, not on a Confirm card, because the record shows they are done or replaced. It does
+    not refuse because a bot requested them. Live decisions stay open: the v0.5.0 publish, the org-chart yes and the CEO Bot
+    questions. The website deploy task (no activity since Oct 14) is either left alone or put on at most one card for her to
+    confirm, not closed by guesswork. It does not approve or decline any approval. The reply says what it closed, how many,
+    and how to undo it, in a few plain lines.
+
+- id: queue-stop-release-notices
+  group: queue
+  prompt: "i don't think we need those release notices at all, i don't want them"
+  history:
+    - {from: "human:dana", body: "can you clear old tasks?"}
+    - {from: "assistant", body: "I closed one old task (Finance phase 0 review of PR #1991). The others are live work or wait on you."}
+  hub:
+    - match: '^task list'
+      out:
+        tasks:
+          - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
+          - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
+          - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
+          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
+          - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
+          - {id: 9f7e3a2c-1000-4000-8000-000000000010, title: "CEO Bot: which goals does it own?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "Two questions open.", created: "2026-10-27T11:00:00Z", updated: "2026-10-31T11:00:00Z"}
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
+        next_offset: null
+    - match: '^automation list'
+      out:
+        automations:
+          - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published (about twice a day)", enabled: true, runs_7d: 14, creates: "one task per release, owner human:dana"}
+          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+        next: null
+    - match: '^automation (show|get) auto_docs_release'
+      out:
+        automation:
+          id: auto_docs_release
+          name: "Docs and release notes for each release"
+          owner: "bot:technical-writer"
+          trigger: {kind: "release.published"}
+          steps: [{action: "task.create", owner: "human:dana", title: "Docs for {version} release notes"}]
+          enabled: true
+          version: 4
+    - match: '^automation update auto_docs_release'
+      out: {ok: true, id: auto_docs_release, enabled: false, version: 5, summary: "disabled at the owner's request via Assistant"}
+    - match: '^rules add'
+      out: {ok: true, id: rule_1182, status: active}
+    - match: '^task bulk close'
+      out: {matched: 8, changed: 8, note: "closed as the person, via Assistant"}
+  must:
+    - '^(automation update auto_docs_release|rules add)\b'
+    - '^task (bulk close|close)\b'
+  must_not:
+    - '^approval (approve|decline)'
+    - '^message send'
+  reply: |
+    Stops the source, not just the symptom: it disables the Technical Writer's "Docs and release notes for each release"
+    automation (`hub automation update auto_docs_release --disable`), or adds a rule that stops it, and says so. It also
+    closes the open "Docs for vX" tasks that are already done, as Dana, in bulk. It says what it changed and how to turn the
+    automation back on (undo). It does not message the Technical Writer or any bot about it, and does not refuse because the
+    automation belongs to a bot. A short reply in a few lines, with the automation named.
+
+- id: queue-why-sent
+  group: queue
+  prompt: "why are they being sent?"
+  history:
+    - {from: "human:dana", body: "i don't think we need those release notices at all, i don't want them"}
+    - {from: "assistant", body: "I closed the done release-notes tasks. The source is still on."}
+  hub:
+    - match: '^task list'
+      out: *q_tasks
+    - match: '^origin show 1a0c5e27\S*'
+      out:
+        item: {kind: task, id: "1a0c5e27-1000-4000-8000-000000000001", title: "Docs for v0.5.20 release notes"}
+        made_by: "bot:technical-writer"
+        source: {kind: automation, id: auto_docs_release, name: "Docs and release notes for each release", trigger: "release.published"}
+        siblings_this_week: 14
+        stops:
+          - {fix: "Turn the automation off", command: "hub automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
+          - {fix: "Or a rule that stops it", command: "hub rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
+    - match: '^automation list'
+      out:
+        automations:
+          - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published (about twice a day)", enabled: true, runs_7d: 14, creates: "one task per release, owner human:dana"}
+        next: null
+  must:
+    - '^(origin show|automation (list|show))\b'
+  must_not:
+    - '^(automation update|rules add|assistant propose)'
+    - '^task (bulk close|close)'
+    - '^message send'
+  reply: |
+    Names the source from the record: the automation "Docs and release notes for each release" (owned by the Technical Writer),
+    which files one "Docs for vX" task for the owner on each release, releases going out about twice a day. It says this
+    from `origin show` or the automation list, not a guess. It offers to stop it (turn the automation off, or add a rule)
+    and asks, or does it only if the owner asked for the stop in the same message. It does not close anything or change the
+    automation in this reply, since the owner asked why. Plain and short.
+
+- id: queue-needs-you-breakdown
+  group: queue
+  prompt: "right now, i see 193 tasks labeled as \"needs you\". of these, i think maybe 5 actually need me, can you see why?"
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 193
+        by_kind: {task: 130, question: 57, approval: 6}
+        created_this_week: 159
+        older_than_3_days: 118
+        by_bot:
+          - {bot: "bot:technical-writer", display_name: "Technical Writer", total: 20, task: 20, question: 0, approval: 0, this_week: 12, older_than_3_days: 8}
+          - {bot: "bot:botops", display_name: "BotOps", total: 26, task: 18, question: 8, approval: 0, this_week: 19, older_than_3_days: 7}
+          - {bot: "bot:health-monitor", display_name: "Health Monitor", total: 22, task: 22, question: 0, approval: 0, this_week: 22, older_than_3_days: 0}
+          - {bot: "bot:engineering-lead", display_name: "Engineering Lead", total: 19, task: 11, question: 8, approval: 0, this_week: 16, older_than_3_days: 3}
+          - {bot: "bot:release-manager", display_name: "Release Manager", total: 18, task: 9, question: 6, approval: 3, this_week: 15, older_than_3_days: 3}
+          - {bot: "bot:pr-reviewer", display_name: "PR Reviewer", total: 15, task: 11, question: 2, approval: 2, this_week: 13, older_than_3_days: 2}
+          - {bot: "bot:keeper", display_name: "Keeper", total: 11, task: 11, question: 0, approval: 0, this_week: 11, older_than_3_days: 4}
+          - {bot: "bot:ceo-bot", display_name: "CEO Bot", total: 12, task: 0, question: 12, approval: 0, this_week: 2, older_than_3_days: 10}
+          - {bot: "bot:finance-analyst", display_name: "Finance Analyst", total: 14, task: 6, question: 8, approval: 0, this_week: 5, older_than_3_days: 9}
+          - {bot: "bot:recruiting", display_name: "Recruiting", total: 9, task: 9, question: 0, approval: 0, this_week: 1, older_than_3_days: 8}
+          - {bot: "bot:website", display_name: "Website", total: 6, task: 6, question: 0, approval: 0, this_week: 0, older_than_3_days: 6}
+          - {bot: "bot:growth", display_name: "Growth", total: 20, task: 7, question: 13, approval: 0, this_week: 8, older_than_3_days: 9}
+          - {bot: "bot:support-bot", display_name: "Support Bot", total: 1, task: 0, question: 0, approval: 1, this_week: 1, older_than_3_days: 0}
+    - match: '^task list'
+      out: *q_tasks
+    - match: '^message list'
+      out:
+        actor: "human:dana"
+        messages:
+          - {id: 0a6d4b92-2000-4000-8000-000000000001, kind: notice, from_actor: "bot:release-manager", text: 'Approve this publish: {"release": "v0.5.0", "channel": "stable"}', refs: {approval: 5f3e21c0-2000-4000-8000-000000000001, task: 7d21c4a0-1000-4000-8000-000000000008}, created: "2026-11-01T09:00:00Z"}
+          - {id: 0a6d4b92-2000-4000-8000-000000000002, kind: notice, from_actor: "bot:pr-reviewer", text: 'Approve this merge: {"repo": "tico", "pull_request": 2041}', refs: {approval: 6e1f0c2a-2000-4000-8000-000000000002}, created: "2026-11-02T14:00:00Z"}
+        more_messages: false
+        tasks: []
+        notices: []
+  must:
+    - '^needs-you show'
+  must_not:
+    - '^approval (approve|decline)'
+    - '^assistant propose .*approvals'
+  reply: |
+    Gives the exact count from the board's own numbers: 193 items needing Dana, split as 130 tasks, 57 bot questions and
+    6 approvals, and the split by bot (the Technical Writer, BotOps, Health Monitor, and so on, with the numbers the tool
+    returned). These numbers match the tool output exactly, not the owner's round figure. It says most of the 193 are
+    leftover asks and test pings, not decisions, and gives the cause in one line (repeat test pings, per-release docs tasks,
+    old questions). Then it names the few real decisions from the record: the v0.5.0 publish approval, the Engineering group
+    in the org chart, the release merge approval and the CEO Bot goal questions, with links. It offers the cleanup (closing
+    the done and duplicate items, stopping the source) and does not approve or decline anything.
+
+- id: queue-undo-close
+  group: queue
+  prompt: "undo that"
+  history:
+    - {from: "human:dana", body: "Close the Finance phase 0 review of PR #1991. It's done."}
+    - {from: "assistant", body: "Closed it: Finance phase 0 review of PR #1991."}
+  hub:
+    - match: '^assistant change list'
+      out:
+        changes:
+          - id: chg_7f3a21
+            at: "2026-11-03T09:12:00Z"
+            action: task.close
+            summary: "Closed 'Finance phase 0 review of PR #1991'"
+            words: "Close the Finance phase 0 review of PR #1991. It's done."
+            recorded_as: "Dana (via Assistant)"
+            undo: "reopen"
+    - match: '^assistant change restore chg_7f3a21'
+      out: {ok: true, id: chg_7f3a21, restored: "task reopened to open", task: "Finance phase 0 review of PR #1991"}
+  must:
+    - '^assistant change list\b'
+    - '^assistant change restore chg_7f3a21\b'
+  must_not:
+    - '^task (create|close|bulk close)\b'
+    - '^approval (approve|decline)'
+    - '^message send'
+  reply: |
+    Finds the last change the Assistant made for Dana (the close of the Finance phase 0 review of PR #1991) from its change
+    list, and restores it, so the task is open again. It says in one line what was undone and which task, with a link if known.
+    It does not create a new task, close anything else, or message anyone. Short.
+
+- id: queue-morning-summary
+  group: queue
+  prompt: "morning, anything I should know?"
+  hub:
+    - match: '^brief'
+      out:
+        alerts:
+          - "Runner queue: 6 test pings from Health Monitor open on you since Nov 2."
+          - "Release v0.5.20 shipped at 23:00 UTC; its docs task is done but still open."
+        waiting_on_you: {count: 193}
+        bots_down: []
+        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Manager is waiting on your v0.5.0 publish approval."
+    - match: '^needs-you show'
+      out: {total: 193, by_kind: {task: 130, question: 57, approval: 6}, created_this_week: 159, older_than_3_days: 118}
+    - match: '^health check'
+      out: {problems: [], note: "No bot is down. Two computers are idle."}
+    - match: '^task list'
+      out: *q_tasks
+  must:
+    - '^(brief|needs-you show|health check|task list)\b'
+  must_not:
+    - '^message send'
+    - '^approval (approve|decline)'
+  reply: |
+    A short morning summary, not a dump: nothing is down, the number that waits on her (193, from the tool, quoted exactly or
+    as "about 190" with the exact figure available), the handful that are real decisions (the v0.5.0 publish approval, the
+    org-chart yes, the release merge), and the noise (the repeated test pings and done docs tasks). It offers one clear next
+    step (clear the done and duplicate items, stop the test pings) or does it, saying what it did with undo. It does not
+    approve anything, and it does not send messages. Plain lines, links where it has ids.

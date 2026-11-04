@@ -103,3 +103,24 @@ def test_docker_updater_speaks_the_servers_contract(environment, monkeypatch, tm
         time.sleep(0.01)
     assert started == [("v0.2.0", "v0.1.9")]
 
+
+
+def test_a_server_tico_updates_offers_no_update_now(environment, monkeypatch):
+    """TICO_UPDATES=tico (Tico updates this server from outside): no Update now, and the app says why."""
+    monkeypatch.setenv("TICO_UPDATES", "tico")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000")      # even an updater left in .env is not called
+    network(monkeypatch, lambda request: pytest.fail("the updater was called"))
+    releases.CHECKER.release = {"tag": "v0.2.0", "url": RELEASE["html_url"], "published_at": "", "name": ""}
+    releases.CHECKER.checked = releases.CHECKER.clock()
+    assert releases.notice()["managed"] is True and releases.notice()["available"] is True
+    api = environment()
+    r = api.post("/api/v2/system/update", json={"version": "v0.2.0"}, headers=signed_in())
+    assert r.status_code == 409 and r.json()["error"]["code"] == "managed_update"
+    assert "command" not in r.json()["error"]
+    assert api.get("/api/v2/system/update", headers=signed_in()).json()["managed"] is True
+    checks = api.get("/api/v2/health", headers=signed_in()).json()["checks"]
+    version = next(c for c in checks if c["id"] == "version")
+    assert version["status"] == "info" and version["summary"].endswith("Tico updates this server.")
+    assert [f["label"] for f in version["fixes"]] == ["What is new"]
+    monkeypatch.delenv("TICO_UPDATES")
+    assert releases.notice()["managed"] is False

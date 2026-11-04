@@ -1,4 +1,4 @@
-// Settings > Computers > Models' Tico AI Gateway card against a fake server: the key is typed once, sent once and never
+// Settings > Models > Tico Gateway (its Advanced part) against a fake server: the key is typed once, sent once and never
 // shown again (only its preview); the Tico models appear only while the connection has a key, by their Tico names
 // with what runs underneath; the Gateway's 80% warning, "Gateway cap reached" and a revoked key read plainly to the
 // owner; members see only whether it is connected. An install invited by its install command says it connected
@@ -16,6 +16,8 @@ const {unrouted} = require('./support/routes.cjs');
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', dialog => dialog.accept());
     const KEY = 'tgw_fixture_0123456789abcdef';
+    // Another service than the saved key's: the server holds the save until the owner keeps or clears the key.
+    const MOVED = 'https://elsewhere.example.test/v1/gateway';
     const tico = (id, name, under) => ({id, label: name, description: `Claude ${under} 5.5 underneath`, runtime: 'pi',
       provider: 'tico', efforts: ['low', 'high', 'max'], default_effort: 'high', harnesses: ['pi']});
     const catalog = {
@@ -64,6 +66,13 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/providers/gateway') {
         if (req.method() === 'GET') return json(shown(role === 'owner'));
         sent.push({method: req.method(), body: req.postDataJSON?.() ?? null});
+        const asked = req.postDataJSON?.() ?? {};
+        if (req.method() === 'PUT' && asked.url === MOVED && !asked.credentials) {
+          return json({error: {code: 'destination_change', detail: 'This sends the saved Gateway key elsewhere.', retryable: false,
+            integration: 'gateway', name: 'Tico AI Gateway', old: {address: 'https://gateway.example.test:443'},
+            new: {address: 'https://elsewhere.example.test:443'}, credentials: ['Gateway key'], revision: gateway.revision,
+            choices: ['keep', 'clear']}}, 409);
+        }
         if (req.method() === 'PUT') {
           gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,
             message: 'Connected.'};
@@ -86,24 +95,25 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     const card = page.locator('#set-gateway');
+    // The key, address and state sit behind Advanced; a redraw keeps it open.
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=devices]').click();
+      await page.locator('[data-settings-tab=models]').click();
       await page.evaluate(() => renderSettingsProviders());
-      await card.waitFor();
+      await page.locator('#set-gateway-card [data-gateway-advanced]').evaluate(el => { el.open = true; });
     };
     const modelOptions = () => page.locator('[data-provider-model] option').evaluateAll(
       options => options.map(o => ({value: o.value, text: o.textContent, title: o.title})));
     await page.goto('https://tico-ui.test/#/settings');
     await open();
     // Not connected: no Tico models, and the gateway is never a provider tick box of its own.
-    assert.equal(await card.locator('[data-gateway-state]').getAttribute('data-gateway-state'), 'none');
+    assert.equal(await page.locator('#set-gateway-card [data-gateway-state]').getAttribute('data-gateway-state'), 'none');
     assert.equal(await page.locator('[data-provider][value=tico]').count(), 0, 'the gateway follows its key, not a tick box');
     assert.ok(!(await modelOptions()).some(o => o.value.startsWith('tico-')), 'no Tico models while not connected');
     // Connect: the key goes once in the PUT, the field empties, and the page never shows it again.
     await card.locator('[data-gateway-key]').fill(KEY);
     await card.locator('[data-gateway-save]').click();
-    await page.locator('#set-gateway [data-gateway-state=connected]').waitFor();
+    await page.locator('#set-gateway-card [data-gateway-state=connected]').waitFor();
     const put = sent.find(row => row.method === 'PUT');
     assert.deepEqual(put.body, {url: '', expected_revision: 0, key: KEY}, 'the key is sent once, with the revision shown');
     assert.equal(await card.locator('[data-gateway-key]').inputValue(), '', 'the key field is empty after save');
@@ -126,16 +136,37 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => document.querySelector('#set-gateway [data-gateway-url]')?.value === '');
     assert.deepEqual(sent.filter(row => row.method === 'PUT')[1].body,
       {url: 'https://gateway.example.test/v1/gateway', expected_revision: 1}, 'an empty field keeps the saved key');
+    // Another service while a key is saved: the owner is asked first, by scheme, host and port and the key's label, never
+    // the key or its preview. Cancel saves nothing; Clear sends the answer with the same revision.
+    await open();
+    await card.locator('[data-gateway-url]').fill(MOVED);
+    await card.locator('[data-gateway-save]').click();
+    const ask = page.locator('dialog.destination-dialog');
+    await ask.waitFor();
+    assert.equal(await ask.locator('[data-destination-old]').innerText(), 'https://gateway.example.test:443');
+    assert.equal(await ask.locator('[data-destination-new]').innerText(), 'https://elsewhere.example.test:443');
+    assert.match(await ask.innerText(), /Gateway key/);
+    assert.ok(!(await ask.innerText()).includes('tgw'), 'no key preview in the prompt');
+    await ask.locator('[data-destination-cancel]').click();
+    await page.locator('#set-gateway [data-gateway-status] .err').waitFor();
+    assert.equal(await card.locator('[data-gateway-status]').innerText(), 'Nothing was saved');
+    const puts = sent.filter(row => row.method === 'PUT').length;
+    await card.locator('[data-gateway-save]').click();
+    await ask.waitFor();
+    await ask.locator('[data-destination-clear]').click();
+    await page.waitForFunction(() => document.querySelector('#set-gateway [data-gateway-url]')?.value === '');
+    assert.deepEqual(sent.filter(row => row.method === 'PUT').slice(puts).map(row => row.body),
+      [{url: MOVED, expected_revision: 2}, {url: MOVED, expected_revision: 2, credentials: 'clear'}], 'asked, then answered');
     // What the Gateway says about the key reads plainly to the owner.
     const says = async (state, message, used, pill) => {
       gateway = {...gateway, state, message, used, working: !['revoked', 'unknown'].includes(state)};
       await open();
-      assert.equal(await card.locator('.pill').innerText(), pill, `${state} badge`);
+      assert.equal(await page.locator('#set-gateway-card [data-gateway-line]').innerText(), pill, `${state} status`);
       assert.equal(await card.locator('[data-gateway-message]').innerText(), message, `${state} message`);
     };
     await says('warning', 'This key has used 80% of its monthly Gateway cap. Bots stop at 100% until next month.', 0.8, 'Connected');
-    await says('cap_reached', 'Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap.', 1, 'Gateway cap reached');
-    await says('not_ready', "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait until Tico turns them on.", null, 'Not ready');
+    await says('cap_reached', 'Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap.', 1, 'Cap reached');
+    await says('not_ready', "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait until Tico turns them on.", null, 'Connected');
     await says('revoked', 'Not working: Tico has revoked this gateway key. Ask Tico for a new key and save it here.', null, 'Not working');
     await card.locator('[data-gateway-check]').click();
     await page.waitForFunction(() => !document.querySelector('#set-gateway [data-gateway-check]')?.disabled);
@@ -151,7 +182,8 @@ const {unrouted} = require('./support/routes.cjs');
     // Clear: the key goes, and so do the Tico models.
     await open();
     await card.locator('[data-gateway-clear]').click();
-    await page.locator('#set-gateway [data-gateway-state=none]').waitFor();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
+    await page.locator('#set-gateway-card [data-gateway-state=none]').waitFor();
     assert.ok(!(await modelOptions()).some(o => o.value.startsWith('tico-')), 'Tico models go with the key');
     // An automatic key: the card says so, and nobody is asked for a code or a key.
     gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,

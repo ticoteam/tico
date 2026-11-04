@@ -101,7 +101,7 @@ def _hold(digest):
 
 
 def _row(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -110,7 +110,7 @@ def _row(c):
 
 
 def _write(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(record, sort_keys=True)))
 
 
@@ -424,8 +424,8 @@ def heartbeat_later(store):
 
 
 def install(app, store, settings, auth):
-    def actor(who):
-        return app.state.inbound.connection_actor(who, what="this server", code="company_connection")
+    def actor(who, tap=False):
+        return app.state.inbound.connection_actor(who, what="this server", code="company_connection", tap=tap)
 
     @app.get(PROOF_PATH)
     async def company_connection_proof():
@@ -462,5 +462,5 @@ def install(app, store, settings, auth):
     @app.delete("/api/v2/company/server-connection")
     def company_server_disconnect(request: Request):
         who = request.state.identity
-        actor(who)
+        actor(who, tap=True)
         return disconnect(store, app.state.vault, who)

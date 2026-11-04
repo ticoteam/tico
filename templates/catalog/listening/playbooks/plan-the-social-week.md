@@ -5,6 +5,9 @@ weekday sweep is running. Budget 30 minutes. The outcome is two weeks of posts i
 `knowledge/social-calendar.md`, each written for its channel and ready as one batch.
 Nothing is published by this playbook.
 
+Inputs: the task, `knowledge/social-calendar.md`, the last two weeks of sweep digests in `reports/sweeps/`, and the content plan if the team has one.
+Done when: two weeks of posts are in `knowledge/social-calendar.md`, each with its text, account, image brief and source; the batch is in `reports/social/`; the task note gives the count planned, published and still drafted.
+
 ---
 
 ## 1. Read what is already planned
@@ -32,8 +35,7 @@ Paid or gifted endorsements carry a clear disclosure. Alt text for every image y
 ## 4. Prepare and post the batch
 
 Write the batch to `reports/social/YYYY-MM-DD-plan.md`: date, account, text, link, image brief, source.
-The payload lists each post's account, time and exact text. Publish or schedule requested posts
-with your Tools when a person has turned mail sending on in Tico; otherwise keep the drafts and their destinations.
+The payload lists each post's account, time and exact text. Publish or schedule a post only when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the drafts and their destinations.
 
 ## 5. Record and finish
 

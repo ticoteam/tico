@@ -24,10 +24,10 @@ carries the `text` the person reads, that text must be exactly what will be publ
 `content_sha256` must be the lower-case hex SHA-256 of the text's UTF-8 bytes, or the request is refused.
 With or without text, a `content_sha256` that isn't 64 lower-case hex characters is refused.
 
-A `support` approval is a Tico bug report for the Tico maintainers, and nothing reaches them without a
-person's yes: `hub support report --message "..."` drafts it (the `message`, its `content_sha256` and
-`include_ids`, whether the version and install ID go with it), and once a person approves it,
-`hub support send --approval <id>` sends it, filed as that person. Make the report self-contained: what
+A `support` approval is a Tico bug report for the Tico maintainers. `hub support report --message "..."` sends it at
+once, unless the team's owner turned off "Bots send reports to the Tico team without asking"; then it is drafted (the
+`message`, its `content_sha256` and `include_ids`, whether the version and install ID go with it), and once a person
+approves it, `hub support send --approval <id>` sends it, filed as that person. The command's output says which. Make the report self-contained: what
 failed, since when, the exact error, what you tried. No secrets, customer data or tokens. Don't hand the
 person a copy-and-paste task instead.
 

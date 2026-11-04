@@ -154,6 +154,12 @@ pub fn is_checkout(path: &Path) -> bool {
     path.join(".git").exists()
 }
 
+/// Whether a turn copies the bot's AI-tool memory into its checkout: a git checkout, never a private meeting's copy and
+/// never a stateless bot's (continuity::stateless), which keeps no memory at all.
+pub fn copies_into(private: bool, stateless: bool, checkout: &Path) -> bool {
+    !private && !stateless && is_checkout(checkout)
+}
+
 /// Puts `entries` in `learnings` (created if missing): at the end of the moved-rules section when there is one, else as
 /// that section after the title and intro, ahead of the first `## ` section or log entry.
 pub fn insert(learnings: &str, entries: &[&Entry], day: &str) -> String {
@@ -410,5 +416,15 @@ mod tests {
         let two = insert(&with_log, &[&e("b.md")], "d");
         assert!(two.contains("- a.md [source: claude-memory/a.md; added: d]\n- b.md [source: claude-memory/b.md; added: d]\n\n## 2026-10-01"), "{two}");
         assert_eq!(insert("# L\nintro", &[&e("c.md")], "d").matches(HEADING).count(), 1);
+    }
+
+    #[test]
+    fn a_normal_bots_checkout_gets_its_memory_copied_and_a_stateless_or_private_one_never_does() {
+        let dir = temp();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        assert!(copies_into(false, false, &dir), "a normal bot's checkout gets its memory");
+        assert!(!copies_into(false, true, &dir), "a stateless bot keeps no memory to copy");
+        assert!(!copies_into(true, false, &dir), "a private meeting's copy takes none");
+        assert!(!copies_into(false, false, &temp()), "no git checkout, no copy");
     }
 }

@@ -2,13 +2,13 @@
 
 An endpoint belongs to a person (`created_by`), who sees through it what they could see in Tico: `publish` builds one
 message per distinct owner, and a task they cannot read produces nothing for them. A bot cannot make an endpoint. It
-asks, a person approves, and the person owns what is made (`requested_by` names the bot). The CEO Bot sends nothing.
+asks, a person approves, and the person owns what is made (`requested_by` names the bot). The Strategy Bot sends
+nothing.
 
 `publish` runs in the caller's write transaction and only inserts: one `webhook_events` row for the event and one
 `webhook_sends` row for each endpoint that should hear of it, so a rolled-back change tells nobody. The workers in
 backend/webhook_delivery.py post them after the commit. A producer calls it with one line and it never raises on that
-path: a failure is rolled back to a savepoint, logged, and the producer's own write goes on.
-"""
+path: a failure is rolled back to a savepoint, logged, and the producer's own write goes on."""
 import base64
 import hashlib
 import json
@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from fastapi import Request
 from pydantic import Field
 
-from . import egress
+from . import destinations, egress
 from . import hubdb as H
 from . import models as M
 from . import webhook_delivery as D
@@ -49,6 +49,9 @@ MAX_HEADER_VALUE = 1000
 MAX_FILTER = 50
 REFUSED_HEADERS = ("host", "content-length", "content-type", "transfer-encoding", "connection")
 HEADER_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
+# Why an endpoint is paused after its address changed and its secret header values were cleared: it stays paused until
+# each one is typed again or removed (`update`), and sends nothing without them (webhook_delivery.deliver).
+NEEDS_VALUE = "A secret header needs its value again: the address changed and its saved value was cleared"
 REPLAY_BATCH = 500
 DISABLE_DAYS = 5
 DISABLE_SPAN_HOURS = 12
@@ -145,6 +148,10 @@ def links_for(type_, subject, data):
         app, api = f"#/task/{data['task_id']}", f"/api/v2/tasks/{data['task_id']}"
     elif group == "bot":
         app, api = f"#/bot/{subject}", f"/api/v2/bots/{subject}"
+    elif group == "thread":
+        api = f"/api/v2/threads/{subject}/timeline"
+    elif group == "message" and data.get("thread_id"):
+        api = f"/api/v2/threads/{data['thread_id']}/timeline"
     elif group in ("meeting", "strategy", "market", "health"):
         app = {"meeting": "#/meetings", "strategy": "#/strategy", "market": "#/market", "health": "#/health"}[group]
     out = {}
@@ -161,7 +168,9 @@ def envelope(type_, subject, data, timestamp):
 
 
 def body_of(env):
-    return json.dumps(env, separators=(",", ":"), ensure_ascii=False)
+    # A delivered body names a run as the API does (backend/runs.py): its attempt_id keys read run_id.
+    from .runs import public_json
+    return public_json(json.dumps(env, separators=(",", ":"), ensure_ascii=False))
 
 
 # ----------------------------------------------------------------------------------------------------- who may read
@@ -227,7 +236,27 @@ def view_for(c, actor, type_, subject, data, cache):
         return data
     if group in ("health", "inbound", "webhook"):
         return data if _admin(c, actor, cache) or not _state["auth"] else None
+    if group in ("thread", "message"):
+        return _thread_view(c, actor, type_, subject, data, cache)
     return data
+
+
+def _thread_view(c, actor, type_, subject, data, cache):
+    """A thread event is the endpoint owner's when the owner may read the thread (`threads.readable`, the check the
+    timeline makes). A held message is not in its thread yet, so it is checked on the thread it was going to: an
+    owner or admin hears of it only where they could read that thread, as for any other event."""
+    auth = _state["auth"]
+    if not auth:
+        return data
+    who = _identity(c, actor, cache)
+    if not who:
+        return None
+    if type_ == "message.held":
+        subject = (data or {}).get("thread_id") or subject
+    from . import threads
+    if not threads.readable(c, threads.viewer(auth, who), subject):
+        return None
+    return data or {}
 
 
 # ------------------------------------------------------------------------------------------------------------ publish
@@ -237,9 +266,9 @@ def listening(c):
     return c.execute("SELECT 1 FROM webhooks WHERE deleted_at IS NULL LIMIT 1").fetchone() is not None
 
 
-def _is_ceo(actor):
-    from . import ceo_bot
-    return actor == H.bot_actor(ceo_bot.SLUG)
+def _is_strategy_bot(actor):
+    from . import strategy_bot
+    return actor == H.bot_actor(strategy_bot.SLUG)
 
 
 def _refresh(c):
@@ -253,7 +282,7 @@ def _event_row(c, event_id, type_, subject, data, actor, skipped=0, only=""):
     payload = json.dumps(data, separators=(",", ":"), default=str)
     if len(payload) > MAX_DATA:
         payload = json.dumps({"truncated": True, "bytes": len(payload)})
-    c.execute("INSERT OR IGNORE INTO webhook_events(id,type,subject,version,payload,actor,skipped,created,only_id) "
+    c.execute("INSERT OR IGNORE INTO webhook_events(id,type,subject,version,payload,actor,skipped,created_at,only_id) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (event_id, type_, str(subject), version_of(type_), payload, actor, skipped,
                                              H.now(), only))
 
@@ -265,7 +294,7 @@ def _queue(c, hook, event_id, type_, subject, data, at=None):
         data = {"truncated": True}
     body = body_of(envelope(type_, str(subject), data, at or stamp))
     return c.execute("INSERT OR IGNORE INTO webhook_sends(id,event_id,webhook_id,type,subject,body,state,attempts,"
-                     "next_attempt,created) VALUES(?,?,?,?,?,?,'ready',0,?,?)",
+                     "next_attempt_at,created_at) VALUES(?,?,?,?,?,?,'ready',0,?,?)",
                      ("wh_" + uuid.uuid4().hex[:24], event_id, hook["id"], type_, str(subject), body, stamp, stamp)).rowcount
 
 
@@ -280,17 +309,17 @@ def publish(c, type, subject, data, actor, *, only=None, revision=None):
     journal while any endpoint exists (paused ones too, for "Send missed"), and every enabled endpoint subscribed to
     `type` gets a message built through its owner's read view, at most MAX_PER_EVENT of them. With
     `only` (an endpoint id) it sends to that one and raises Refused when it cannot: the endpoint is missing, paused
-    or deleted, the sender is the CEO Bot or a bot whose send switch is off, or the endpoint's owner may not read
+    or deleted, the sender is the Strategy Bot or a bot whose send switch is off, or the endpoint's owner may not read
     the subject. `revision` makes the event id repeatable, so a retried write queues nothing twice."""
     if only is not None:
         return _publish_only(c, str(type), str(subject), data or {}, actor, only, revision)
     try:
         name = canonical(type)
         # One indexed query when nobody listens, which is nearly always.
-        every = c.execute("SELECT * FROM webhooks WHERE deleted_at IS NULL ORDER BY created, id").fetchall()
-        if not name or not every or _is_ceo(actor):
+        every = c.execute("SELECT * FROM webhooks WHERE deleted_at IS NULL ORDER BY created_at, id").fetchall()
+        if not name or not every or _is_strategy_bot(actor):
             return 0
-        hooks = [h for h in every if h["enabled"] and subscribed(json.loads(h["events_json"]), name)]
+        hooks = [h for h in every if h["enabled"] and subscribed(json.loads(h["events"]), name)]
         c.execute("SAVEPOINT webhook_publish")
         try:
             queued = _fan_out(c, hooks, name, str(subject), data or {}, actor, revision)
@@ -329,8 +358,8 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
         raise Refused("That endpoint does not exist")
     if not hook["enabled"]:
         raise Refused("That endpoint is paused")
-    if _is_ceo(actor):
-        raise Refused("The CEO Bot does not send webhooks")
+    if _is_strategy_bot(actor):
+        raise Refused("The Strategy Bot does not send webhooks")
     if H.is_bot(actor):
         from . import mail_settings
         if not (mail_settings.stored(c, H.actor_id(actor)) or {}).get("outbound_send"):
@@ -363,8 +392,8 @@ def _facts(c, name, subject, data, actor):
         if row:
             break
     if row:
-        who = {a for a in (row.get("owner"), actor) if a and H.is_bot(a)}
-        return {"bots": who, "owner": row.get("owner"), "type": row.get("type_id")}
+        who = {a for a in (row.get("owner_id"), actor) if a and H.is_bot(a)}
+        return {"bots": who, "owner_id": row.get("owner_id"), "type": row.get("type_id")}
     if name.split(".")[0] == "bot":
         return {"bots": {H.bot_actor(subject)}}
     return {}
@@ -378,10 +407,10 @@ def passes(c, filt, facts):
         return False
     if filt.get("task_types") and "type" in facts and facts["type"] not in filt["task_types"]:
         return False
-    if filt.get("departments") and "owner" in facts and _state.get("settings") is not None:
+    if filt.get("departments") and "owner_id" in facts and _state.get("settings") is not None:
         from . import task_rules
         try:
-            mine = task_rules.department_of(c, _state["settings"], facts["owner"])
+            mine = task_rules.department_of(c, _state["settings"], facts["owner_id"])
         except Exception:
             mine = None
         if mine not in filt["departments"]:
@@ -391,7 +420,7 @@ def passes(c, filt, facts):
 
 def filter_of(hook):
     try:
-        return json.loads(hook["filter_json"] or "{}")
+        return json.loads(hook["filter"] or "{}")
     except (KeyError, IndexError, ValueError):
         return {}
 
@@ -417,7 +446,7 @@ class FilterIn(Contract):
 
 def clean_filter(c, filt):
     """The stored form of a filter: only the lists that hold something, each name once, in the same spelling the
-    events carry (bots as `bot:<slug>`, task types by id). An unknown department or task type is refused."""
+    events carry (bots as `bot:<id>`, task types by id). An unknown department or task type is refused."""
     if not filt:
         return {}
     out = {}
@@ -431,7 +460,8 @@ def clean_filter(c, filt):
                 raise Problem("webhook", f"{item} is not a department", 422)
         out["departments"] = list(dict.fromkeys(filt.departments))
     if filt.bots:
-        out["bots"] = list(dict.fromkeys(b if b.startswith("bot:") else H.bot_actor(b) for b in filt.bots if b.strip()))
+        named = [b.removeprefix("bot:") for b in filt.bots if b.strip()]
+        out["bots"] = list(dict.fromkeys(H.bot_actor((H.resolve_bot(c, b) or {}).get("id", b)) for b in named))
     if filt.task_types:
         ids = []
         for item in filt.task_types:
@@ -490,15 +520,22 @@ def clean_headers(c, vault, hook_id, items, kept=()):
 
 def headers_of(hook):
     try:
-        return json.loads(hook["headers_json"] or "[]")
+        return json.loads(hook["headers"] or "[]")
     except (KeyError, IndexError, ValueError):
         return []
 
 
 def open_headers(c, vault, hook_id, stored):
-    """The headers to send: a secret's value opened. Name to value."""
+    """The headers to send: a secret's value opened. Name to value. A secret whose value was cleared has none to send
+    (`needs_value`), so the send waits instead (webhook_delivery.deliver)."""
     return {h["name"]: (vault.cipher.unseal(c, _context(hook_id, h["name"]), h["value"]) if h["secret"] else h["value"])
-            for h in stored}
+            for h in stored if not h.get("needs")}
+
+
+def needs_value(stored):
+    """The secret headers whose value was cleared when the address changed: the endpoint sends nothing until each is
+    typed again or removed."""
+    return [h["name"] for h in stored if h.get("secret") and h.get("needs")]
 
 
 def _actor_may_use(c, actor, hook, name):
@@ -507,7 +544,7 @@ def _actor_may_use(c, actor, hook, name):
     if actor == H.KEEPER:
         return
     if H.is_bot(actor):
-        if name and not subscribed(json.loads(hook["events_json"]), name):
+        if name and not subscribed(json.loads(hook["events"]), name):
             raise Refused("That endpoint does not listen for this event")
         return
     if not _state.get("auth"):
@@ -548,16 +585,16 @@ def may_manage(who, hook=None):
 
 def may_send(c, who, hook, name):
     """Who may send a custom event to an endpoint: a person who manages it; a bot only with its send switch on, and
-    only to an endpoint that listens for that name; never the CEO Bot."""
+    only to an endpoint that listens for that name; never the Strategy Bot."""
     if is_person(who):
         may_manage(who, hook)
         return
-    if who.role != "bot" or _is_ceo(who.actor):
+    if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots with sending switched on send webhooks", 403)
     from . import mail_settings
     if not (mail_settings.stored(c, H.actor_id(who.actor)) or {}).get("outbound_send"):
         raise Problem("forbidden", "Sending is off for this bot; a person turns it on in its mail settings", 403)
-    if not subscribed(json.loads(hook["events_json"]), name):
+    if not subscribed(json.loads(hook["events"]), name):
         raise Problem("forbidden", "That endpoint does not listen for this event", 403)
 
 
@@ -590,7 +627,7 @@ def counts(c, ids):
     marks = ",".join("?" * len(ids))
     out = {i: {"delivered": 0, "failed": 0, "pending": 0} for i in ids}
     for row in c.execute(f"SELECT webhook_id, state, count(*) n FROM webhook_sends WHERE webhook_id IN ({marks}) AND "
-                         f"(state IN ('ready','sending') OR next_attempt>=?) GROUP BY webhook_id, state", (*ids, since)):
+                         f"(state IN ('ready','sending') OR next_attempt_at>=?) GROUP BY webhook_id, state", (*ids, since)):
         key = {"delivered": "delivered", "failed": "failed", "ready": "pending", "sending": "pending"}.get(row["state"])
         if key:
             out[row["webhook_id"]][key] += row["n"]
@@ -601,13 +638,15 @@ def view(hook, who, tally=None):
     mine = is_person(who) and (hook["created_by"] == who.actor or is_admin(who))
     grace = hook["secret_prev_until"] if hook["secret_prev"] and (hook["secret_prev_until"] or "") > H.now() else None
     return {"id": hook["id"], "name": hook["name"], "url": hook["url"] if mine else _origin(hook["url"]),
-            "host": hook["host"], "events": json.loads(hook["events_json"]), "enabled": bool(hook["enabled"]),
+            "host": hook["host"], "events": json.loads(hook["events"]), "enabled": bool(hook["enabled"]),
             "paused_reason": hook["paused_reason"], "rate_per_hour": hook["rate_per_hour"],
             "allow_http": bool(hook["allow_http"]), "created_by": hook["created_by"],
-            "requested_by": hook["requested_by"] or None, "created": hook["created"], "updated": hook["updated"],
+            "requested_by": hook["requested_by"] or None, "created_at": hook["created_at"], "updated_at": hook["updated_at"],
             "revision": hook["revision"], "old_secret_until": grace, "can_change": mine,
             "filter": {"departments": [], "bots": [], "task_types": [], **filter_of(hook)},
-            "headers": [{"name": h["name"], "secret": h["secret"], **({"set": True} if h["secret"] else {"value": h["value"]})}
+            "headers": [{"name": h["name"], "secret": h["secret"],
+                         **(({"set": False, "needs_value": True} if h.get("needs") else {"set": True}) if h["secret"]
+                            else {"value": h["value"]})}
                         for h in headers_of(hook)] if mine else [],
             "disabled_at": hook["disabled_at"], "disabled_reason": hook["disabled_reason"] or None,
             "last_7_days": tally or {"delivered": 0, "failed": 0, "pending": 0}}
@@ -617,7 +656,7 @@ def send_view(row):
     return {"id": row["id"], "webhook_id": row["webhook_id"], "event_id": row["event_id"], "type": row["type"],
             "subject": row["subject"], "state": row["state"], "attempts": row["attempts"],
             "last_status": row["last_status"], "last_error": row["last_error"],
-            "next_attempt": row["next_attempt"] if row["state"] == "ready" else None, "created": row["created"],
+            "next_attempt_at": row["next_attempt_at"] if row["state"] == "ready" else None, "created_at": row["created_at"],
             "delivered_at": row["delivered_at"]}
 
 
@@ -627,7 +666,7 @@ def listing(c, who, limit=LISTED, offset=0):
     sql, args = "SELECT * FROM webhooks WHERE deleted_at IS NULL", []
     if who.role != "bot" and not is_admin(who):
         sql, args = sql + " AND created_by=?", [who.actor]
-    rows = c.execute(sql + " ORDER BY created, id LIMIT ? OFFSET ?", (*args, limit + 1, offset)).fetchall()
+    rows = c.execute(sql + " ORDER BY created_at, id LIMIT ? OFFSET ?", (*args, limit + 1, offset)).fetchall()
     more = len(rows) > limit
     rows = rows[:limit]
     tally = counts(c, [r["id"] for r in rows])
@@ -665,6 +704,9 @@ class WebhookUpdate(Contract):
     filter: FilterIn | None = None
     headers: list[HeaderIn] | None = Field(default=None, max_length=MAX_HEADERS)
     expected_revision: int | None = None
+    # When the address moves to another destination while secret headers keep their saved values: "keep" sends them
+    # to the new address, "clear" removes them (named "needs value") and pauses the endpoint until they are typed again.
+    credentials: str | None = Field(default=None, max_length=10)
 
 
 class WebhookSend(Contract):
@@ -725,8 +767,8 @@ def _insert(c, vault, who, spec, owner, requested_by="", headers=()):
     hook_id, secret, now = "ep_" + uuid.uuid4().hex[:12], new_secret(), H.now()
     filt = clean_filter(c, FilterIn(**spec["filter"]) if spec.get("filter") else None)
     stored = clean_headers(c, vault, hook_id, headers)
-    c.execute("INSERT INTO webhooks(id,name,url,host,enabled,events_json,secret,rate_per_hour,allow_http,created_by,"
-              "requested_by,created,updated,filter_json,headers_json) VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO webhooks(id,name,url,host,enabled,events,secret,rate_per_hour,allow_http,created_by,"
+              "requested_by,created_at,updated_at,filter,headers) VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)",
               (hook_id, spec["name"], spec["url"], host, json.dumps(spec["events"]),
                vault.cipher.seal(c, D.sealed_as(hook_id), secret), spec["rate_per_hour"], int(spec["allow_http"]),
                owner, requested_by, now, now, json.dumps(filt), json.dumps(stored)))
@@ -748,18 +790,18 @@ def create(c, vault, who, body):
     if is_person(who):
         owner_only_http(who, spec["allow_http"])
         return _insert(c, vault, who, spec, who.actor, headers=body.headers)
-    if who.role != "bot" or _is_ceo(who.actor):
+    if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots ask for webhook endpoints", 403)
     if body.headers:
         raise Problem("forbidden", "A person sets custom headers; a bot asks without them", 403)
     payload = _approval_payload(spec)
     digest = H.payload_hash(payload)
-    approved = c.execute("SELECT * FROM approvals WHERE payload_hash=? AND requested_by=? AND kind='send' AND "
+    approved = c.execute("SELECT * FROM approvals WHERE payload_hash=? AND requested_by_id=? AND kind='send' AND "
                          "decision='approved' AND consumed_at IS NULL ORDER BY decided_at LIMIT 1",
                          (digest, who.actor)).fetchone()
     if approved:
         H.approval_consume(c, who.actor, approved["id"])
-        return _insert(c, vault, who, spec, approved["decided_by"], requested_by=who.actor)
+        return _insert(c, vault, who, spec, approved["decided_by_id"], requested_by=who.actor)
     open_ = c.execute("SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,)).fetchone()
     owner_only_http(who, spec["allow_http"])
     check_address(spec["url"], False)
@@ -770,30 +812,107 @@ def create(c, vault, who, body):
     return {"approval": {"id": aid, "status": "pending"}, "webhook": None}
 
 
+def carried(before, after):
+    """The secret headers whose saved value an edit keeps as it was: the credentials a new address would receive."""
+    old = {h["name"]: h["value"] for h in before if h.get("secret") and not h.get("needs") and h.get("value")}
+    return [h["name"] for h in after if h.get("secret") and not h.get("needs") and old.get(h["name"]) == h.get("value")]
+
+
+def destination_change(c, hook, url, kept, vault=None):
+    """What moving `hook` to `url` does to the secret headers it keeps (`kept`, names): None when none is kept or the
+    destination is the same (scheme, host, port, path and query: shared receivers tell recipients apart by path),
+    else the safe old and new destination (backend/destinations.py)."""
+    if not kept:
+        return None
+    key = vault.cipher.key(c) if vault is not None and getattr(vault, "configured", False) else b""
+    return destinations.change(hook["url"], url, path_counts=True, key=key)
+
+
+UPDATE_PATH = re.compile(r"/api/v2/webhooks/([^/]+)/update")
+
+
+def kept_by(before, items):
+    """The saved secret headers a headers list (`items`, as sent) keeps with their saved value: a secret listed
+    without a value keeps the one it has (`clean_headers`). With no list, every saved secret is kept. The same answer
+    `carried` gives after the save, read before it, so a card and the save agree on what a new address receives."""
+    if items is None:
+        return carried(before, before)
+    saved = set(carried(before, before))
+    out = []
+    for item in items:
+        item = item if isinstance(item, dict) else getattr(item, "__dict__", {})
+        name = str(item.get("name") or "").strip().lower()
+        if item.get("secret") and item.get("value") in (None, "") and name in saved and name not in out:
+            out.append(name)
+    return out
+
+
+def pending_change(c, who, hook_id, body, vault=None):
+    """For BotOps' Confirm card (backend/app.py `person_card`): (endpoint, destination change or None, kept secret
+    header names) that `body`, an update asked for `who`, would make, without saving. Refused at once when `who` may not
+    change the endpoint, as the tap would be. A secret listed without a value keeps its saved one, as the save does."""
+    hook = _row(c, hook_id)
+    may_manage(who, hook)
+    body = body if isinstance(body, dict) else {}
+    url = body.get("url") or hook["url"]
+    items = body.get("headers")
+    kept = kept_by(headers_of(hook), items if isinstance(items, list) or items is None else [])
+    return hook, destination_change(c, hook, url, kept, vault), kept
+
+
 def update(c, who, hook_id, body, vault=None):
+    """Change an endpoint. A new address for another destination while secret headers keep their saved values is
+    held (`destinations.held`) until the body says `credentials: "keep"` (they go to the new address) or `"clear"`
+    (their values are removed, their names kept as needing a value, and the endpoint pauses until each is typed again
+    or removed); either leaves one `integration.destination_changed` event. Any address change needs
+    `expected_revision`, so the decision is about the endpoint as the editor saw it."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
     if body.expected_revision is not None and body.expected_revision != hook["revision"]:
         raise Problem("version_conflict", "This endpoint changed; refresh before saving", 409)
+    option = destinations.choice(body.credentials)
     name = body.name if body.name is not None else hook["name"]
     url = body.url if body.url is not None else hook["url"]
     allow = bool(hook["allow_http"] if body.allow_http is None else body.allow_http)
     if allow != bool(hook["allow_http"]):
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns plain http to this computer on or off", 403)
-    events = clean_events(body.events) if body.events is not None else json.loads(hook["events_json"])
+    events = clean_events(body.events) if body.events is not None else json.loads(hook["events"])
     host = check_address(url, allow)
+    if url != hook["url"] and body.expected_revision is None:
+        raise Problem("expected_revision", "Changing the address needs expected_revision: the revision you read", 422)
     filt = clean_filter(c, body.filter) if body.filter is not None else filter_of(hook)
-    headers = headers_of(hook)
+    before = headers_of(hook)
+    headers = before
     if body.headers is not None:
         if vault is None:
             raise Problem("webhook", "Headers cannot be changed here", 422)
         headers = clean_headers(c, vault, hook_id, body.headers, headers)
-    c.execute("UPDATE webhooks SET name=?, url=?, host=?, events_json=?, rate_per_hour=?, allow_http=?, "
-              "filter_json=?, headers_json=?, revision=revision+1, updated=? WHERE id=?",
+    kept = carried(before, headers)
+    moved = destination_change(c, hook, url, kept, vault)
+    if moved and not option:
+        raise destinations.held("webhook", moved, kept, hook["revision"], hook["name"])
+    destinations.require_tap(who, moved)
+    if moved and option == destinations.CLEAR:
+        headers = [{"name": h["name"], "secret": True, "value": "", "needs": True} if h["name"] in kept else h
+                   for h in headers]
+    enabled, reason = hook["enabled"], hook["paused_reason"] or ""
+    if needs_value(headers):
+        if enabled or reason == NEEDS_VALUE:
+            enabled, reason = 0, NEEDS_VALUE              # nothing goes out without the header (Product: pause)
+        # An endpoint already paused or turned off for another reason keeps that reason, so typing the values again
+        # never turns back on what someone paused on purpose.
+    elif reason == NEEDS_VALUE:
+        enabled, reason = 1, ""                           # every cleared value was typed again or removed
+    c.execute("UPDATE webhooks SET name=?, url=?, host=?, events=?, rate_per_hour=?, allow_http=?, "
+              "filter=?, headers=?, enabled=?, paused_reason=?, revision=revision+1, updated_at=? WHERE id=?",
               (name, url, host, json.dumps(events), body.rate_per_hour or hook["rate_per_hour"], int(allow),
-               json.dumps(filt), json.dumps(headers), H.now(), hook_id))
+               json.dumps(filt), json.dumps(headers), enabled, reason, H.now(), hook_id))
     H.event(c, who.actor, "webhook.updated", hook_id, {"name": name})
+    if moved:
+        destinations.record(c, who, "webhook", hook_id, moved, kept, option, hook["revision"] + 1)
+    if enabled and not hook["enabled"]:
+        _refresh(c)
     return view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id))
 
 
@@ -803,7 +922,7 @@ def rotate(c, vault, who, hook_id):
     may_manage(who, hook)
     old = vault.cipher.unseal(c, D.sealed_as(hook_id), hook["secret"])
     secret = new_secret()
-    c.execute("UPDATE webhooks SET secret=?, secret_prev=?, secret_prev_until=?, revision=revision+1, updated=? WHERE id=?",
+    c.execute("UPDATE webhooks SET secret=?, secret_prev=?, secret_prev_until=?, revision=revision+1, updated_at=? WHERE id=?",
               (vault.cipher.seal(c, D.sealed_as(hook_id), secret), vault.cipher.seal(c, D.sealed_as(hook_id, True), old),
                H.shift(H.now(), hours=GRACE), H.now(), hook_id))
     H.event(c, who.actor, "webhook.rotated", hook_id, {})
@@ -813,7 +932,7 @@ def rotate(c, vault, who, hook_id):
 def pause(c, who, hook_id, reason=""):
     hook = _row(c, hook_id)
     may_manage(who, hook)
-    c.execute("UPDATE webhooks SET enabled=0, paused_reason=?, revision=revision+1, updated=? WHERE id=?",
+    c.execute("UPDATE webhooks SET enabled=0, paused_reason=?, revision=revision+1, updated_at=? WHERE id=?",
               (reason or f"Paused by {who.actor}", H.now(), hook_id))
     H.event(c, who.actor, "webhook.paused", hook_id, {})
     return view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id))
@@ -822,25 +941,28 @@ def pause(c, who, hook_id, reason=""):
 def resume(c, who, hook_id):
     hook = _row(c, hook_id)
     may_manage(who, hook)
+    if needs_value(headers_of(hook)):
+        raise Problem("needs_value", "Type the value of " + ", ".join(needs_value(headers_of(hook))) + " again, or remove "
+                      "it, before turning this endpoint back on", 409)
     c.execute("UPDATE webhooks SET enabled=1, paused_reason='', disabled_at=NULL, disabled_reason='', failing_since=NULL, "
-              "revision=revision+1, updated=? WHERE id=?", (H.now(), hook_id))
+              "revision=revision+1, updated_at=? WHERE id=?", (H.now(), hook_id))
     H.event(c, who.actor, "webhook.resumed", hook_id, {})
     _refresh(c)
     return view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id))
 
 
 def delete(c, who, hook_id):
-    """Gone for good: its pending sends are cancelled and its secrets cleared. Finished sends stay in the log until
+    """Gone for good: its pending sends are canceled and its secrets cleared. Finished sends stay in the log until
     the cleanup removes them."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
-    cancelled = c.execute("UPDATE webhook_sends SET state='cancelled', last_error='The endpoint was deleted', "
-                          "next_attempt=?, claimed_at=NULL WHERE webhook_id=? AND state IN ('ready','sending')",
+    canceled = c.execute("UPDATE webhook_sends SET state='canceled', last_error='The endpoint was deleted', "
+                          "next_attempt_at=?, claimed_at=NULL WHERE webhook_id=? AND state IN ('ready','sending')",
                           (H.now(), hook_id)).rowcount
-    c.execute("UPDATE webhooks SET deleted_at=?, enabled=0, secret='', secret_prev='', headers_json='[]', updated=? WHERE id=?",
+    c.execute("UPDATE webhooks SET deleted_at=?, enabled=0, secret='', secret_prev='', headers='[]', updated_at=? WHERE id=?",
               (H.now(), H.now(), hook_id))
-    H.event(c, who.actor, "webhook.deleted", hook_id, {"cancelled": cancelled})
-    return {"id": hook_id, "deleted": True, "cancelled": cancelled}
+    H.event(c, who.actor, "webhook.deleted", hook_id, {"canceled": canceled})
+    return {"id": hook_id, "deleted": True, "canceled": canceled}
 
 
 def send_custom(c, who, hook_id, body):
@@ -879,7 +1001,7 @@ def sends(c, who, hook_id, state=None, limit=LOG_LISTED, offset=0):
     sql, args = "SELECT * FROM webhook_sends WHERE webhook_id=?", [hook_id]
     if state:
         sql, args = sql + " AND state=?", [*args, state]
-    rows = c.execute(sql + " ORDER BY created DESC, id LIMIT ? OFFSET ?", (*args, limit + 1, offset)).fetchall()
+    rows = c.execute(sql + " ORDER BY created_at DESC, id LIMIT ? OFFSET ?", (*args, limit + 1, offset)).fetchall()
     more = len(rows) > limit
     out = {"items": [send_view(r) for r in rows[:limit]], "more": more}
     if more:
@@ -894,13 +1016,13 @@ def one_send(c, who, hook_id, send_id):
     row = c.execute("SELECT * FROM webhook_sends WHERE id=? AND webhook_id=?", (send_id, hook_id)).fetchone()
     if not row:
         raise Problem("not_found", "Send not found", 404)
-    attempts = c.execute("SELECT n,at,timestamp_sent,status,ms,response_head,error FROM webhook_attempts WHERE send_id=? "
+    attempts = c.execute("SELECT n,created_at,timestamp_sent,status,ms,response_head,error FROM webhook_attempts WHERE send_id=? "
                          "ORDER BY n DESC LIMIT 50", (send_id,)).fetchall()
     return {**send_view(row), "attempt_log": [dict(a) for a in attempts]}
 
 
 def retry(c, who, hook_id, send_id):
-    """Send a failed, cancelled or delivered send again now (a delivered one is a resend). Its id and body stay, so a
+    """Send a failed, canceled or delivered send again now (a delivered one is a resend). Its id and body stay, so a
     receiver that kept the first still drops the repeat."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
@@ -911,7 +1033,7 @@ def retry(c, who, hook_id, send_id):
         raise Problem("webhook", "That send is still being tried", 409)
     if row["state"] == "withheld":
         raise Problem("webhook", "A rehearsal copy sends nothing", 409)
-    c.execute("UPDATE webhook_sends SET state='ready', attempts=0, next_attempt=?, claimed_at=NULL, last_error='' WHERE id=?",
+    c.execute("UPDATE webhook_sends SET state='ready', attempts=0, next_attempt_at=?, claimed_at=NULL, last_error='' WHERE id=?",
               (H.now(), send_id))
     H.event(c, who.actor, "webhook.retried", send_id, {"webhook": hook_id})
     _refresh(c)
@@ -945,13 +1067,13 @@ def _working(c, who, hook_id):
 def recover_failed(c, who, hook_id, since):
     """Every send that gave up since `since` goes out again, same ids and bodies (a receiver that kept the first one
     still drops the repeat). At most REPLAY_BATCH at a time; `more` says run it again."""
-    hook = _working(c, who, hook_id)
+    _working(c, who, hook_id)
     at = _since(since)
-    ids = [r["id"] for r in c.execute("SELECT id FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt>=? "
-                                      "ORDER BY next_attempt LIMIT ?", (hook_id, at, REPLAY_BATCH + 1))]
+    ids = [r["id"] for r in c.execute("SELECT id FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt_at>=? "
+                                      "ORDER BY next_attempt_at LIMIT ?", (hook_id, at, REPLAY_BATCH + 1))]
     more, ids = len(ids) > REPLAY_BATCH, ids[:REPLAY_BATCH]
     for send_id in ids:
-        c.execute("UPDATE webhook_sends SET state='ready', attempts=0, next_attempt=?, claimed_at=NULL, last_error='' WHERE id=?",
+        c.execute("UPDATE webhook_sends SET state='ready', attempts=0, next_attempt_at=?, claimed_at=NULL, last_error='' WHERE id=?",
                   (H.now(), send_id))
     H.event(c, who.actor, "webhook.recovered", hook_id, {"since": at, "sends": len(ids)})
     if ids:
@@ -969,10 +1091,10 @@ def replay_missing(c, who, hook_id, since, after=""):
     so events this endpoint may not have never hold the rest up."""
     hook = _working(c, who, hook_id)
     at = _since(since)
-    events, filt = json.loads(hook["events_json"]), filter_of(hook)
-    where, params = ("created>=?", [at]) if not after else ("(created>? OR (created=? AND id>?))", [at, at, after])
+    events, filt = json.loads(hook["events"]), filter_of(hook)
+    where, params = ("created_at>=?", [at]) if not after else ("(created_at>? OR (created_at=? AND id>?))", [at, at, after])
     rows = c.execute(f"SELECT * FROM webhook_events e WHERE {where} AND (only_id='' OR only_id=?) AND NOT EXISTS("
-                     "SELECT 1 FROM webhook_sends s WHERE s.event_id=e.id AND s.webhook_id=?) ORDER BY created, id LIMIT ?",
+                     "SELECT 1 FROM webhook_sends s WHERE s.event_id=e.id AND s.webhook_id=?) ORDER BY created_at, id LIMIT ?",
                      (*params, hook_id, hook_id, REPLAY_BATCH + 1)).fetchall()
     more, rows = len(rows) > REPLAY_BATCH, rows[:REPLAY_BATCH]
     cache, queued = {}, 0
@@ -987,12 +1109,12 @@ def replay_missing(c, who, hook_id, since, after=""):
             continue
         shown = view_for(c, hook["created_by"], row["type"], row["subject"], data, cache)
         if shown is not None:
-            queued += _queue(c, hook, row["id"], row["type"], row["subject"], shown, at=row["created"])
+            queued += _queue(c, hook, row["id"], row["type"], row["subject"], shown, at=row["created_at"])
     H.event(c, who.actor, "webhook.replayed", hook_id, {"since": at, "sends": queued})
     if queued:
         _refresh(c)
     return {"webhook": hook_id, "since": at, "checked": len(rows), "queued": queued, "more": more,
-            "next_since": rows[-1]["created"] if more else None, "next_after": rows[-1]["id"] if more else None}
+            "next_since": rows[-1]["created_at"] if more else None, "next_after": rows[-1]["id"] if more else None}
 
 
 def enable(c, who, hook_id):
@@ -1002,7 +1124,7 @@ def enable(c, who, hook_id):
     offer = None
     if hook["disabled_at"]:
         since = hook["failing_since"] or H.shift(hook["disabled_at"], days=-DISABLE_DAYS)
-        failed = c.execute("SELECT count(*) FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt>=?",
+        failed = c.execute("SELECT count(*) FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt_at>=?",
                            (hook_id, since)).fetchone()[0]
         offer = {"since": since, "failed": failed}
     shown = resume(c, who, hook_id)
@@ -1018,13 +1140,13 @@ def auto_disable(c, now=None):
     window = H.shift(now, days=-DISABLE_DAYS)
     off = []
     for hook in c.execute("SELECT * FROM webhooks WHERE enabled=1 AND deleted_at IS NULL AND failing_since<=?", (window,)).fetchall():
-        row = c.execute("SELECT count(*) n, max(at) latest FROM webhook_attempts WHERE webhook_id=? AND at>=?",
+        row = c.execute("SELECT count(*) n, max(created_at) latest FROM webhook_attempts WHERE webhook_id=? AND created_at>=?",
                         (hook["id"], hook["failing_since"])).fetchone()
         if not row["n"] or row["latest"] <= H.shift(hook["failing_since"], hours=DISABLE_SPAN_HOURS):
             continue
         reason = f"Every delivery failed for {DISABLE_DAYS} days"
         c.execute("UPDATE webhooks SET enabled=0, disabled_at=?, disabled_reason=?, paused_reason=?, revision=revision+1, "
-                  "updated=? WHERE id=?", (now, reason, reason, now, hook["id"]))
+                  "updated_at=? WHERE id=?", (now, reason, reason, now, hook["id"]))
         H.event(c, H.KEEPER, "webhook.auto_disabled", hook["id"], {"name": hook["name"], "attempts": row["n"]})
         try:
             c.execute("SAVEPOINT webhook_disable")
@@ -1051,13 +1173,13 @@ def health_summary(c):
     if not names:
         return {"failed": [], "flaky": [], "skipped": 0, "disabled": []}
     failed = [names[r["webhook_id"]] for r in c.execute(
-        "SELECT DISTINCT webhook_id FROM webhook_sends WHERE state='failed' AND next_attempt>=?", (day,)) if r["webhook_id"] in names]
+        "SELECT DISTINCT webhook_id FROM webhook_sends WHERE state='failed' AND next_attempt_at>=?", (day,)) if r["webhook_id"] in names]
     flaky = []
     for r in c.execute("SELECT webhook_id, count(*) n, sum(CASE WHEN status BETWEEN 200 AND 299 THEN 0 ELSE 1 END) bad "
-                       "FROM webhook_attempts WHERE at>=? GROUP BY webhook_id", (day,)):
+                       "FROM webhook_attempts WHERE created_at>=? GROUP BY webhook_id", (day,)):
         if r["webhook_id"] in names and r["n"] >= 5 and r["bad"] * 2 > r["n"] and names[r["webhook_id"]] not in failed:
             flaky.append(names[r["webhook_id"]])
-    skipped = c.execute("SELECT count(*) FROM webhook_events WHERE skipped>0 AND created>=?", (day,)).fetchone()[0]
+    skipped = c.execute("SELECT count(*) FROM webhook_events WHERE skipped>0 AND created_at>=?", (day,)).fetchone()[0]
     off = [r["name"] for r in c.execute("SELECT name FROM webhooks WHERE disabled_at IS NOT NULL AND deleted_at IS NULL")]
     return {"failed": failed, "flaky": flaky, "skipped": skipped, "disabled": off}
 
@@ -1116,7 +1238,7 @@ def install(app, settings, store, auth, mutate):
             hook = _reach(c, who, hook_id)
             shown = view(hook, who, counts(c, [hook_id]).get(hook_id))
             recent = [] if who.role == "bot" else [dict(r) for r in c.execute(
-                "SELECT send_id,n,at,status,ms,error FROM webhook_attempts WHERE webhook_id=? ORDER BY at DESC, n DESC LIMIT 10",
+                "SELECT send_id,n,created_at,status,ms,error FROM webhook_attempts WHERE webhook_id=? ORDER BY created_at DESC, n DESC LIMIT 10",
                 (hook_id,))]
             return {"webhook": shown, "recent_attempts": recent}
 
@@ -1190,5 +1312,5 @@ def install(app, settings, store, auth, mutate):
 
     @app.post("/api/v2/webhooks/{hook_id}/sends/{send_id}/retry")
     def webhook_retry(request: Request, hook_id: str, send_id: str, body: M.Empty):
-        """Send a failed, cancelled or delivered send again."""
+        """Send a failed, canceled or delivered send again."""
         return mutate(request, body, lambda c: {"send": retry(c, request.state.identity, hook_id, send_id)})

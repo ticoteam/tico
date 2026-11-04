@@ -143,13 +143,14 @@ pub fn poll(runner: &Arc<Runner>) {
                     if let Ok(rows) = me.client.get("runners/assignments").await {
                         let rows = rows.as_array().cloned().unwrap_or_default();
                         let runtimes = harness_runtimes(&rows);
-                        let default = harness_defaults(&runtimes, &harness.config, crate::isolation::enabled());
+                        let default = harness_defaults(&runtimes, &harness.config, crate::gateway_relay::runs_gateway());
                         let runtimes: Vec<String> = runtimes.into_iter().collect();
                         tools.lock().unwrap().want(&runtimes, &default);
                     }
                 }
-                let active = me.active.lock().unwrap().clone();
-                let busy = crate::harness_tools::busy(&active);
+                // Read at the moment of a switch, not here: a turn can start while `tick` waits on the server.
+                let turns = me.clone();
+                let busy = move || crate::harness_tools::busy(&turns.active.lock().unwrap().clone());
                 let ask = wants(&me, "harness", crate::harness_tools::POLL_S);
                 harness.relay.get_or_insert_with(crate::harness_tools::Relay::new).tick(&tools, &me.client, busy, ask).await
             }
@@ -160,14 +161,15 @@ pub fn poll(runner: &Arc<Runner>) {
 }
 
 /// Optional computer defaults: the first bot's runtime and the Gateway runtime the company chose.
-/// Only isolated computers can run Gateway turns. Passing these as defaults keeps the owner's off
-/// choice effective, while a bot's explicit primary/task model/fallback still makes its harness required.
-pub fn harness_defaults(runtimes: &HashSet<String>, config: &Value, isolated: bool) -> Vec<String> {
+/// Only computers that run Gateway turns (gateway_relay.rs runs_gateway) want its harness. Passing these as defaults
+/// keeps the owner's off choice effective, while a bot's explicit primary/task model/fallback still makes its harness
+/// required.
+pub fn harness_defaults(runtimes: &HashSet<String>, config: &Value, gateway: bool) -> Vec<String> {
     let mut defaults = vec![];
     if runtimes.is_empty() {
         defaults.push(text_of(&config["default_runtime"]));
     }
-    if isolated {
+    if gateway {
         defaults.push(text_of(&config["gateway_runtime"]));
     }
     defaults.retain(|r| !r.is_empty());

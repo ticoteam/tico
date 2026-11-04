@@ -17,19 +17,21 @@ function meetStop() {
 async function pageNotes() {
   meetStop();
   const linked = new URLSearchParams(S.route.split('?')[1] || '');
+  if (linked.get('live')) return pageLiveMeetings(linked.get('live'));
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemEdit: '', itemAdd: '', itemConfirm: '', itemDup: {},
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
+      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
       <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>
       <button type="button" role="tab" data-review="pending" aria-selected="false">Pending <span class="meet-pending-n" id="meet-pending-count"></span></button>
       <button type="button" role="tab" data-review="dismissed" aria-selected="false">Dismissed</button></div>
       <div class="meet-sources" id="meet-sources" hidden></div>
+      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
     <section class="meet-granola" id="meet-granola" aria-label="Granola" hidden></section>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
@@ -48,6 +50,7 @@ async function pageNotes() {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
+  meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog = $('#notes-modal');
   const closeNote = () => {
@@ -94,7 +97,7 @@ async function pageNotes() {
 // Review stays personal until approval; counts are quiet and never enter Needs you.
 function meetPendingBadge(count) {
   for (const el of document.querySelectorAll('[data-meet-pending]')) {
-    el.textContent = count > 99 ? '99+' : String(count || ''); el.hidden = !count;
+    el.hidden = !count; countSet(el, count > 99 ? '99+' : String(count || ''));   // a new number ticks in (ui/app/motion.js)
     el.setAttribute('aria-label', `${count} pending meetings`);
   }
 }
@@ -156,7 +159,7 @@ async function meetReviewAct(state, button, action, id) {
   finally { state.reviewBusy = false; button.disabled = false; }
 }
 function meetReviewDetail(rec) {
-  const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.name !== 'coo').map(e => `<option value="${esc(e.name)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
+  const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.id !== 'coo').map(e => `<option value="${esc(e.id)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
   return `<div class="note-send meet-review-detail"><span class="meet-review-tag">${rec.review_state === 'pending' ? 'Pending' : 'Dismissed'}</span><span class="muted meet-review-who">Only you see this</span><span class="spacer"></span>
     ${rec.review_state === 'pending' ? `<select id="meet-review-private" aria-label="Who sees it once shared"><option value="team"${!rec.private ? ' selected' : ''}>Team</option><option value="private"${rec.private ? ' selected' : ''}>Private</option></select>
     <select id="meet-review-send" aria-label="Bot that files its tasks">${sendTo}</select>
@@ -191,6 +194,21 @@ async function meetSettingsOpen(state) {
 // The meeting sources Tico takes from, in the order they are offered. `logo` is a key in ui/tool-icons.js;
 // a source without one is drawn as its first two letters. Close is set up in its tool doc, the
 // rest in a dialog (ui/meeting-importers.js).
+// Tico Recorder for Mac: the newest release's disk image.
+const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
+// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
+// A browser can't tell, so it keeps the download.
+async function meetRecorderLink() {
+  if (!nativeHas('openRecorder')) return;
+  let installed = false;
+  try { installed = await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch {}
+  const link = $('#meet-recorder');
+  if (!installed || !link) return;
+  const button = document.createElement('button');
+  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
+  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
+  link.replaceWith(button);
+}
 const MEET_SOURCES = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -229,7 +247,7 @@ function meetTile(state, source, big) {
   const account = source.id === 'granola' && !!state.granola;
   const mine = account ? granolaTileState(state) : null;
   const st = mine || (known ? meetSourceState(row, source.id) : {key: '', word: ''});
-  const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_success) : '';
+  const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
   const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
   return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile${big ? ' big' : ' item'}" data-state="${st.key}" ${attrs}${big ? '' : ' role="menuitem"'} aria-label="${esc(label)}">
@@ -358,11 +376,10 @@ async function meetLoad(state, first) {
   else if (!state.selected) $('#notes-detail').innerHTML = '';
 }
 const meetFiltersOn = state => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
-// No meetings and nothing narrowing the list: offer both ways in.
-const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>' : `<div class="meet-blank"><h2>Connect a source or add a note</h2>
-    <div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div>
-    <div class="meet-or">or</div>
-    <button class="primary" type="button" data-add>Add notes</button></div>`;
+// No meetings and nothing narrowing the list: the sources, since the Add source menu is hidden until one is connected
+// (the header has Add notes).
+const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
+  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
 const meetPeople = r => {
@@ -444,9 +461,10 @@ function meetMadeChips(r) {
   }
   return chips.join('');
 }
-const sentLink = s => s?.task
-  ? `<a href="#/bot/${esc(s.slug)}/tasks">${esc(empName(s.slug))}</a>`
-  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${esc(empName(s.slug))}</a>`;
+// `bot` is the bot's id; a record sent before ids says `slug`.
+const sentLink = s => { const bot = s?.bot || s?.slug; return s?.task
+  ? `<a href="#/bot/${encodeURIComponent(bot)}/tasks">${empName(bot)}</a>`
+  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${empName(bot)}</a>`; };
 // "Today, 2:37 PM" / "Yesterday, 9:12 AM" / "Sep 4, 2:37 PM"
 function meetWhen(iso) {
   if (!iso) return '';
@@ -499,14 +517,13 @@ function meetList(state) {
         <div class="meet-main"><button class="note-title" type="button" data-rec="${esc(r.id)}">${esc(noteTitle(r))}</button><div class="meet-meta">${meta}</div></div>
         <div class="meet-side">${state.review === 'pending' ? `<button class="primary small" type="button" data-review-action="approve" data-send="auto" data-id="${esc(r.id)}" title="Share, then send to ${esc(assistantName())} to file its tasks">Share & send</button><button class="ghost small" type="button" data-review-action="dismiss" data-id="${esc(r.id)}">Dismiss</button>` : state.review === 'dismissed' ? `<button class="ghost small" type="button" data-review-action="restore" data-id="${esc(r.id)}">Restore</button>` : ''}${fail}${working ? `<span class="meet-state" title="${esc(working.bot)}">${working.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : ''}${esc(working.word)}${working.bot ? ` <span class="muted">· ${esc(working.bot)}</span>` : ''}</span>` : ''}${meetMadeChips(r)}${proposed && state.review === 'live' && !working && !meetMade(r).length ? `<span class="meet-proposed muted">${proposed} proposed</span>` : ''}</div></li>`;
     }).join('')}</ul>`
-    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings. New imports wait here for your review.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
+    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
   el.querySelectorAll('[data-note-row]').forEach(b => b.onclick = event => {
     if (event.target.closest('[data-review-check], [data-review-action], a')) return;
     state.selected = b.dataset.noteRow; state.confirmDelete = ''; state.editing = false;
     meetShow(state, true); meetDetail(state, state.selected);
   });
   meetReviewWire(state, el); meetReviewBulk(state);
-  const add = el.querySelector('[data-add]'); if (add) add.onclick = () => meetNotesOpen(state);
   meetPaintTiles(state);
 }
 async function meetDetail(state, id) {
@@ -535,7 +552,7 @@ function meetPaint(state, rec) {
     `<details data-note-section="source-${t.id}"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)} transcript${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
       ${t.summary ? `<div class="note-body">${esc(t.summary).replace(/\n/g, '<br>')}</div>` : ''}
       <div class="note-transcript">${(t.turns || []).map(turn => `<p><span class="muted mono">[${mmss(turn.start_ms)}]</span> ${turn.speaker ? `<strong>${esc(turn.speaker)}</strong> ` : ''}${esc(turn.text)}</p>`).join('')}</div></details>`).join('');
-  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.name)}">${esc(e.display_name)}</option>`).join('');
+  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('');
   const owner = rec.owner === 'owner' ? 'the owner' : (rec.owner || 'the sender');
   const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
   const leadLink = rec.source === 'close' && /^https:\/\//i.test(rec.source_context?.lead_url || '')
@@ -575,7 +592,7 @@ function meetPaint(state, rec) {
       ${state.editing
         ? `<input type="text" id="meet-title" aria-label="Title" value="${esc(rec.title || '')}" placeholder="Title">`
         : `<h2 id="meet-heading">${esc(noteTitle(rec))}</h2>`}
-      <div class="meta">${meta}</div>${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
+      <div class="meta">${meta}</div>${rec.client === 'tico-recorder' ? '<div class="meta">From Tico Recorder</div>' : ''}${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
     </div>${meetPill(rec)}</div>
     ${rec.error ? `<div class="err" style="margin-top:12px">${esc(rec.error)}</div>` : ''}
     ${rec.warning ? `<div class="muted" style="font-size:12.5px;margin-top:8px">${esc(rec.warning)}</div>` : ''}
@@ -667,7 +684,7 @@ function meetPaint(state, rec) {
     const msg = $('#meet-msg');
     send.disabled = true; send.title = msg.textContent = 'Sending…';
     try {
-      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {slug: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
+      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {bot_id: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
       await refresh(true); await meetLoad(state, true);
     } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; send.removeAttribute('title'); }
   };
@@ -713,7 +730,7 @@ function meetNotesOpen(state) {
           <label>Recording link (optional) <input type="url" id="manual-media" placeholder="https://…"></label>
         </div>
       </div>
-      <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.name)}">${esc(e.display_name)}</option>`).join('')}</select></label>
+      <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('')}</select></label>
       <label class="import-private"><input type="checkbox" id="manual-private"> Private: participants, its owner and the team owner only</label>
       <div class="row"><button class="primary" type="submit" id="manual-go">Add notes</button>
         <button class="ghost" type="button" id="manual-cancel">Cancel</button><span class="muted" id="manual-msg" role="status"></span></div>
@@ -790,7 +807,7 @@ const meetItemLine = it => {
   const d = it.detail || {};
   // A bare "ana" or "support" is a person's id or a bot's name: show the name, as everywhere else.
   const who = o => String(o).includes(':') ? actorLabel(o) : (S.people || []).find(p => p.id === o)?.name
-    || (S.emps.some(e => e.name === o) ? botDisplayName(o) : o);
+    || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
   if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
     /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
   if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
@@ -816,11 +833,15 @@ function meetSeek(ms) {
   line.classList.add('meet-seeked');
   setTimeout(() => line.classList.remove('meet-seeked'), 1500);
 }
+// The owner picker's bot options are bare ids; a task owner is the actor, `bot:<id>`.
+const meetFieldValue = f => { const v = f.value.trim(); return f.dataset.field === 'owner' && !v.includes(':') ? 'bot:' + v : v; };
 function meetItemFields(section, detail) {
   const fields = (MEET_SECTIONS.find(s => s.key === section) || {fields: []}).fields;
   return fields.map(([name, label]) => {
     if (name === 'owner') {
-      const current = (detail || {}).owner || '';
+      // An owner the notes named by slug (or a bare name) is picked by its id.
+      const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
+      const current = bot ? bot.id : named;
       return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
     }
     return `<input type="text" data-field="${name}" placeholder="${esc(label)}" aria-label="${esc(label)}" value="${esc((detail || {})[name] || '')}">`;
@@ -909,7 +930,7 @@ function meetItemsHandlers(state, rec) {
       const text = form.querySelector('[data-text]').value.trim();
       if (!text) return;
       const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = f.value.trim(); });
+      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
       state.itemAdd = '';
       if (await call('', {section: form.dataset.new, text, detail})) toast('Added');
       else repaint();
@@ -922,7 +943,7 @@ function meetItemsHandlers(state, rec) {
       const text = form.querySelector('[data-text]').value.trim();
       if (!text) return;
       const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = f.value.trim(); });
+      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
       state.itemEdit = '';
       if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail}, form.dataset.edit)) toast('Saved');
       else repaint();

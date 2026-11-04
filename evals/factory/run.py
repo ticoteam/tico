@@ -16,6 +16,7 @@ import sys
 import time
 import math
 import shlex
+import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from multiprocessing import get_context
 from pathlib import Path
@@ -27,12 +28,20 @@ DEFAULT_SECONDS = 60    # a scenario with no timing yet
 
 
 def one(name, seed, explain):
-    """Run one scenario in this process: (name, seconds, summary, check results, explain lines, trace)."""
+    """Run one scenario in this process: (name, seconds, summary, check results, explain lines, trace). A run that
+    raises is one failed check carrying its traceback: the other scenarios on the VM still report, and an exception
+    never has to cross the process pool."""
     from .scenarios import REPORT, SCENARIOS
     from .sim import Run
     scenario = next(s for s in SCENARIOS if s.name == name)
     started = time.perf_counter()
-    run = Run(scenario, seed).go()
+    try:
+        run = Run(scenario, seed).go()
+    except Exception:
+        crashed = {"check": "the run got to its end", "ok": False, "ticket": None, "detail": traceback.format_exc()[-2500:],
+                   "report": False, "found": True}
+        return {"scenario": name, "seed": seed, "about": scenario.about, "seconds": round(time.perf_counter() - started, 1),
+                "summary": {}, "checks": [crashed], "explain": []}
     results = []
     for check, ticket, fn in scenario.checks:
         ok, detail = fn(run)

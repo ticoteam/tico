@@ -15,6 +15,7 @@ from backend.auth import Identity
 from backend.company_file import from_yaml
 from backend.config import Settings
 from backend.store import H, encode
+from backend import bot_settings as BS
 
 OWNER_EMAIL = "owner@sample.example"
 PEOPLE = {"default_user": "owner", "people": [
@@ -53,8 +54,8 @@ def environment(tmp_path):
                 c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING",
                           (encode(PEOPLE),))
                 for slug, config in SEED.items():
-                    c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
-                              (slug, encode(config), "owner", "bot-" + slug))
+                    c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
+                    BS.write(c, slug, config)
         return client
 
     yield build
@@ -81,11 +82,16 @@ def rows(api, sql, args=()):
         return [dict(row) for row in c.execute(sql, args)]
 
 
+def bot_ids(api):
+    """Bot slug to bot id: a bot the sample makes has a generated id, and the tables name bots by it."""
+    return {row["slug"]: row["id"] for row in rows(api, "SELECT id,slug FROM bots")}
+
+
 # ---------------------------------------------------------------------------------------------- the file
 def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_starter_tasks():
     draft, extra = sample_company.team()
     assert draft == from_yaml(sample_company.FILE.read_text())          # import can read it as it is
-    assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "pr-reviewer", "support", "content"]
+    assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "builder", "support", "content"]
     assert [b["title"] for b in draft["bots"]] == ["Assistant", "Head of Product", "Builder", "Support Agent",
                                                    "Content Marketer"]
     assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
@@ -116,30 +122,33 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["anthropic", "openai"] and providers["default"]["runtime"] == "claude"
 
-    bots = {row["slug"]: row for row in rows(api, "SELECT slug,display_name,runtime,model,state FROM bots")}
+    bots = {row["slug"]: row for row in rows(
+        api, "SELECT b.slug,b.display_name,b.state,s.runtime AS runtime,s.model AS model "
+             "FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id LEFT JOIN bot_settings s ON s.bot_id=b.id")}
     assert {"coo", "botops", *ROLE_BOTS} <= set(bots)
     assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS          # spread over both subscriptions
     assert bots["builder"]["display_name"] == "Builder"
     setup = {row["bot"]: row for row in rows(api, "SELECT bot,onboarding_state,reports_to FROM bot_config")}
     # Set up by the sample's own answers: not parked, so their work is claimed once a computer runs them.
-    assert all(setup[slug]["onboarding_state"] == O.ONBOARDED for slug in ROLE_BOTS)
-    assert setup["builder"]["reports_to"] == "head-of-product"
+    ids = bot_ids(api)
+    assert all(setup[ids[slug]]["onboarding_state"] == O.ONBOARDED for slug in ROLE_BOTS)
+    assert setup[ids["builder"]]["reports_to"] == ids["head-of-product"]
     # Their first routines stay off: only the starter tasks run on day one.
     routines = rows(api, "SELECT s.bot,coalesce(sc.enabled,1) AS enabled FROM schedules s "
                          "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.bot IN (%s)"
-                    % ",".join("?" * len(ROLE_BOTS)), tuple(ROLE_BOTS))
+                    % ",".join("?" * len(ROLE_BOTS)), tuple(ids[slug] for slug in ROLE_BOTS))
     assert routines and not any(r["enabled"] for r in routines)
     # No "Finish onboarding" reminder in Needs you for a sample bot.
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Finish onboarding%' AND status NOT IN ('done','closed')")
 
-    goals = {row["owner"]: row for row in rows(api, "SELECT id,owner,title FROM goals WHERE owner LIKE 'bot:%'")}
-    assert {"bot:coo", *("bot:" + slug for slug in ROLE_BOTS)} <= set(goals)
-    tasks = rows(api, "SELECT id,owner,requester,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
+    goals = {row["owner_id"]: row for row in rows(api, "SELECT id,owner_id,title FROM goals WHERE owner_id LIKE 'bot:%'")}
+    assert {"bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS)} <= set(goals)
+    tasks = rows(api, "SELECT id,owner_id,requester_id,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
                  % ",".join("?" * len(record["sample"]["tasks"])), tuple(record["sample"]["tasks"]))
-    assert sorted(t["owner"] for t in tasks) == sorted(["bot:coo", *("bot:" + slug for slug in ROLE_BOTS)])
+    assert sorted(t["owner_id"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS))
     for task in tasks:
-        assert task["requester"] == "human:owner" and task["status"] == "open"
-        assert task["goal_id"] == goals[task["owner"]]["id"]
+        assert task["requester_id"] == "human:owner" and task["status"] == "open"
+        assert task["goal_id"] == goals[task["owner_id"]]["id"]
         # Each ends by asking the owner one Yes/No question, the card in Needs you.
         assert re.search(r'hub task question --on owner "Approve [^"]+\?"', task["body"]), task["body"]
 
@@ -154,7 +163,8 @@ def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_
     again = start(api)
     assert again.status_code == 409, again.text
     assert again.json()["error"]["code"] == "sample_company" and "already set up" in again.json()["error"]["detail"]
-    assert len(rows(api, "SELECT id FROM tasks WHERE owner='bot:builder'")) == 1        # nothing made twice
+    builder = bot_ids(api)["builder"]
+    assert len(rows(api, "SELECT id FROM tasks WHERE owner_id=?", ("bot:" + builder,))) == 1        # nothing made twice
 
 
 def test_a_company_with_its_own_provider_keeps_it(environment):
@@ -162,7 +172,8 @@ def test_a_company_with_its_own_provider_keeps_it(environment):
     assert start(api).status_code == 200
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["openai"]
-    bots = {row["slug"]: row["runtime"] for row in rows(api, "SELECT slug,runtime FROM bots")}
+    bots = {row["slug"]: row["runtime"] for row in rows(
+        api, "SELECT b.slug,s.runtime AS runtime FROM bots b LEFT JOIN bot_settings s ON s.bot_id=b.id")}
     # Claude is off here, so the Claude bots run on the company's own default, as a wizard pick would.
     assert bots["builder"] == "codex" and bots["head-of-product"] == "codex"
 
@@ -175,18 +186,19 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     assert all(states[slug] == "active" for slug in ("coo", *ROLE_BOTS))
     placed = {row["bot"] for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?",
                                          (computer["runner_id"],))}
-    assert {"coo", *ROLE_BOTS} <= placed
+    ids = bot_ids(api)
+    assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= placed
     # Each starter task woke its bot: a job waits for the computer to claim it.
-    queued = {row["bot"] for row in rows(api, "SELECT bot FROM jobs WHERE state='queued'")}
-    assert {"coo", *ROLE_BOTS} <= queued
+    queued = {row["bot_id"] for row in rows(api, "SELECT bot_id FROM jobs WHERE state='queued'")}
+    assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= queued
 
 
 def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
-    """The computer makes each bot's repository from its template (runner/catalog_job.py); a template's state.md
+    """The computer makes each bot's repository from its template (runner_support/catalog_job.py); a template's state.md
     says setup has not started, and its AGENT.md asks the setup questions first until it does."""
     import io
     import json
-    from runner import catalog_job
+    from runner_support import catalog_job
     api = environment()
     start(api)
     record, config = (api.get(path, headers=signed_in()).json() for path in ("/api/v2/setup", "/api/v2/config"))
@@ -197,8 +209,9 @@ def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(enviro
 
     projects = tmp_path / "projects"
     projects.mkdir()
-    configs = {row["bot"]: json.loads(row["config_json"]) for row in rows(api, "SELECT bot,config_json FROM bot_config")}
-    request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[slug]},
+    configs = {row["bot"]: json.loads(row["config"]) for row in rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")}
+    ids = bot_ids(api)
+    request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[ids[slug]]},
                          "path": str(projects / ("bot-" + slug)), "action": "bootstrap"} for slug in ROLE_BOTS]}
     out = io.StringIO()
     catalog_job.main({"projects_dir": str(projects)}, Server(), io.StringIO(json.dumps(request)), out)

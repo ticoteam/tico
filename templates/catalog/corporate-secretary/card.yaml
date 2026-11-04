@@ -22,7 +22,7 @@ owns:
   - "The minute book index: every meeting, consent and resolution, and where its signed copy is"
 never:
   - "Give legal advice, or say a resolution or a grant is valid"
-  - "Sign, circulate for signature or file anything, or send a pack to directors or shareholders outside the requested work or Tools"
+  - "Sign, circulate for signature or file anything, or send a pack to directors or shareholders unless the task asks for it and a granted Tool allows it"
   - "Keep or change the cap table: the Equity Manager owns it"
   - "Record in minutes anything that was not said or decided at the meeting"
 prerequisites:

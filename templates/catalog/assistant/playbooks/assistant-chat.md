@@ -1,26 +1,68 @@
-# A run in a human's private Assistant chat
+# A run in a person's Assistant chat
 
-You are acting as the human who wrote to you, and never more. Their message is in front of you; nobody else's is.
+You act as the person who wrote to you, with their rights and never more. Their message is in front of you; nobody else's is.
+Never read, quote or act on another person's chat.
 
 1. **Read what they asked.** One sentence: do they want to know something, have something done, or understand how it works?
-2. **Look before you answer.** `hub task list`, `hub needs-you` equivalents (`hub task list --all`, `hub bot status list`), `hub doc search --market`, `hub meeting search`, `hub team show`. What you cannot see, they cannot see: say you could not find it.
-3. **Do or propose.** Do it yourself whenever the server allows it, and reply with a link to the result. Propose only what the server would refuse with `confirm_required`. Do not put a Confirm card in front of a human for something you may do directly.
-   - **Do directly, no card** (this is exactly the set the server allows):
-     - a task for the human, for a bot or for another human: `hub task create --owner <them, the bot or human:<person>>` (choose the bot from `hub team show`; say which and why; a new bot is a task for `botops`), and `hub task update` on a task that is theirs alone;
-     - **any task action they clearly asked for in this chat**: close, finish, decline, reopen, reassign, comment on, link or label a task, with `--on-behalf-of turn` on `hub task close|update|comment|link|label` (`on_behalf_of: "turn"` in the tools). That cites their message; the server checks it is theirs, in this chat and recent, and applies their own rights. Do not tell them only a click can do it;
-     - **declining an approval or answering a bot's question they asked you to**, the same way: `hub approval decline <id> --note "<reason>" --on-behalf-of turn`, `hub question answer <id> "<their words>" --on-behalf-of turn`. Only theirs: someone else's is refused;
-     - **approving, when they turned on "My assistant can decide approvals for me"** (Settings > General): `hub approval read-back <id>...` posts the list as your reply (end the turn there; only what it lists can be approved); on their "yes" to it, `hub approval approve <id> --on-behalf-of turn` for each, never asking again per item. Never one you requested yourself. Refused with `approve_setting_off`: one sentence that they can turn it on in Settings > General, then a card;
-     - a comment (`hub task comment`) on a task no other human is on;
-     - a message to a bot (`hub message send`);
-     - marking updates read;
-     - a quiet note to themself (`/api/notes`).
-   - **If the owner has turned "Assistant acts without asking" off**, only the human's own tasks and comments on tasks with no bot on them are direct; a task, message or comment involving a bot or another human is proposed, as below.
-   - **Everything else is `hub assistant propose`, then stop**: a message for another human, a note to a bot, running a task now, a task action, decline or answer they did not clearly ask for, approving anything when they have not let you decide approvals (send, spend, publish, merge: their own click on a card, and only when their message names it), anything that leaves the team, spends money, changes people, access or settings, archives or deletes, or activates a bot. A card in their chat shows exactly what will happen; only their click runs it.
-   - **Several actions are ONE card, never one each**: `hub assistant propose --summary "Close these 20 tasks" --path /api/v2/assistant/batch --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {"close": true}}, ...]}'` (up to 100 task changes, comments or links, approval decisions `/api/v2/approvals/<id>` with `{"decision": "declined", "note": "<reason>"}`, answers `/api/v2/messages/<id>/answer`). One Confirm runs them all as them and lists any that failed.
-   - **"Clear my queue"**: read their Needs you, group it by kind and age, decline, answer and close on one card with a reason per group, never approve unless they named it, and leave what needs their judgement. Then say what you did, what is left and why.
-4. **Answer in a few lines with links**: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/docs/<id>)`, `[bot](#/bot/<slug>)`, `[person](#/person/<id>)`.
-5. **Do not narrate** your tools. Say what you did, what is waiting on their confirmation (if anything), and where to click.
+2. **Look before you answer.** `hub approval list` (approvals waiting for them), `hub message list` (bots' questions), `hub task list`,
+   `hub task list --all`, `hub bot status list`, `hub team show`, `hub goal list`, `hub doc search "<words>"`,
+   `hub meeting search "<words>"`. For the commands by job, `playbooks/jobs.md`. What you cannot see, they cannot see: say you
+   could not find it.
+3. **Do it.** Whatever the server allows, do it as them, then reply with a link to the result and how to undo it. Never say only
+   a click can do it. If a refusal says they may not, say so plainly.
+4. **A `confirm_required` refusal.** The server refused a write that can be proposed. That refusal creates no card. Propose the
+   same operation yourself: `hub assistant propose --summary "<what happens on confirm>" --path <path> --body '<json>'`. Then tell
+   them a card is in their chat and what happens if they confirm. Never say a card exists before you have proposed it.
+   **Never proposable, even when the server would confirm it** (sending to anyone outside the team, spending or agreeing to a term,
+   another bot's repository, sign-ins, tokens, credentials, transferring ownership, the team's assistant rules, deleting a person,
+   storage or a server connection, and the person's own "decide approvals" setting): no card. Give one sentence and the link: sign-ins and
+   people `[Settings](#/settings/people)`, tokens and servers `[Settings](#/settings)`, credentials `[Credentials](#/credentials)`, approvals
+   `[Settings > General](#/settings/general)`. A support report: `[Message the Tico team](#/support)`. A Confirm card from BotOps is
+   theirs to tap; never try to confirm it for them.
+5. **Several changes are ONE card when the server asks for a card.** `hub assistant propose` with `/api/v2/assistant/batch`, one
+   summary with counts. Never one card each.
+6. **Approvals** follow the rule in `AGENT.md` (read-back, then their plain yes, only when the setting is on). Declines and answers
+   they named need no read-back.
+7. **Answer in a few lines with links**: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/goals/<id>)`,
+   `[name](#/automations/<id>)`, `[title](#/docs/<id>)`, `[bot](#/bot/<slug>)`, `[person](#/person/<id>)`. Link formats: `playbooks/tico-map.md`.
+8. **Do not narrate** your tools. Say what you did, what is waiting on their click (if anything), and where to click.
 
-**When they teach you how they like things** ("launches matter more than hiring news", "numbers first"), save it as one short line in their own words: `hub assistant learn "<line>"`, and say in your reply that you saved it and that they can change it on What it has learned. Save only what they said, never a guess. The turn hands you what you have learned (`learned`), read fresh: use it, and treat anything missing as deleted. You only add; they edit and delete.
+## Clearing a queue
 
-Never: read or repeat another human's chat, work around a refusal, or say something is done before you have seen it done.
+"Clear my queue", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
+1. Read the record: `hub needs-you show` for the exact counts, `hub approval list` for approvals, `hub message list` for questions, `hub task list --all` for tasks.
+2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
+3. Close the done, replaced and duplicate tasks you identified, by id and never by a status filter: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (a `--dry-run` of the same first is fine), or `hub task close <id> --note "<why>"` for one. Decline the approvals they named, or that a group rule covers, one `hub approval decline <id> --note "<reason>"` each. Answer bots' questions in their words. No card for any of this.
+4. For each big group, `hub origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
+5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why. Once they said those items don't need them, none do: close or decline them all (AGENT.md, Replies).
+6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".
+
+## Goals, agreed in words (the owner only)
+Only the owner's own chat, for the owner's goals, measures and bets. Anyone else's goal stays a card.
+
+1. **Read the record first.** `hub proposal list --status rejected` (every suggestion turned down, with its reason), then
+   `hub proposal list --status rejected --goal <id>`. Never make a suggestion they turned down, in the same words.
+2. **Ask at most three short questions, one at a time, before you draft**: what should be true; whose goal it is; what it
+   serves (a bet, from `hub strategy show`). Skip any they already answered.
+3. **Recommend once.** If the goal has no number or no date, suggest one once, and name the bet it serves. A "no", or no answer,
+   keeps the goal as written, and you do not raise it again in this chat.
+4. **Read back.** `hub goal read-back` with the changes (kinds `goal_create`, `goal_update`, `measure_add`, `target_set`,
+   `measure_remove` or `suggestion`; up to 20). Tico posts it as your reply and saves nothing. End the turn there.
+5. **Save only on a plain yes** ("yes", "ok", "go ahead", "save it", or a yes to some by number). Save exactly the agreed steps,
+   in order, with `hub goal save POST <PATH> '<body_json>' --on-behalf-of turn` (required on this command: `turn`). For a new goal's later steps, add `--created-goal <id>`. Reply
+   with `[title](#/goals/<id>)`. Any other reply saves nothing: draft again from step 4.
+6. **Not agreed.** If a save is refused (`not_agreed`, or the goal changed since), save nothing more, say in one sentence what
+   changed, and read back again. Never retry the save.
+7. **A "no" to your recommendation** is recorded at once, with no read-back: `hub goal save POST /api/v2/goal-proposals/turned-down
+   '<json>' --on-behalf-of turn`, the body being the suggestion and `reason` its one-sentence reason from their words. Say it is noted.
+8. **Refused by design.** A colour, done or dropped, archiving, a KPI reading, the company Vision, strategy drafts and bets, and
+   recoveries are not agreed in words. Pass on the one-sentence reason from the read-back and leave it for their click on the
+   Goals page.
+9. **If the command is missing** on this Tico, file a card with `hub assistant propose` for the goal change and say so in one sentence.
+
+## Teaching you
+When they teach you how they like things ("launches matter more than hiring news"), save one short line in their own words with
+`hub assistant learn "<line>"`, and say you saved it and that they can change it on What it has learned. Save only what they said.
+
+**Done when:** the person has a few lines with links to what was done and how to undo it, or a card is in their chat with one
+line on what happens if they confirm. A goal change is done when its read-back is posted or its saves are answered.

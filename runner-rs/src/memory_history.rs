@@ -21,6 +21,7 @@ use crate::util::log;
 pub const FOLDERS: &[&str] = &["memory", "knowledge"];
 pub const DOCUMENTS: &[&str] = &["memory/learnings.md", "memory/decisions.md"];
 pub const MAX_COMMITS: usize = 40;
+pub const MAX_DOCUMENT_BYTES: usize = 4_000_000;
 pub const MAX_DIFF: usize = 20_000;
 pub const EVERY: Duration = Duration::from_secs(300);
 
@@ -220,11 +221,15 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
         }));
     }
     let mut documents = Map::new();
+    let mut oversized = vec![];
     if upstream {
         for rel in DOCUMENTS {
             // The upstream's copy: what is only on this computer stays here.
             let Some(text) = git_out(root, &["show", &format!("@{{u}}:{rel}")]).await else { continue };
-            if text.len() > 100_000 {
+            if text.len() > MAX_DOCUMENT_BYTES {
+                if sent_docs.get(*rel).map(String::as_str) != Some("oversized") {
+                    oversized.push(rel.to_string());
+                }
                 continue;
             }
             if sent_docs.get(*rel) != Some(&crate::files_publish::sha256_hex(text.as_bytes())) {
@@ -232,12 +237,17 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
             }
         }
     }
-    if rows.is_empty() && documents.is_empty() {
+    if rows.is_empty() && documents.is_empty() && oversized.is_empty() {
         return 0;
     }
     rows.truncate(50);
-    let body = json!({"commits": rows, "documents": documents});
-    let key = format!("memory:{bot}:{}", &crate::files_publish::sha256_hex(dumps_sorted(&body).as_bytes())[..32]);
+    let mut body = json!({"commits": rows, "documents": documents});
+    if !oversized.is_empty() {
+        body["oversized"] = json!(oversized);
+    }
+    // A file may return to earlier content after being oversized. Do not replay an old HTTP receipt.
+    // Client retries keep this key; a later report is a fresh operation (record() remains idempotent).
+    let key = format!("memory:{bot}:{}:{}", &crate::files_publish::sha256_hex(dumps_sorted(&body).as_bytes())[..32], uuid::Uuid::new_v4());
     if let Err(e) = client.post(&format!("bots/{bot}/memory/report"), &body, Some(&key)).await {
         // An older server has no such route: nothing to report to, and nothing lost (git still has it).
         if e.status != 404 {
@@ -251,6 +261,10 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
                 "INSERT INTO memory_reported(bot,sha,shared,attempt) VALUES(?1,?2,?3,?4) ON CONFLICT(bot,sha) DO UPDATE SET shared=excluded.shared,attempt=excluded.attempt",
                 params![bot, row["sha"].as_str(), row["shared"].as_bool().unwrap_or(false) as i64, row["attempt"].as_str()],
             )?;
+        }
+        for rel in &oversized {
+            // Replacing the old digest ensures the file is resent even if it shrinks to its old content.
+            c.execute("INSERT OR REPLACE INTO memory_documents VALUES(?1,?2,'oversized')", params![bot, rel])?;
         }
         for (rel, text) in &documents {
             c.execute("INSERT OR REPLACE INTO memory_documents VALUES(?1,?2,?3)", params![bot, rel, crate::files_publish::sha256_hex(text.as_str().unwrap_or("").as_bytes())])?;
@@ -330,6 +344,42 @@ mod tests {
         let again = body(1);
         assert!(again["commits"][0]["diff"].as_str().unwrap().contains("+two"));
         assert_eq!(again["documents"], json!({"memory/learnings.md": "one\ntwo\n"}));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn oversized_documents_count_bytes_and_resend_when_the_old_content_fits_again() {
+        let dir = std::env::temp_dir().join(format!("tico-memory-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        sh(&dir, "git init -q --bare origin.git && git init -q -b main bot && cd bot && git config user.email b@x && git config user.name Bot && mkdir memory && echo original > memory/learnings.md && git add . && git commit -qm initial && git remote add origin ../origin.git && git push -q -u origin main");
+        let root = dir.join("bot");
+        let state = State::open(&dir.join("state")).unwrap();
+        let (url, seen) = hub().await;
+        let client = Client::new(&url, "t", 5, 0).unwrap();
+        report(&state, &client, "ops", &root, "", "", false).await;
+        let text = "é".repeat(MAX_DOCUMENT_BYTES / 2 + 1);
+        assert!(text.chars().count() < MAX_DOCUMENT_BYTES);
+        assert!(text.len() > MAX_DOCUMENT_BYTES);
+        std::fs::write(root.join(DOCUMENTS[0]), text).unwrap();
+        sh(&root, "git commit -qam large && git push -q");
+        report(&state, &client, "ops", &root, "", "", false).await;
+        let request = seen.lock().unwrap()[1].clone();
+        let body: Value = serde_json::from_str(&request[request.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(body["oversized"], json!([DOCUMENTS[0]]));
+        assert_eq!(body["documents"], json!({}));
+        report(&state, &client, "ops", &root, "", "", false).await;
+        assert_eq!(seen.lock().unwrap().len(), 2, "unchanged oversize need not report again");
+        // Return to the very same upstream commit: the document must resend without any new commit rows.
+        sh(&root, "git reset -q --hard HEAD~1 && git update-ref refs/remotes/origin/main HEAD");
+        report(&state, &client, "ops", &root, "", "", false).await;
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        let last = &requests[2];
+        let body: Value = serde_json::from_str(&last[last.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(body["documents"], json!({"memory/learnings.md": "original\n"}));
+        assert!(body.get("oversized").is_none());
+        let key = |request: &str| request.lines().find(|l| l.to_ascii_lowercase().starts_with("idempotency-key:")).unwrap().to_string();
+        assert_ne!(key(&requests[0]), key(last), "returning content needs a fresh server operation");
         std::fs::remove_dir_all(dir).ok();
     }
 

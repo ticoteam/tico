@@ -18,7 +18,7 @@ def persisted_setting(api, machine):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO meeting_importers VALUES(?,?,?,?,?)",
                   ("fireflies", 1, machine["runner_id"], "human:ana", H.now()))
-        c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?)",
+        c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?)",
                   ("recording:fireflies", H.now(), json.dumps({"imported_total": 7})))
 
 

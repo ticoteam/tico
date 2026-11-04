@@ -1,0 +1,19 @@
+[package]
+name = "anlg-onnx"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+name = "anlg_onnx"
+
+[features]
+default = []
+coreml = ["ort/coreml"]
+
+[dependencies]
+ndarray = "0.16"
+ort = { version = "=2.0.0-rc.10", features = ["ndarray"] }
+thiserror = "2"
+tracing = "0.1"

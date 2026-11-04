@@ -1,0 +1,19 @@
+{
+ "answer": {
+  "ack_seq": 1,
+  "historical": true
+ },
+ "endpoint": "events",
+ "request": {
+  "events": [
+   {
+    "kind": "message",
+    "payload": {
+     "text": "done after all"
+    },
+    "seq": 1
+   }
+  ]
+ },
+ "status": 200
+}

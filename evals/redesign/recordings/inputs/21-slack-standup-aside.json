@@ -1,0 +1,39 @@
+{
+  "id": "21-slack-standup-aside",
+  "kind": "slack",
+  "questions": "slack-route",
+  "level": "low",
+  "state": {
+    "message": {
+      "channel": "C-general",
+      "is_dm": false,
+      "from": "omar",
+      "text": "lol the standup ran 25 minutes again, somebody bring a timer"
+    },
+    "thread": null,
+    "previous_routing": null,
+    "roster": [
+      {
+        "bot": "engineering-lead",
+        "role": "Engineering Lead: plans and reviews engineering work"
+      },
+      {
+        "bot": "release-manager",
+        "role": "Release Manager: cuts releases and their notes"
+      },
+      {
+        "bot": "legal",
+        "role": "Legal helper: contracts, terms and policies"
+      },
+      {
+        "bot": "support",
+        "role": "Support agent: customer tickets and setup help"
+      },
+      {
+        "bot": "sales-ops",
+        "role": "Sales ops: pipeline and outreach"
+      }
+    ]
+  },
+  "note": "An aside with no ask and no bot named."
+}

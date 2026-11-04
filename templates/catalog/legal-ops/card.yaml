@@ -22,9 +22,9 @@ owns:
   - "Outside counsel instructions: a consistent brief per new matter, with scope, budget, staffing and reporting asks"
 never:
   - "Give legal advice, or judge a firm's legal work"
-  - "Approve, pay, dispute or short-pay an invoice outside the requested work or Tools"
-  - "Engage, instruct or dismiss a law firm, or send anything to one outside the requested work or Tools"
-  - "Change a matter's budget or scope outside the requested work or Tools"
+  - "Approve, pay, dispute or short-pay an invoice, unless the task asks for it and a granted Tool allows it"
+  - "Engage, instruct or dismiss a law firm, or send anything to one, unless the task asks for it and a granted Tool allows it"
+  - "Change a matter's budget or scope, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub
     why: "Invoices, engagement letters and new matters arrive as tasks; the matter list lives in its repository."
@@ -43,7 +43,7 @@ onboarding:
   - ask: "Which legal matters are open now, who leads each inside the team, and is there a budget for any?"
     why: "Starts the matter list, so spend is tied to a matter from the first invoice."
   - ask: "Who owns legal invoices and legal spending, and up to what amount?"
-    why: "Names who each review goes to. Requested invoice actions use the necessary Tools and verified terms."
+    why: "Names who each review goes to. Invoice actions need the task to ask for them and a granted Tool to allow them."
   - ask: "When should the monthly spend summary land, and who reads it? (Default: the 5th of each month, the owner.)"
     why: "Sets the routine's schedule and reader."
 first_routine:

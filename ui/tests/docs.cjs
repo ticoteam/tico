@@ -1,7 +1,7 @@
 // The Docs page, against an in-memory stand-in for the docs API (fixtures only, no server): write a doc,
 // edit it (with the version-conflict message), read its history and restore an old version, lock it
 // (only owners and bot administrators), add, open, edit and remove a linked doc, search across both
-// kinds, and import a file. On a first visit to an empty Docs the Librarian asks where the docs are.
+// kinds, and import a file. On a first visit to an empty Docs it asks where the docs are.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (both themes, and a phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -33,27 +33,27 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     let me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', cloud: true, bot_admin: true};
     const docs = new Map(), versions = new Map(), linked = [], requests = [];
     const stamp = (doc, actor, note, minutes) => {
-      versions.get(doc.id).unshift({version: doc.version, title: doc.title, path: doc.path, body: doc.body, actor, created: ago(minutes), note});
+      versions.get(doc.id).unshift({version: doc.version, title: doc.title, path: doc.path, body: doc.body, actor, created_at: ago(minutes), note});
     };
     const add = (id, docPath, title, body, {locked = false, history = []} = {}) => {
-      const doc = {id, path: docPath, title, body, locked, version: 1, created_by: 'human:ben', created: ago(600), updated_by: 'human:ben', updated: ago(600), archived: false};
+      const doc = {id, path: docPath, title, body, locked, version: 1, created_by: 'human:ben', created_at: ago(600), updated_by: 'human:ben', updated_at: ago(600), archived: false};
       docs.set(id, doc); versions.set(id, []); stamp(doc, 'human:ben', 'Created', 600);
-      for (const [text, actor, note] of history) { doc.version += 1; doc.body = text; doc.updated_by = actor; doc.updated = ago(90); stamp(doc, actor, note, 90); }
+      for (const [text, actor, note] of history) { doc.version += 1; doc.body = text; doc.updated_by = actor; doc.updated_at = ago(90); stamp(doc, actor, note, 90); }
       return doc;
     };
     add('doc-000000000001', 'support/refund-policy.md', 'Refund policy', 'Refund within 14 days.', {history: [['# Refund policy\n\nRefund within **30 days**.', 'bot:ops', 'Longer window']]});
     add('doc-000000000002', 'pricing.md', 'Pricing and plans', '# Pricing and plans\n\n| Plan | Price |\n|---|---|\n| Starter | $35 |\n\nSee [refunds](support/refund-policy.md).');
     const addLinked = (raw, title, kind, description, by = 'human:ana') => {
       const url = /^https?:\/\//.test(raw) ? raw : 'https://' + raw;
-      const row = {id: 'link-' + (++seq), title, url, kind, host: new URL(url).hostname.replace(/^www\./, ''), description, added_by: by, created: ago(300), updated: ago(300)};
+      const row = {id: 'link-' + (++seq), title, url, kind, host: new URL(url).hostname.replace(/^www\./, ''), description, added_by: by, created_at: ago(300), updated_at: ago(300)};
       linked.push(row); return row;
     };
     addLinked('https://help.acme.example/refunds', 'Help centre', 'website', 'What customers read');
     addLinked('https://drive.google.com/drive/folders/brand', 'Brand assets', 'google_drive', 'Logos and the tone guide', 'human:ben');
     const view = doc => ({...doc, updated_by_name: NAMES[doc.updated_by] || doc.updated_by, created_by_name: NAMES[doc.created_by] || doc.created_by});
-    const row = doc => ({id: doc.id, path: doc.path, title: doc.title, updated: doc.updated, updated_by: doc.updated_by, updated_by_name: NAMES[doc.updated_by], locked: doc.locked, version: doc.version});
+    const row = doc => ({id: doc.id, path: doc.path, title: doc.title, updated_at: doc.updated_at, updated_by: doc.updated_by, updated_by_name: NAMES[doc.updated_by], locked: doc.locked, version: doc.version});
     const linkView = l => ({...l, added_by_name: NAMES[l.added_by]});
-    const sourceView = l => ({...linkView(l), provider: l.kind, repo: '', reference: '', reference_override: '', path: '', status: 'link_only', last_checked: null, doc_count: 0, skipped: 0, error_code: ''});
+    const sourceView = l => ({...linkView(l), provider: l.kind, repo: '', reference: '', reference_override: '', path: '', status: 'link_only', last_checked_at: null, doc_count: 0, skipped: 0, error_code: ''});
     const kindOf = raw => { const host = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw).hostname; return /notion\.so$/.test(host) ? 'notion' : /github\.com$/.test(host) ? 'github' : 'website'; };
     const titleOf = raw => { const u = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw); return u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/$/, ''); };
     let started = {empty: {docs: false}, cards: []};
@@ -61,18 +61,18 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const docsSetupSkipped = new Set();   // whose Skip for now is saved: each person's own
     let chatSequence = 0, reopenBlocked = false;
     const chats = [
-      {id: 'docs-earlier', title: 'Who helps new hires?', created: ago(90), closed_at: ago(60)},
-      {id: 'docs-archived', title: 'How do refunds work?', created: ago(300), closed_at: ago(200)},
+      {id: 'docs-earlier', title: 'Who helps new hires?', created_at: ago(90), closed_at: ago(60)},
+      {id: 'docs-archived', title: 'How do refunds work?', created_at: ago(300), closed_at: ago(200)},
     ];
     const externalCitation = 'https://github.com/acme/handbook/blob/' + 'a'.repeat(40) + '/docs/refunds.md?plain=1#L3-L4';
     const answer = 'See [Internal doc · Refund policy](doc:doc-000000000001). [External · Refunds — Policy](' + externalCitation + ')';
     const chatMessages = new Map([
-      ['docs-earlier', [{id: 'earlier-question', from_actor: 'human:ana', body: 'Who helps new hires?'}]],
-      ['docs-archived', [{id: 'old-question', from_actor: 'human:ana', body: 'How do refunds work?'},
-        {id: 'old-answer', in_reply_to: 'old-question', from_actor: 'bot:librarian', body: 'Refunds take 30 days. ' + answer + '<script>window.docsUnsafe = true</script>'}]],
+      ['docs-earlier', [{id: 'earlier-question', sender_id: 'human:ana', body: 'Who helps new hires?'}]],
+      ['docs-archived', [{id: 'old-question', sender_id: 'human:ana', body: 'How do refunds work?'},
+        {id: 'old-answer', in_reply_to: 'old-question', sender_id: 'bot:librarian', body: 'Refunds take 30 days. ' + answer + '<script>window.docsUnsafe = true</script>'}]],
     ]);
     const outside = (id, body, actor = 'human:ben') => {       // someone else saves while this person is editing
-      const doc = docs.get(id); doc.version += 1; doc.body = body; doc.updated_by = actor; doc.updated = ago(0); stamp(doc, actor, 'Their edit', 0);
+      const doc = docs.get(id); doc.version += 1; doc.body = body; doc.updated_by = actor; doc.updated_at = ago(0); stamp(doc, actor, 'Their edit', 0);
     };
 
     await context.route('**/*', async route => {
@@ -84,7 +84,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(ui, p) : '';
       if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
       if (p === '/api/me') return json(me);
-      if (p === '/api/employees') return json([]);
+      if (p === '/api/employees') return json([{name: 'librarian', display_name: 'Librarian', status: 'active'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
@@ -123,11 +123,11 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         const id = body.conversation_id || 'librarian-chat-' + (++chatSequence);
         if (body.new_conversation) {
           chats.forEach(chat => { chat.closed_at ||= ago(0); });
-          chats.unshift({id, title: body.question, created: ago(0), closed_at: null});
+          chats.unshift({id, title: body.question, created_at: ago(0), closed_at: null});
         }
         const messageId = 'ask-docs-' + requests.length;
-        chatMessages.set(id, [...(chatMessages.get(id) || []), {id: messageId, from_actor: 'human:ana', body: body.question},
-          ...(!librarianQueued ? [{id: 'answer-' + messageId, in_reply_to: messageId, from_actor: 'bot:librarian', body: answer}] : [])]);
+        chatMessages.set(id, [...(chatMessages.get(id) || []), {id: messageId, sender_id: 'human:ana', body: body.question},
+          ...(!librarianQueued ? [{id: 'answer-' + messageId, in_reply_to: messageId, sender_id: 'bot:librarian', body: answer}] : [])]);
         return json({conversation_id: id, message_id: messageId, results: [{id: 'doc-000000000001', title: 'Refund policy', type: 'internal'}]});
       }
       const chatRead = /^\/api\/v2\/conversations\/([^/]+)\/(watch|snapshot)$/.exec(p);
@@ -139,17 +139,9 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         return route.fulfill({contentType: 'text/event-stream', body: 'event: snapshot\ndata: ' + JSON.stringify(snapshot) + '\n\n'});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      // A one-row market, so the Market page draws and Ask the Librarian answers from its graph.
-      if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', status: 'active'}]});
-      if (p === '/api/v2/market/entities/company/rival') return json({entity: {id: 'company/rival', type: 'company', name: 'Rival', summary: 'Sells to studios.'}, edges: [], evidence: []});
-      if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', degree: 0}], edges: []});
       if (p === '/api/company-docs') return json({documents: []});
-      if (p === '/api/v2/market/ask') {
-        requests.push({api: 'market/ask', body: req.postDataJSON()});
-        return json({answer: 'Rival competes on price [entity:company/rival].', citations: [{kind: 'entity', id: 'company/rival'}], excerpts: []});
-      }
       if (p === '/api/v2/setup/getting-started' && method === 'GET') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true,
-        cards_dismissed: started.cards, can_build: true, owner: me.role === 'owner', empty: {docs: true, market: false, tasks: false, updates: false, goals: false, meetings: false, ...started.empty}});
+        cards_dismissed: started.cards, can_build: true, owner_id: me.role === 'owner', empty: {docs: true, market: false, tasks: false, updates: false, goals: false, meetings: false, ...started.empty}});
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: true, cards: [], skipped: []});
       if (!p.startsWith('/api/v2/')) return json({});
       const api = p.slice(8);
@@ -159,7 +151,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       if (api === 'docs' && method === 'POST') {
         const id = 'doc-' + String(++seq).padStart(12, '0');
         const doc = add(id, body.path || body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.md', body.title, body.body);
-        Object.assign(doc, {created_by: 'human:ana', updated_by: 'human:ana', updated: ago(0)}); versions.get(id)[0].actor = 'human:ana';
+        Object.assign(doc, {created_by: 'human:ana', updated_by: 'human:ana', updated_at: ago(0)}); versions.get(id)[0].actor = 'human:ana';
         return json({doc: view(doc)});
       }
       if (api === 'docs/import') {
@@ -188,7 +180,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         if (one[2] === 'versions') return json({doc: doc.id, versions: versions.get(doc.id).map(v => ({...v, body: undefined, current: v.version === doc.version, actor_name: NAMES[v.actor]}))});
         if (one[2] === 'restore') {
           const old = versions.get(doc.id).find(v => v.version === body.version);
-          doc.archived = false; doc.version += 1; doc.body = old.body; doc.title = old.title; doc.updated_by = 'human:ana'; doc.updated = ago(0); stamp(doc, 'human:ana', `Restored version ${body.version}`, 0);
+          doc.archived = false; doc.version += 1; doc.body = old.body; doc.title = old.title; doc.updated_by = 'human:ana'; doc.updated_at = ago(0); stamp(doc, 'human:ana', `Restored version ${body.version}`, 0);
           return json({doc: view(doc)});
         }
         if (method === 'PATCH') {
@@ -198,7 +190,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
           if (body.archived) doc.archived = true;
           if (['title', 'body', 'path'].some(k => body[k] !== undefined && body[k] !== doc[k])) {
             Object.assign(doc, Object.fromEntries(['title', 'body', 'path'].filter(k => body[k] !== undefined).map(k => [k, body[k]])));
-            doc.version += 1; doc.updated_by = 'human:ana'; doc.updated = ago(0); stamp(doc, 'human:ana', body.note || '', 0);
+            doc.version += 1; doc.updated_by = 'human:ana'; doc.updated_at = ago(0); stamp(doc, 'human:ana', body.note || '', 0);
           }
           return json({doc: view(doc)});
         }
@@ -259,71 +251,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
     await shot(page, 'list');
-
-    // Desktop rail stays open while reading, streams answers and preserves collapse per viewer.
-    assert.equal(await page.locator('[data-docs-ask]').getAttribute('role'), 'complementary');
-    assert.equal(await page.locator('.dask-backdrop').count(), 0);
-    const mainBox = await page.locator('#main').boundingBox(), railBox = await page.locator('[data-docs-ask]').boundingBox();
-    assert(mainBox.x + mainBox.width <= railBox.x + 1, 'rail has its own space');
-    await page.locator('.dask-form textarea').fill('What is the refund policy?');
-    await page.locator('.dask-form button').click();
-    await page.locator('.dask-cite').first().waitFor();
-    assert.equal(await page.locator('.dask-cite').first().getAttribute('href'), '#/docs/doc-000000000001');
-    assert.equal(await page.locator('.dask-cite', {hasText: 'External · Refunds'}).getAttribute('href'), externalCitation);
-    assert.equal(await page.locator('.dask-a .md-card').count(), 0);
-    assert.equal(await page.locator('.dask-results a').textContent(), 'Refund policy');
-    await shot(page, 'rail-desktop');
-    // Archived personal conversations survive reload, restore sanitized answers and keep follow-ups in the same room.
-    await page.reload();
-    await page.locator('.docs-heading').waitFor();
-    await page.locator('.dask-history summary').click();
-    const oldChat = page.locator('[data-docs-conversation="docs-archived"]');
-    const findOldChat = async () => {
-      while (!await oldChat.count()) {
-        const shown = await page.locator('[data-docs-conversation]').count();
-        await page.locator('[data-conversations-more]').click();
-        await page.waitForFunction(count => document.querySelectorAll('[data-docs-conversation]').length > count, shown);
-      }
-    };
-    await findOldChat();
-    reopenBlocked = true;
-    await oldChat.click();
-    await page.locator('.toast', {hasText: 'Wait for this conversation'}).waitFor();
-    assert.equal(await page.locator('[data-docs-ask] [data-turn]').count(), 0, 'a busy response preserves the thread on screen');
-    reopenBlocked = false;
-    await oldChat.click();
-    await page.locator('[data-docs-ask] [data-answer]', {hasText: 'Refunds take 30 days'}).waitFor();
-    assert.equal(await page.locator('.dask-q').innerText(), 'How do refunds work?');
-    assert.equal(await page.locator('.dask-cite').first().getAttribute('href'), '#/docs/doc-000000000001');
-    assert.equal(await page.evaluate(() => window.docsUnsafe), undefined);
-    assert.equal(await page.locator('.dask-form button').isDisabled(), false);
-    await page.locator('.dask-form textarea').fill('And gift cards?');
-    await page.locator('.dask-form button').click();
-    await page.locator('[data-docs-ask] [data-turn]').nth(1).locator('[data-answer]').waitFor();
-    assert.deepEqual(requests.findLast(r => r.api === 'docs/ask').body, {question: 'And gift cards?', conversation_id: 'docs-archived'});
-    await page.locator('[data-new-chat]').click();
-    await page.locator('.dask-form textarea').fill('Who owns release checks?');
-    await page.locator('.dask-form button').click();
-    await page.locator('.dask-results a').waitFor();
-    assert.equal(requests.findLast(r => r.api === 'docs/ask').body.new_conversation, true);
-    await page.locator('.dask-history summary').click();
-    await findOldChat();
-    await shot(page, 'previous-conversations');
-    await page.locator('[data-docs-conversation="docs-earlier"]').click();
-    await page.locator('[data-docs-ask] .dask-err', {hasText: 'No reply saved'}).waitFor();
-    assert.equal(await page.locator('.dask-form button').isDisabled(), false, 'an unanswered archived question does not block the composer');
-    assert.equal(await page.locator('[data-docs-ask] [data-thinking]').count(), 0);
-    // The rail is part of the page: Escape elsewhere leaves it open.
-    await page.locator('#docs-search').focus();
-    await page.keyboard.press('Escape');
-    assert.equal(await page.locator('[data-docs-ask]').count(), 1);
-    await page.locator('.dask-close').click();
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'docs-ask', 'hiding the rail focuses its button');
-    await page.reload();
-    await page.locator('.docs-heading').waitFor();
-    assert.equal(await page.locator('[data-docs-ask]').count(), 0);
-    await page.locator('#docs-ask').click();
-    await page.locator('[data-docs-ask]').waitFor();
+    // Ask opens the Ask panel with this page; nothing of the Librarian: no rail, settings link or sidebar gear.
+    assert.equal(await page.locator('#docs-ask').getAttribute('aria-label'), 'Ask');
+    assert.equal(await page.locator('#docs-ask').getAttribute('data-ask-open'), '');
+    assert.equal(await page.locator('[data-docs-ask], #docs-librarian-settings, #side .nav-librarian, #nav-strategy-librarian').count(), 0);
 
     // ---- read an internal doc, and its relative link to another doc stays in the app
     await page.locator('.docs-item', {hasText: 'Pricing and plans'}).click();
@@ -335,7 +266,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('.docs-reader-head h2', {hasText: 'Refund policy'}).waitFor();
     await shot(page, 'doc');
 
-    // Research: the Librarian adds what it finds on the web to the section chosen.
+    // Research adds what it finds on the web to the section chosen.
     await page.locator('#doc-more').click();
     await page.locator('#doc-research').click();
     const research = page.locator('form[data-research-form]');
@@ -348,35 +279,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(asked.section, '');
     assert.equal(await research.locator('a', {hasText: 'View task'}).getAttribute('href'), '#/task/task-research');
     await research.locator('button', {hasText: 'Close'}).click();
-
-    // Market: the same rail, its own thread, answered from the market graph; what it drew on opens the note.
-    const docsAsks = requests.filter(r => r.api === 'docs/ask').length;
-    await page.evaluate(() => { location.hash = '#/market'; });
-    await page.locator('#market-shell [data-librarian-open]').waitFor({state: 'attached'});
-    await page.locator('[data-docs-ask]').waitFor();
-    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask about the market…');
-    assert.equal(await page.locator('.dask-history').isVisible(), false, 'Docs history stays out of Market');
-    assert.equal(await page.locator('[data-docs-ask] [data-turn]').count(), 0, 'Market has its own thread');
-    await page.locator('.dask-form textarea').fill('Who competes with us?');
-    await page.locator('.dask-form button').click();
-    await page.locator('.dask-cites .dask-cite', {hasText: 'Rival'}).waitFor();
-    assert.equal(requests.findLast(r => r.api === 'market/ask').body.question, 'Who competes with us?');
-    assert.equal(requests.filter(r => r.api === 'docs/ask').length, docsAsks);
-    assert.equal(await page.locator('[data-docs-ask] [data-answer]').innerText(), 'Rival competes on price.');
-    await page.locator('.dask-cites .dask-cite').click();
-    await page.waitForFunction(() => location.hash === '#/strategy/market?note=company%2Frival');
-    await page.locator('#market-read [data-market-research="company/rival"]').click();
-    await page.locator('form[data-research-form] textarea').fill('Find their pricing');
-    await page.locator('form[data-research-form] [type=submit]').click();
-    await page.locator('form[data-research-form] a', {hasText: 'View task'}).waitFor();
-    assert.equal(requests.findLast(r => r.api === 'librarian/research').body.target, 'company/rival');
-    await page.locator('form[data-research-form] button', {hasText: 'Close'}).click();
-    assert.equal(await page.locator('[data-docs-ask]').count(), 1, 'a citation opens the note beside the rail');
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();
-    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask about your docs…');
 
-    // A narrow desktop still reserves space for the rail and lets a doc open.
+    // A narrow desktop lets a doc open without sideways scrolling.
     await page.setViewportSize({width: 1024, height: 860});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.locator('.docs-item', {hasText: 'Refund policy'}).click();
@@ -524,22 +430,6 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.equal(await page.locator('#docs-ask .docs-ask-word').isVisible(), false);
     await shot(page, 'phone-list');
-    assert.equal(await page.locator('[data-docs-ask]').count(), 0);
-    await page.locator('#docs-ask').click();
-    assert.equal(await page.locator('[data-docs-ask]').getAttribute('aria-modal'), 'true');
-    await shot(page, 'rail-phone');
-    // No AI provider: the question is saved and waits; the sheet says so, not that the Librarian is reading.
-    librarianQueued = true;
-    await page.locator('.dask-form textarea').fill('How do I add an AI provider?');
-    await page.locator('.dask-form button').click();
-    await page.locator('[data-no-provider]').waitFor();
-    assert.equal(await page.locator('[data-docs-ask] [data-thinking]').count(), 0);
-    assert.equal(await page.locator('[data-no-provider] a').getAttribute('data-gs-tab'), 'models');
-    assert.equal(await page.locator('.dask-form button').isDisabled(), false);
-    await shot(page, 'rail-phone-no-provider');
-    librarianQueued = false;
-    await page.locator('.dask-close').click();
-
     await page.locator('.docs-item').first().click();
     await page.locator('.docs-reader-head h2').waitFor();
     assert.equal(await page.locator('#docs-browser').isVisible(), false);
@@ -580,7 +470,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert(sourceHeading.y + sourceHeading.height < page.viewportSize().height);
     await page.close();
 
-    // ---- a first visit to an empty Docs: the Librarian asks where the docs are, takes the links as sources and
+    // ---- a first visit to an empty Docs: Docs asks where the docs are, takes the links as sources and
     // files one task; Skip for now is remembered, and the menu brings the question back
     page = await open('#/docs');
     assert.equal(await page.locator('[data-docs-setup]').count(), 0);         // Docs has docs: nothing is asked

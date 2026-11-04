@@ -1,5 +1,5 @@
-//! GitHub credentials for a turn (`runner/git_credentials.py`, `runner/credential_socket.py`,
-//! `runner/credential_bin/gh`).
+//! GitHub credentials for a turn (`runner_support/git_credentials.py`, `runner_support/credential_socket.py`,
+//! `runner_support/credential_bin/gh`).
 //!
 //! The hub mints a repository-scoped GitHub App token that lasts an hour; a turn can run longer, so git
 //! does not keep one. Its credential helper is `tico-runner git-credential`, which asks this runner's
@@ -133,6 +133,8 @@ struct Registered {
     mailboxes: std::collections::BTreeSet<String>,
     issued: Vec<String>,
     redactor: Option<Arc<Redactor>>,
+    /// A turn that asks for its GitHub tokens with its own token, and its own cache (register_as).
+    own: Option<(Client, Arc<TokenCache>)>,
 }
 
 pub struct CredentialSocket {
@@ -238,7 +240,14 @@ impl CredentialSocket {
     }
 
     pub fn register(&self, attempt_token: &str, bot: &str) {
-        self.attempts.lock().unwrap().insert(attempt_token.into(), Registered { bot: bot.into(), mailboxes: Default::default(), issued: vec![], redactor: None });
+        self.attempts.lock().unwrap().insert(attempt_token.into(), Registered { bot: bot.into(), mailboxes: Default::default(), issued: vec![], redactor: None, own: None });
+    }
+
+    /// `register`, for a turn whose GitHub tokens the hub answers by the turn itself, not by this computer: a private
+    /// meeting's, which gets read-only ones (backend/github_app.py token). Never a token this computer's cache holds.
+    pub fn register_as(&self, attempt_token: &str, bot: &str, own: Client) {
+        let entry = Registered { bot: bot.into(), mailboxes: Default::default(), issued: vec![], redactor: None, own: Some((own, Arc::new(TokenCache::new()))) };
+        self.attempts.lock().unwrap().insert(attempt_token.into(), entry);
     }
 
     /// The mailboxes this attempt may ask a mail token for.
@@ -274,8 +283,9 @@ async fn answer(attempts: &Mutex<HashMap<String, Registered>>, client: &Client, 
     let Some(token) = asked.get("token").and_then(|t| t.as_str()).filter(|t| !t.is_empty()) else {
         return json!({"error": if asked.is_object() { "unknown attempt" } else { "bad request" }});
     };
-    let known = attempts.lock().unwrap().get(token).map(|r| (r.bot.clone(), r.mailboxes.clone()));
-    let Some((bot, mailboxes)) = known else { return json!({"error": "unknown attempt"}) };
+    let known = attempts.lock().unwrap().get(token).map(|r| (r.bot.clone(), r.mailboxes.clone(), r.own.clone()));
+    let Some((bot, mailboxes, own)) = known else { return json!({"error": "unknown attempt"}) };
+    let (client, cache) = own.as_ref().map_or((client, cache), |(c, k)| (c, k.as_ref()));
     if let Some(mail) = asked.get("mail") {
         return crate::mail_key::answer(&mailboxes, mail).await;
     }
@@ -455,7 +465,7 @@ pub async fn apply(env: &mut Env, client: &Client, cache: &TokenCache, bot: &str
             env.insert("PATH".into(), turn_path.clone());
             env.insert(TURN_PATH_KEY.into(), turn_path);
             if cfg!(target_os = "macos") {
-                let startup = crate::env::root().join("runner").join("shell_init");
+                let startup = crate::env::root().join("runner_support").join("shell_init");
                 env.insert("TICO_TURN_BASH_ENV".into(), env.get("BASH_ENV").cloned().unwrap_or_default());
                 let zdot = env.get("ZDOTDIR").or_else(|| env.get("HOME")).cloned().unwrap_or_default();
                 env.insert("TICO_TURN_ZDOTDIR".into(), zdot);
@@ -551,7 +561,7 @@ pub fn credential(socket: Option<&str>, repository: Option<&str>) -> String {
         return held;
     }
     if let Some(s) = socket.filter(|s| !s.is_empty()) {
-        match socket_request(Path::new(s), &std::env::var("HUB_TOKEN").unwrap_or_default(), repository, "git") {
+        match socket_request(Path::new(s), &crate::client::bearer(&std::env::var("HUB_TOKEN").unwrap_or_default()).unwrap_or_default(), repository, "git") {
             Ok(t) => return t,
             Err(e) => eprintln!("Tico runner: no fresh GitHub App token (socket): {}", e.chars().take(300).collect::<String>()),
         }

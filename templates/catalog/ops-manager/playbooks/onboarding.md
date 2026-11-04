@@ -3,6 +3,12 @@
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not
 finished. Budget 25 minutes. The outcome is five recorded answers, a duties register with an owner and a date on every row, a real first weekly page on the task, and the first routine checked.
 
+Inputs: the task, open tasks, the calendar, the Operations bots' published reports, and any vendor mailbox the bot can reach.
+
+Done when: the five answers are in `state.md` under `## Answers`; `knowledge/duties.md`, `knowledge/vendors.md` and
+`knowledge/rhythm.md` exist, with a row for every duty ("needs an owner" where none was given); the first page is
+attached and labelled; the routine is checked and logged in `memory/decisions.md`; and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -44,13 +50,13 @@ task labelled "First draft, not yet reviewed". Draft one vendor follow-up if a t
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you this page every Monday at 08:30, and a human sends anything to a vendor." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this page every Monday at 08:30, and a human sends anything to a vendor." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

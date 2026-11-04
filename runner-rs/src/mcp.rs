@@ -293,6 +293,22 @@ pub fn claude_config(servers: &[Value]) -> Map<String, Value> {
     out
 }
 
+/// `mcpServers` for pi's `mcp.json` (streamable HTTP only). `direct` exposure declares each tool to the model, as
+/// Claude Code declares its own, so a bot calls them in one step. Headers keep their `${VAR}` placeholders, which pi
+/// reads from the turn's environment.
+pub fn pi_config(servers: &[Value]) -> Map<String, Value> {
+    let mut out = Map::new();
+    for s in servers {
+        let mut row = json!({"url": s["url"], "exposure": "direct"});
+        let headers = headers_of(s);
+        if !headers.is_empty() {
+            row["headers"] = Value::Object(headers);
+        }
+        out.insert(text_of(&s["name"]), row);
+    }
+    out
+}
+
 /// `mcpServers` for Gemini CLI's settings file: `httpUrl` is streamable HTTP, `url` is SSE.
 #[allow(dead_code)] // the Gemini host reads it
 pub fn gemini_config(servers: &[Value]) -> Map<String, Value> {
@@ -498,7 +514,9 @@ mod tests {
         assert_eq!(codex.len(), 1);
         assert_eq!(codex[0].1, "Codex cannot use it: it takes http servers, not sse");
         assert_eq!(supported(&servers, "gemini", "antigravity").len(), 0);
-        assert!(unsupported(&servers, "pi", "")[0].1.ends_with("cannot use it: it has no MCP support"));
+        // Pi takes streamable HTTP only: the SSE server is named, the HTTP one passes.
+        assert_eq!(supported(&servers, "pi", "").len(), 1);
+        assert!(unsupported(&servers, "pi", "")[0].1.ends_with("cannot use it: it takes http servers, not sse"));
         let warnings = warnings_for(&tools(), "codex", "");
         assert_eq!(warnings, ["docs: its MCP server is not passed to the bot's runs. Codex cannot use it: it takes http servers, not sse"]);
         let claude = claude_config(&servers);

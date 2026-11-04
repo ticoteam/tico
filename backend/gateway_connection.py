@@ -38,7 +38,7 @@ import time
 
 from clients import gateway as G
 
-from . import read_cache
+from . import destinations, read_cache
 from .store import H, Problem
 
 KEY = "gateway-connection"
@@ -67,7 +67,7 @@ AUTO_MESSAGES = {
                       "new one, or paste a gateway key here.",
     "invite_used_up": "Tico AI Gateway could not connect automatically: the invite code has been used by all the "
                       "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
-    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico cancelled the invite code. Ask Tico Team "
+    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico canceled the invite code. Ask Tico Team "
                       "for a new one, or paste a gateway key here.",
 }
 AUTO_LATER = "Tico AI Gateway could not connect automatically yet. Tico tries again every hour."
@@ -104,13 +104,19 @@ def _row(c):
 
 
 def _write(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(record, sort_keys=True)))
 
 
-def source(c, settings=None):
-    """Where the key comes from: "environment", "settings" or "" when there is none."""
-    return "environment" if env_key(settings) else "settings" if _row(c).get("key") else ""
+def revision(c):
+    """The saved connection's revision: every save, clear and automatic key adds one."""
+    return int(_row(c).get("revision") or 0)
+
+
+def source(c, settings=None, record=None):
+    """Where the key comes from: "environment", "settings" or "" when there is none. `record`: the saved connection
+    already read (`target`)."""
+    return "environment" if env_key(settings) else "settings" if (_row(c) if record is None else record).get("key") else ""
 
 
 def connected(c, settings=None):
@@ -118,16 +124,34 @@ def connected(c, settings=None):
 
 
 def key(c, vault, settings=None):
-    """The gateway key, for a call to the Gateway or a run that makes one; '' when none is set. Never logged."""
+    """The gateway key; '' when none is set. Never logged. A call to the Gateway takes it with its address from
+    `target`."""
     if env_key(settings):
         return env_key(settings)
     sealed = _row(c).get("key")
     return vault.cipher.unseal(c, CONTEXT, sealed) if sealed else ""
 
 
-def url(c, settings=None):
-    """The Gateway's base URL: the environment's, else the saved one, else Tico HQ's."""
-    return G.base_url(env_url(settings) or _row(c).get("url") or "")
+def url(c, settings=None, record=None):
+    """The Gateway's base URL: the environment's, else the saved one, else Tico HQ's. Not for a send: `target`."""
+    return G.base_url(env_url(settings) or (_row(c) if record is None else record).get("url") or "")
+
+
+def target(c, vault, settings=None):
+    """(key, base URL, `_fingerprint`) for a call to the Gateway, all from one read of the saved connection; key '' when
+    none is set. Every send takes its key and address from here, never from `key` and `url` one by one: outside a
+    transaction each read sees the newest save, so a save in between (a new address with Clear, or with a newly typed
+    key) would pair the key it took away with an address it was never kept for. A demo's key is the sample's and goes
+    nowhere: here it is '' as if none were set, so every send that takes it (search, fetch, images, judges, the postal
+    reader, Billing) acts as it does without a key and sends nothing."""
+    record = _row(c)
+    if _demo(settings):
+        secret = ""
+    elif env_key(settings):
+        secret = env_key(settings)
+    else:
+        secret = vault.cipher.unseal(c, CONTEXT, record["key"]) if record.get("key") else ""
+    return secret, url(c, settings, record), _fingerprint(c, settings, record)
 
 
 def view(c, settings=None, *, manage=False):
@@ -150,30 +174,31 @@ def view(c, settings=None, *, manage=False):
     return {**out, "preview": record.get("preview", "") if where == "settings" else "",
             "env": ENV_KEY if where == "environment" else "",
             "revision": int(record.get("revision") or 0),
-            "updated": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
+            "updated_at": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
             "state": state, "working": state not in G.REFUSED,
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
             "used": fresh.get("used"), "spent_usd": fresh.get("spent_usd"), "cap_usd": fresh.get("cap_usd"),
             "checked": fresh.get("at", "")}
 
 
-def _fingerprint(c, settings=None):
+def _fingerprint(c, settings=None, record=None):
     """Which key a check was made with, without keeping it: the source and the saved revision, or for the
     environment's key (which a restart can replace with no revision) a short one-way digest of it and its URL."""
-    where = source(c, settings)
+    record = _row(c) if record is None else record
+    where = source(c, settings, record)
     if where == "environment":
         digest = hashlib.sha256(f"tico-gateway-check\n{env_key(settings)}\n{env_url(settings)}".encode()).hexdigest()
         return f"{where}:{digest[:16]}"
-    return f"{where}:{_row(c).get('revision', 0)}" if where else ""
+    return f"{where}:{record.get('revision', 0)}" if where else ""
 
 
-def key_id(c, settings=None):
+def key_id(c, settings=None, record=None):
     """A non-secret id of the gateway key in use, for usage records: the Gateway's own id of an automatic key (`gk_`),
     else `_fingerprint`. Never the key; '' with none."""
-    record = _row(c)
-    if source(c, settings) == "settings" and record.get("origin") == AUTOMATIC and record.get("key_id"):
+    record = _row(c) if record is None else record
+    if source(c, settings, record) == "settings" and record.get("origin") == AUTOMATIC and record.get("key_id"):
         return str(record["key_id"])
-    return _fingerprint(c, settings)
+    return _fingerprint(c, settings, record)
 
 
 def owner_only(who):
@@ -199,9 +224,27 @@ def _clean_url(value):
                       "query or password", 422) from None
 
 
+LABEL_KEY = "Gateway key"
+
+
+def destination_change(c, body, settings=None):
+    """What saving `body` would do to where the saved key goes (backend/destinations.py): None when it stays with the
+    same service (a path on the same origin is the same service) or no key is saved here, else the safe old and new
+    destination. An empty URL is Tico's address, so going back to it from another is a change too."""
+    before = _row(c)
+    if env_key(settings) or not before.get("key"):
+        return None
+    return destinations.change(G.base_url(before.get("url") or ""), G.base_url(_clean_url(body.get("url"))))
+
+
 def save(c, vault, who, body, now, settings=None):
     """Save a key (and URL), or only the URL with the key left as it is. Returns the record before and after, both
-    without the key."""
+    without the key.
+
+    A new address for another service while a key is saved is held (`destinations.held`) until the body says what
+    happens to the key: `credentials: "keep"` sends it to the new address, `"clear"` drops it in the same write (Tico
+    models turn off, connecting automatically stays off, and no check is sent). A key typed in the same save replaces
+    the saved one, so nothing saved moves. Either way the change leaves one `integration.destination_changed` event."""
     owner_only(who)
     if env_key(settings):
         raise Problem("environment", f"The server's environment sets the gateway key ({ENV_KEY}); change it there", 409)
@@ -210,6 +253,11 @@ def save(c, vault, who, body, now, settings=None):
         raise Problem("conflict", "The Gateway connection changed since you opened it; reload and try again", 409)
     secret = body.get("key")
     new_url = _clean_url(body.get("url"))
+    option = destinations.choice(body.get("credentials"))
+    moved = destination_change(c, body, settings)
+    if moved and not secret and not option:
+        raise destinations.held("gateway", moved, [LABEL_KEY], before.get("revision"), G.LABEL)
+    destinations.require_tap(who, moved)
     after = {**before, "url": new_url if new_url != G.DEFAULT_BASE else "", "revision": int(before.get("revision") or 0) + 1,
              "updated": now, "updated_by": who.actor}
     if secret:
@@ -220,12 +268,20 @@ def save(c, vault, who, body, now, settings=None):
         after["preview"] = secret[:3] + "…" + secret[-3:] if len(secret) >= 12 else "••••••"
         for field in ("origin", "key_id", "rotate_after"):
             after.pop(field, None)                        # a pasted key is the owner's: never rotated or replaced
+    elif moved and option == destinations.CLEAR:
+        for field in ("key", "preview", "origin", "key_id", "rotate_after"):
+            after.pop(field, None)
+        after["auto"] = {"off": True, "at": now}          # never enrolled again at the new address behind the owner's back
     elif not before.get("key"):
         raise Problem("key", "Paste the gateway key Tico gave you", 422)
     after.pop("check", None)
     _write(c, after)
     H.event(c, who.actor, "gateway.connection.saved", PROVIDER,
-            {"key_changed": bool(secret), "url": after["url"] or G.DEFAULT_BASE, "revision": after["revision"]})
+            {"key_changed": bool(secret), "destination": destinations.safe(G.base_url(after["url"])),
+             "revision": after["revision"]})
+    if moved:
+        destinations.record(c, who, "gateway", PROVIDER, moved, [LABEL_KEY],
+                            destinations.REPLACED if secret else option, after["revision"])
     return _public(before), _public(after)
 
 
@@ -283,10 +339,17 @@ def record_check(c, result, fingerprint, now, settings=None):
     return True
 
 
+def _demo(settings):
+    """A demo never asks the Gateway: no key check, no automatic key. Its key and last answer are the sample's."""
+    return bool(getattr(settings, "demo", False))
+
+
 def check_now(store, vault, settings=None, opener=None):
     """Ask the Gateway about the key now (outside any transaction: it is a network call) and keep the answer."""
+    if _demo(settings):
+        return None
     with store.read() as c:
-        secret, base, fingerprint = key(c, vault, settings), url(c, settings), _fingerprint(c, settings)
+        secret, base, fingerprint = target(c, vault, settings)
     if not secret:
         return None
     result = G.check(secret, base, opener=opener)
@@ -298,6 +361,8 @@ def check_now(store, vault, settings=None, opener=None):
 def check_soon(store, vault, settings=None, opener=None):
     """`check_now` on a background thread, unless this key was asked about less than CHECK_EVERY seconds ago. For the
     checks nobody pressed a button for: the page opening and the hourly sweep. Returns the thread, or None."""
+    if _demo(settings):
+        return None
     with store.read() as c:
         record = _row(c)
         fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else
@@ -315,6 +380,8 @@ def check_soon(store, vault, settings=None, opener=None):
 
 def check_later(store, vault, settings=None, opener=None):
     """`check_now` on a background thread: the sweep and page loads never wait on the Gateway."""
+    if _demo(settings):
+        return None
     def run():
         try:
             check_now(store, vault, settings, opener)
@@ -389,7 +456,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     """`run_credentials` for attempt `attempt_id`, by what its claim handed it out on, to the runner `who` that holds it.
     Only a runner is handed the key: its turn reaches the Gateway through the runner's relay with a token for that turn
     alone (runner-rs/src/gateway_relay.rs), because the turn's own commands can read whatever the turn's processes hold."""
-    row = c.execute("SELECT bot FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    row = c.execute("SELECT bot_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     config = handed(c, attempt_id)
     if not row or not wanted(config):
         return []
@@ -397,7 +464,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
                             else fallback.get("model") if is_tico(fallback.get("model"))
                             else config.get("gateway_fallback"))
-    if items and (bot := bot_header(c, vault, row["bot"])):
+    if items and (bot := bot_header(c, vault, row["bot_id"])):
         # The relay sends it on every model call of the turn, in place of anything the turn sends by that name.
         items.append({"id": "gateway-bot", "name": G.LABEL + " bot", "env": RUN_BOT_ENV, "kind": "text",
                       "value": bot[G.BOT_HEADER]})
@@ -406,7 +473,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
         # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
-                {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
+                {"bot": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id})
     return items
 
 
@@ -415,9 +482,9 @@ def run_credentials(c, vault, settings, model):
     set, else nothing. Shaped like `GET credential-runtime`'s items."""
     if not is_tico(model):
         return []
-    secret = key(c, vault, settings)
+    secret, base, _ = target(c, vault, settings)
     try:
-        base = G.safe_base(url(c, settings))
+        base = G.safe_base(base)
     except ValueError:
         return []                                     # an environment URL the key may not go to (the page says so)
     if not secret:
@@ -457,6 +524,11 @@ def _invite_mark(code):
 def _identity(record):
     """Whether the install has its own identity (id and sealed secret) from a first enroll."""
     return bool(record.get("install") and record.get("install_secret"))
+
+
+def install_id(c):
+    """The install's Gateway id (`gi_...`), or '' before its first sign-up. It names the install on Tico HQ."""
+    return str(_row(c).get("install") or "")
 
 
 def maintained(c, settings=None):
@@ -544,7 +616,7 @@ def _due(record, settings, now, linked=False):
 def auto_tick(store, vault, settings=None, opener=None, now=None):
     """Enroll or rotate this install's own key when it is due (`_due`); a network call, so outside any transaction.
     Returns what it did ("enrolled", "rotated", "stopped", a refusal code) or None when nothing was due."""
-    if not getattr(vault, "configured", False) or not _auto_lock.acquire(blocking=False):
+    if _demo(settings) or not getattr(vault, "configured", False) or not _auto_lock.acquire(blocking=False):
         return None
     try:
         return _auto_tick(store, vault, settings, opener, now or datetime.datetime.now(datetime.timezone.utc))
@@ -559,7 +631,7 @@ def _auto_tick(store, vault, settings, opener, now):
         action = _due(record, settings, now, linked)
         if not action:
             return None
-        base = url(c, settings)
+        base = url(c, settings, record)                   # the address this record's key was kept for (`target`)
         current = vault.cipher.unseal(c, CONTEXT, record["key"]) if action == "rotate" else ""
         install = str(record.get("install") or "")
         secret = vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"]) if install and record.get(
@@ -625,6 +697,10 @@ def _keep(store, vault, record, answer, now, install, secret, what, via=""):
         H.event(c, SYSTEM, f"gateway.connection.{what}", PROVIDER,
                 {"install": install, "key_id": after["key_id"], "revision": after["revision"]})
     check_later(store, vault, getattr(store, "settings", None))
+    # A Tico Cloud cell's new key may be what HQ needs to answer about its access (backend/cloud_access.py): ask now.
+    from . import cloud_access
+    if cloud_access.cell():
+        cloud_access.sync_later(store, vault, getattr(store, "settings", None))
     return what
 
 

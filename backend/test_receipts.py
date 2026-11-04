@@ -142,24 +142,30 @@ def sources(task):
     callers without one retain the owner-only rule.
     """
     out = []
+    # The review gate marks each child it collected as a review of the board's review steps and names those steps;
+    # a caller that did not classify them gets the Dev board's generic review titles.
+    names = [re.escape(n) for n in task.get("review_steps") or ()] or [r"Review \d+"]
+    keeper_words = re.compile(r"ready[ -]for[ -]review|" + "|".join(names), re.I)
     for item in [task, *task.get("children", [])]:
-        if item is not task and not re.match(r"^Review [12](?:\b|:)", item.get("title", ""), re.I):
+        review = item.get("review_check")
+        if item is not task and not (review if review is not None
+                                     else re.match(r"^Review \d+(?:\b|:)", item.get("title", ""), re.I)):
             continue
         if item.get("note"):
-            out.append({"task": item["id"], "message": None, "actor": item.get("owner"),
-                        "created": item.get("updated") or "", "source": "note", "text": item["note"]})
+            out.append({"task": item["id"], "message": None, "actor": item.get("owner_id"),
+                        "created_at": item.get("updated_at") or "", "source": "note", "text": item["note"]})
         for message in item.get("messages", []):
             if any(message.get(k) for k in REMOVED):
                 continue
-            actor = message.get("from_actor")
+            actor = message.get("sender_id")
             text = message.get("body", "")
-            keeper = actor == "keeper" and re.search(r"ready[ -]for[ -]review|Review [12]", text, re.I)
-            allowed = {item.get("owner"), task.get("owner"), *item.get("receipt_authors", [])}
+            keeper = actor == "keeper" and keeper_words.search(text)
+            allowed = {item.get("owner_id"), task.get("owner_id"), *item.get("receipt_authors", [])}
             if actor not in allowed and not keeper:
                 continue
             out.append({"task": item["id"], "message": message.get("id"), "actor": actor,
-                        "created": message.get("created") or "", "source": "message", "text": text})
-    return sorted(out, key=lambda s: (s["created"], s["message"] or ""))
+                        "created_at": message.get("created_at") or "", "source": "message", "text": text})
+    return sorted(out, key=lambda s: (s["created_at"], s["message"] or ""))
 
 
 def _lines(text):

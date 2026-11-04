@@ -8,12 +8,17 @@ request's thread, never inside a transaction.
     read(key, base, month)          balance, status, credits, usage by day, the month's statement, the booking link
     day(key, base, day)             one day's usage by hour
     statement_csv(key, base, month) the month's statement as CSV, as HQ writes it
+    cloud(key, base)                a Tico Cloud company's access (backend/cloud_access.py), at `<Gateway URL>/cloud`
     servers(key, base)              the company's hosted servers (Settings > Computers), at `<Gateway URL>/servers`
     start(key, base, server_id)     start one of them again; HQ refuses while the company is paused for credit
 
 Only the owner and admins see the page; the routes refuse everyone else (backend/app.py). Money is whole
 micro-dollars end to end: an answer with a float anywhere is refused rather than shown. The key goes only in the
 request's header, only to a URL `clients/gateway.py safe_base` allows, and never follows a redirect.
+
+A Tico Cloud company's answer carries `cloud` (HQ billing/company.py): its access (open, frozen or locked), plan, trial
+end and billing page, checked field by field (backend/cloud_access.py `parse`) and None for every other company. The
+route keeps it (cloud_access.from_billing), so opening the page after paying opens the app at once.
 
 What the page shows when it can't show billing (`state`): `no_gateway` (this install has no gateway key: billing comes
 with Tico AI Gateway), `no_account` (HQ knows the key but no company bill for it yet: the empty state, with HQ's
@@ -27,13 +32,16 @@ company staff shut down answers `deactivated`. An install HQ hosts nothing for a
 hidden.
 """
 
+import hashlib
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
 from clients import gateway as G
 
+from . import cloud_access
 from .store import Problem
 
 PATH = "/billing"
@@ -45,9 +53,13 @@ STATES = ("active", "low", "paused", "grace")
 OPENER = None                # tests replace it with a function (request, timeout) -> response: nothing leaves the test
 REFUSED = ("unknown_key", "revoked_key")
 SERVERS = "/servers"
+CLOUD = "/cloud"             # a Tico Cloud company's access (backend/cloud_access.py)
 SERVER_ID = re.compile(r"pv-[0-9a-f]{16}")
 KINDS = ("tico", "bot_computer")
 PAUSED = "Paused: out of credit. Add credit to start this computer."
+PAUSE_TTL = 60               # seconds a pause bit is reused: the bot page asks on every refresh
+CLOCK = time.monotonic       # tests replace it
+_pause = {}                  # (sha256 of the gateway key, base) -> (expires, paused)
 
 
 def _no_float(text):
@@ -173,7 +185,26 @@ def parse(body):
             "month": str(data.get("month") or ""), "months": months,
             "credits": [_credit(row) for row in data.get("credits") or []],
             "usage": [_period(row, 10) for row in data.get("usage") or []],
-            "statement": _statement(data.get("statement")), "booking_url": _booking(data.get("booking_url"))}
+            "statement": _statement(data.get("statement")), "booking_url": _booking(data.get("booking_url")),
+            "cloud": cloud_access.parse(data.get("cloud"))}
+
+
+def cloud(key, base):
+    """HQ's word on a Tico Cloud company's access, at `<Gateway URL>/cloud`: (200, payload), (404, {}) for a company
+    that is not a cloud one (`not_cloud`, or an HQ without the route), or (another status or "unreachable", {})."""
+    if not key:
+        return "no_gateway", {}
+    try:
+        base = G.safe_base(base)
+    except ValueError:
+        return "unreachable", {}
+    status, body, _ = _get(key, base, "", root=CLOUD)
+    if status != 200:
+        return status, {}
+    try:
+        return 200, json.loads(body, parse_float=_no_float, parse_constant=_no_float)
+    except ValueError:
+        return "unreachable", {}
 
 
 def read(key, base, month=""):
@@ -186,6 +217,20 @@ def read(key, base, month=""):
         return parse(answer[0])
     except (ValueError, TypeError, AttributeError):
         return {"state": "unreachable"}
+
+
+def paused(key, base):
+    """Whether HQ says the company is paused for credit (the bit the bot pause banner shows), kept PAUSE_TTL seconds per
+    gateway key and base. Only this bit is cached: `read` is uncached, the billing page shows its balance live."""
+    slot = (hashlib.sha256((key or "").encode()).hexdigest(), base)
+    now = CLOCK()
+    hit = _pause.get(slot)
+    if hit and hit[0] > now:
+        return hit[1]
+    billing = read(key, base)
+    value = billing.get("state") == "paused" and billing.get("record_only") is False
+    _pause[slot] = (now + PAUSE_TTL, value)
+    return value
 
 
 def day(key, base, when):

@@ -8,7 +8,7 @@ pack: operations
 icon: event_note
 suggest: common
 tags: [meetings, projects, action-items, decisions, remote, services, agency]
-summary: "Writes up every imported team meeting (summary, decisions, action items) and tracks each action item and project milestone until it is done. It creates requested tasks and tells the intended teammates; internal only."
+summary: "Writes up each imported team meeting: a summary, the decisions and the action items, each with its quote. Tracks every action item and milestone until it is done, and creates the tasks the transcript supports. Internal only."
 pains:
   - "meetings without follow-up"
   - "nobody remembers what we decided"
@@ -19,11 +19,11 @@ owns:
   - "A summary, the decisions and the action items for every team meeting it is asked to cover"
   - "Task proposals for action items, with the quote and timestamp that support each one"
   - "The running decision log, so a decision can be found later"
-  - "The action item and milestone tracker: every open item with its owner, date and status, chased until done (knowledge/actions.md)"
-  - "Which meetings it covers and who receives each summary (knowledge/coverage.md)"
+  - "The action item and milestone tracker: every open item with its owner, date and status, chased until done"
+  - "Which meetings it covers and who receives each summary, with the restricted list"
 never:
-  - "Assign a task to a human outside the requested work or Tools"
-  - "Send or post a summary outside the team, or to anyone the coverage rules do not name outside the requested work or Tools"
+  - "Assign a task to a human unless the requested work covers it and a granted Tool allows it"
+  - "Send or post anything outside the team, or a summary to anyone the coverage rules do not name"
   - "Attribute a commitment to someone who did not make it, or invent an owner or a due date"
   - "Write up a private meeting or one on the restricted list"
 prerequisites:
@@ -37,17 +37,17 @@ onboarding:
   - ask: "Which meetings should I write up: every team meeting, or only some, such as the weekly team meeting and customer calls?"
     why: "The routine fires for every team meeting. A coverage rule keeps the notes worth reading."
   - ask: "Who receives a summary: the participants, or also a named human or channel?"
-    why: "Sets who receives the summary within the requested work. The default is the participants only."
+    why: "Sets who receives each summary. The default is the participants only."
   - ask: "Which meetings must stay restricted, such as one-to-ones, hiring, board or legal?"
     why: "I will not summarise them for anyone beyond their participants, whatever the coverage rule says."
   - ask: "When an action item has no clear owner or date, should I leave it open and ask the human who ran the meeting?"
     why: "Sets how I handle ambiguity. I never guess an owner."
   - ask: "For customer meetings, do you want a drafted recap email for whoever ran the call?"
-    why: "A recap to a customer is external, so it stays a draft until a person turns mail sending on in Tico."
+    why: "A recap to a customer is outside the team, so it stays a draft for a person to send."
 first_routine:
   title: "Meeting notes draft"
   cadence: "After each imported team meeting (the meeting.ready event), after setup"
-  output: "reports/YYYY-MM-DD-<meeting>.md: summary, decisions, action items and proposed tasks with quotes, shared with the intended participants"
+  output: "A write-up per meeting: summary, decisions, action items and proposed tasks, each with its quote and timestamp, shared with the intended participants"
   draft_only: true
 example_output: knowledge/examples/meeting-summary.md
 reasoning_effort: medium

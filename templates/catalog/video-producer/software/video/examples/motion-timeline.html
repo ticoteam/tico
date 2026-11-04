@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion graphics (window.__timeline)</title>
+<style>
+  :root { --bg: #f5f1e8; --ink: #1b1b1b; --accent: #e4572e; --card: #ffffff; }
+  html, body { margin: 0; width: 100%; height: 100%; background: var(--bg); overflow: hidden; }
+  body { font-family: "Noto Sans", "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
+  .stage { position: relative; width: 1920px; height: 1080px; }
+  .card {
+    position: absolute; top: 240px; width: 440px; height: 560px; border-radius: 28px; background: var(--card);
+    box-shadow: 0 30px 60px rgba(0,0,0,.12); padding: 48px; box-sizing: border-box;
+    opacity: 0; will-change: transform, opacity;
+  }
+  .card .n { font-size: 120px; font-weight: 800; color: var(--accent); line-height: 1; }
+  .card .t { font-size: 46px; font-weight: 700; margin-top: 28px; }
+  .card .d { font-size: 30px; color: #555; margin-top: 16px; line-height: 1.35; }
+  .counter { position: absolute; left: 180px; bottom: 150px; font-size: 96px; font-weight: 800; }
+  .counter span { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="card" id="c1" style="left:180px">
+      <div class="n">01</div><div class="t">Script</div><div class="d">Write the message in one page.</div>
+    </div>
+    <div class="card" id="c2" style="left:740px">
+      <div class="n">02</div><div class="t">Storyboard</div><div class="d">Pick the shots before anything is recorded.</div>
+    </div>
+    <div class="card" id="c3" style="left:1300px">
+      <div class="n">03</div><div class="t">Render</div><div class="d">Same input, same frames, every time.</div>
+    </div>
+    <div class="counter"><span id="secs">0.0</span> s</div>
+  </div>
+<script>
+  // Seek contract: duration_ms is the length, seek(ms) draws exactly that moment.
+  const cards = [document.getElementById('c1'), document.getElementById('c2'), document.getElementById('c3')];
+  const secs = document.getElementById('secs');
+  const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+  const clamp01 = (x) => Math.min(1, Math.max(0, x));
+
+  window.__timeline = {
+    duration_ms: 6000,
+    fps: 30,
+    seek(ms) {
+      cards.forEach((card, i) => {
+        // Each card rises in 0.4 s, staggered by 0.5 s, then holds.
+        const p = easeOut(clamp01((ms - 300 - i * 500) / 400));
+        card.style.opacity = String(p);
+        card.style.transform = `translateY(${(1 - p) * 120}px)`;
+      });
+      secs.textContent = (ms / 1000).toFixed(1);
+    },
+  };
+  window.__timeline.seek(0);
+</script>
+</body>
+</html>

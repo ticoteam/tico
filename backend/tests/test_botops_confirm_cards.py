@@ -4,10 +4,11 @@ secret's value back are theirs alone. Ana owns the team, Ben is an admin, Cara i
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.test_botops_parity import act
 from backend.tests.test_credential_sharing import JIRA, jira, local
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend import usage_limits
 
 
 def card_in_chat(api, card, person):
@@ -16,7 +17,7 @@ def card_in_chat(api, card, person):
         msg = H.message(c, card["message_id"])
         room = H.conversation(c, msg["conversation_id"])
         row = c.execute("SELECT owner,status FROM assistant_actions WHERE id=?", (card["action"]["id"],)).fetchone()
-    assert msg["from_actor"] == "bot:botops" and msg["to_actor"] == "human:" + person
+    assert msg["sender_id"] == "bot:botops" and msg["recipient_id"] == "human:" + person
     assert set(room["participants"]) == {"human:" + person, "bot:botops"}
     assert (row["owner"], row["status"]) == ("human:" + person, "pending")
 
@@ -63,8 +64,8 @@ def test_botops_direct_off_turns_providers_and_raised_limits_into_cards(api, bot
     assert "needs_confirm" not in act(api, ana, "PUT", "usage/pools/company", {"daily_usd": 80}).json()
     assert act(api, ana, "PUT", "usage/pools/company", {"daily_usd": 500}).json()["needs_confirm"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT daily_usd FROM usage_limits WHERE bot='ops'").fetchone()[0] == 5
-        assert c.execute("SELECT daily_usd FROM usage_pools WHERE scope='company'").fetchone()[0] == 80
+        assert usage_limits.own(c, "ops")["daily_usd"] == 5
+        assert usage_limits.pool(c, "company")["daily_usd"] == 80
     confirm(api, card.json(), "ana-test")
     assert get(api, "providers")["enabled"] == ["openai"]
 
@@ -84,7 +85,7 @@ def test_routes_that_hand_back_a_secret_refuse_botops_acting_for_an_admin(api, b
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM human_tokens").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM events WHERE action IN ('person.account_created','credential.revealed') "
-                         "AND json_extract(detail_json,'$.via')='botops'").fetchone()[0] == 0
+                         "AND json_extract(detail,'$.via')='botops'").fetchone()[0] == 0
 
 
 def test_a_secret_in_a_gateway_key_or_slack_tokens_is_refused(api, botops):
@@ -192,7 +193,14 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         put(api, "access/rules", {"botops_direct": False})
         ana = turn(api, botops, person="ana-test", text="Change the Gateway address")
         current = get(api, "providers/gateway")
-        request = {"url": proposed.url, "expected_revision": current["revision"]}
+        request = {"url": proposed.url, "expected_revision": current["revision"], "credentials": "keep"}
+        from backend import destinations
+        old, new = destinations.address(original.url), destinations.address(proposed.url)
+
+        # Not told whether the saved key goes along: refused at once with what the owner must decide, and no card.
+        unsaid = act(api, ana, "PUT", "providers/gateway", {k: v for k, v in request.items() if k != "credentials"})
+        assert unsaid.status_code == 409 and unsaid.json()["error"]["code"] == "destination_change", unsaid.text
+        assert unsaid.json()["error"]["old"]["address"] == old and unsaid.json()["error"]["new"]["address"] == new
 
         secret = act(api, ana, "PUT", "providers/gateway", {**request, "key": KEY})
         assert secret.status_code == 422 and secret.json()["error"]["code"] == "secret_in_request", secret.text
@@ -204,21 +212,23 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         assert pending.status_code == 200 and pending.json()["needs_confirm"], pending.text
         card = pending.json()
         card_in_chat(api, card, "ana")
-        # The owner sees the address the key would go to before tapping.
-        assert {"field": "url", "new": proposed.url} in card["action"]["diff"], card["action"]
+        # The owner sees the address the key would go to before tapping: scheme, host and port, and that it keeps it.
+        assert {"field": "destination", "old": old, "new": new} in card["action"]["diff"], card["action"]
+        assert {"field": "credentials", "new": "keep: Gateway key"} in card["action"]["diff"]
+        assert "/v1/gateway" not in json.dumps(card["action"]["diff"]) + card["action"]["description"]
         assert proposed.calls == []                         # the saved key has not reached the new address
         assert get(api, "providers/gateway")["url"] == original.url
         assert KEY not in json.dumps(card)
 
-        cancelled = post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token="ana-test")
-        assert cancelled["action"]["status"] == "cancelled"
+        canceled = post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token="ana-test")
+        assert canceled["action"]["status"] == "canceled"
         assert get(api, "providers/gateway")["url"] == original.url
         assert proposed.calls == []
 
         # Retrying creates one new card; the exact same URL-only request runs once on the owner's tap.
         pending = act(api, ana, "PUT", "providers/gateway", request)
         card = pending.json()
-        assert card["needs_confirm"] and card["action"]["id"] != cancelled["action"]["id"]
+        assert card["needs_confirm"] and card["action"]["id"] != canceled["action"]["id"]
         approved = confirm(api, card, "ana-test")
         assert approved["action"]["status"] == "done"
         assert get(api, "providers/gateway")["url"] == proposed.url
@@ -231,9 +241,9 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         put(api, "access/rules", {"botops_direct": True})
         current = get(api, "providers/gateway")
         direct_rule_card = act(api, ana, "PUT", "providers/gateway",
-                               {"url": original.url, "expected_revision": current["revision"]})
+                               {"url": original.url, "expected_revision": current["revision"], "credentials": "keep"})
         assert direct_rule_card.status_code == 200 and direct_rule_card.json()["needs_confirm"], direct_rule_card.text
-        assert {"field": "url", "new": original.url} in direct_rule_card.json()["action"]["diff"]
+        assert {"field": "destination", "old": new, "new": old} in direct_rule_card.json()["action"]["diff"]
         assert get(api, "providers/gateway")["url"] == proposed.url
         assert original.calls == []
         assert confirm(api, direct_rule_card.json(), "ana-test")["action"]["status"] == "done"
@@ -253,8 +263,8 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
             assert c.execute("SELECT count(*) FROM assistant_actions WHERE owner='human:ben'").fetchone()[0] == 0
         assert proposed.calls == [("/v1/gateway/key", KEY)]
         with api.app.state.store.read() as c:
-            visible = json.dumps([dict(r) for r in c.execute("SELECT body_json,result_json FROM assistant_actions")]
-                                 + [dict(r) for r in c.execute("SELECT body,refs_json FROM messages")])
+            visible = json.dumps([dict(r) for r in c.execute("SELECT body,result FROM assistant_actions")]
+                                 + [dict(r) for r in c.execute("SELECT body,refs FROM messages")])
         assert KEY not in visible
 
 
@@ -288,7 +298,7 @@ def test_a_computers_code_is_only_on_the_persons_card(api, botops):
     # Nowhere BotOps reads: not the stored card, its result, or the chat.
     with api.app.state.store.read() as c:
         stored = json.dumps([dict(r) for r in c.execute("SELECT * FROM assistant_actions")])
-        said = json.dumps([dict(r) for r in c.execute("SELECT body,refs_json FROM messages")])
+        said = json.dumps([dict(r) for r in c.execute("SELECT body,refs FROM messages")])
     assert code not in stored and code not in said
     again = act(api, ana, "GET", f"assistant/actions/{card['action']['id']}")
     assert code not in again.text
@@ -380,6 +390,176 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
     assert JIRA not in refused.text
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM enrollments WHERE consumed_at IS NULL").fetchone()[0] == 0
-        assert c.execute("SELECT daily_usd FROM usage_limits WHERE bot='ops'").fetchone()[0] == 10
+        assert usage_limits.own(c, "ops")["daily_usd"] == 10
     assert api.app.state.auth.owner_email == "ana@acme.example"
     assert "cara@acme.example" not in api.app.state.auth.bot_admins
+
+
+def test_a_teammate_added_as_a_requester_by_botops_waits_for_the_owners_tap(api, botops):
+    task = post(api, "tasks", {"owner": "ana", "title": "Plan the launch", "body": "Plan it"}, token="ana-test")
+    ana = turn(api, botops, person="ana-test", text="Add Ben to my launch task")
+    answer = act(api, ana, "POST", f"tasks/{task['id']}/requesters", {"actor": "human:ben"})
+    assert answer.status_code == 200 and answer.json()["needs_confirm"], answer.text
+    card_in_chat(api, answer.json(), "ana")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM task_requesters WHERE task_id=? AND actor=?",
+                         (task["id"], "human:ben")).fetchone()[0] == 0
+    assert confirm(api, answer.json(), "ana-test")["action"]["status"] == "done"
+    rows = get(api, f"tasks/{task['id']}/requesters")["requesters"]
+    assert [r["actor"] for r in rows] == ["human:ben"]
+
+
+def test_botops_acting_for_a_person_puts_a_task_link_and_an_outside_requester_on_a_card(api, botops):
+    task = post(api, "tasks", {"owner": "ana", "title": "Plan the launch", "body": "Plan it"}, token="ana-test")
+    ana = turn(api, botops, person="ana-test", text="Link my launch doc and add the agency as a contact")
+    link = act(api, ana, "POST", f"tasks/{task['id']}/links", {"url": "https://docs.acme.example/launch", "title": "Doc"})
+    assert link.status_code == 200 and link.json()["needs_confirm"], link.text
+    contact = act(api, ana, "POST", f"tasks/{task['id']}/requesters", {"email": "agency@acme.example", "name": "Agency"})
+    assert contact.status_code == 200 and contact.json()["needs_confirm"], contact.text
+    assert not any(l.get("url") == "https://docs.acme.example/launch" for l in get(api, f"tasks/{task['id']}/links")["links"])
+    assert get(api, f"tasks/{task['id']}/requesters")["requesters"] == []
+    assert confirm(api, link.json(), "ana-test")["action"]["status"] == "done"
+    assert confirm(api, contact.json(), "ana-test")["action"]["status"] == "done"
+    assert any(l.get("url") == "https://docs.acme.example/launch" for l in get(api, f"tasks/{task['id']}/links")["links"])
+    assert [r["email"] for r in get(api, f"tasks/{task['id']}/requesters")["requesters"]] == ["agency@acme.example"]
+
+
+# ---- any teammate withdraws a waiting Confirm card (backend/assistant.py action_withdraw) ----
+
+def waiting_card(api, botops):
+    """Ana asks BotOps to make Cara an admin: BotOps proposes it as a Confirm card in Ana's chat and it waits."""
+    ana = turn(api, botops, person="ana-test", text="Make Cara an admin")
+    answer = act(api, ana, "POST", "access/people/cara", {"role": "admin"})
+    assert answer.status_code == 200 and answer.json()["needs_confirm"], answer.text
+    card_in_chat(api, answer.json(), "ana")
+    return ana, answer.json()
+
+
+def withdraw_as(api, attempt, aid, body=None):
+    """A bot's own call: no `X-Tico-On-Behalf-Of`, so BotOps acts as itself, never as the person it works for."""
+    return act(api, attempt, "POST", f"assistant/actions/{aid}/withdraw", body or {}, ref=None)
+
+
+def room_texts(api, card):
+    with api.app.state.store.read() as c:
+        room = H.message(c, card["message_id"])["conversation_id"]
+        rows = c.execute("SELECT sender_id, recipient_id, body FROM messages WHERE conversation_id=? ORDER BY rowid",
+                         (room,)).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def withdrew_note(api, card):
+    notes = [t for t in room_texts(api, card) if "withdrew that card" in (t[2] or "")]
+    assert notes, room_texts(api, card)
+    return notes[-1]
+
+
+def event_actor(api, aid):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT actor FROM events WHERE action='assistant.action.withdrawn' AND target=?",
+                         (aid,)).fetchone()[0]
+
+
+def test_the_proposing_bot_withdraws_its_card_and_the_owner_is_told(api, botops):
+    ana, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    answer = withdraw_as(api, ana, aid, {"reason": "  Wrong   person,\nCara is not the one  "})
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["action"]["status"] == "withdrawn"
+    assert event_actor(api, aid) == "bot:botops"
+    assert "cara@acme.example" not in api.app.state.auth.bot_admins                   # nothing ran
+    sender, recipient, text = withdrew_note(api, card)
+    assert (sender, recipient) == ("bot:botops", "human:ana")
+    assert text == "BotOps withdrew that card, so nothing will run. Wrong person, Cara is not the one"
+    # The card no longer confirms, and a second withdraw is refused as already settled.
+    post(api, f"assistant/actions/{aid}/confirm", {}, token="ana-test", expected=409)
+    assert "cara@acme.example" not in api.app.state.auth.bot_admins
+    assert withdraw_as(api, ana, aid).status_code == 409
+
+
+def test_a_different_bot_can_withdraw_a_waiting_card(api, botops):
+    _, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    _, _, other = setup_attempt(api, "ops")
+    answer = withdraw_as(api, other, aid, {"reason": "Ops has the current list"})
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["action"]["status"] == "withdrawn"
+    assert event_actor(api, aid) == "bot:ops"
+    sender, recipient, text = withdrew_note(api, card)
+    assert recipient == "human:ana" and text.endswith("withdrew that card, so nothing will run. Ops has the current list")
+
+
+def test_another_person_can_withdraw_a_waiting_card(api, botops):
+    _, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    answer = post(api, f"assistant/actions/{aid}/withdraw", {}, token="ben-test")
+    assert answer.get("action", answer)["status"] == "withdrawn"
+    assert event_actor(api, aid) == "human:ben"
+    assert withdrew_note(api, card)[2].endswith("so nothing will run.")
+    post(api, f"assistant/actions/{aid}/confirm", {}, token="ana-test", expected=409)
+
+
+def test_the_owner_still_cancels_and_a_settled_card_cannot_be_withdrawn(api, botops):
+    ana, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    assert post(api, f"assistant/actions/{aid}/cancel", {}, token="ana-test")["action"]["status"] == "canceled"
+    finish(api, botops, ana)                      # BotOps' first turn is done: its next card is a new turn
+    _, card2 = waiting_card(api, botops)
+    done = post(api, f"assistant/actions/{card2['action']['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done"
+    refused = post(api, f"assistant/actions/{card2['action']['id']}/withdraw", {}, token="ben-test", expected=409)
+    assert "already done" in str(refused), refused
+    # The canceled one can't be withdrawn either.
+    post(api, f"assistant/actions/{aid}/withdraw", {}, token="ben-test", expected=409)
+
+
+def test_an_unknown_card_is_404_and_a_confirm_after_withdraw_is_refused(api, botops):
+    ana, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    assert withdraw_as(api, ana, "no-such-card").status_code == 404
+    withdraw_as(api, ana, aid)
+    post(api, f"assistant/actions/{aid}/confirm", {}, token="ana-test", expected=409)
+    assert "cara@acme.example" not in api.app.state.auth.bot_admins
+
+
+def test_teammates_find_waiting_cards_by_proposer_and_owner(api, botops):
+    ana, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    _, _, other = setup_attempt(api, "ops")
+    ids = lambda r: [a["id"] for a in r.json()["actions"]]
+    listed = act(api, other, "GET", "assistant/proposals", None, ref=None)
+    assert listed.status_code == 200 and ids(listed) == [aid]
+    fields = set(listed.json()["actions"][0])
+    assert {"id", "owner", "proposer", "summary", "description", "created_at"} <= fields
+    assert not fields & {"method", "path", "body", "diff", "result", "confirm_hash"}   # what finds a card, no more
+    assert ids(act(api, other, "GET", "assistant/proposals?proposer=botops&owner=human:ana", None, ref=None)) == [aid]
+    assert ids(act(api, other, "GET", "assistant/proposals?owner=human:ben", None, ref=None)) == []
+    assert ids(act(api, other, "GET", "assistant/proposals?proposer=assistant", None, ref=None)) == []
+    withdraw_as(api, ana, aid)
+    assert ids(act(api, other, "GET", "assistant/proposals", None, ref=None)) == []
+
+
+def test_the_withdraw_and_list_tools_are_offered_to_bots_and_work(api, botops):
+    from clients import hubtools
+    from backend.tests.test_mcp import call
+    _, card = waiting_card(api, botops)
+    aid = card["action"]["id"]
+    _, _, other = setup_attempt(api, "ops")
+    names = {t["name"] for t in hubtools.listing(kind="bot")}
+    assert {"hub_assistant_withdraw", "hub_assistant_proposals"} <= names
+    err, out = call(api, "hub_assistant_proposals", {"proposer": "botops"}, token=other["token"])
+    assert not err and [a["id"] for a in out["actions"]] == [aid], out
+    err, out = call(api, "hub_assistant_withdraw", {"id": aid, "reason": "Wrong person"}, token=other["token"])
+    assert not err and out["action"]["status"] == "withdrawn", out
+    assert withdrew_note(api, card)[2].startswith("ops withdrew that card")
+
+
+def test_a_private_assistant_card_is_listed_to_its_owner_only(api, botops):
+    """The Assistant's cards come from a person's private chat: only that person sees them in the list."""
+    card = post(api, "assistant/actions", {"summary": "Archive Finance", "path": "/api/v2/bots/finance/archive",
+                                           "body": {"expected_revision": 1}}, token="ana-test")["action"]
+    ids = lambda r: [a["id"] for a in r["actions"]]
+    assert card["id"] in ids(get(api, "assistant/proposals", token="ana-test"))
+    assert card["id"] not in ids(get(api, "assistant/proposals", token="ben-test"))
+    _, _, other = setup_attempt(api, "ops")
+    assert card["id"] not in ids(act(api, other, "GET", "assistant/proposals", None, ref=None).json())

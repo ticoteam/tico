@@ -25,7 +25,6 @@
   {"team": "hr", "template": "learning"},
   {"team": "finance", "template": "finance-lead"},
   {"team": "finance", "template": "payroll"},
-  {"team": "finance", "template": "bookkeeping"},
   {"team": "finance", "template": "accounts-payable"},
   {"team": "finance", "template": "ar-followup"},
   {"team": "finance", "template": "billing"},

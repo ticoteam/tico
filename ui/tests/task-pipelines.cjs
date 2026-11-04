@@ -11,12 +11,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     const errors = [], posted = [];
     page.on('pageerror', error => errors.push(error.message));
-    // No step is waiting or declined (backend retire_held_steps); the board shows only the working steps.
+    // No seeded step is waiting or declined (backend retire_held_steps); the board shows only the working steps.
     const statuses = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
     let types = [
       {id: 'general', name: 'General', steps: statuses.map((status, position) => ({id: 'general-' + status, type_id: 'general', name: status, status, position}))},
       {id: 'marketing', name: 'Marketing', steps: [
-        {id: 'draft', name: 'Draft', status: 'open'}, {id: 'legal', name: 'Legal review', status: 'review'},
+        {id: 'draft', name: 'Draft', status: 'open'},
+        {id: 'legal', name: 'Legal review', status: 'review', flow: {check: 'review', on_pass: 'Complete', on_fail: 'Draft'}},
         {id: 'copy', name: 'Copy review', status: 'review'}, {id: 'complete', name: 'Complete', status: 'done'},
         {id: 'archive', name: 'Archive', status: 'closed'}].map((step, position) => ({...step, position, type_id: 'marketing'}))},
       // The roadmap types go by role, whoever manages them; a Dev tickets type made later beside Engineering goes first.
@@ -34,10 +35,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const tasks = ['draft', 'copy', 'complete', null].map((stepId, index) => {
       const step = types[1].steps.find(step => step.id === stepId) || null;
       return {id: 'task-' + index, title: ['Write the campaign', 'Review the campaign', 'Finished campaign', 'Unmapped campaign'][index],
-        body: 'Please review the campaign.', owner: 'bot:ops', requester: 'human:ana',
+        body: 'Please review the campaign.', owner_id: 'bot:ops', requester_id: 'human:ana',
         type_id: 'marketing', step_id: stepId, type: {id: 'marketing', name: 'Marketing'}, step,
         status: step?.status || 'doing', lane: 'company', version: 1, labels: [], links: [], parts: {total: 0, done: 0},
-        rank: index, created: '2026-10-01T12:00:00Z', updated: '2026-10-01T12:00:00Z'};
+        rank: index, created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z'};
     });
     tasks.push({...tasks[0], id: 'general-task', title: 'General task', type_id: 'general', step_id: 'general-open',
       type: {id: 'general', name: 'General'}, step: types[0].steps[0]});
@@ -61,7 +62,6 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/routines') return json({routines: []});
       if (p === '/api/v2/check-pool-candidates') return json({candidates: url.searchParams.get('bots').split(',').map(slug =>
         slug === 'rev-a' ? {slug, name: 'Reviewer xAI', configured: {model: 'Claude Haiku 5.5', provider: 'Anthropic'}, runtime: null}
           : {slug, name: 'Reviewer GPT', configured: {model: 'GPT 6.1 Sol', provider: 'OpenAI'},
@@ -94,7 +94,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
           const body = req.postDataJSON(); posted.push({path: p, body});
           if (refuseMove) { refuseMove = false; return json({error: {code: 'identity', detail: 'not yours to change'}}, 422); }
           if ('step_rank' in body) task.step_rank = body.step_rank;
-          if (body.owner) task.owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
+          if (body.owner) task.owner_id = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
           if (body.type) task.type_id = body.type;
           const type = types.find(type => type.id === task.type_id);
           const step = 'step' in body ? type.steps.find(step => step.id === body.step) : type.steps.find(step => step.status === (body.status || task.status));
@@ -144,7 +144,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await page.evaluate(() => TASKS_ST.view), 'board');
     await finishedCol('complete', ['Finished campaign']);
     await finishedCol('archive', ['Dropped campaign']);
-    tasks.push({...tasks[2], id: 'done-later', title: 'Finished later', updated: '2026-10-02T12:00:00Z'});
+    tasks.push({...tasks[2], id: 'done-later', title: 'Finished later', updated_at: '2026-10-02T12:00:00Z'});
     await page.evaluate(() => tasksLoad(TASKS_ST, {poll: true}));
     await finishedCol('complete', ['Finished campaign', 'Finished later']);
     tasks.pop();
@@ -210,7 +210,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const card = (stepId, n, title, over = {}) => ({...tasks[0], id: n, title, step_id: stepId, step: types[1].steps.find(s => s.id === stepId),
       status: 'review', version: 1, rank: 0, ...over});
     tasks.push(card('legal', 'plan', 'Plan the launch', {step_rank: 1}), card('legal', 'brief', 'Brief the agency', {step_rank: 2,
-      relations: {blocks: [{id: 'plan', title: 'Plan the launch', status: 'review', owner: 'bot:ops', direction: 'in'}]}}));
+      relations: {blocks: [{id: 'plan', title: 'Plan the launch', status: 'review', owner_id: 'bot:ops', direction: 'in'}]}}));
     tasks[0].step_rank = 1;
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.locator('#task-body [data-task-key="tbrief"]').waitFor();
@@ -245,26 +245,26 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
     // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold says its own why.
-    Object.assign(brief, {blocked_since: '2026-10-02T10:00:00Z', blocked_reason: 'Needs the launch plan reviewed first.'});
+    Object.assign(brief, {holds: [{kind: 'blocked', reason: 'Needs the launch plan reviewed first.', since: '2026-10-02T10:00:00Z', until: null, by: 'keeper', cause: 'dependency'}]});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => /· since/.test(document.querySelector('#task-body [data-board-blocked="tbrief"]')?.title || ''));
     assert.equal(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').count(), 1);
     assert.match(await page.locator('#task-body [data-board-blocked="tbrief"]').getAttribute('title'),
       /^Waiting on Ops: Needs the launch plan reviewed first\. · since .+\nBlocked by Plan the launch$/);
-    Object.assign(brief, {blocked_kind: 'gate', blocked_reason: 'Review 1 has no verdict yet'});
+    Object.assign(brief.holds[0], {cause: 'gate', reason: 'Review 1 has no verdict yet'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
     assert.match(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').first().innerText(), /^Review 1 has no verdict yet · since/);
-    Object.assign(brief, {blocked_since: null, blocked_kind: null, blocked_reason: null});
+    Object.assign(brief, {holds: []});
     // Only the first open blocker's owner is named: a person's task linked ahead of the bot's reads "Blocked by".
     const opsBlocker = brief.relations.blocks[0];
-    brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner: 'human:ana', direction: 'in'}, opsBlocker]};
+    brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner_id: 'human:ana', direction: 'in'}, opsBlocker]};
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Legal review');
     // A task that waits on a person keeps their ask: on them directly, or through the ask card a bot's task files,
     // which the server serves as a blocker the person owns, linked after the bot's.
     for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker,
-      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner: 'human:ana', direction: 'in'}]}}]) {
+      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner_id: 'human:ana', direction: 'in'}]}}]) {
       Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
       await page.evaluate(() => tasksLoad(TASKS_ST));
       await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
@@ -347,7 +347,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-create [data-modal-close]').click();
     types[1].steps.push({id: 'verified', name: 'Verified', status: 'done', position: 5, type_id: 'marketing'},
       {id: 'filed', name: 'Filed', status: 'closed', position: 6, type_id: 'marketing'});
-    const decision = {...tasks[2], id: 'decision', owner: 'human:ana', requester: 'bot:ops'};
+    const decision = {...tasks[2], id: 'decision', owner_id: 'human:ana', requester_id: 'bot:ops'};
     tasks.push(decision);
     // A task opened uses the types already read; the page's next load reads the edited ones.
     await page.evaluate(async task => { await tasksLoad(TASKS_ST); taskModalShow(task); }, decision);
@@ -373,7 +373,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     ].map((step, position) => ({...step, position, type_id: dev.id}));
     const held = {...tasks[0], id: 'dev-held', title: 'Build the export', type_id: dev.id,
       type: {id: dev.id, name: dev.name}, step_id: 'dev-blocked', step: dev.steps[1], status: 'waiting',
-      blocked_reason: 'Waiting for a test machine <script>', blocked_since: '2026-10-02T10:00:00Z'};
+      holds: [{kind: 'blocked', reason: 'Waiting for a test machine <script>', since: '2026-10-02T10:00:00Z', until: null, by: 'human:ana', cause: 'manual'}]};
     tasks.push(held);
     for (const width of [1200, 375]) {
       await page.setViewportSize({width, height: 900});
@@ -401,7 +401,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       getComputedStyle(document.documentElement).getPropertyValue('--rail-left').trim() ===
         Math.round(Math.max(RAILS.left.min, Math.min(railsWant('left'), railsMax('left')))) + 'px');
     // Owner reason entry is cancellable and sends the reason with the step move.
-    Object.assign(held, {step_id: 'dev-building', step: dev.steps[2], status: 'doing', blocked_since: null, blocked_reason: null});
+    Object.assign(held, {step_id: 'dev-building', step: dev.steps[2], status: 'doing', holds: []});
     await page.evaluate(task => {
       TASKS_ST.tasks = TASKS_ST.tasks.map(t => t.id === task.id ? task : t);
       tasksRender(TASKS_ST);
@@ -410,7 +410,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await drag('tdev-held', '#task-body [data-col="dev-blocked"]');
     await page.locator('.task-block-reason [data-cancel]').click();
     assert.equal(await page.evaluate(() => document.activeElement?.dataset.openTask), 'tdev-held',
-      'cancelling a dragged Blocked move restores focus to its card');
+      'canceling a dragged Blocked move restores focus to its card');
     await page.evaluate(task => taskModalShow(task), held);
     await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="step"]')?.textContent.includes('In Progress'));
     await page.locator('#task-modal [data-prop="step"]').click();
@@ -437,7 +437,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     }
     await page.locator('#set-types [data-edit-type=marketing]').click();
     assert.deepEqual(await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('select option').evaluateAll(o => o.map(x => x.value)),
-      ['open', 'doing', 'review', 'ready', 'done', 'closed'], 'no step can be waiting or declined');
+      ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed'], 'a step may be waiting, never declined');
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Campaigns');
     await page.locator('.task-type-editor [data-steps] .task-step-edit').nth(1).locator('[data-up]').click();
     // A step's check pool and each checker's limit of open checks (backend/check_pools.py).
@@ -449,6 +449,16 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await firstStep.locator('[aria-label="Open checks each"]').fill('3');
     assert.equal(await page.locator('.task-type-editor [name=typeBots]').inputValue(), 'parties', 'a type starts with its bots kept to their own tasks');
     await page.locator('.task-type-editor [name=typeBots]').selectOption('work');
+    // Another model company is a check step's rule: it starts at prefer, shows on no other step, fits a phone, and a
+    // changed rule is saved as the step's flow (its step references as ids).
+    assert.equal(await firstStep.locator('[aria-label="Another model company"]').inputValue(), 'prefer', 'a check step starts at prefer');
+    assert.equal(await page.locator('.task-type-editor [data-steps] .task-step-edit').nth(1).locator('[aria-label="Another model company"]').count(), 0,
+      'a step that is no check has no such rule');
+    await page.setViewportSize({width: 390, height: 844});
+    const rule = await firstStep.locator('[aria-label="Another model company"]').boundingBox();
+    assert(rule && rule.x >= 0 && rule.x + rule.width <= 390, 'the rule fits a phone-width editor');
+    await page.setViewportSize({width: 1200, height: 900});
+    await firstStep.locator('[aria-label="Another model company"]').selectOption('require');
     // A type private by default (the Product roadmap) shows each step's public name too, and a new step left blank
     // is not given its internal name publicly.
     assert.equal(await page.locator('.task-type-editor [name=defaultVisibility]').inputValue(), 'private');
@@ -468,6 +478,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(edit.body.bots, 'work', 'the editor saves what bots may do with the type');
     assert.deepEqual([edit.body.steps[0].check_pool, edit.body.steps[0].check_limit], [['rev-a', 'rev-b'], 3], 'a step saves its check pool and limit');
     assert.deepEqual([edit.body.steps[1].check_pool, edit.body.steps[1].check_limit], [[], 2], 'a step without one saves none');
+    assert.deepEqual(edit.body.steps[0].flow, {check: 'review', on_pass: 'complete', on_fail: 'draft', other_company: 'require'},
+      'a changed rule saves the check step\'s whole flow, its step references as ids');
+    assert.equal('flow' in edit.body.steps[1], false, 'a step that is no check sends no flow');
     await page.locator('#set-types [data-new-type]').click();
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Design');
     await page.locator('.task-type-editor button[type=submit]').click();

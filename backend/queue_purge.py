@@ -23,8 +23,8 @@ def bots_for(c, scope):
 
 
 def _from_a_person(row):
-    refs = H._json(row["refs_json"], {}) or {}
-    return H.is_human(row["from_actor"]) or H.is_human(str(refs.get(wake_rules.CAUSED_BY) or ""))
+    refs = H._json(row["refs"], {}) or {}
+    return H.person_sent(dict(row)) or H.is_human(str(refs.get(wake_rules.CAUSED_BY) or ""))
 
 
 def apply(c, bots):
@@ -33,11 +33,11 @@ def apply(c, bots):
         return {"cancelled": 0, "kept_people": 0, "still_running": 0}
     marks = ",".join("?" * len(bots))
     still_running = c.execute(
-        f"SELECT count(*) FROM jobs WHERE bot IN ({marks}) AND state IN ({','.join('?' * len(RUNNING))})",
+        f"SELECT count(*) FROM jobs WHERE bot_id IN ({marks}) AND state IN ({','.join('?' * len(RUNNING))})",
         (*bots, *RUNNING)).fetchone()[0]
     rows = c.execute(
-        f"""SELECT j.id, m.from_actor, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id
-            WHERE j.state='queued' AND j.bot IN ({marks})""", bots).fetchall()
+        f"""SELECT j.id, m.sender_id, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id
+            WHERE j.state='queued' AND j.bot_id IN ({marks})""", bots).fetchall()
     cancel, kept_people = [], 0
     for row in rows:
         if _from_a_person(row):
@@ -47,6 +47,6 @@ def apply(c, bots):
     cancelled = 0
     if cancel:
         cancelled = c.execute(
-            f"UPDATE jobs SET state='cancelled', held=0 WHERE state='queued' AND id IN ({','.join('?' * len(cancel))})",
+            f"UPDATE jobs SET state='canceled', held=0 WHERE state='queued' AND id IN ({','.join('?' * len(cancel))})",
             cancel).rowcount
     return {"cancelled": cancelled, "kept_people": kept_people, "still_running": still_running}

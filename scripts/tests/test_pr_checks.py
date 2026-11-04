@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -36,7 +37,7 @@ def test_uncertain_changes_and_main_run_everything_and_ui_keeps_its_map(tmp_path
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
     assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
     assert checks.selection(["ui/app/core.js"])["browser"] == ["--all"]
-    assert checks.selection(["runner/harnesses/codex.toml"])["conformance"]
+    assert checks.selection(["runner-rs/harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
     assert checks.selection(["backend/harness_actions.py"])["conformance"]
     # A removed mapped browser test makes the map uncertain, even if its sibling remains.
@@ -108,7 +109,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
 
 def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fails_the_job(tmp_path, monkeypatch, mapped):
     for changed, crates in ((["runner-rs/src/state.rs"], ["runner-rs"]), (["relay-rs/src/gateway.rs"], ["relay-rs"]),
-                            (["runner/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
+                            (["runner_support/redact.py"], ["runner-rs"]), (["runner-rs/Cargo.lock", "relay-rs/Cargo.lock"],
                                                                     ["relay-rs", "runner-rs"]),
                             (["backend/tests/fixtures/gateway_enroll_contract.json"], ["runner-rs"])):
         for event in ("pull_request", "push"):
@@ -125,7 +126,7 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
-    (tmp_path / "runner/tests").mkdir(parents=True)
+    (tmp_path / "runner_support/tests").mkdir(parents=True)
     (tmp_path / checks.CONFORMANCE).touch()
     (tmp_path / "ci-results").mkdir()
     (tmp_path / "ci-results/conformance.xml").write_text("<testsuite><testcase/></testsuite>")
@@ -316,8 +317,10 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # On this checkout: a test-only change runs that test and the few that import, read or list it (or every file,
     # like test_local_imports), not the suite; the scheduler's guard follows
     # task_loops; the shared helper reaches the Caddy container test through caddy_assets.
+    # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
+    # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 20
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 25
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
@@ -463,3 +466,59 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
     checks.prepare("pull_request", stale, tmp_path / "plan.json")
+
+
+def receipt_job(name, url, status="completed", conclusion="success"):
+    return {"name": name, "html_url": url, "status": status, "conclusion": conclusion,
+            "started_at": "2026-11-04T17:00:00Z", "completed_at": "2026-11-04T17:01:30Z"}
+
+
+def run_receipt(stdin):
+    """The receipt action as the timings job runs it: gh's output on stdin, the summary and exit code back."""
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "pr_checks.py"), "receipt"], input=stdin,
+                            capture_output=True, timeout=60)
+    return result.returncode, result.stdout.decode()
+
+
+JOBS = [receipt_job("tests (1)", "https://github.com/ticoteam/tico/actions/runs/1/job/11"),
+        receipt_job("static", "https://github.com/ticoteam/tico/actions/runs/1/job/12", conclusion="failure")]
+ERROR_PAGE = {"message": "Server Error", "documentation_url": "https://docs.github.com/rest"}
+
+
+def test_a_receipt_of_jobs_pages_is_the_table_without_a_note():
+    code, out = run_receipt(json.dumps([{"total_count": 2, "jobs": JOBS}]).encode())
+    assert code == 0
+    assert out == checks.receipt(JOBS) + "\n" and checks.RECEIPT_INCOMPLETE not in out
+
+
+def test_an_error_page_beside_a_jobs_page_keeps_the_jobs_and_says_the_receipt_is_incomplete():
+    code, out = run_receipt(json.dumps([ERROR_PAGE, {"total_count": 2, "jobs": JOBS}]).encode())
+    assert code == 0
+    assert "| [tests (1)](https://github.com/ticoteam/tico/actions/runs/1/job/11) | success | 90.0 |" in out
+    assert "| [static](https://github.com/ticoteam/tico/actions/runs/1/job/12) | failure | 90.0 |" in out
+    assert "Server Error" not in out and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
+
+
+@pytest.mark.parametrize("stdin", [
+    json.dumps([ERROR_PAGE]).encode(),                    # an error-only response
+    b'[{"total_count": 2, "jobs": [',                     # invalid JSON
+    b"",                                                  # no output at all
+    b"\xff",                                              # not UTF-8
+    json.dumps(ERROR_PAGE).encode(),                      # a top level that is not a list
+    json.dumps([{"jobs": "not a list"}]).encode(),        # jobs that are not a list
+    json.dumps([{"jobs": [{"name": "half"}]}]).encode(),  # a job without its fields
+])
+def test_a_receipt_that_cannot_read_its_pages_exits_zero_and_says_so(stdin):
+    code, out = run_receipt(stdin)
+    assert code == 0
+    assert out.startswith("| Job | Result | Seconds |") and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
+
+
+def test_the_receipt_step_cannot_fail_or_cancel_the_timings_gate():
+    import yaml
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["timings"]
+    steps = {step.get("name"): step for step in job["steps"]}
+    receipt_step = steps["Per-job timings linked from the PR check"]
+    assert receipt_step["continue-on-error"] is True
+    assert receipt_step["timeout-minutes"] * 2 <= job["timeout-minutes"]
+    assert steps["Required checks passed"]["if"] == "always()"

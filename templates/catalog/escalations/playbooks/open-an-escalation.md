@@ -1,40 +1,38 @@
 # Open an escalation
 
-Triggered by a task that escalates a ticket, or by the digest finding one that meets a trigger. Budget
-15 minutes. The outcome is a case file, a register line, an owner proposed and, if it is a defect, an
-engineering-ready bug report.
+Triggered by a task that escalates a ticket, or by the digest finding one that meets a trigger. Budget 15 minutes.
+
+Inputs: the escalation task, the ticket thread, `knowledge/register.md`, `knowledge/escalation-rules.md`, and the customer's
+VIP terms if they are listed.
+
+Outcome: a case file, one register line, a severity and an owner proposed and recorded, and for a defect an engineering-ready
+bug report.
+
+Done when: the case is in the register once and no second case exists; the severity and owner are on the task with their
+reasons; the timeline has every customer touch with a time; and the first update is drafted and marked for review.
 
 ---
 
 ## 1. Check it is not already open
 
-Search `knowledge/register.md` and `hub task list` for the customer and the problem. If a case exists,
-add to it; never open a second one.
+Search `knowledge/register.md` and `hub task list` for the customer and the problem. If a case exists, add to it; never open
+a second one.
 
-## 2. Set severity from the rules
+## 2. Set severity and owner
 
-Match the impact to `knowledge/escalation-rules.md`: who is affected, can they work, is there a
-workaround, is a contractual time at risk. Write the reason in one line. When unsure, choose the higher
-severity and say so; a human may lower it.
+Follow `skills/set-severity-and-owner/SKILL.md`. When the rules do not decide the owner, ask the head of support in the task.
 
-## 3. Propose one owner
+## 3. Build the timeline
 
-A named human from the rules, never a team. Put it on the task and ask the head of support to confirm
-if the rules do not decide it.
+From the first customer message to now: each touch with its time, channel and one line. Mark the gaps where the customer
+waited without hearing from us.
 
-## 4. Build the timeline
+## 4. Write the bug report, if it is a defect
 
-From the first customer message to now: each touch with time, channel and one line. Mark the gaps where
-the customer waited without hearing from us.
+Follow `skills/write-an-engineering-bug-report/SKILL.md`. If you cannot reproduce it, ask the Technical Support Engineer with
+`hub task create --owner technical-support` first.
 
-## 5. Write the bug report, if it is a defect
+## 5. Prepare the first update
 
-Title (what breaks, where), steps to reproduce from a known state, expected and actual result,
-environment (plan, browser or app version, region), how often, how many customers, evidence (ticket
-quotes, screenshots named, log lines with credentials removed). If you cannot reproduce it, ask the Technical
-Support Engineer with `hub task create --owner technical-support` first.
-
-## 6. Prepare the first update
-
-Acknowledge the problem in the customer's terms, say who owns it and when they will hear next. Ready
-for review on the task. Save the case file, add the register line, commit.
+Follow `skills/write-a-customer-update/SKILL.md`. Put the draft on the task, marked for review. Save the case file, add the
+register line, and commit.

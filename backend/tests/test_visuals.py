@@ -203,7 +203,7 @@ def test_a_reader_taken_off_a_private_task_is_refused_the_next_range_with_their_
     src = r.json()["comment"]["refs"]["attachments"][0]["src"]
     assert api.get(src, headers={"Range": "bytes=0-1"}).status_code == 206
     with api.app.state.store.transaction() as c:                # the task is handed to Ben: Cara no longer reads it
-        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("cara-test")).status_code in (403, 404)
     for request in ({"Range": "bytes=0-1"}, {"Range": "bytes=4-9"}, {}):
         assert api.get(src, headers=request).status_code == 404
