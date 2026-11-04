@@ -541,6 +541,8 @@ def restore_tasks(c, ids, actor=None):
     for e in entries:
         changed(c, e["task_id"])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
+    # A task restorer may not read its meetings, so skipped links must not reveal their count.
+    skipped.pop("meeting_task_links", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
 
 

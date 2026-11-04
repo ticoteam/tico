@@ -244,19 +244,21 @@ def test_hard_deletion_cascades_links_without_deleting_the_other_resource(api):
 
 
 def test_task_trash_restores_links_and_skips_a_meeting_deleted_while_trashed(api):
-    rid, t = record(api), task(api)
-    link(api, rid, [t['id']], kind='sent')
+    rid = record(api, {'private': True, 'audience': 'participants'}, 'ben-test')
+    t = task(api, requester='human:ben', owner='human:ana', private=False)
+    link(api, rid, [t['id']], 'ben-test', kind='sent')
+    assert not get(api, f"tasks/{t['id']}/meetings")['meetings']
     post(api, f"tasks/{t['id']}/delete", {})
-    assert not get(api, f'meetings/{rid}/tasks')['tasks']
+    assert not get(api, f'meetings/{rid}/tasks', 'ben-test')['tasks']
     restored = post(api, f"tasks/{t['id']}/restore", {})
     assert restored['restored'] == t['id'] and not restored['skipped']
-    assert get(api, f'meetings/{rid}/tasks')['tasks'][0]['kind'] == 'sent'
+    assert get(api, f'meetings/{rid}/tasks', 'ben-test')['tasks'][0]['kind'] == 'sent'
     post(api, f"tasks/{t['id']}/delete", {})
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM media_control WHERE meeting_id=?', (rid,))
         c.execute('DELETE FROM meetings WHERE id=?', (rid,))
     restored = post(api, f"tasks/{t['id']}/restore", {})
-    assert restored['restored'] == t['id'] and restored['skipped'] == {'meeting_task_links': 1}
+    assert restored['restored'] == t['id'] and not restored['skipped']
     assert not get(api, f"tasks/{t['id']}/meetings")['meetings']
 
 
