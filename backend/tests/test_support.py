@@ -1,6 +1,7 @@
 """Contact support (PRIVACY.md, "Support tickets"): the form's request is forwarded to HQ, only on submit and never in demo
 mode, and a person sees their own tickets and HQ's replies, and no one else's."""
 
+import importlib
 import json
 import logging
 import re
@@ -472,11 +473,10 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     (request,) = hq.seen
     assert set(json.loads(request.content)) == {"message", "version", "install_id", "source"}    # no email, no diagnostics
     assert json.loads(request.content)["source"] == "bot_report"        # a bot's report a person approved
-    # The approver's ticket: on their Support page, counted for them, not the bot's.
+    # The approver's ticket is kept under their name, but a bot's report is not in their chat (support.OWN).
     with api.app.state.store.read() as c:
         assert [tuple(x) for x in c.execute("SELECT actor FROM support_tickets")] == [(approver,)]
-    mine = api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"]
-    assert [t["id"] for t in mine] == [sent["ticket"]["id"]]
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
     # Again: the same ticket back, nothing more reaches HQ.
     again = send(api, bot, approval["id"])
     assert again.status_code == 200 and again.json()["ticket"]["id"] == sent["ticket"]["id"] and again.json()["again"]
@@ -489,7 +489,7 @@ def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the
     bot = as_bot(api)
     approval = draft(api, bot, include_ids=False).json()
     decide(api, approval["id"])
-    assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {}
+    assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {"source": "bot_report"}
     assert json.loads(hq.seen[-1].content) == {"message": REPORT, "source": "bot_report"}
 
 
@@ -1086,3 +1086,166 @@ def test_a_rule_send_leaves_no_unread_notice_for_the_default_person_and_needs_yo
         unread = {m["id"] for m in H.inbox(c, person)["messages"]}
     assert kind == "notice" and read_at and delivered_at          # the message stays, as history, and it is read
     assert mid not in unread                                       # no unread notice for the default person
+
+
+def test_a_bots_ticket_is_not_in_the_persons_chat_and_its_replies_do_not_count(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """A bot's report is not in the person's chat (support.OWN): it is not listed, its replies do not count toward
+    `unread`, and it cannot be read, answered or deleted there. It is still filed, its replies are still pulled and kept,
+    and a bot's follow-up (note) still reaches HQ. Covers a bot's report, one kept before `source` was stored (by its
+    approval's key), and the Health Monitor's (`health:`). A key of the person's own that starts like a bot's does not
+    hide the person's ticket."""
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    mine = file(api).json()["id"]
+    bot = as_bot(api)
+    filed = draft(api, bot).json()                              # the team rule is on by default: sent at once
+    assert filed["sent"] is True and filed["ticket"]["sent"]["source"] == "bot_report"
+    bot_ticket = filed["ticket"]["id"]
+    older_bot = draft(api, bot, message="The checkout button does nothing").json()["ticket"]["id"]
+    health = file(api, message="Sync stalled since 0.3.47").json()["id"]
+    spoof = file(api, headers={**signed_in(), "idempotency-key": "health:sig"}, message="My own report").json()["id"]
+    with api.app.state.store.transaction() as c:                # kept before `source` was stored
+        c.execute("UPDATE support_tickets SET sent='{}' WHERE id=?", (older_bot,))
+        c.execute("UPDATE support_tickets SET request_key='health:sig', sent='{}' WHERE id=?", (health,))
+    hq_ids = list(hq.tickets)                                    # HQ's ids, in filing order
+    assert len(hq_ids) == 5
+    hq.staff_replies(hq_ids[0], "Try a reload")                  # mine
+    hq.staff_replies(hq_ids[1], "The report is with the team")  # the bot's
+    hq.staff_replies(hq_ids[2], "Fixed in 0.3.48")              # the older bot's
+    hq.staff_replies(hq_ids[3], "Thanks, fixed")                 # the Health Monitor's
+    hq.staff_replies(hq_ids[4], "Got it")                        # the person's own
+    assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).status_code == 200
+    listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
+    assert {t["id"] for t in listed["tickets"]} == {mine, spoof}
+    assert listed["unread"] == 2                                 # only the replies on the person's own tickets
+    with api.app.state.store.read() as c:                        # the bots' tickets are pulled and kept, not dropped
+        kept = {r["id"]: r["messages"] for r in c.execute("SELECT id, messages FROM support_tickets")}
+    assert "The report is with the team" in kept[bot_ticket] and "Fixed in 0.3.48" in kept[older_bot]
+    assert "Thanks, fixed" in kept[health]
+    for hidden in (bot_ticket, older_bot, health):
+        assert api.post(f"/api/v2/support/tickets/{hidden}/read", headers=signed_in()).status_code == 404
+        assert api.post(f"/api/v2/support/tickets/{hidden}/messages", json={"message": "Hello"},
+                        headers=signed_in()).status_code == 404
+        assert api.delete(f"/api/v2/support/tickets/{hidden}", headers=signed_in()).status_code == 404
+    assert len(hq.tickets) == 5                                  # nothing was deleted at HQ
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM support_tickets WHERE id=?", (bot_ticket,)).fetchone()
+    api.app.state.support.note(row, "[Health Monitor] Seen again (2 times)")   # the bot's follow-up still reaches HQ
+    assert json.loads(hq.seen[-1].content) == {"message": "[Health Monitor] Seen again (2 times)"}
+
+
+def test_bots_tickets_do_not_crowd_the_persons_own_out_of_the_list(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The chat's filter runs before the limit: three newer bot tickets do not push the person's own out of a list of two."""
+    monkeypatch.setattr(support, "LISTED", 2)
+    api = environment()
+    mine = file(api).json()["id"]
+    bot = as_bot(api)
+    for n in range(3):
+        assert draft(api, bot, message=f"Report {n}").json()["sent"] is True
+    listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
+    assert [t["id"] for t in listed["tickets"]] == [mine]
+    assert listed["unread"] == 0
+
+
+def test_the_persons_own_tickets_refresh_ahead_of_newer_bot_tickets(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The refresh's limit cuts the bots' tickets first: three newer bot tickets do not stop HQ's reply on the person's own
+    ticket from being pulled."""
+    monkeypatch.setattr(support, "LISTED", 2)
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    mine = file(api).json()["id"]
+    bot = as_bot(api)
+    for n in range(3):
+        assert draft(api, bot, message=f"Report {n}").json()["sent"] is True
+    with api.app.state.store.read() as c:
+        hq_id = c.execute("SELECT hq_id FROM support_tickets WHERE id=?", (mine,)).fetchone()[0]
+    hq.staff_replies(hq_id, "We have a fix.")
+    refreshed = api.post("/api/v2/support/tickets/refresh", json={}, headers=signed_in()).json()
+    assert [t["id"] for t in refreshed["tickets"]] == [mine] and refreshed["unread"] == 1
+
+
+def test_the_ticket_in_view_is_asked_about_whatever_its_place_under_the_limit(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
+    """The ticket a person has open is refreshed even when two newer tickets of theirs fill the limit."""
+    monkeypatch.setattr(support, "LISTED", 2)
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    old = file(api, message="The first question").json()["id"]
+    file(api, message="A second question")
+    file(api, message="A third question")
+    with api.app.state.store.read() as c:
+        hq_id = c.execute("SELECT hq_id FROM support_tickets WHERE id=?", (old,)).fetchone()[0]
+    hq.staff_replies(hq_id, "Here is the answer.")
+    api.post("/api/v2/support/tickets/refresh", json={"ticket": old}, headers=signed_in())
+    with api.app.state.store.read() as c:
+        messages = c.execute("SELECT messages FROM support_tickets WHERE id=?", (old,)).fetchone()[0]
+    assert "Here is the answer." in messages
+
+
+def test_a_retry_across_the_upgrade_finds_the_ticket_filed_under_the_bare_key(environment, hq):  # noqa: F811  (the fixture)
+    """A ticket filed before the person's keys were kept as `idem:<key>` is the one a retry with the same key gets back."""
+    api = environment()
+    headers = {**signed_in(), "Idempotency-Key": "retry-7"}
+    first = file(api, headers=headers).json()["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET request_key='retry-7' WHERE id=?", (first,))   # as an older release kept it
+    sent = len(hq.seen)
+    again = file(api, headers=headers)
+    assert again.status_code in (200, 201) and again.json()["id"] == first, again.text
+    assert len(hq.seen) == sent                                    # nothing new reached HQ
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def test_a_persons_draft_filed_before_the_upgrade_under_the_approval_key_replays_and_is_not_filed_again(environment, hq):  # noqa: F811  (the fixture)
+    api = environment()
+    riley = as_person(api, "riley")
+    approval = draft(api, riley).json()["id"]
+    assert api.post(f"/api/v2/approvals/{approval}", json={"decision": "approved"}, headers=riley).status_code == 200
+    sent = send(api, riley, approval)
+    assert sent.status_code == 200, sent.text
+    ticket = sent.json()["ticket"]["id"]
+    with api.app.state.store.transaction() as c:                   # as an older release kept it
+        c.execute("UPDATE support_tickets SET request_key=? WHERE request_key=?", ("approval:" + approval, "draft:" + approval))
+    before = len(hq.seen)
+    replay = send(api, riley, approval)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["ticket"]["id"] == ticket and replay.json()["again"] is True
+    assert len(hq.seen) == before
+    with api.app.state.store.read() as c:                       # the replay moved the row to the key a draft has now
+        assert c.execute("SELECT request_key FROM support_tickets WHERE id=?", (ticket,)).fetchone()[0] == "draft:" + approval
+    assert [t["id"] for t in api.get("/api/v2/support/tickets", headers=riley).json()["tickets"]] == [ticket]
+
+
+def test_a_request_a_person_sent_under_approval_before_the_upgrade_is_back_in_their_chat(environment, hq):  # noqa: F811  (the fixture)
+    """Before this change a person's approved request was filed under `approval:<id>`, where their chat does not list it.
+    Migration 0072 moves each such ticket to `draft:<id>`, the key a draft gets now, so the chat lists it again. A bot's
+    report under `approval:` stays the bot's, and a report the Health Monitor filed (health_reports) keeps its key."""
+    api = environment()
+    riley = as_person(api, "riley")
+    bot = as_bot(api)
+    asked = draft(api, riley).json()["id"]
+    monitored = draft(api, riley, message="Sync stalled since 0.3.47").json()["id"]
+    for approval in (asked, monitored):
+        assert api.post(f"/api/v2/approvals/{approval}", json={"decision": "approved"}, headers=riley).status_code == 200
+    mine = send(api, riley, asked).json()["ticket"]["id"]
+    watched = send(api, riley, monitored).json()["ticket"]["id"]
+    filed = draft(api, bot, message="The checkout button does nothing").json()     # sent at once, filed as the bot's
+    with api.app.state.store.transaction() as c:                  # as the release before this change filed them
+        c.execute("UPDATE support_tickets SET request_key=? WHERE id=?", ("approval:" + asked, mine))
+        c.execute("UPDATE support_tickets SET request_key=? WHERE id=?", ("approval:" + monitored, watched))
+        c.execute("INSERT INTO health_reports(signature, ticket_id, approval_id, created_at) VALUES('sig-sync', ?, ?, ?)",
+                  (watched, monitored, "2026-01-01T00:00:00Z"))
+    assert api.get("/api/v2/support/tickets", headers=riley).json()["tickets"] == []      # under approval: , so unlisted
+    migration = importlib.import_module("backend.migrations.0072_person_draft_keys")
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+        migration.up(c)                                           # a second run changes nothing
+    listed = api.get("/api/v2/support/tickets", headers=riley).json()["tickets"]
+    assert [(t["id"], t["source"]) for t in listed] == [(mine, "person")]
+    with api.app.state.store.read() as c:
+        keys = {r["id"]: r["request_key"] for r in c.execute("SELECT id, request_key FROM support_tickets")}
+    assert keys[mine] == "draft:" + asked
+    assert keys[watched] == "approval:" + monitored
+    with api.app.state.store.read() as c:                       # the bot's approval, whose id its send-at-once draft did not echo
+        bot_approval = c.execute("SELECT id FROM approvals WHERE requested_by_id='bot:coo' AND kind='support'").fetchone()[0]
+    assert keys[filed["ticket"]["id"]] == "approval:" + bot_approval
