@@ -289,9 +289,7 @@ def context(c, row, recipient):
                 "For a declined result, decide whether to close it or reopen/reassign it. Reading or commenting alone does not consume it.\n"
                 "Do not set another follow-up on the returned result; put remaining work on an actionable task with its own date.")
     lines = ["Follow up on this task now.", "Expected: " + (row.get("check_back_note") or "inspect the next result"),
-             "Inspect the actual result or blocker, repair routine handoffs within your authority, and continue.",
-             "Before waiting again, verify the assignment/reservation exists and set a future follow-up with",
-             "`hub task check-back " + row["id"] + " --in 45m --for <what to inspect>`. A status note is not a handoff."]
+             "Inspect the actual result or blocker, repair routine handoffs within your authority, and continue."]
     lines.append("Checkpoint: " + str(row.get("note") or "none recorded")[:400])
     if row.get("due_at"):
         lines.append("Delivery deadline: " + row["due_at"])

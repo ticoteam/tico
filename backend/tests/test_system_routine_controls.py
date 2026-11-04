@@ -16,7 +16,6 @@ from backend import team_rules
 from backend.scheduler import Scheduler, stamp
 from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
-from backend.tests.test_stale_review import FakeDecide
 
 TIMED = {"stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
          "engineering_exceptions", "bookkeeper_check", "memory_tidy", "auto_dream", "task_roundup"}   # the jobs with a schedule preset
@@ -219,32 +218,6 @@ def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_
             "an unconfigured night is not tried again before tomorrow"
 
 
-def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows_the_result(api, monkeypatch):
-    store = api.app.state.store
-    put(api, "system-routines/stale_review", {"on": True}, token="ben-test")
-    model = FakeDecide("leave")
-    monkeypatch.setattr(stale_review, "server_engine", lambda *a, **k: model)
-    with store.transaction() as c:
-        for n in range(35):
-            row = H.task_create(c, "human:ana", f"Old export task {n}", "x", "bot:ops")
-            when = H.shift(H.now(), days=-10)
-            c.execute("UPDATE tasks SET status='open',updated_at=?,created_at=? WHERE id=?", (when, when, row["id"]))
-        stale_review._set_watermark(c, H.now())          # a pass just ran: Run now runs anyway
-
-    def run_once():
-        before = (rows(api)["stale_review"]["last"] or {}).get("started_at")
-        assert post(api, "system-routines/stale_review/run", {}, token="ben-test")["running"] is True
-        for _ in range(200):
-            last = rows(api)["stale_review"]["last"]
-            if not stale_review._RUNNING.locked() and last and last["started_at"] != before:
-                return last
-            time.sleep(0.05)
-        raise AssertionError("the run never finished")
-    last = run_once()
-    assert len(model.calls) == stale_review.CALLS_PER_HOUR == 30, "the hourly cap bites a manual run too"
-    assert last["ok"] and "checked" in last["result"], last
-    run_once()                                           # a second Run now in the same hour gets what is left: none
-    assert len(model.calls) == 30
 
 
 def test_run_now_on_a_plain_job_lands_its_result_on_the_row_and_is_refused_while_off(api):
@@ -298,3 +271,22 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     assert {"stale_review", "approval_expiry"} <= done
     assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["due_reminders"]["search"]
     assert "engineering" in jobs["cleanup"]["search"] and "housekeeping" in jobs["cleanup"]["search"]
+
+
+def test_run_now_on_stale_review_asks_no_model_and_says_find_stuck_lists_the_candidates(api):
+    store = api.app.state.store
+    put(api, "system-routines/stale_review", {"on": True}, token="ben-test")
+    with store.transaction() as c:
+        row = H.task_create(c, "human:ana", "Old export task", "x", "bot:ops")
+        when = H.shift(H.now(), days=-10)
+        c.execute("UPDATE tasks SET status='open',updated_at=?,created_at=? WHERE id=?", (when, when, row["id"]))
+    assert post(api, "system-routines/stale_review/run", {}, token="ben-test")["running"] is True
+    last = None
+    for _ in range(200):
+        last = rows(api)["stale_review"]["last"]
+        if not stale_review._RUNNING.locked() and last:
+            break
+        time.sleep(0.05)
+    assert last and last["ok"] and "Find stuck" in last["result"], last
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='judge.call'").fetchone()[0] == 0

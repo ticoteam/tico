@@ -43,6 +43,11 @@ def ask_restate(conn):
     for row in unexplained(conn):
         with isolated(conn, "restate_asks", row["id"]):
             H._wake(conn, row, row["owner_id"], message(row), {"wake": "restate_ask"}, trigger="stall_check")
-            H.event(conn, H.KEEPER, ACTION, row["id"], {"bot": H.actor_id(row["owner_id"]), "to": row["waiting_on"]})
+            mark_asked(conn, row)
             asked.append(row["id"])
     return asked
+
+
+def mark_asked(conn, row):
+    """The bot was asked to restate this task's ask: the event that keeps it to once, ever (`unexplained` skips it)."""
+    H.event(conn, H.KEEPER, ACTION, row["id"], {"bot": H.actor_id(row["owner_id"]), "to": row["waiting_on"]})

@@ -73,8 +73,9 @@ def _line(asked, task):
     return f'- To {who}{where}: "{H._clip(asked.get("body") or "", 160)}" (asked {str(H.ask_clock(asked))[:10]})'
 
 
-def send_back(conn, bot, items):
-    """Take `items` off their people's lists and wake `bot` once with all of them."""
+def take_back(conn, items):
+    """Take `items` ((ask, task) pairs) off their people's lists: each ask is superseded, and a task's wait for it ends.
+    Writes no message. Returns the people the asks were to."""
     stamp = H.now()
     people = set()
     for asked, task in items:
@@ -92,6 +93,14 @@ def send_back(conn, bot, items):
             from . import task_holds
             task_holds.withdrawn(conn, task["id"], [asked["id"]], "no answer in two business days (still needed?)",
                                  told=False)
+    for person in people:
+        H._recount(conn, person)
+    return people
+
+
+def send_back(conn, bot, items):
+    """Take `items` off their people's lists and wake `bot` once with all of them."""
+    take_back(conn, items)
     lines = [_line(asked, task) for asked, task in items[:LISTED]]
     if len(items) > LISTED:
         lines.append(f"- and {len(items) - LISTED} more")
@@ -103,8 +112,6 @@ def send_back(conn, bot, items):
             "without it. Aim for questions a person can answer within 24 hours.")
     msg = H.say(conn, H.KEEPER, bot, text, kind="notice",
                 refs={"wake": "still_needed", "asks": [asked["id"] for asked, _ in items]})
-    for person in people:
-        H._recount(conn, person)
     H._recount(conn, bot)
     H.event(conn, H.KEEPER, ACTION, bot, {"asks": [asked["id"] for asked, _ in items], "message": msg["id"]})
     return msg

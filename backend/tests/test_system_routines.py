@@ -4,14 +4,10 @@ by `GET /api/v2/system-routines` for Settings > Routines. Spec acceptance tests 
 
 from datetime import datetime, timedelta, timezone
 
-from backend import judge as B
-from backend import still_wanted
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_stale_review import FakeDecide, stale   # noqa: F401
 from backend.tests.test_tasks_board import api, get, headers, post   # noqa: F401
-from clients import judge as J
 
 
 def rows(api, token="ana-test"):
@@ -77,53 +73,8 @@ def test_a_failed_run_shows_failed_with_a_plain_reason_and_still_counts_as_a_sch
     assert "private" not in str(jobs), "an exception's own text never shows"
 
 
-def test_a_stale_review_answered_by_the_gateway_shows_gateway_and_this_months_spend(stale):
-    api, store, task = stale
-    task("Ship the export button", pr="merged")
-    run = SR.Run("stale_review")
-    from backend import stale_review
-    stale_review.words(run, stale_review.run_pass(store, engine=FakeDecide("update")))
-    SR.write(store, run)
-    with store.transaction() as c:      # what `judge.metered` writes for a paid call
-        H.event(c, H.KEEPER, "judge.spend", "stale-review@1", {"label": "stale-review@1", "cost_usd": 0.42})
-        H.event(c, H.KEEPER, "judge.spend", "listening@2", {"label": "listening@2", "cost_usd": 9.0})
-    jobs, _ = rows(api)
-    row = jobs["stale_review"]
-    assert row["last"]["result"] == "1 checked, 1 suggestion" and row["last"]["ok"]
-    assert row["route"] == "Gateway" and row["fallback"] is None
-    assert row["spent_this_month_usd"] == 0.42, "only this job's question set"
 
 
-def test_gateway_down_falls_back_to_own_key_then_company_ai_and_the_row_says_so(stale):
-    api, store, task = stale
-    task("Ship the export button", pr="merged")
-
-    def gateway(state, questions, label=None):
-        raise J.JudgeError("unavailable", "down")
-    gateway.provider = J.GATEWAY_PROVIDER
-    own = FakeDecide("update", provider=J.TYPESAFE_PROVIDER)
-    own.provider = J.TYPESAFE_PROVIDER
-    chain = B.ordered([gateway, own])
-    from backend import stale_review
-    run = stale_review.words(SR.Run("stale_review"), stale_review.run_pass(store, engine=chain))
-    SR.write(store, run)
-    jobs, _ = rows(api)
-    assert jobs["stale_review"]["route"] == "Company key"
-    assert jobs["stale_review"]["fallback"] == "Ran on your own key: Gateway unavailable"
-
-    # ...and with the own key down too, the company's AI answers.
-    task("Ship the import button", pr="merged")
-    own.fail = J.JudgeError("auth", "refused")
-    llm = FakeDecide("update", provider=next(iter(J.LLM_PROVIDERS.values())))
-    llm.provider = llm.provider
-    with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")    # the next hour's pass
-    run = stale_review.words(SR.Run("stale_review"),
-                             stale_review.run_pass(store, engine=B.ordered([gateway, own, llm])))
-    SR.write(store, run)
-    jobs, _ = rows(api)
-    assert jobs["stale_review"]["route"] == "Company AI"
-    assert jobs["stale_review"]["fallback"] == "Ran on company AI: Gateway unavailable"
 
 
 def test_old_runs_are_pruned_to_the_last_ones_per_job(api):

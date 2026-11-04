@@ -60,24 +60,30 @@ def asks_on(api, task_id):
         return [m for m in H.task_comments(c, task_id) if m["kind"] == "ask" and m["refs"].get("still_wanted")]
 
 
-def test_an_idle_task_gets_one_still_wanted_ask_and_an_active_one_none(api):
+def put_card(api, task_id):
+    """A Still wanted? card as put before this change: the question a person answers Keep or Close on, in the idle stretch
+    the card's stale_asked_at marks."""
+    ask = {"questions": [{"id": "still_wanted", "header": "Still wanted?", "question": "Still wanted?",
+                          "options": [{"label": "Keep", "description": "Keep it open"},
+                                      {"label": "Close", "description": "Close it"}],
+                          "multi": False, "other": False}], "who": "human:ana"}
+    with api.app.state.store.transaction() as c:
+        H.task_comment(c, H.KEEPER, task_id, "Nothing has happened on this task for 7 days. Still wanted?",
+                       wake=False, ask=ask, extra_refs={"still_wanted": True})
+        c.execute("UPDATE tasks SET stale_asked_at=updated_at WHERE id=?", (task_id,))
+
+
+def test_an_idle_task_gets_no_still_wanted_question_any_more(api):
     stale = idle(api, "Old idea")
     fresh = post(api, "tasks", {"owner": "ops", "title": "Current work", "body": "Now."})
-    assert ask_idle(api) == [stale["id"]]
-    [ask] = asks_on(api, stale["id"])
-    assert ask["recipient_id"] == "human:ana" and ask["sender_id"] == H.KEEPER
-    assert asks_on(api, fresh["id"]) == []
-    # Another week passes with nobody answering: still the one ask for this stretch.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated_at=?,stale_asked_at=? WHERE id=?",
-                  (H.shift(H.now(), days=-8), H.shift(H.now(), days=-8), stale["id"]))
     assert ask_idle(api) == []
-    assert len(asks_on(api, stale["id"])) == 1
+    assert asks_on(api, stale["id"]) == [] and asks_on(api, fresh["id"]) == []
 
 
 def test_keep_restarts_the_clock_and_close_closes(api):
     kept, closed = idle(api, "Keep me"), idle(api, "Drop me")
-    ask_idle(api)
+    put_card(api, kept["id"])
+    put_card(api, closed["id"])
     for task, label in ((kept, "Keep"), (closed, "Close")):
         [ask] = asks_on(api, task["id"])
         post(api, f"tasks/{task['id']}/answers",

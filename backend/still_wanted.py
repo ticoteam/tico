@@ -1,15 +1,13 @@
-"""One "Still wanted?" question for a task nobody has touched in a week.
+"""Still wanted? questions to people about idle tasks, and the answers to the ones already put.
 
-With many tasks open, some stop mattering and nobody says so. Nothing here closes or deletes a task on
-its own: an idle task gets one question to the person behind it, Keep or Close, and only their answer
-acts. One ask per idle stretch: `stale_asked_at` records it, and any later activity (a comment, an
-update, a completed turn's checkpoint) starts a new stretch.
+No new question is put to a person: `ask_idle` returns nothing, and migration 0080 withdraws the open ones. A question put
+before that is still answered here: `is_ask`, `choice` and `act` read its Keep or Close, and only the person it was put to
+decides. `idle_tasks` still names the tasks a week idle, one at a time, for the tests that read them.
 """
 
 import sqlite3
 
 from . import hubdb as H
-from .batch_work import isolated
 
 IDLE_DAYS = 7
 QUESTION_ID = "still_wanted"
@@ -59,31 +57,8 @@ def idle_tasks(conn, at=None):
 
 
 def ask_idle(conn, at=None):
-    """Put "Still wanted?" to the person behind each idle task. Returns the task ids asked about. Not while the team
-    has Stale ticket review on: its suggestions cover a quiet week (backend/stale_review.py)."""
-    from . import team_rules
-    try:
-        if team_rules.load(conn)["stale_review"]:
-            return []
-    except sqlite3.OperationalError:     # a local hub keeps no team rules
-        pass
-    asked = []
-    for row in idle_tasks(conn, at):
-        with isolated(conn, "still_wanted", row["id"]):
-            person = recipient(conn, row)
-            ask = {"questions": [{"id": QUESTION_ID, "header": "Still wanted?",
-                                  "question": f"Still wanted? {row['title']}"[:300],
-                                  "options": [{"label": KEEP, "description": "Keep it open"},
-                                              {"label": CLOSE, "description": "Close it"}],
-                                  "multi": False, "other": False}], "who": person}
-            H.task_comment(conn, H.KEEPER, row["id"],
-                           f"Nothing has happened on this task for {IDLE_DAYS} days. Still wanted?",
-                           wake=False, ask=ask, extra_refs={"still_wanted": True})
-            # The ask itself bumps `updated_at`; recording the same moment keeps it inside this stretch.
-            conn.execute("UPDATE tasks SET stale_asked_at=updated_at WHERE id=?", (row["id"],))
-            H.event(conn, H.KEEPER, "task.still_wanted_ask", row["id"], {"to": person})
-            asked.append(row["id"])
-    return asked
+    """No question goes to a person about an idle task any more: the maintenance run never messages a person. Returns []."""
+    return []
 
 
 def is_ask(asked):
