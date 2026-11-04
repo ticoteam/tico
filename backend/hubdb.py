@@ -4401,7 +4401,7 @@ def declared_hold(conn, actor, row, step, step_id):
     return is_human(actor)
 
 
-def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=()):
+def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=(), notify_parties=True):
     """Every task status write keeps its type and step consistent, including old runners. A task
     that enters a step joins its end; one that lands on a numbered type without a number gets one."""
     from . import task_holds
@@ -4436,10 +4436,10 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
             from . import task_holds
             task_holds.withdrawn(conn, row["id"], supersede_asks(conn, row["id"]),
-                                 f"its task was {TASK_ENDED[effective]}", by=actor)
+                                 f"its task was {TASK_ENDED[effective]}", by=actor, told=notify_parties)
             supersede_ask_cards(conn, row, effective)
             # ...and so is a yes it was waiting for: nothing will act on it now.
-            withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
+            withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.", notify=notify_parties)
             # Its parent and the tasks it blocked lose a hold: their reason follows, and the last one clearing frees them.
             task_holds.ended(conn, {**row, "status": effective}, effective)
         elif row.get("status") in ("done", "closed", "declined"):
@@ -7499,15 +7499,22 @@ def _marketing_outcome(conn, actor, row, step, type=None):
     return bool(named & set(MT.finished_step_ids()))
 
 
-def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None):
-    _task_private_writer(conn, actor, row)
+def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None, *, check_only=False):
+    def denied(rule, detail):
+        # Automatic completion probes permissions without refusal audits or escalation side effects.
+        if check_only:
+            raise Refused(rule, detail)
+        refuse(conn, actor, rule, detail)
+
+    if actor != KEEPER and not task_private_readable(conn, actor, row):
+        denied("not-found", "Task not found")
     # A person closes a task they can edit, as task_update decides: on it (_task_close_party), or a mover. The person
     # it waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
     # someone refused its status and note must not be able to end it.
     mover = task_mover(conn, actor, row, mover)
     if is_human(actor) and not _task_close_party(conn, actor, row) and row.get("waiting_on") != actor:
         if not (can_move(conn, actor) if mover is None else mover):
-            refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
+            denied("close", f"Only someone who can edit this task closes it: its requester "
                                          f"({actor_name(conn, row['requester_id'])}), its owner, the person it waits on, "
                                          "or a person who moves tasks")
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
@@ -7515,10 +7522,10 @@ def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
     outcome = _marketing_outcome(conn, actor, row, step, type)
     if actor == TASK_MANAGER and actor != row["requester_id"] and not (note or "").strip():
-        refuse(conn, actor, "close", "The Task Manager closes a task only with a note saying why it is finished")
+        denied("close", "The Task Manager closes a task only with a note saying why it is finished")
     if not task_represents(conn, actor, row["requester_id"]) and not is_human(actor) and actor != KEEPER and not (
             shipped or outcome):
-        refuse(conn, actor, "close", f"{actor_name(conn, row['requester_id'])} asked for this; only they or their managers close it")
+        denied("close", f"{actor_name(conn, row['requester_id'])} asked for this; only they or their managers close it")
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
 
@@ -7537,11 +7544,8 @@ def _check_finish_children(conn, actor, parent, mover, *, strict=True):
     for kid in descendants(conn, parent["id"]):
         if kid["status"] not in ACTIVE_STATUSES:
             continue
-        if not strict:
-            # A permission probe is not an attempted explicit write: no refusal audit or quarantine accrues.
-            conn.execute("SAVEPOINT finish_child_permission")
         try:
-            _task_close_allowed(conn, actor, kid, _closed_with_note(parent), mover)
+            _task_close_allowed(conn, actor, kid, _closed_with_note(parent), mover, check_only=not strict)
         except Refused as exc:
             if not strict:
                 left_open.add(kid["id"])
@@ -7550,10 +7554,6 @@ def _check_finish_children(conn, actor, parent, mover, *, strict=True):
             why = "" if task_private(conn, kid) else f" ({exc.detail})"
             raise Refused(exc.rule, f"The open subtask {shown} is not yours to close{why}. "
                                    "Finish it first or ask whoever requested it to close it", exc.severity) from exc
-        finally:
-            if not strict:
-                conn.execute("ROLLBACK TO finish_child_permission")
-                conn.execute("RELEASE finish_child_permission")
     return left_open
 
 
@@ -7571,7 +7571,8 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
             continue
         task_close(conn, actor, kid["id"], note=_closed_with_note(parent), quiet=quiet,
                    mover=mover, with_parent=parent["id"])
-        conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (kid["id"],))
+        if "version" in kid:       # the standalone hub schema predates API optimistic concurrency
+            conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (kid["id"],))
         changed["closed"].append(_child_name(conn, kid))
     if changed["closed"]:
         _task_event(conn, parent["id"], KEEPER, "children", None, "Closed with it: " + "; ".join(changed["closed"]), "")
@@ -7616,7 +7617,8 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     running = with_parent and _has_table(conn, "attempts") and _one(
         conn, "SELECT 1 FROM attempts WHERE task_id=? AND state IN ('leased','running') LIMIT 1", (task_id,))
     ts = now()
-    _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
+    _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "",
+                notify_parties=not with_parent or bool(running))
     conn.execute("UPDATE tasks SET closed_at=?, closed_by_id=?, updated_at=?, "
                  "note=COALESCE(NULLIF(?, ''), note) WHERE id=?", (ts, actor, ts, note or "", task_id))
     if row.get("waiting_on"):
@@ -8642,7 +8644,7 @@ def approval_target(kind, payload):
         else None
 
 
-def approval_withdraw(conn, approval_id, note):
+def approval_withdraw(conn, approval_id, note, *, notify=True):
     """An undecided approval nobody needs any more leaves the person's queue as `withdrawn`: its task ended, a newer
     request replaced it, or nobody decided it in APPROVAL_STALE_DAYS. Only the keeper withdraws, so a withdrawal is
     never mistaken for a person's no; the bot that asked hears once, quietly, and may ask again."""
@@ -8658,7 +8660,7 @@ def approval_withdraw(conn, approval_id, note):
         task_holds.refresh(conn, row["task_id"], f"Your {row['kind']} approval was withdrawn")
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
-    if conv and _actor_exists(conn, row["requested_by_id"]):
+    if notify and conv and _actor_exists(conn, row["requested_by_id"]):
         _write_message(conn, KEEPER, row["requested_by_id"], f"Withdrawn: your {row['kind']} approval. {note}",
                        conv, "notice", {"approval": approval_id, "quiet": True}, None, None)
     _recount(conn, row["requested_by_id"])
@@ -8666,11 +8668,11 @@ def approval_withdraw(conn, approval_id, note):
     return approval(conn, approval_id)
 
 
-def withdraw_task_approvals(conn, task_id, note):
+def withdraw_task_approvals(conn, task_id, note, *, notify=True):
     """Withdraw every undecided approval on a task that ended."""
     return [aid for (aid,) in conn.execute("SELECT id FROM approvals WHERE task_id=? AND decision IS NULL "
                                            "ORDER BY created_at", (task_id,)).fetchall()
-            if approval_withdraw(conn, aid, note)]
+            if approval_withdraw(conn, aid, note, notify=notify)]
 
 
 def _approval_facts(row):

@@ -210,12 +210,28 @@ def test_idle_cascaded_children_send_no_notices_to_their_parties(tmp_path, statu
     parent = make(c, ANA, "Plan the launch", CMO)
     child = make(c, CMO, "Draft the launch copy", SEO, parent)
     if status != "open":
-        H.task_update(c, SEO, child["id"], status=status, note="Ready for the next step")
+        H.task_update(c, H.KEEPER if status == "ready" else SEO, child["id"], status=status, note="Ready for the next step")
     before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
     H.task_close(c, ANA, parent["id"])
     assert H.task(c, child["id"])["status"] == "closed"
     assert not c.execute("SELECT 1 FROM messages WHERE rowid>? AND json_extract(refs,'$.task')=?",
                          (before, child["id"])).fetchone()
+    c.close()
+
+
+def test_idle_cascade_withdraws_questions_and_approvals_without_notifying_the_childs_bot(tmp_path):
+    c = hub(tmp_path / "hub.db")
+    parent = make(c, ANA, "Plan the launch", CMO)
+    child = make(c, CMO, "Draft the launch copy", SEO, parent)
+    asked = H.task_comment(c, SEO, child["id"], "Which launch date?", wake=False,
+                           ask={"who": ANA})
+    approval = H.approval_request(c, SEO, "merge", {"repo": "acme/docs", "pr": 12}, task_id=child["id"])
+    H.task_update(c, SEO, child["id"], status="review", note="Ready to review")
+    before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+    H.task_close(c, ANA, parent["id"])
+    assert H.message(c, asked["id"])["superseded_at"]
+    assert H.approval(c, approval["id"])["decision"] == "withdrawn"
+    assert not c.execute("SELECT 1 FROM messages WHERE rowid>? AND recipient_id=?", (before, SEO)).fetchone()
     c.close()
 
 
@@ -279,8 +295,8 @@ def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclos
                             parent_id=parent["id"], lint=False)
         other = H.task_create(c, "human:ana", "Approve the launch copy", "", "bot:cpo",
                               parent_id=parent["id"], lint=False)
-        secret = H.task_create(c, "bot:cpo", "Compare confidential salaries", "", "human:ana",
-                               parent_id=parent["id"], private=True, lint=False)
+        secret = H.task_create(c, "bot:cpo", "Compare confidential salaries", "", "bot:cpo",
+                               parent_id=other["id"], private=True, lint=False)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "goal-thread"}, machine["token"])
     goal = attempt["chat_goal"]
     events = {"events": [
