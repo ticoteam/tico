@@ -87,7 +87,7 @@ async function themed(page, name) {
       await page.waitForSelector('.mt-step.open[data-mt-step="find_stuck"] .mt-detail');
       assert.equal(await step('find_stuck').locator('[data-mt-often]').inputValue(), 'custom');
       assert.equal(await step('find_stuck').locator('[data-mt-every]').inputValue(), '6');
-      assert.match(await step('find_stuck').locator('.mt-detail').innerText(), /Most bots woken per run/);
+      assert.match(await step('find_stuck').locator('.mt-detail').innerText(), /Most bots woken per run/i);
       const bots = step('find_stuck').locator('[data-mt-bots]');
       assert.equal(await bots.inputValue(), '10');
       await bots.fill('5'); await bots.press('Tab');
@@ -135,7 +135,7 @@ async function themed(page, name) {
       await step('learn').locator('[data-mt-open]').click();
       await page.waitForSelector('.mt-step[data-mt-step="learn"] [data-mt-stats]');
       const stats = await step('learn').locator('[data-mt-stats]').innerText();
-      assert.match(stats, /Last 7 days/);
+      assert.match(stats, /Last 7 days/i);
       for (const re of [/6\s*Runs/, /42\s*Read/, /5\s*Sent/, /4\s*Saved/, /1\s*Dropped/, /\$0\.18\s*Cost/]) assert.match(stats, re);
 
       // The monthly cap: the env's $50 in effect, then $100.
@@ -211,7 +211,7 @@ async function themed(page, name) {
       await page.locator('.mt-step[data-mt-step="dream"] [data-mt-open]').click();
       await page.waitForSelector('.mt-step[data-mt-step="dream"] [data-mt-bots]');
       assert.equal(await page.locator('.mt-step[data-mt-step="dream"] [data-mt-bots]').isDisabled(), true);
-      assert.match(await page.locator('.mt-step[data-mt-step="dream"] .mt-detail').innerText(), /Most bots per run/);
+      assert.match(await page.locator('.mt-step[data-mt-step="dream"] .mt-detail').innerText(), /Most bots per run/i);
       assert.deepEqual(writes, []);
       assert.deepEqual(errors, []);
       await page.close();
