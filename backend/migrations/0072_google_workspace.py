@@ -34,7 +34,7 @@ GOOGLE_OAUTH_CLIENTS = (
 )
 CONNECTOR_REPORTS = (
     "CREATE TABLE IF NOT EXISTS connector_reports(service TEXT NOT NULL, runner_id TEXT NOT NULL, account TEXT NOT NULL "
-    "DEFAULT '', error TEXT NOT NULL DEFAULT '', failing_json TEXT NOT NULL DEFAULT '[]', ok_accounts_json TEXT NOT NULL "
+    "DEFAULT '', error TEXT NOT NULL DEFAULT '', failing TEXT NOT NULL DEFAULT '[]', ok_accounts TEXT NOT NULL "
     "DEFAULT '[]', reported_at TEXT NOT NULL, PRIMARY KEY(service, runner_id, account))"
 )
 GOOGLE_SETUP_GENERATIONS = (

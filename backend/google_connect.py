@@ -253,38 +253,24 @@ def _other_holder(c, runner_id):
 def claimable(c, runner_id, holds, named=False):
     """The next connect or disconnect this computer may take, or None (plan v5 V).
 
-    A person's row goes to the computer hosting their message bot when there is one:
-    - a first connect goes there while that computer is online; a publisher takes it only otherwise;
-    - a reconnect goes there, whoever held the earlier grant (the old holder's refreshes are then refused, see google_refresh);
-    - a disconnect goes to the holder, the only computer that can revoke the grant it holds.
-    With no bot computer, the rules are as they were: the holder; or, for a publisher, a first connect or a grant whose
-    holder was removed, unless another computer has said it holds mail credentials recently."""
+    google_rights.takes decides each row. With the person's message bot on a live computer, that computer takes the first
+    connect and the reconnect, online or not: a publisher waits for it rather than taking the connect, and a reconnect
+    goes there whoever held the earlier grant (the old holder's refreshes are then refused, see google_refresh). A
+    disconnect goes to the holder, the only computer that can revoke the grant it holds. With no bot computer, the holder
+    keeps its grant; a publisher takes a first connect, or a grant whose holder was removed, unless another computer has
+    said it holds mail credentials recently."""
     expire(c)
     rows = c.execute("SELECT * FROM google_connects WHERE status IN ('ready','disconnecting') "
                      "ORDER BY updated_at").fetchall()
     if not rows:
         return None
-    hosts = google_rights.inbox_hosts(c)
-    live = {r[0] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
+    hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
     elsewhere = None
     for row in rows:
-        host = hosts.get(row["person_id"]) or {}
-        holder = row["holder"]
-        holder_live = bool(holder) and holder in live
         if elsewhere is None:
             elsewhere = _other_holder(c, runner_id)
         orphan = named and (holds or not elsewhere)     # a publisher, when no other computer has said it holds mail
-        if row["status"] == "disconnecting":
-            mine = holder == runner_id or (not holder_live and orphan)
-        elif holder and host.get("runner"):
-            mine = host["runner"] == runner_id          # a reconnect routes to the bot's computer
-        elif holder:
-            mine = holder == runner_id or (not holder_live and orphan)
-        elif host.get("runner") and host.get("online"):
-            mine = host["runner"] == runner_id          # a first connect goes to the bot's computer while it is online
-        else:
-            mine = orphan
-        if mine:
+        if google_rights.takes(runner_id, orphan, row, hosts, live):
             return row
     return None
 
@@ -432,7 +418,8 @@ def install(app, store, member, mutate):
             if (not row or row["runner_id"] != runner["id"] or row["status"] != "finishing" or not row["code"]
                     or not row["verifier"]):
                 raise Problem("state", "No sign-in code waits for this computer to exchange", 409)
-            if not google_rights.may_row(runner["id"], named, row, google_rights.inbox_hosts(c)):
+            hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+            if not google_rights.takes(runner["id"], named, row, hosts, live):
                 raise Problem("forbidden", google_rights.FORBIDDEN, 403)
             code, verifier = row["code"], row["verifier"]
             c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
@@ -467,9 +454,11 @@ def install(app, store, member, mutate):
                 # Also a grant whose connected result never reached the server: the computer reconnects.
                 raise Problem("not_this_grant", "This computer holds no Connect Google grant from this server for that "
                                                 "mailbox", 403)
-            # The narrow gate (plan v4 O): a publisher, or the computer hosting the person's message bot. A grant that
-            # moved away from its bot's computer is refused here, and the answer says to reconnect (the mail CLI stops on it).
-            if not google_rights.may_row(runner["id"], named, held, google_rights.inbox_hosts(c)):
+            # The one rule (google_rights.takes): the computer hosting the person's message bot, or, with no host, the holder.
+            # A grant that moved away from its bot's computer is refused here, and the answer says to reconnect (the mail CLI
+            # stops on it).
+            hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+            if not google_rights.takes(runner["id"], named, held, hosts, live):
                 raise Problem("not_this_grant", "This computer no longer runs the message bot for that mailbox, so it does "
                                                 "not refresh its Connect Google grant. Reconnect it in Settings > Google.",
                               403)
@@ -498,7 +487,8 @@ def install(app, store, member, mutate):
                 raise Problem("not_found", "No Google connect is waiting for this person", 404)
             if row["runner_id"] != runner["id"] or row["status"] not in ("finishing", "revoking"):
                 raise Problem("state", "This Google connect is not this computer's to finish", 409)
-            if not google_rights.may_row(runner["id"], named, row, google_rights.inbox_hosts(c)):
+            hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+            if not google_rights.takes(runner["id"], named, row, hosts, live):
                 raise Problem("forbidden", google_rights.FORBIDDEN, 403)
             if (row["status"] == "finishing") != (body.status != "disconnected"):
                 raise Problem("state", "That result does not answer this request", 409)

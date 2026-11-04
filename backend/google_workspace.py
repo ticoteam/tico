@@ -166,19 +166,20 @@ def authority(c, mailbox):
 
 def owned_mailboxes(c, runner_id):
     """The mailboxes this computer may publish, claim, read the calendar of and report on, and nothing else:
-    the workspace mailboxes whose inbox bot runs here, and the personal mailboxes whose live grant it holds. A personal
-    grant whose mailbox's bot now runs on another computer is not held here: a reconnect moves it, and the old holder
-    keeps nothing meanwhile (google_rights.may_row refuses that holder's refresh the same way)."""
+    the workspace mailboxes whose inbox bot runs here, and the personal mailboxes whose live grant it takes. A grant is
+    taken by google_rights.takes: the live computer hosting the person's message bot, or, with no host (or while the
+    grant is ending), its live holder. Revoked computers take nothing. When the bot moves, its new computer owns the
+    grant but cannot refresh it until the person reconnects (the health says so), and the old holder keeps nothing."""
+    from . import google_rights
     row = active(c)
     live = _live_mailboxes(c)
-    bots = {str(box["address"]).lower(): box["bot"] for box in routines.message_bot_mailboxes(c)}
-    placed = {r[0]: r[1] for r in c.execute("SELECT bot, runner_id FROM assignments")}
+    grants = c.execute("SELECT * FROM google_connects WHERE grant_hash IS NOT NULL AND status<>'disconnected'").fetchall()
     owned = set()
-    for box, status in c.execute("SELECT lower(mailbox), status FROM google_connects WHERE holder=? AND "
-                                 "grant_hash IS NOT NULL AND status<>'disconnected'", (runner_id,)).fetchall():
-        host = placed.get(bots.get(box))
-        if host in (None, runner_id) or status in ("disconnecting", "revoking"):
-            owned.add(box)
+    if grants:
+        hosts, runners = google_rights.inbox_hosts(c), google_rights.live_runners(c)
+        for grant in grants:
+            if google_rights.takes(runner_id, False, grant, hosts, runners):
+                owned.add(str(grant["mailbox"]).lower())
     if row:
         hosted = {r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (runner_id,))}
         for box in routines.message_bot_mailboxes(c):

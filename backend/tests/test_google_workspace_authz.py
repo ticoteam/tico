@@ -60,6 +60,18 @@ def place(api, machine, bot="inbox"):
                   "VALUES(?,?,0,?,'ana')", (bot, machine["runner_id"], H.now()))
 
 
+def unplace(api, bot="inbox"):
+    """The bot has no computer: its assignment is gone."""
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
+
+
+def revoke(api, machine):
+    """The computer is revoked: it is no host and no holder any more."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), machine["runner_id"]))
+
+
 def publish(api, token, mailbox=BOX, expected=200):
     return post(api, "connectors/mail/messages", {"mailbox": mailbox, "messages": [], "deleted": [],
                                                    "synced_at": H.now()}, token, expected=expected)
@@ -288,3 +300,62 @@ def test_a_reconnect_moves_the_grant_to_the_bot_s_computer_and_the_old_holder_ke
     refused = post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"], expected=403)
     assert refused["error"]["code"] == "forbidden"
     assert get(api, "runners/connectors", old["token"])["connectors"] == []
+
+
+def test_a_first_connect_waits_for_the_bot_s_computer_even_while_it_is_offline(api, google, monkeypatch):
+    seed_org(api)
+    declare(api, BOX)
+    office = runner(api, label="Office Mac")                    # the owner's: a publisher
+    bot_mac = runner(api, operator="ben", label="Bot Mac")      # the bot's computer, not yet online
+    place(api, bot_mac)
+    begin_ana(api)
+    assert post(api, "connectors/mail/google/claim", {"holds_mail": True}, office["token"])["connect"] is None
+    ready(api, bot_mac, [])                                     # the bot's computer comes online and takes the connect
+    finish_ana(api, bot_mac, monkeypatch, "1//host")
+    assert publish(api, bot_mac["token"], expected=200)         # the bot's computer owns the grant it connected
+    assert publish(api, office["token"], expected=403)["error"]["kind"] == "personal_grant"
+
+
+def test_a_holder_with_no_bot_computer_refreshes_and_reconnects_its_grant(api, google, monkeypatch):
+    seed_org(api)
+    declare(api, BOX)
+    holder = runner(api, operator="ben", label="Bot Mac")       # not a publisher: it took the connect as the bot's host
+    place(api, holder)
+    ready(api, holder, [])
+    begin_ana(api)
+    finish_ana(api, holder, monkeypatch, "1//first")
+    unplace(api)                                                # the bot has no live computer now
+    monkeypatch.setattr(google_connect, "post_token", connect.FakeGoogle())
+    assert connect.refresh(api, holder["token"], mailbox=BOX, refresh_token="1//first").status_code == 200
+    assert publish(api, holder["token"], expected=200)          # the holder still owns the grant it holds
+    begin_ana(api)
+    finish_ana(api, holder, monkeypatch, "1//second")           # with no bot computer, the holder takes the reconnect
+    assert connect.refresh(api, holder["token"], mailbox=BOX, refresh_token="1//second").status_code == 200
+    r = connect.refresh(api, holder["token"], mailbox=BOX, refresh_token="1//first")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
+
+
+def test_a_revoked_bot_computer_is_no_host_so_a_publisher_takes_the_first_connect(api, google, monkeypatch):
+    seed_org(api)
+    declare(api, BOX)
+    office = runner(api, label="Office Mac")                    # a publisher
+    bot_mac = runner(api, operator="ben", label="Bot Mac")
+    place(api, bot_mac)
+    ready(api, bot_mac, [])
+    revoke(api, bot_mac)                                        # the bot's computer is removed: no live host
+    begin_ana(api)
+    finish_ana(api, office, monkeypatch, "1//office")           # the publisher takes the first connect
+    assert publish(api, office["token"], expected=200)          # and the publisher owns the grant it holds
+
+
+def test_a_revoked_computers_fresh_failure_does_not_count(api, workspace_key):
+    seed_org(api)
+    declare(api, BOX)
+    bot_mac = runner(api, operator="ben", label="Bot Mac")
+    office = runner(api, label="Office Mac")
+    place(api, bot_mac)
+    health(api, bot_mac["token"], failing=[(BOX, "error")])
+    assert stored_error(api) is not None
+    revoke(api, bot_mac)                                        # its report is still fresh, but it is revoked
+    health(api, office["token"])                                # any computer's report recomputes the health
+    assert stored_error(api) is None

@@ -3,7 +3,8 @@
 `publisher()` (backend/connectors.py) is unchanged. It still decides every mailbox that no Google Workspace and no
 personal grant covers, exactly as before. A mailbox one of them covers has a single owner:
 - `workspace`: the computer hosting the mailbox's message bot (`google_workspace.owned_mailboxes`);
-- `personal`: the computer holding the person's live Connect Google grant.
+- `personal`: the computer that takes the person's live Connect Google grant (`takes`): the live computer hosting their
+  message bot, or the holder while no computer hosts it.
 Any other computer is refused with 403 `workspace_owned` or `personal_grant`, a publisher included. Work already leased
 stays with the computer that leased it (`connectors.py`, `automations.py`), so a move never turns finished work into a
 retry. Health is kept per computer and per account (`connector_reports`), and `service_health` is derived from it.
@@ -107,12 +108,31 @@ def bot_mailboxes(c, runner_id):
     return out
 
 
-def may_row(runner_id, named, row, hosts):
-    """The narrow gate on one person's Connect Google row (plan v4 O, v5 V): a publisher, the computer hosting that
-    person's message bot, or, while the grant is being disconnected or revoked, the computer holding it."""
+def live_runners(c):
+    """The ids of the computers that are not revoked. A revoked computer is never a host or a holder."""
+    return {row[0] for row in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
+
+
+def takes(runner_id, named, row, hosts, live):
+    """Whether this computer is the one that acts on one person's Connect Google row (plan v4 O, v5 V). The first connect,
+    reconnect, exchange, refresh, result and the mailbox's ownership all ask this one rule.
+
+    - A row being disconnected or revoked goes to its holder while the holder is live. With the holder gone, a publisher
+      `named` finishes it.
+    - Otherwise, when the person's message bot has a live computer (`hosts`), only that computer takes it, online or not:
+      a publisher waits for the host rather than taking the connect.
+    - With no host, a live holder keeps its grant. With no live holder, a publisher `named` takes it (a first connect).
+    The claim passes `named` narrowed to the orphan case (`google_connect.claimable`)."""
+    holder = row["holder"] or ""
+    holder_live = bool(holder) and holder in live
+    if row["status"] in ("disconnecting", "revoking"):
+        return holder == runner_id if holder_live else bool(named)
     host = (hosts.get(row["person_id"]) or {}).get("runner")
-    return bool(named or (host and host == runner_id)
-                or (row["holder"] == runner_id and row["status"] in ("disconnecting", "revoking")))
+    if host:
+        return host == runner_id
+    if holder_live:
+        return holder == runner_id
+    return bool(named)
 
 
 def report(c, service, runner_id, now, *, failing=None, ok=(), reportable_set=None):
@@ -124,14 +144,14 @@ def report(c, service, runner_id, now, *, failing=None, ok=(), reportable_set=No
     dropped (the new owner reports them). Then service_health is derived again."""
     failing = dict(failing or {})
     ok = [account for account in dict.fromkeys(ok) if account not in failing]
-    c.execute("INSERT INTO connector_reports(service,runner_id,account,error,failing_json,ok_accounts_json,reported_at) "
+    c.execute("INSERT INTO connector_reports(service,runner_id,account,error,failing,ok_accounts,reported_at) "
               "VALUES(?,?,'','','[]',?,?) ON CONFLICT(service,runner_id,account) DO UPDATE SET "
-              "ok_accounts_json=excluded.ok_accounts_json,reported_at=excluded.reported_at",
+              "ok_accounts=excluded.ok_accounts,reported_at=excluded.reported_at",
               (service, runner_id, encode(ok), now))
     for account, (message, reason) in failing.items():
-        c.execute("INSERT INTO connector_reports(service,runner_id,account,error,failing_json,ok_accounts_json,reported_at) "
+        c.execute("INSERT INTO connector_reports(service,runner_id,account,error,failing,ok_accounts,reported_at) "
                   "VALUES(?,?,?,?,?,'[]',?) ON CONFLICT(service,runner_id,account) DO UPDATE SET error=excluded.error,"
-                  "failing_json=excluded.failing_json,reported_at=excluded.reported_at",
+                  "failing=excluded.failing,reported_at=excluded.reported_at",
                   (service, runner_id, account, str(message)[:1000], encode({"reason": reason}), now))
     for account in ok:
         c.execute("DELETE FROM connector_reports WHERE service=? AND runner_id=? AND account=?",
@@ -157,15 +177,15 @@ def counted(c, service, now):
         "SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account=''", (service,))}
     revoked = {row["id"] for row in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NOT NULL")}
     owned, out = {}, []
-    for row in c.execute("SELECT runner_id, account, error, failing_json FROM connector_reports WHERE service=? "
+    for row in c.execute("SELECT runner_id, account, error, failing FROM connector_reports WHERE service=? "
                          "AND account<>'' AND error<>'' ORDER BY account", (service,)).fetchall():
+        if row["runner_id"] in revoked:
+            continue
         beat = beats.get(row["runner_id"])
         if beat is None:
             continue
         stale = beat <= stamp
         if stale:
-            if row["runner_id"] in revoked:
-                continue
             if row["runner_id"] not in owned:
                 owned[row["runner_id"]] = {box.lower() for box in workspace.owned_mailboxes(c, row["runner_id"])}
             if row["account"].lower() not in owned[row["runner_id"]]:
@@ -185,7 +205,8 @@ def derive(c, service, now):
     failing: a fresh computer's own message, or, for a computer gone quiet, that it has not reported since its last
     heartbeat. It is stamped with the newest heartbeat. Its readers (views, health) are unchanged."""
     name = "connector:" + service
-    beats = c.execute("SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account=''",
+    beats = c.execute("SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account='' "
+                      "AND runner_id NOT IN (SELECT id FROM runners_with_state WHERE revoked_at IS NOT NULL)",
                       (service,)).fetchall()
     if not beats:
         c.execute("DELETE FROM service_health WHERE service=?", (name,))
@@ -194,7 +215,7 @@ def derive(c, service, now):
     failing = counted(c, service, now)
     if failing:
         labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
-        signin = [row["account"] for row in failing if json.loads(row["failing_json"]).get("reason") == "signin"]
+        signin = [row["account"] for row in failing if json.loads(row["failing"]).get("reason") == "signin"]
         detail = {"runner_id": failing[0]["runner_id"], "needs_person": bool(signin), "signin": signin}
         if signin:
             detail["action"] = "Reconnect the Google account for " + ", ".join(signin)
