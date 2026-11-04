@@ -288,3 +288,20 @@ def test_only_a_person_suggests_and_hires(api):
 def test_an_unknown_team_is_not_found(api):
     suggest(api, "no-such-team", expected=404)
     hire(api, "no-such-team", [{"role": "x", "template": "pr-reviewer"}], expected=404)
+
+
+def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monkeypatch):
+    """A team that already fills more roles than the suggestion shows still sees each of them, and the head it lacks."""
+    from backend import team_build
+    providers(api, "anthropic", "openai")
+    team = engineering(api)
+    others = [role["pick"]["template"] for role in suggest(api, team)["roles"] if role["pick"].get("template")]
+    others += [alt["template"] for role in suggest(api, team)["roles"] for alt in role["alternatives"]]
+    filled = {t: "ghost-" + t for t in dict.fromkeys(others) if t != "engineering-lead"}
+    assert len(filled) > team_build.ROLES
+    monkeypatch.setattr(team_build, "_filled", lambda c, group: filled)
+    roles = [role for role in suggest(api, team)["roles"] if role["pick"].get("template")]
+    shown = {role["pick"]["template"]: role["on_team"] for role in roles}
+    assert roles[0]["pick"]["template"] == "engineering-lead" and shown["engineering-lead"] is False
+    picked = [t for t in shown if t != "engineering-lead"]
+    assert all(shown[t] for t in picked) and set(picked) <= set(filled)

@@ -165,10 +165,13 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
     words, common = R._words(text), R._common(list(members.values()))
     raw = {row["template"]: row for row in read_cards(onboarding.settings)}
     suggested = set(ranked["suggested_default"])
-    # A role the team already fills is always shown (as on the team), whatever its rank; the other slots go in rank order.
-    shown, open_slots = [], ROLES - sum(1 for t in picked if t in filled)
+    # The head and every role the team already fills are always shown, whatever their rank (so more than ROLES when a
+    # team has that many); the other slots go in rank order.
+    head = R.head_of(value, dept)
+    kept = {t for t in picked if t in filled or t == head}
+    shown, open_slots = [], ROLES - len(kept)
     for template in picked:
-        if template in filled:
+        if template in kept:
             shown.append(template)
         elif open_slots > 0:
             shown.append(template)
