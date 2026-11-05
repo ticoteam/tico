@@ -781,8 +781,8 @@ def decide(current, found, at, idle_s):
     machine that never enrolled, made again at the next want); problem is what its bots' queued work waits on when
     nothing is done ("stuck", "no_enroll"), or None to leave the row's as it is. Pure: the clock is `at`. `found` is
     `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
-    if (current.get("stop_until") or 0) > at:
-        return None, None                                   # a stop or replacement is already at HQ
+    if current["problem"] == "replacing" and (current.get("stop_until") or 0) > at:
+        return None, None                                   # a person's replacement is already at HQ
     on = current["state"] in ON and current["machine_id"]
     # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
     booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
@@ -1175,7 +1175,7 @@ class Manager:
 
 
 # ----------------------------------------------------------------------------- what people see
-PROBLEMS = {"out_of_credit": "Out of credit", "stuck": "Started, but its work did not run there",
+PROBLEMS = {"out_of_credit": "Out of credit", "replacing": "Replacing machine", "stuck": "Started, but its work did not run there",
             "no_enroll": "Made, but it never connected to this server"}
 ASLEEP = "asleep; starts when work can run"
 
@@ -1408,11 +1408,12 @@ def remove(store, hq, who, auth, key, request, mutate, replace=False):
             if (current["stop_until"] or 0) > now():
                 raise Problem("busy", "This cloud machine is stopping. Try again shortly", 409)
             hold = now() + STOP_HOLD
-            save(c, key, stop_until=hold)
+            save(c, key, stop_until=hold, problem="replacing")
     if replay:
         return mutate(request, Empty(), lambda c: {"ok": True})
 
     def finish(c):
+        from . import model_subscriptions as MS
         if row(c, key)["machine_id"] != current["machine_id"]:
             raise Problem("changed", "The cloud machine changed. Try again", 409)
         if current["runner_id"]:
@@ -1426,7 +1427,7 @@ def remove(store, hq, who, auth, key, request, mutate, replace=False):
              ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
              enroll_by=None, enroll_fails=0, stop_until=None, start_asked_at=None,
              # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
-             changed_by=current["changed_by"] if replace and not auth.bot_admin(who) else who.actor)
+             changed_by=current["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor)
         H.event(c, who.actor, "cloud_machine.deleted", key, {"machine": current["machine_id"]})
         return {"ok": True}
 
@@ -1443,8 +1444,8 @@ def remove(store, hq, who, auth, key, request, mutate, replace=False):
         return mutate(request, Empty(), finish)
     finally:
         with store.transaction() as c:
-            c.execute("UPDATE cloud_machines SET stop_until=? WHERE bot=? AND machine_id=? AND stop_until=?",
-                      (current["stop_until"], key, current["machine_id"], hold))
+            c.execute("UPDATE cloud_machines SET stop_until=?,problem=? WHERE bot=? AND machine_id=? AND stop_until=?",
+                      (current["stop_until"], current["problem"], key, current["machine_id"], hold))
 
 
 def health(c, settings=None):

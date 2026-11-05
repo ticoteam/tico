@@ -1053,6 +1053,24 @@ def test_a_bot_manager_can_replace_without_losing_the_admins_plan_placement(clou
     assert given(cloud, new["runner_id"]) == {"claude": sid}
 
 
+def test_replace_through_the_settings_tool_waits_for_the_persons_confirmation(cloud):
+    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.test_settings_assistant import mcp
+
+    enrolled(cloud)
+    _, attempt = assistant_turn(cloud.api, "ana-test", "Replace ops's cloud machine")
+    failed, card = mcp(cloud.api, "hub_settings_set", {"key": "bot.cloud_machine.replace", "bot": "ops",
+                                                    "value": {}, "on_behalf_of": "turn"}, attempt["token"])
+    assert not failed and card["needs_confirm"], card
+    assert not [call for call in cloud.hq.calls if call[0] == "delete"]
+    action = card["action"]["id"]
+    post(cloud.api, f"assistant/actions/{action}/confirm", {}, token=attempt["token"], expected=403)
+    done = post(cloud.api, f"assistant/actions/{action}/confirm", {})["action"]
+    assert done["status"] == "done", done
+    assert cloud.row()["state"] == "deleted"
+    assert len([call for call in cloud.hq.calls if call[0] == "delete"]) == 1
+
+
 def test_nothing_defaults_to_a_machine_before_hq_lists_sizes(api, monkeypatch):  # noqa: F811
     store = api.app.state.store
     cloud_access.apply(store, cloud_access.parse(signals("open")))
