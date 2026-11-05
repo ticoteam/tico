@@ -253,10 +253,11 @@ who added it. Owners and admins add, rename, reconnect and remove them in **Sett
 page sees the list (name, kind, status, computers, usage), never a value.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
-Every bot on that computer then runs that tool on it. A bot with no fallback of its own can use it too when that tool is
-installed, the company has that tool's provider turned on (adding a subscription for that tool turns it on, and the
-first-run setup lists the providers to switch on), and **Fall back when a plan runs out** is on in **Settings >
-Models**. On an updated runner, an unused automatic candidate's login is fetched only when the bot is about to use it.
+Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
+model on the same login (that fallback is skipped once the login is spent), can use it too when that tool is installed,
+the company has that tool's provider turned on (adding a subscription for that tool turns it on, and the first-run setup
+lists the providers to switch on), and **Fall back when a plan runs out** is on in **Settings > Models**. On an updated
+runner, an unused automatic candidate's login is fetched only when the bot is about to use it.
 Changing or removing that login leaves a turn still running on another tool alone. Once the fallback fetches the login,
 changing it stops that turn too. Older runners fetch fallback logins up front and restart those turns when a login
 changes.

@@ -411,15 +411,19 @@ that is still spent sees one run, not one per bot. While that run is out, Try no
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the thread's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant DM) and
-reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model.
+reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model. A named fallback on the same
+login as the spent one is skipped (it would hit the same limit), and the turn goes to the company's other providers as
+described below.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
 the cloud cooldown applies.
 
-A bot with no fallback of its own still gets one on a usage limit (a spend cap such as "monthly spend limit" counts):
-the runner runs that turn once on the first of the company's other providers that is signed in on the same computer,
-either by its own sign-in or by a company subscription given to that computer ([Computers](computers.md)), with that
-provider's default model (`fallback_models` in `GET /api/v2/config`), and reports `fallback` with `primary_limited`. A
+A bot with no fallback of its own, or whose named fallback is another model on the same login (that fallback is skipped
+once the login is spent), still gets one on a usage limit (a spend cap such as "monthly spend limit" counts): the runner
+runs that turn once on the first of the company's other providers that is signed in on the same computer, either by its
+own sign-in or by a company subscription given to that computer ([Computers](computers.md)), with the company's default
+model on that tool, or that provider's recommended model when the company's default is on another tool
+(`fallback_models` in `GET /api/v2/config`), and reports `fallback` with `primary_limited`. A
 provider signed in only by a key in the environment is skipped (a turn carries only its own runtime's keys; Codex turns
 its key into a login).
 A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
