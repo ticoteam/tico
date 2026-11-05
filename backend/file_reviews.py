@@ -134,6 +134,7 @@ def require_readable(c, auth, who, reviewed):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (entry["file"],)).fetchone()
         if not row or not file_visible(c, auth, who, row, {}):
             raise Problem("privacy", "You can no longer open a file under review", 403)
+        H._writer(c, who.actor, task_id=row["task_id"])
 
 
 def record(c, who, task_id, question_id, answer_id, reviewed):
@@ -169,6 +170,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
     if verdict not in VERDICTS:
         raise Problem("validation", "A review approves or asks for changes", 422)
     task_id = auth.task(c, who, auth.resolve_task(c, who, task))["id"]
+    H._writer(c, who.actor, task_id=task_id)
     mine = H.actor_id(who.actor) if H.is_bot(who.actor) else None
     if fid:
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -192,6 +194,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
             raise Problem("not_found", "No published file you can open has these bytes at this path", 404)
     else:
         raise Problem("validation", "Give a file id, or a path and its digest", 422)
+    H._writer(c, who.actor, task_id=row["task_id"])
     if mine and row["bot_id"] == mine:
         raise Problem("forbidden", "A bot never reviews its own file: ask a person or another bot", 403)
     entry = {"file": row["id"], "version": v["version"], "digest": v["source_digest"] or v["digest"]}
