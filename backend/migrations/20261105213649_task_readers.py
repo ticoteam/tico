@@ -32,7 +32,14 @@ def _move(conn, table):
     for kind, name, sql in conn.execute("SELECT type, name, sql FROM sqlite_master WHERE tbl_name=? "
                                         "AND type IN ('index','trigger') AND sql LIKE '%guest%'", (table,)).fetchall():
         conn.execute(f"DROP {kind.upper()} IF EXISTS {name}")
+    # DROP COLUMN parses every trigger again. On a new file an earlier migration's trigger names a table the module
+    # code makes after the migrations (presences_meeting_delete names task_roles), so the triggers step aside for it.
+    triggers = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL").fetchall()
+    for name, _ in triggers:
+        conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
     conn.execute(f"ALTER TABLE {table} DROP COLUMN guest")
+    for _, sql in triggers:
+        conn.execute(sql)
 
 
 def up(conn):
