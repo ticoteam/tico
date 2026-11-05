@@ -5,11 +5,12 @@ import json
 import httpx
 import pytest
 
-from backend import cloud_access, cloud_machines as CM, team_rules
+from backend import assistant, cloud_access, cloud_machines as CM, team_rules
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, headers, setup_attempt
 from backend.tests.test_openapi_v2 import conforms
+from backend.tests.test_assistant import assistant_turn
 
 PATH = "/api/v2/cloud-machines/support"
 KEY = "tgw-synthetic-fixture-key-0042"
@@ -116,6 +117,21 @@ def test_full_app_support_cannot_enable_its_own_machine_access(api, hq, monkeypa
     api.app.state.store.settings.test_identities["staff-test"] = Identity(
         "human:tico-support", "owner", support="full", token_id=sid)
     assert api.put(PATH, json={"on": True}, headers=headers("staff-test")).status_code == 403
+    assert hq.calls == [] and audit(api) == []
+
+
+def test_owner_assistant_needs_the_same_confirmation_as_the_support_access_rule(api, hq):
+    _, attempt = assistant_turn(api, "ana-test")
+    token = attempt["token"]
+    # This is a real leased Assistant credential, which authenticates as the owner without support scope.
+    who = api.app.state.auth.authenticate(headers(token), PATH, "PUT")
+    assert who.role == "owner" and who.via == "assistant" and not who.support
+    for on in (False, True):
+        for path, body in (("/api/v2/access/rules", {"support_access": on}), (PATH, {"on": on})):
+            assert not assistant.admits_on_turn("PUT", path, body)
+            response = api.put(path, json=body, headers=headers(token))
+            assert response.status_code == 403, response.text
+            assert response.json()["error"]["code"] == "confirm_required"
     assert hq.calls == [] and audit(api) == []
 
 
