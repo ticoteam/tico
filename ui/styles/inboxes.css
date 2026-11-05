@@ -112,6 +112,7 @@
 .lo-letter:first-child,.lo-grants>li:first-child{padding-top:0}
 .lo-letter:last-child,.lo-grants>li:last-child{border-bottom:0}
 .lo-letter-top,.lo-grant-head{display:flex;justify-content:space-between;align-items:start;gap:12px}
+.lo-grant-head strong{min-width:0;overflow-wrap:anywhere}
 .lo-letter-top>div{display:flex;flex-direction:column;gap:4px;min-width:0;overflow-wrap:anywhere}
 .lo-letter-top .pill{flex:none}
 .lo-letter-meta,.lo-letter-actions,.lo-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-top:10px}
