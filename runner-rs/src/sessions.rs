@@ -379,13 +379,19 @@ pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
     Ok(if done.ok() && r.contains('/') { r } else { String::new() })
 }
 
-/// Make or reuse the task's worktree: (upstream ref, problem). A problem means the turn runs in the main checkout.
-pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String, String) {
+/// Make or reuse the task's worktree: (upstream ref, problem). A path refusal stops the turn; other problems
+/// let it run in the main checkout.
+pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> Result<(String, String), String> {
+    crate::repo_safety::outside_installation(main)?;
+    crate::repo_safety::outside_installation(path)?;
+    if let Some(parent) = path.parent() {
+        crate::repo_safety::outside_installation(parent)?;
+    }
     let env = crate::safegit::environment(turn);
     // A private meeting's branch tracks nothing: a bare `git push` there has nowhere to go.
     let private = task.starts_with(PRIVATE);
     if !main.join(".git").symlink_metadata().is_ok_and(|m| m.is_dir()) {
-        return (String::new(), MISSING.into());
+        return Ok((String::new(), MISSING.into()));
     }
     let made: Result<(String, String), Fault> = async {
         let asked = gitrun::git(main, &env, &["rev-parse", "--path-format=absolute", "--git-common-dir"], 15).await?;
@@ -459,13 +465,16 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
         Ok((tracked, String::new()))
     }
     .await;
-    made.unwrap_or_else(|f| (String::new(), fault_name(&f)))
+    Ok(made.unwrap_or_else(|f| (String::new(), fault_name(&f))))
 }
 
 /// After a completed turn: commit memory/ and knowledge/ (not `skip`, and only when `memory` is set: a stateless bot's are
 /// left as they are), stamp this lane's unpushed commits with the run and rebase them onto the upstream. "" or the
 /// problem; on a problem the commits stay for the next turn.
 pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory: bool) -> String {
+    if let Err(problem) = crate::repo_safety::outside_installation(path) {
+        return problem;
+    }
     let env = crate::safegit::committing_environment(turn);
     let timeout = 45;
     let done: Result<String, Fault> = async {
@@ -530,6 +539,7 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
 /// checkout is the pass's own and its upstream is the bot's main, so discarding back to the upstream is safe; without
 /// one, nothing is discarded and the error says so.
 pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String> {
+    crate::repo_safety::outside_installation(path)?;
     let env = crate::safegit::environment(turn);
     let done: Result<Result<Vec<String>, String>, Fault> = async {
         let ahead = g(path, &env, &["log", "--format=%h", "@{u}..HEAD"], 15).await?;
@@ -559,6 +569,9 @@ pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String
 
 /// Take a closed task's worktree and branch away once nothing in it is unsaved. True when gone.
 pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
+    if crate::repo_safety::outside_installation(main).is_err() || crate::repo_safety::outside_installation(path).is_err() {
+        return false;
+    }
     let env = crate::safegit::environment(turn);
     if !path.exists() {
         return true;
@@ -584,6 +597,9 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
 
 /// Take an ended private meeting's worktree and branch away, whatever is in it: nothing there is ever kept. True when gone.
 pub async fn remove_private(main: &Path, path: &Path, name: &str, turn: &Env) -> bool {
+    if crate::repo_safety::outside_installation(main).is_err() || crate::repo_safety::outside_installation(path).is_err() {
+        return false;
+    }
     let env = crate::safegit::environment(turn);
     if !name.starts_with(PRIVATE) {
         return false;
@@ -807,10 +823,11 @@ pub fn sibling_repo(name: &str, workspace: &Path) -> String {
 }
 
 /// Siblings a bot reads (`reads:`) sit beside its checkout, pulled (service.py ensure_reads).
-pub async fn ensure_reads(workspace: &Path, path: &Path) {
+pub async fn ensure_reads(workspace: &Path, path: &Path) -> Result<(), String> {
+    crate::repo_safety::outside_installation(path)?;
     let reads = declared_reads(path);
     if reads.is_empty() {
-        return;
+        return Ok(());
     }
     let clean = crate::safegit::clean_environment(&crate::env::process_environment());
     let mut origin = String::new();
@@ -825,10 +842,7 @@ pub async fn ensure_reads(workspace: &Path, path: &Path) {
     }
     for name in reads {
         let sibling = workspace.join(sibling_repo(&name, workspace));
-        if let Err(problem) = crate::repo_safety::outside_installation(&sibling) {
-            log(&format!("Tico runner: {problem}"));
-            continue;
-        }
+        crate::repo_safety::outside_installation(&sibling)?;
         if sibling.is_dir() {
             let error = crate::execute::pull_repo(&sibling, &crate::env::process_environment()).await;
             if !error.is_empty() {
@@ -846,6 +860,7 @@ pub async fn ensure_reads(workspace: &Path, path: &Path) {
             log(&format!("Tico runner: could not clone {leaf}, which {} reads", path.file_name().unwrap_or_default().to_string_lossy()));
         }
     }
+    Ok(())
 }
 
 // ----------------------------------------------------------------------------- lanes
@@ -1057,8 +1072,15 @@ impl Runner {
             self.lanes.try_checkout(&bot)
         };
         let main_path = local_path(&self.config, &bot, &attempt["config"]);
-        if !app {
-            crate::repo_safety::outside_installation(&main_path)?;
+        crate::repo_safety::outside_installation(&main_path)?;
+        if !task.is_empty() {
+            crate::repo_safety::outside_installation(&path_for(&self.config.projects_dir(), &bot, &task))?;
+        }
+        for row in attempt["worktrees"].as_array().into_iter().flatten() {
+            let relative = text_of(&row["path"]);
+            if !relative.is_empty() {
+                crate::repo_safety::outside_installation(&self.config.projects_dir().join(relative))?;
+            }
         }
         if app {
             std::fs::create_dir_all(&main_path).map_err(|e| format!("cannot create {}: {e}", main_path.display()))?;
@@ -1068,8 +1090,9 @@ impl Runner {
 
     /// Bring the checkout up to date before the turn: a shared one is rebased (its problem goes to the prompt),
     /// any other fast-forwarded; then the siblings it reads.
-    pub async fn refresh_checkout(&self, place: &Place, attempt: &mut Value, env: &Env) {
+    pub async fn refresh_checkout(&self, place: &Place, attempt: &mut Value, env: &Env) -> Result<(), String> {
         let path = &place.main_path;
+        crate::repo_safety::outside_installation(path)?;
         if is_shared(&attempt["config"]) {
             attempt["branch_sync_problem"] = json!(sync_shared(path, env).await);
         } else {
@@ -1084,7 +1107,7 @@ impl Runner {
                 }
             }
         }
-        ensure_reads(&self.config.projects_dir(), path).await;
+        ensure_reads(&self.config.projects_dir(), path).await?;
         // A built-in bot's product files follow the release (crate::product_files); a task lane pushes them at once.
         crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
         if !place.task.is_empty() && !place.private && crate::product_files::unpushed(&place.bot) {
@@ -1093,6 +1116,7 @@ impl Runner {
                 crate::product_files::pushed(&place.bot);
             }
         }
+        Ok(())
     }
 
     /// A task lane's own worktree (else the main checkout, waited for), and the task's set-up worktrees and their
@@ -1144,11 +1168,11 @@ impl Runner {
                     place.checkout = Some(self.during_drain(&text_of(&attempt["id"]), async {
                         self.lanes.hold_checkout(&place.bot, place.person, lost).await.map_err(crate::execute::Fail::runtime)
                     }).await.map_err(|e| e.text)?);
-                    self.refresh_checkout(place, attempt, env).await;
+                    self.refresh_checkout(place, attempt, env).await?;
                 }
             } else {
                 place.checkout = None;
-                ensure_reads(&self.config.projects_dir(), &session).await;
+                ensure_reads(&self.config.projects_dir(), &session).await?;
                 attempt["_session"] = json!({"path": session.display().to_string(), "branch": format!("{BRANCH}{}", place.task), "upstream": tracked, "private": place.private});
                 place.execution_path = session.clone();
                 place.session_path = Some(session);
@@ -1168,8 +1192,9 @@ impl Runner {
     }
 
     /// Add or reuse the task's worktree under the checkout's git lock and rebase it onto its upstream. Err only when
-    /// a drain hands the claim back while it waits for the lock: that is no worktree problem to wait out.
+    /// a path is unsafe or a drain hands the claim back while it waits for the lock; neither can be waited out.
     async fn task_worktree(&self, place: &Place, session: &Path, attempt: &mut Value, env: &Env) -> Result<(String, String), String> {
+        crate::repo_safety::outside_installation(session)?;
         if !place.private && crate::product_files::unpushed(&place.bot) {
             // The worktree would sync from an upstream without the refreshed product files.
             return Ok((String::new(), "its refreshed product files are not pushed yet".into()));
@@ -1177,7 +1202,7 @@ impl Runner {
         let _git = self.during_drain(&text_of(&attempt["id"]), async {
             Ok(self.lanes.git_lock(&place.main_path).lock_owned().await)
         }).await.map_err(|e| e.text)?;
-        let (tracked, problem) = ensure(&place.main_path, session, &place.task, env).await;
+        let (tracked, problem) = ensure(&place.main_path, session, &place.task, env).await?;
         // A private meeting's copy keeps what the meeting changed: it is not moved onto the upstream mid-meeting.
         if problem.is_empty() && !place.private {
             attempt["branch_sync_problem"] = json!(sync_shared(session, env).await);

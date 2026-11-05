@@ -1593,7 +1593,7 @@ impl Runner {
                     return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
                 }
                 let refresh = async {
-                    self.refresh_checkout(p, &mut attempt, &env).await;
+                    self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
                     Ok(())
                 };
                 if p.task.is_empty() {
