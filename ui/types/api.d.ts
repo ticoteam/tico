@@ -3123,9 +3123,12 @@ export type LettersGrants = {
   granted_by_id: string;
   grantee_id: string;
   grantee_type: string;
+  id: string;
   level: string;
   outbox_id: string;
 }>;
+  next: string | null;
+  outbox_id: string;
 };
 
 export type LettersRevoked = {
@@ -8938,6 +8941,8 @@ export type ListLettersResponse = LetterOutPage;
 
 /** GET /api/v2/letters/outboxes/{outbox_id}/grants */
 export type ListLettersGrantsParams = {
+  after?: string;
+  limit?: number;
   outbox_id: "company";
 };
 export type ListLettersGrantsBody = never;

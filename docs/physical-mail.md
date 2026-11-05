@@ -91,7 +91,7 @@ the provider's price plus 25%. An unconfigured Gateway shows Coming soon and doe
 
 An owner or admin grants sending with `PUT /api/v2/letters/outboxes/company/grants/bot/{bot_id}` and
 `{"level":"send"}`. `DELETE` on the same address revokes it; both are audited. The grants list is
-`GET /api/v2/letters/outboxes/company/grants`; people may also receive a `person/{person_id}` grant. BotOps or an
+`GET /api/v2/letters/outboxes/company/grants` (`limit` up to 100, `after` from `next`, 64 KiB cap); people may also receive a `person/{person_id}` grant. BotOps or an
 Assistant changing grants or company policy must use the person's Confirm flow.
 
 Set `PUT /api/v2/letters/settings` with `return_address` (`name`, `line1`, optional `line2`, `city`, two-letter US

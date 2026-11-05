@@ -113,6 +113,18 @@ def test_botops_policy_and_access_changes_wait_for_the_persons_tap(api, botops):
     assert get(api, "letters/outboxes/company/grants")["grants"] == []
 
 
+def test_grants_are_paged_without_duplicates_and_refuse_oversized_pages(api):
+    grant(api, "ops")
+    grant(api, "finance")
+    first = get(api, "letters/outboxes/company/grants?limit=1")
+    second = get(api, "letters/outboxes/company/grants?limit=1&after=" + first["next"])
+    assert first["outbox_id"] == "company" and len(first["grants"]) == len(second["grants"]) == 1
+    assert {first["grants"][0]["grantee_id"], second["grants"][0]["grantee_id"]} == {"ops", "finance"}
+    assert second["next"] is None
+    get(api, "letters/outboxes/company/grants?limit=101", expected=422)
+    assert len(json.dumps(get(api, "letters/outboxes/company/grants")).encode()) < 64 * 1024
+
+
 def test_quote_ask_approve_requotes_same_hash_and_submits_once(api, hq):
     row = quote(api)
     assert row["page_count"] == 1 and row["total_micros"] == 1500000

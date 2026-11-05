@@ -21673,6 +21673,29 @@
               "type": "string",
               "title": "Outbox Id"
             }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
           }
         ],
         "responses": {
@@ -60100,11 +60123,23 @@
       "LettersGrants": {
         "type": "object",
         "properties": {
+          "outbox_id": {
+            "type": "string"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "grants": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
+                "id": {
+                  "type": "string"
+                },
                 "outbox_id": {
                   "type": "string"
                 },
@@ -60129,6 +60164,7 @@
                 "granted_by_id",
                 "grantee_id",
                 "grantee_type",
+                "id",
                 "level",
                 "outbox_id"
               ],
@@ -60137,7 +60173,9 @@
           }
         },
         "required": [
-          "grants"
+          "grants",
+          "next",
+          "outbox_id"
         ],
         "additionalProperties": true
       },
