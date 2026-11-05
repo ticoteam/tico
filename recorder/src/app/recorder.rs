@@ -314,6 +314,7 @@ pub struct Recorder {
     pub live_sync: Option<LiveSync>,
     _task_link_sync: Option<tico_recorder_native::task_links::TaskLinkSync>,
     pub config: Settings,
+    settings_version: u64,
     pub records: Vec<Summary>,
     current: Option<Recording>,
     blocks: (Signature, Vec<Block>),
@@ -410,6 +411,7 @@ impl Recorder {
         if !demo && let Err(error) = speech::settle(store.root(), speech::own_keys) {
             eprintln!("Speech source unchanged: {error:#}");
         }
+        let settings_version = settings::version();
         let config = settings::read(store.root())?;
         let records = store.summaries()?;
         let (tx, rx) = mpsc::channel();
@@ -449,6 +451,7 @@ impl Recorder {
                 .map(|row| row.id.clone())
                 .unwrap_or_default(),
             config,
+            settings_version,
             records,
             current: None,
             blocks: (Default::default(), vec![]),
@@ -1108,6 +1111,18 @@ impl Recorder {
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
+        let version = settings::version();
+        if !self.demo
+            && self.settings_version != version
+            && let Ok(config) = settings::read(self.store.root())
+        {
+            self.config = config;
+            self.settings_version = version;
+            self.reset_saved();
+            self.keep_destination();
+            self.services_at = None;
+            self.bump();
+        }
         while let Ok(reply) = self.rx.try_recv() {
             if reply.kind == "delete" {
                 self.join_delete();

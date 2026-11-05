@@ -922,6 +922,24 @@ fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
 }
 
 #[test]
+fn settings_reload_controller_observes_writes_without_a_settings_job_reply() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    // Exercise the normal controller refresh with the fixture's background workers disabled.
+    app.demo = false;
+    let mut config = settings::read(directory.path()).unwrap();
+    config.microphone = "Studio mic".into();
+    settings::write(directory.path(), &config).unwrap();
+    app.tick();
+    assert_eq!(app.config.microphone, "Studio mic");
+    config.microphone.clear();
+    settings::write(directory.path(), &config).unwrap();
+    app.tick();
+    assert!(app.config.microphone.is_empty());
+}
+
+#[test]
 fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();

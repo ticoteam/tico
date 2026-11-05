@@ -10,7 +10,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, Weak,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -31,8 +31,6 @@ struct Shared {
     id: u64,
     /// Bumped by every committed write through this process.
     data: AtomicU64,
-    /// Bumped when Settings are saved, so workers re-read them.
-    settings: AtomicU64,
     /// Bumped by writes and by `poke`; waiters sleep on `wake` until it moves.
     changes: Mutex<u64>,
     wake: Condvar,
@@ -54,6 +52,22 @@ impl Shared {
 }
 
 static NEXT_STORE: AtomicU64 = AtomicU64::new(1);
+/// Weak references let settings writers wake every opened library without keeping one alive.
+static OPEN_STORES: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
+
+pub(crate) fn settings_changed() {
+    let mut stores = OPEN_STORES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    stores.retain(|weak| {
+        if let Some(shared) = weak.upgrade() {
+            shared.bump(false);
+            true
+        } else {
+            false
+        }
+    });
+}
 /// Connections kept open per thread and library, so a query costs no open, pragma or close.
 const KEPT_PER_THREAD: usize = 4;
 thread_local! {
@@ -221,13 +235,19 @@ impl Store {
             shared: Arc::new(Shared {
                 id: NEXT_STORE.fetch_add(1, Ordering::Relaxed),
                 data: AtomicU64::new(0),
-                settings: AtomicU64::new(0),
                 changes: Mutex::new(0),
                 wake: Condvar::new(),
                 live: Mutex::new(()),
                 task_links: Mutex::new(()),
             }),
         };
+        {
+            let mut stores = OPEN_STORES
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            stores.retain(|weak| weak.strong_count() > 0);
+            stores.push(Arc::downgrade(&store.shared));
+        }
         private_dir(&store.root)?;
         private_dir(&store.root.join("audio"))?;
         let db = store.db()?;
@@ -318,13 +338,9 @@ impl Store {
     pub fn poke(&self) {
         self.shared.bump(false);
     }
-    /// Settings or credentials were saved: workers re-read them when next woken.
-    pub fn settings_saved(&self) {
-        self.shared.settings.fetch_add(1, Ordering::SeqCst);
-        self.poke();
-    }
+    /// Every settings or credential writer advances the process-wide generation.
     pub fn settings_version(&self) -> u64 {
-        self.shared.settings.load(Ordering::SeqCst)
+        crate::settings::version()
     }
     /// Sleeps until the change signal moves past `since`, or `timeout`; returns its new value.
     pub fn wait_changes(&self, since: u64, timeout: Duration) -> u64 {

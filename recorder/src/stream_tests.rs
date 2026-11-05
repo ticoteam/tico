@@ -137,6 +137,78 @@ fn texts(store: &Store, id: &str, channel: &str) -> Vec<(String, u64)> {
 const SECOND: usize = 16_000;
 
 #[test]
+fn settings_reload_stream_waits_for_a_key_and_reloads_credentials_and_endpoint() {
+    if settings::tests::isolated(
+        "stream::tests::settings_reload_stream_waits_for_a_key_and_reloads_credentials_and_endpoint",
+    ) {
+        return;
+    }
+    let closed: Session = Box::new(|socket| {
+        created(socket);
+        while !matches!(socket.read().unwrap(), Message::Close(_)) {}
+    });
+    let (url, seen, server) = mock(vec![
+        closed,
+        Box::new(|socket| {
+            created(socket);
+            while !matches!(socket.read().unwrap(), Message::Close(_)) {}
+        }),
+        Box::new(|socket| {
+            created(socket);
+            until_done(socket);
+            send(socket, json!({"type":"transcript.done"}));
+        }),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Settings changed while streaming").unwrap();
+    let mut config = Settings {
+        streaming: Some(true),
+        streaming_url: url.clone(),
+        ..Default::default()
+    };
+    settings::write(dir.path(), &config).unwrap();
+    let mut streams = Streams::new(
+        store.clone(),
+        record.id.clone(),
+        Plan::from_settings(&config).unwrap(),
+    );
+    let feed = streams.feed("me").unwrap();
+    wait_for("the missing-key status", || {
+        state(&record.id, "me").state == "off"
+    });
+    assert!(seen.lock().unwrap().is_empty());
+    settings::save_secret(KEY_NAME, "first-key").unwrap();
+    wait_for("the first credential", || {
+        seen.lock().unwrap().len() == 1 && state(&record.id, "me").state == "live"
+    });
+    settings::save_secret(KEY_NAME, "second-key").unwrap();
+    wait_for("the replacement credential", || {
+        seen.lock().unwrap().len() == 2 && state(&record.id, "me").state == "live"
+    });
+    config.streaming_url = format!("{url}/changed");
+    settings::write(dir.path(), &config).unwrap();
+    wait_for("the replacement endpoint", || {
+        seen.lock().unwrap().len() == 3 && state(&record.id, "me").state == "live"
+    });
+    assert!(state(&record.id, "me").error.is_empty());
+    drop(feed);
+    wait_for("the stream to stop", || {
+        state(&record.id, "me").state == "stopped"
+    });
+    server.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|(_, key)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["Bearer first-key", "Bearer second-key", "Bearer second-key"]
+    );
+    assert!(requests[2].0.starts_with("/v1/stt/changed?"));
+}
+
+#[test]
 fn service_times_map_to_the_recording_across_gaps() {
     // 0.5 s streamed from 10 s into the recording, then audio resumed at 20 s.
     let anchors = [(0, 10_000.), (8_000, 20_000.)];
