@@ -5,7 +5,7 @@ const {journey, open, go, must, assertClean, expectFailure, shot, t, SEEDS} = re
 
 journey('make-page', async ({hub, browser, phone}) => {
   await must(hub, 'dana', 'POST', 'assistant/turn-on', {});
-  const made = await must(hub, 'dana', 'POST', 'tasks', {owner: 'person:dana', title: 'Prepare the alert flow', body: 'Three scenarios.'});
+  const made = await must(hub, 'dana', 'POST', 'tasks', {owner: 'human:dana', title: 'Prepare the alert flow', body: 'Three scenarios.'});
   const id = (made.task || made).id;
   const page = await open(browser, hub, 'priya', {phone, hash: '#/task/' + id});
   let status = null, cap = false;

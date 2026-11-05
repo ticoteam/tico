@@ -125,6 +125,8 @@ person's rights, and asks before a hard delete, which only the owner may do.
 On a task, the Tico dot box takes a description and **Make page**. Your Assistant reads only the task's shared
 context list, writes one HTML page, and files and pins it on that task. You appear as the author; the Assistant
 keeps the page and its version retains the attempt that published it. No scripts run.
+Each request starts a fresh session, with its initiating message and shared task context. Earlier Assistant history,
+unrelated queued tasks and later chat messages stay out of that turn.
 
 The card says **Making page…** until the page is pinned. A turn that ends without a pin says **Not made · Open chat**.
 The card survives reopening the task. A task with 60 pins returns **This task has 60 pins**; unlink a page to make room.
