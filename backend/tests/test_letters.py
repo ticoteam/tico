@@ -203,6 +203,40 @@ def test_timeout_retry_keeps_the_claimed_quote_and_never_resubmits_provider(api,
     assert len(submits) == 2 and submits[0] == submits[1]
 
 
+def test_restart_recovers_the_saved_submission_claim_without_a_new_quote(api, hq):
+    row = send(api, quote(api))
+    hq.timeout = True
+    approve(api, row)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE letters SET next_sync_at=? WHERE id=?", (H.now(), row["id"]))
+    count = len(hq.quotes)
+    restarted = L.Letters(api.app, api.app.state.store, api.app.state.auth, api.app.state.store.settings)
+    restarted.drain()
+    assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1 and len(hq.quotes) == count
+
+
+def test_unstable_proof_stops_instead_of_repeatedly_requesting_approval(api, hq):
+    row = send(api, quote(api))
+    hq.proof = L.render("Different provider proof bytes for the same letter")
+    approve(api, row)
+    after = fetch(api, row)
+    assert after["error"] == "unstable_proof" and after["approval_id"] == row["approval_id"] and not hq.jobs
+    count = len(hq.calls)
+    api.app.state.letters.drain()
+    assert len(hq.calls) == count
+
+
+def test_bot_quotes_an_uploaded_pdf_through_the_existing_library_path(api, hq):
+    import base64
+    ident, token = bot(api)
+    grant(api, ident)
+    failed, uploaded = call(api, "hub_file_upload", {"path": "letter.pdf", "content_base64":
+        base64.b64encode(L.render("A letter uploaded by a bot")).decode(), "scope": "bot"}, token=token)
+    assert not failed, uploaded
+    row = post(api, "letters/quotes", {"file_id": uploaded["id"], "recipient": RECIPIENT}, token=token)
+    assert row["page_count"] == 1 and row["proof"]
+
+
 def test_unconfigured_is_coming_soon_and_does_not_poll_in_a_loop(api, hq):
     hq.unconfigured = True
     result = post(api, "letters/quotes", {"text": "Hello", "recipient": RECIPIENT}, expected=503)

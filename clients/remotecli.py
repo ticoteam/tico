@@ -248,7 +248,7 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "connections"):
+    if args.cmd in ("mail", "letter", "connections"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
         return via_tool(client, args)

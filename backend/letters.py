@@ -168,6 +168,8 @@ def public(row):
     for key in ("recipient", "return_address", "tracking"):
         out[key] = H._json(row[key], [] if key == "tracking" else {})
     out["proof"] = "/api/v2/files/" + row["proof_blob_id"] if row["proof_blob_id"] else None
+    for key in ("color", "duplex", "cancel_possible"):
+        out[key] = bool(out[key])
     return out
 
 
@@ -243,7 +245,8 @@ class Letters:
             return True
         try:
             result = engine({"recipient": recipient, "text": text}, questions, "Letters out recipient")
-            return J.choice(J.check_answers(result.get("answers"), questions), "recipient_kind") != "other"
+            choice, confidence = J.choice(J.check_answers(result.get("answers"), questions), "recipient_kind")
+            return choice != "other" or confidence < 0.8
         except Exception:
             return True
 
@@ -275,12 +278,23 @@ class Letters:
             from . import task_privacy
             task_privacy.guard_write(c, who, "/api/v2/letters/quotes", self.auth)
             company, _, _ = authorize(c, self.auth, who)
+            if who.attempt_id and not (body.task_id or body.thread_id):
+                message = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (who.attempt_id,)).fetchone()
+                if message:
+                    message = dict(message)
+                    conversation = H.conversation(c, message["conversation_id"])
+                    body = body.model_copy(update={"task_id": H.message_task_id(message, conversation),
+                                                   "thread_id": message["conversation_id"]})
             if not company["return_address"]:
                 raise Problem("return_address", "Set the return address before sending a letter", 422)
             if body.task_id:
                 self.auth.task(c, who, body.task_id)
             if body.thread_id:
                 self.auth.conversation(c, who, body.thread_id)
+            task = H.task(c, body.task_id) if body.task_id else None
+            origin = str((task or {}).get("trigger_source") or "")
+            automation_id = origin.removeprefix("automation:") if origin.startswith("automation:") else None
         data = self.source(who, body)
         text = pdf_text(data)
         must_ask = body.mail_class != "first_class" or self.triage(body.recipient.model_dump(), text)
@@ -290,9 +304,9 @@ class Letters:
         with self.store.transaction() as c:
             authorize(c, self.auth, who)
             source = blobs.register(c, who, source_digest, len(data), "letter.pdf", "application/pdf")
-            c.execute("INSERT INTO letters(id,outbox_id,requested_by,acting_bot_id,task_id,thread_id,recipient,"
+            c.execute("INSERT INTO letters(id,outbox_id,requested_by,acting_bot_id,automation_id,task_id,thread_id,recipient,"
                 "recipient_hash,return_address,mail_class,color,duplex,source_blob_id,always_ask,created_at,updated_at) "
-                "VALUES(?,'company',?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (ident, who.actor, acting_bot(who), body.task_id,
+                "VALUES(?,'company',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (ident, who.actor, acting_bot(who), automation_id, body.task_id,
                 body.thread_id, dump(recipient), hashlib.sha256(dump(recipient).encode()).hexdigest(),
                 dump(company["return_address"]), body.mail_class, int(body.color), int(body.duplex), source["id"],
                 int(must_ask), now, now))
@@ -321,6 +335,11 @@ class Letters:
         proof = self.call("/quotes/" + qid + "/proof", pdf=True)
         if not proof.startswith(b"%PDF-") or hashlib.sha256(proof).hexdigest() != quote["proof_sha256"]:
             raise Problem("proof_changed", "The rendered proof changed; nothing was sent", 409)
+        if row["proof_blob_id"]:
+            with self.store.read() as c:
+                old_digest = c.execute("SELECT digest FROM blobs WHERE id=?", (row["proof_blob_id"],)).fetchone()[0]
+            if old_digest != quote["proof_sha256"]:
+                raise Problem("unstable_proof", "Identical letter input produced different proof bytes; ask HQ to extend quote life", 409)
         digest = self.app.state.blobs.put(proof, "application/pdf")
         with self.store.transaction() as c:
             blob = blobs.register(c, SimpleNamespace(actor=row["requested_by"]), digest, len(proof),
@@ -456,7 +475,8 @@ class Letters:
                     if approval:
                         H.approval_consume(c, row["requested_by"], approval["id"])
                     c.execute("UPDATE letters SET status='submitting',submission_quote_id=quote_id,approved_hash=?,"
-                        "submitted_at=?,updated_at=? WHERE id=?", (row["approval_hash"] if approval else None, H.now(), H.now(), ident))
+                        "submitted_at=?,next_sync_at=?,updated_at=? WHERE id=?",
+                        (row["approval_hash"] if approval else None, H.now(), H.now(), H.now(), ident))
                     row["submission_quote_id"] = row["quote_id"]
             result = self.call(body={"quote_id": row["submission_quote_id"]}, idempotency_key="tico-letter:" + ident)
             self.update(ident, result)
@@ -477,7 +497,7 @@ class Letters:
             # Unconfigured is a setup state, so the sweep leaves it alone until a person retries.
             with self.store.transaction() as c:
                 c.execute("UPDATE letters SET error=?,attempts=attempts+1,next_sync_at=?,updated_at=? WHERE id=?",
-                    (exc.code, None if exc.code in ("unconfigured", "letters_disabled", "forbidden", "letters_cap")
+                    (exc.code, None if exc.code in ("unconfigured", "letters_disabled", "forbidden", "letters_cap", "unstable_proof")
                      else later(BACKOFF[min(row["attempts"], len(BACKOFF)-1)]), H.now(), ident))
 
     def update(self, ident, result):
@@ -492,7 +512,6 @@ class Letters:
                 int(bool(result.get("cancel_possible"))), str(result.get("error") or "")[:100],
                 None if status in FINAL else later(600 if status != "mailed" else 86400), H.now(), ident))
             H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
-            c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('letters','update',?,?)", (ident, H.now()))
 
     def cancel(self, who, ident):
         with self.lock:
@@ -519,9 +538,9 @@ class Letters:
         try:
             with self.store.read() as c:
                 due = [r[0] for r in c.execute("SELECT l.id FROM letters l LEFT JOIN approvals a ON a.id=l.approval_id "
-                    "WHERE ((l.status='waiting_for_ok' AND a.decision IS NOT NULL AND l.error='') OR "
+                    "WHERE ((l.status='waiting_for_ok' AND a.decision IS NOT NULL AND (l.error='' OR l.next_sync_at<=?)) OR "
                     "(l.status IN ('ready','submitting','submitted','printing','mailed') AND l.next_sync_at<=?)) "
-                    "ORDER BY l.updated_at LIMIT 10", (H.now(),))]
+                    "ORDER BY l.updated_at LIMIT 10", (H.now(), H.now()))]
             for ident in due:
                 self.process(ident)
         finally:
