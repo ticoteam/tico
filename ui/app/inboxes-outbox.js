@@ -173,7 +173,11 @@ async function lettersOutSettingsRender(host, ctx) {
   };
   host.querySelector('[data-lo-check]').onclick = async event => {
     const button = event.currentTarget; button.disabled = true;
-    try { const result = await get('/v2/letters/settings?check=true', {fresh: true}); if (ctx.live()) { toast(lettersOutStatus(result)[1]); ctx.refresh(); } }
+    try { const result = await get('/v2/letters/settings?check=true', {fresh: true}); if (ctx.live()) {
+      const [state, label] = lettersOutStatus(result), pill = host.querySelector('[data-ib-status]');
+      if (pill) pill.outerHTML = inboxesPill(state, label);
+      toast(label); button.disabled = false;
+    } }
     catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
   };
 }
