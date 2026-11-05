@@ -3,8 +3,8 @@
 //  - in every group, for the owner and for a member, each card shown has its first line right under its heading and
 //    an Ask BotOps link; a card Settings draws that has neither is listed, so a new card can't miss them;
 //  - Task settings is the Tasks Owner's card: it has the link, and its content stays its own;
-//  - Ask BotOps opens the person's BotOps chat with a draft that names the card's setting and where it is, and sends
-//    nothing: no write leaves the page.
+//  - Ask BotOps opens the person's Assistant, which routes work to BotOps, with a draft naming the setting and where
+//    it is; nothing is sent until the person presses send.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,7 +37,7 @@ async function open(browser, {role = 'owner', hash = '#/settings', phone = false
       email: admin ? 'ana@acme.example' : 'cara@acme.example', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
-    if (p === '/api/employees') return json([{id: 'botops-test-id', name: 'botops', display_name: 'BotOps', status: 'active', host: 'keeper', can_chat: true,
+    if (p === '/api/employees') return json([{id: 'botops-test-id', slug: 'botops', name: 'botops', display_name: 'BotOps', status: 'active', host: 'keeper', can_chat: true,
       can_manage: admin, operator: 'ana', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}, {id: 'ops-test-id', name: 'ops', display_name: 'Ops', status: 'active', host: 'keeper', can_chat: true,
       can_manage: admin, operator: 'ana', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [],
@@ -47,9 +47,12 @@ async function open(browser, {role = 'owner', hash = '#/settings', phone = false
     // What the tabs the links open read first, empty.
     if (p === '/api/v2/listening/destinations') return json({destinations: [], categories: [], receivers: []});
     if (p === '/api/v2/access') return json({people: [], allowed: [], allowed_domains: [], rules: {}, member_bot_limit: 3});
+    if (p === '/api/v2/mailboxes') return json({admin, mailboxes: [], shared: [], may: {}});
     if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], history: {changes: [], transitions: []}});
     if (p === '/api/v2/billing') return json({state: 'no_gateway'});
     if (p === '/api/v2/ceo-bot') return json(null, 404);
+    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'assistant-test-id', name: 'Assistant',
+      room_id: 'assistant-room', messages: [], earlier: null});
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -95,13 +98,13 @@ async function open(browser, {role = 'owner', hash = '#/settings', phone = false
       await page.evaluate(() => { const card = document.querySelector('#settings-defaults'); card.querySelector('.settings-card-line').remove(); card.querySelector('[data-settings-ask]').remove(); });
       await page.locator('#settings-defaults > .settings-card-line').waitFor();
       await page.locator('#settings-defaults > header > [data-settings-ask]').waitFor();
-      // Ask BotOps: the chat opens with the draft in the box, and nothing is sent.
+      // Ask BotOps: the Assistant opens with the draft in the box, and nothing is sent.
       const before = writes.length;
       await page.locator('#settings-defaults > header > [data-settings-ask]').click();
-      await page.waitForFunction(() => location.hash === '#/bot/botops-test-id/chat');
-      const box = page.locator('.p-text').first();
-      await page.waitForFunction(() => /company models/.test(document.querySelector('.p-text')?.value || ''));
-      assert.equal(await box.inputValue(), 'Help me change the company models in Settings > AI models: ');
+      await page.locator('#ask-panel.ask-shown').waitFor();
+      const box = page.locator('#ask-panel .ask-form .p-text');
+      await page.waitForFunction(() => /company models/.test(document.querySelector('#ask-panel .ask-form .p-text')?.value || ''));
+      assert.equal(await box.inputValue(), 'Ask BotOps to help me change the company models in Settings > AI models: ');
       await page.waitForTimeout(300);
       assert.deepEqual(writes.slice(before), [], 'nothing is sent');
       assert.deepEqual(errors, []);

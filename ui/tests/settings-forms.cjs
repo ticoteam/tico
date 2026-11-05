@@ -65,11 +65,9 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await org.inputValue(), 'acme-inc', 'Organization survives the refresh');
     assert.equal(await name.inputValue(), 'Acme Tico', 'App name survives the refresh');
 
-    // Settings: loadSettings and a same-route redraw leave the Add computer and API token fields alone.
+    // The computer form stays in Computers; the personal-token form stays in Connections. Both survive refreshes.
     await page.goto('https://tico-ui.test/#/settings/devices');
-    const machine = page.locator('#machine-label'), token = page.locator('#settings-token-form input[name=label]');
-    await token.waitFor();
-    await token.fill('CI script');
+    const machine = page.locator('#machine-label');
     await page.locator('#machine-add-open').click();
     await machine.fill('Build server');
     // The same-route redraw starts its own loadSettings; wait for that one to finish too.
@@ -81,9 +79,20 @@ const {unrouted} = require('./support/routes.cjs');
       await again;
     });
     assert.equal(await machine.inputValue(), 'Build server', 'Computer name survives loadSettings');
-    assert.equal(await token.inputValue(), 'CI script', 'Token label survives loadSettings');
     assert.equal(await page.locator('#machine-add-dialog').evaluate(d => d.open), true, 'Add computer stays open through loadSettings');
     await page.keyboard.press('Escape');
+    await page.locator('#settings-tabs [data-settings-tab=connections]').click();
+    const token = page.locator('#settings-token-form input[name=label]');
+    await token.waitFor();
+    await token.fill('CI script');
+    await page.evaluate(async () => {
+      await loadSettings();
+      const real = loadSettings; let again = null;
+      loadSettings = () => (again = real());
+      try { route(); } finally { loadSettings = real; }
+      await again;
+    });
+    assert.equal(await token.inputValue(), 'CI script', 'Token label survives loadSettings');
     await page.locator('[data-settings-tab=bots]').click();
     assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
     assert.equal(await page.locator('#settings-devices #settings-add-bot').count(), 0);
@@ -153,7 +162,12 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));
     // The presence read can expose revoked_at before the action's remaining Settings reads finish.
-    await page.locator('#machine-note code', {hasText: 'docker compose'}).waitFor();
+    const dockerDetails = page.locator('#machine-note details.settings-details');
+    await dockerDetails.locator('summary').waitFor();
+    const dockerCommand = dockerDetails.locator('code').filter({hasText: 'docker compose'});
+    assert.equal(await dockerCommand.isVisible(), false, 'Docker instructions stay behind Details');
+    await dockerDetails.locator('summary').click();
+    await dockerCommand.waitFor();
     assert.match(await page.locator('#machine-note').innerText(), /docker compose/);
     await page.locator('#set-machines .machine-card').waitFor({state: 'detached'});
     const showRevoked = page.getByRole('checkbox', {name: 'Show revoked (1)', exact: true});

@@ -32,6 +32,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (p === '/api/v2/operations') return json({machines: [], services: [], issues: []});
         if (p === '/api/v2/models') return json({models: [], harnesses: []});
         if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/billing') return json({state: 'no_gateway'});
         if (p === '/api/v2/settings/turn-levels') {
           if (request.method() === 'POST') {
             const body = request.postDataJSON(); writes.push(body);
@@ -42,7 +43,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
       });
-      await page.goto('https://tico-ui.test/#/settings/models');
+      await page.goto('https://tico-ui.test/#/settings/turn-levels');
       const warning = page.locator('#turn-levels-form [name=warning_per_person]');
       const stop = page.locator('#turn-levels-form [name=stop_per_person]');
       await warning.waitFor();

@@ -10,7 +10,11 @@
 const SETTINGS_CARDS = [
   ['#settings-theme-card', 'Theme', 'How Tico looks for you: dark, light, or the same as your device.'],
   ['#settings-assistant-pane', 'my Assistant', 'Your own Assistant: open its chat and, where the team allows it, choose whether it may decide your approvals for you.'],
-  ['#set-mailboxes-card', 'Mailboxes', 'The mailboxes Tico reads and sends from, who may use each one, and your own Google account for it.'],
+  ['#set-mailboxes-card', 'Mailboxes', 'The Google connection that provides the mailboxes available here.'],
+  ['#mailboxes-top', 'Mailboxes', 'The Google connection that provides the mailboxes available here.'],
+  ['#mailboxes-list', 'Mailboxes', 'The mailboxes Tico can use for this team, including who may use each one.'],
+  ['#mailboxes-may', 'mail permissions', 'What Tico may do with connected mailboxes: organize mail, send messages, and change calendars.'],
+  ['#mailboxes-shared', 'shared mailboxes', 'The shared mailboxes your team has given you access to.'],
   ['#set-people .people-join', 'adding people', 'How people join this team: add them by email, or keep the list in step with your company directory.'],
   ['#set-people .people-list-card:not(#setup-people)', 'People', 'Everyone on the team, the role each has, and whether they can sign in.'],
   ['#setup-people', 'the people from setup', 'People named while this team was set up who are not on the team yet. Add the ones who should be.'],
@@ -66,7 +70,7 @@ function settingsAskDraft(card) {
   const row = SETTINGS_CARDS.find(([sel]) => card.matches(sel));
   const group = SETTINGS_GROUPS.find(g => g.key === card.closest('[data-settings-group]')?.dataset.settingsGroup);
   const name = row?.[1] || card.querySelector(':scope > header h2')?.textContent.trim() || 'a setting';
-  return `Help me change ${name}${group ? ` in Settings > ${group.label}` : ''}: `;
+  return `Ask BotOps to help me change ${name}${group ? ` in Settings > ${group.label}` : ''}: `;
 }
 
 function settingsCardsDecorate(root = $('.settings-panes')) {
@@ -104,21 +108,6 @@ function settingsCardsWatch() {
     const button = event.target.closest('[data-settings-ask]');
     if (!button) return;
     event.preventDefault();
-    botopsAsk(settingsAskDraft(button.closest('[data-settings-card]')));
+    askDraft(settingsAskDraft(button.closest('[data-settings-card]')));
   });
-}
-
-// Opens the person's BotOps chat with `text` in the box, sent only when they press send. A draft they already started
-// stays, with this one below it; `keep` leaves a started draft alone instead.
-function botopsAsk(text, {keep = false} = {}) {
-  const bot = botByRef('botops');
-  if (!bot || !bot.can_chat || botLimited(bot)) { toast('BotOps chat is unavailable. Ask your team owner for access.', true); return; }
-  const pill = botPill(bot.id), box = pq(pill, '.p-text'), started = box.value.trim();
-  if (!started || !keep) {
-    box.value = started ? `${box.value.replace(/\s+$/, '')}\n\n${text}` : text;
-    box.dispatchEvent(new Event('input', {bubbles: true}));
-  }
-  pill.focusOnOpen = true;
-  const address = '#/bot/' + encodeURIComponent(bot.id) + '/chat';
-  if (location.hash === address) showBotTab('chat'); else location.hash = address;
 }
