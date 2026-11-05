@@ -67,6 +67,47 @@ A letter whose scan or reading fails is marked `failed` and tried again after 1 
 last try a scan that still cannot be read is filed for the owner unread, so nobody misses it. A retry never makes a
 second task.
 
+## Letters out
+
+Bots can quote and send US letters through Tico's Gateway, using Tico's Click2Mail account. Print and postage cost
+the provider's price plus 25%. An unconfigured Gateway shows Coming soon and does not retry in a loop.
+
+An owner or admin grants sending with `PUT /api/v2/letters/outboxes/company/grants/bot/{bot_id}` and
+`{"level":"send"}`. `DELETE` on the same address revokes it; both are audited. The grants list is
+`GET /api/v2/letters/outboxes/company/grants`; people may also receive a `person/{person_id}` grant. BotOps or an
+Assistant changing grants or company policy must use the person's Confirm flow.
+
+Set `PUT /api/v2/letters/settings` with `return_address` (`name`, `line1`, optional `line2`, `city`, two-letter US
+`state`, `postal_code`), `mode` (`ask_first`, `on_their_own`, `never`) and optional `monthly_cap_micros` (USD millionths;
+null removes the cap). A structured company physical address is the default when present; otherwise set a return
+address first. `GET` shows these settings and setup state. A manager can set a stricter mode and optional cap at
+`/api/v2/letters/bots/{bot_id}/settings`; the company rule always wins. Caps include Tico-originated accepted letters
+and uncertain submission holds across the company, plus the optional bot cap, in each UTC month.
+
+Use `hub letter quote --text "..." --recipient '{"name":"Recipient","line1":"2 Main St","city":"Dover","state":"DE","postal_code":"19901"}'`
+(MCP `hub_letter_quote`), or `--file-id` for a PDF already in Tico's upload/media store. ReportLab renders text and
+markdown as searchable US Letter text, without fetching images or executing HTML; upload a PDF for characters
+outside its Latin character set. The source PDF may have 1–100 pages and be at most 5 MiB. The result includes the
+page count, live total and a link to HQ's rendered proof, kept in Tico's own blob store.
+
+`hub letter send <letter_id>` (`hub_letter_send`) asks for approval by default. The existing approval card shows the
+proof, recipient, return address, mail class and total. A bot's manager or the owner decides; decline closes the
+letter. On their own is an explicit company opt-in and still asks for certified mail, courts/agencies, uncertain
+classification and the first letter to an address. Classify/Decide is triage, not a security boundary. Never and revoked
+access block approved sends too.
+
+Quotes last 15 minutes. When approval lands Tico re-quotes; any changed approval hash asks again. Earlier proofs stay
+readable to the same people who can read the record: its requester, its bot's manager, and admins. HQ keeps no letter
+contents. Submission saves one quote and a key derived from the Tico letter id before the HTTP call; a timeout, retry
+or restart replays that claim without another print. Never create a replacement for a `submitting` letter: HQ must
+reconcile its existing provider job.
+
+`hub letter list`, `hub letter show <id>` and `hub letter cancel <id>` have matching MCP tools and v2 endpoints:
+`GET /api/v2/letters`, `GET /api/v2/letters/{id}` and `POST /api/v2/letters/{id}/cancel`. Lists are paged and byte
+capped. Status sync polls each active record with backoff and publishes a permission-filtered `letters` live event
+with the changed row. Cancellation passes through HQ's honest answer; User Credit jobs cannot be cancelled and
+there is no promised undo window.
+
 ## Settings > Mail
 
 Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as

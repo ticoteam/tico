@@ -65,7 +65,8 @@ PURGE_ATTEMPTS = 10
 # What holds a blob apart from a message or a file (`release_message_files`): a task's attachment, one in the trash, a
 # meeting's media, a scanned letter, a piece of market evidence.
 BLOB_HOLDERS = (("message_assets", "blob_id"), ("task_assets", "blob_id"), ("task_trash_assets", "blob_id"),
-                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"))
+                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"),
+                ("letters", "source_blob_id"), ("letter_proofs", "blob_id"))
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}
 

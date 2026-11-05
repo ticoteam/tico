@@ -7,7 +7,7 @@
 // from the last change number it was given, so a reconnect misses nothing; `reset` means it was away longer than
 // the server keeps (a day) and each view reads in full. A browser with no EventSource keeps the old polls
 // (liveFallback); everywhere else nothing polls for what this stream carries.
-const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs'];
+const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs', 'letters'];
 const LIVE = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
               handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: ''};
 const liveAvailable = () => typeof EventSource !== 'undefined';

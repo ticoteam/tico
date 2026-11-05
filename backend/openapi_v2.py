@@ -3208,6 +3208,24 @@ STABLE.extend([
      "Take one person's or bot's access away", "MailboxDetail"),
 ])
 
+TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
+STABLE.extend([
+    ("/api/v2/letters", "get", "Letters out", "listLetters", "Letters the caller may read, paged and byte capped", None),
+    ("/api/v2/letters/quotes", "post", "Letters out", "quoteLetter", "Quote a PDF or rendered text without sending", None),
+    ("/api/v2/letters/{letter_id}", "get", "Letters out", "getLetter", "Letter, approved proof and tracking", None),
+    ("/api/v2/letters/{letter_id}/send", "post", "Letters out", "sendLetter", "Ask first or submit under the sending policy", None),
+    ("/api/v2/letters/{letter_id}/cancel", "post", "Letters out", "cancelLetter", "Request cancellation; pass through the provider's honest refusal", None),
+    ("/api/v2/letters/settings", "get", "Letters out", "getLettersSettings", "Company return address, mode, cap and setup state", None),
+    ("/api/v2/letters/settings", "put", "Letters out", "setLettersSettings", "Owner or admin sets company Letters out policy", None),
+    ("/api/v2/letters/access", "get", "Letters out", "getLettersAccess", "Whether the caller has sending access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants", "get", "Letters out", "listLettersGrants", "Sending grants on the company outbox", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}", "put", "Letters out", "grantLettersAccess", "Owner or admin grants send access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}", "delete", "Letters out", "revokeLettersAccess", "Owner or admin revokes send access", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "get", "Letters out", "getBotLettersSettings", "Bot's sending policy override and optional cap", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "put", "Letters out", "setBotLettersSettings", "Bot manager sets a policy that cannot loosen company policy", None),
+])
+
+
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""
     import tempfile

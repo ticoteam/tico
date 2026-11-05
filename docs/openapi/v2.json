@@ -189,6 +189,10 @@
     {
       "name": "Mailboxes",
       "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+    },
+    {
+      "name": "Letters out",
+      "description": "Physical letters sent through the Gateway; approvals bind the saved proof and price."
     }
   ],
   "paths": {
@@ -21398,6 +21402,744 @@
         },
         "tags": [
           "KPIs"
+        ]
+      }
+    },
+    "/api/v2/letters": {
+      "get": {
+        "summary": "Letters the caller may read, paged and byte capped",
+        "operationId": "listLetters",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/access": {
+      "get": {
+        "summary": "Whether the caller has sending access",
+        "operationId": "getLettersAccess",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/bots/{bot_id}/settings": {
+      "get": {
+        "summary": "Bot's sending policy override and optional cap",
+        "operationId": "getBotLettersSettings",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      },
+      "put": {
+        "summary": "Bot manager sets a policy that cannot loosen company policy",
+        "operationId": "setBotLettersSettings",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/outboxes/{outbox_id}/grants": {
+      "get": {
+        "summary": "Sending grants on the company outbox",
+        "operationId": "listLettersGrants",
+        "parameters": [
+          {
+            "name": "outbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "const": "company",
+              "type": "string",
+              "title": "Outbox Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}": {
+      "put": {
+        "summary": "Owner or admin grants send access",
+        "operationId": "grantLettersAccess",
+        "parameters": [
+          {
+            "name": "outbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "const": "company",
+              "type": "string",
+              "title": "Outbox Id"
+            }
+          },
+          {
+            "name": "principal_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "bot",
+                "person"
+              ],
+              "type": "string",
+              "title": "Principal Type"
+            }
+          },
+          {
+            "name": "principal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Principal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__letters__Grant"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      },
+      "delete": {
+        "summary": "Owner or admin revokes send access",
+        "operationId": "revokeLettersAccess",
+        "parameters": [
+          {
+            "name": "outbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "const": "company",
+              "type": "string",
+              "title": "Outbox Id"
+            }
+          },
+          {
+            "name": "principal_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "bot",
+                "person"
+              ],
+              "type": "string",
+              "title": "Principal Type"
+            }
+          },
+          {
+            "name": "principal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Principal Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/quotes": {
+      "post": {
+        "summary": "Quote a PDF or rendered text without sending",
+        "operationId": "quoteLetter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Quote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/letters/settings": {
+      "get": {
+        "summary": "Company return address, mode, cap and setup state",
+        "operationId": "getLettersSettings",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      },
+      "put": {
+        "summary": "Owner or admin sets company Letters out policy",
+        "operationId": "setLettersSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__letters__Settings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/{letter_id}": {
+      "get": {
+        "summary": "Letter, approved proof and tracking",
+        "operationId": "getLetter",
+        "parameters": [
+          {
+            "name": "letter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Letter Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/{letter_id}/cancel": {
+      "post": {
+        "summary": "Request cancellation; pass through the provider's honest refusal",
+        "operationId": "cancelLetter",
+        "parameters": [
+          {
+            "name": "letter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Letter Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/{letter_id}/send": {
+      "post": {
+        "summary": "Ask first or submit under the sending policy",
+        "operationId": "sendLetter",
+        "parameters": [
+          {
+            "name": "letter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Letter Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
         ]
       }
     },
@@ -43176,6 +43918,54 @@
         "title": "AccessAudience",
         "description": "One level of a bot's access: everyone, or these people, teams and bots."
       },
+      "Address": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "line1": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Line1"
+          },
+          "line2": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Line2",
+            "default": ""
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "City"
+          },
+          "state": {
+            "type": "string",
+            "pattern": "^[A-Z]{2}$",
+            "title": "State"
+          },
+          "postal_code": {
+            "type": "string",
+            "pattern": "^\\d{5}(-\\d{4})?$",
+            "title": "Postal Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "line1",
+          "city",
+          "state",
+          "postal_code"
+        ],
+        "title": "Address"
+      },
       "Answer": {
         "properties": {
           "text": {
@@ -46122,6 +46912,42 @@
           "mode"
         ],
         "additionalProperties": true
+      },
+      "BotSettings": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ask_first",
+                  "on_their_own",
+                  "never"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "monthly_cap_micros": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap Micros"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BotSettings"
       },
       "BotSubscription": {
         "type": "object",
@@ -55329,51 +56155,6 @@
         ],
         "additionalProperties": true
       },
-      "Grant": {
-        "properties": {
-          "full_name": {
-            "type": "string",
-            "title": "Full Name"
-          },
-          "access": {
-            "type": "string",
-            "enum": [
-              "read",
-              "write"
-            ],
-            "title": "Access",
-            "default": "write"
-          },
-          "run_workflows": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Workflows"
-          },
-          "edit_workflows": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Edit Workflows"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "full_name"
-        ],
-        "title": "Grant"
-      },
       "Group": {
         "type": "object",
         "properties": {
@@ -62276,6 +63057,88 @@
         ],
         "additionalProperties": true
       },
+      "Quote": {
+        "properties": {
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "mail_class": {
+            "type": "string",
+            "enum": [
+              "first_class",
+              "certified",
+              "certified_return_receipt"
+            ],
+            "title": "Mail Class",
+            "default": "first_class"
+          },
+          "color": {
+            "type": "boolean",
+            "title": "Color",
+            "default": false
+          },
+          "duplex": {
+            "type": "boolean",
+            "title": "Duplex",
+            "default": false
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "recipient"
+        ],
+        "title": "Quote"
+      },
       "RanOn": {
         "type": "object",
         "properties": {
@@ -62627,7 +63490,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/Grant"
+                  "$ref": "#/components/schemas/backend__repositories__Grant"
                 },
                 "type": "array"
               },
@@ -73813,6 +74676,110 @@
           "name"
         ],
         "title": "Edit"
+      },
+      "backend__letters__Grant": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "const": "send",
+            "title": "Level",
+            "default": "send"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Grant"
+      },
+      "backend__letters__Settings": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ask_first",
+                  "on_their_own",
+                  "never"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "return_address": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "monthly_cap_micros": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap Micros"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Settings"
+      },
+      "backend__repositories__Grant": {
+        "properties": {
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ],
+            "title": "Access",
+            "default": "write"
+          },
+          "run_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Workflows"
+          },
+          "edit_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "full_name"
+        ],
+        "title": "Grant"
       }
     },
     "securitySchemes": {

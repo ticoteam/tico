@@ -202,8 +202,9 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert", "letter")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
+                   "letter": ("letter_id", "approval_hash", "proof", "recipient", "return_address", "mail_class", "total_micros"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
                    "merge": ("repo", "pr"),

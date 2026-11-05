@@ -60,7 +60,7 @@ from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads")
+TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "letters")
 AGENT_TOPICS = ("messages", "threads")   # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
@@ -1735,6 +1735,15 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
         picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
     if by_topic.get("threads"):
         picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
+    if by_topic.get("letters"):
+        from . import letters
+        newest_letters = {r["subject_id"]: r for r in by_topic["letters"]}
+        for ident, change in newest_letters.items():
+            try:
+                letter = letters.get(c, auth, who, ident)
+            except Problem:
+                continue
+            picked.append(("letters", change, {"id": ident, "letter": letters.public(letter)}))
     events, size = [], 0
     for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
         actor = None if view.hidden_actor(row["actor"], row) else row["actor"]
