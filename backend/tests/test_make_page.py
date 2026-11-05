@@ -148,10 +148,10 @@ def test_an_unlinked_logged_file_blocks_publish(api):
 
 def test_forged_make_page_refs_are_forbidden_on_generic_message_and_chat_routes(api):
     t = task(api, private=False)
-    refs = {"make_page": {"task": t["id"]}}
-    for path, body in (("messages", {"to": "assistant", "text": "Make this", "refs": refs}),
-                       ("chat/ops", {"text": "Make this", "refs": refs})):
-        post(api, path, body, "ben-test", expected=403)
+    for refs in ({"make_page": {"task": t["id"]}}, {"assistant": True, "make_page": {"task": t["id"]}}):
+        for path, body in (("messages", {"to": "assistant", "text": "Make this", "refs": refs}),
+                           ("chat/ops", {"text": "Make this", "refs": refs})):
+            post(api, path, body, "ben-test", expected=403)
 
 
 def test_ordinary_assistant_turn_cannot_publish_even_with_a_supplied_attempt(api):

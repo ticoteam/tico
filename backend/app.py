@@ -1586,9 +1586,9 @@ def create_app(settings=None):
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
+        if "make_page" in refs:
+            raise Problem("forbidden", "Use the task's Make page control", 403)
         for kind, values in refs.items():
-            if kind == "make_page":
-                raise Problem("forbidden", "Use the task's Make page control", 403)
             if kind in ("task", "task_id"):
                 # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
                 # Anything else is refused here, before a SQL bind of it could fail.
