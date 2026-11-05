@@ -37,11 +37,13 @@ def readable(c, who, rid):
             or row["metadata"].get("kind") != "meeting"):
         raise Problem("not_found", "Meeting not found or unavailable", 404)
     team = media.effective_audience(row["metadata"]) == "team" and row["metadata"].get("private") is False
+    if team:
+        return row
     attached = c.execute(
         "SELECT 1 FROM live_meetings m JOIN live_meeting_bots b ON b.meeting_id=m.id "
         "WHERE m.imported_meeting_id=? AND m.discarded_at IS NULL AND b.bot=?",
         (rid, who.actor.removeprefix("bot:"))).fetchone()
-    if not team and not attached:
+    if not attached:
         raise Problem("not_found", "Meeting not found or unavailable", 404)
     return row
 
