@@ -24,6 +24,9 @@ jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
+**Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
+can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
+take asks and is flagged too. It checks saved asks and explicit waits.
 
 A cloud machine asleep while all its jobs wait on purpose shows those waits as queue information. If any job needs
 a fix, such as signing in its check model, Health marks the bot stuck even when an older task waits on purpose.
