@@ -208,6 +208,11 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     machine = runner(api)
     assign(api, machine, "finance")
     ready(api, machine, ["finance"])
+    # Finish the assignment notice so the measured runs start from comments and can receive steering inputs.
+    warmup = post(api, "jobs/claim", {"bot": "finance", "start_places": True}, token=machine["token"], key="matrix-assignment")["attempt"]
+    assert warmup
+    post(api, f"attempts/{warmup['id']}/complete", {"outcome": "completed", "text": "Ready to review", "last_seq": 0}, token=machine["token"])
+    post(api, f"tasks/{tid}/comments", {"text": "Start the review", "wake": True})
     failures = []
     claimed_ids = []
     if disabled_guard == "scrubber":
@@ -263,7 +268,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             for ident in (fid, bid):
                 for suffix in ("", "/versions/1", "/thumb", "/poster"):
                     result = api.head("/api/v2/files/" + ident + suffix, headers=headers(token))
-                    assert result.status_code in (403, 404, 405), result.status_code
+                    if result.status_code not in (403, 404, 405):
+                        failures.append((state + ":HEAD:" + token + ":" + suffix, ["HTTP " + str(result.status_code)]))
                     clean(state + ":HEAD:" + token + ":" + suffix, dict(result.headers))
             for query in sql_queries:
                 response(state + ":" + token + ":" + query, api.post("/api/v2/sql", json={"sql": query}, headers=headers(token)))
@@ -299,17 +305,20 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         claimed_ids.append(aid)
         post(api, f"attempts/{aid}/started", {"thread_id": "matrix-" + state}, token=machine["token"])
         post(api, f"tasks/{tid}/comments", {"text": "Check remaining attachments",
-             "attachments": [(ordinary if deleted else fid) + "@1"]})
-        response(state + ":attempt inputs", api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(machine["token"])))
-        post(api, f"attempts/{aid}/complete", {"outcome": "succeeded", "text": "Checked", "last_seq": 0}, token=machine["token"])
+             "attachments": [(ordinary if deleted else fid) + "@1"], "wake": True})
+        inputs = api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(machine["token"]))
+        response(state + ":attempt inputs", inputs)
+        assert inputs.status_code == 200 and inputs.json()["messages"], inputs.text
+        post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Checked", "last_seq": 0}, token=machine["token"])
         if not deleted:
             post(api, f"tasks/{tid}/comments", {"text": "Continue review after deletion", "wake": True})
     if disabled_guard:
-        assert failures, "The matrix did not detect removal of " + disabled_guard
+        assert any(isinstance(found, list) and set(found) & set(secrets) for _, found, *rest in failures), \
+            "The matrix did not detect removal of " + disabled_guard
         if disabled_guard == "history":
-            assert any(name in found for _, found, *rest in failures), failures
+            assert any(isinstance(found, list) and name in found for _, found, *rest in failures), failures
         if disabled_guard == "audience":
-            assert any("tasks/" + read_task in label and "Canary confidential quote." in found
+            assert any(isinstance(found, list) and "tasks/" + read_task in label and "Canary confidential quote." in found
                        for label, found, *rest in failures), failures
     else:
         assert not failures, json.dumps(failures, indent=2)
