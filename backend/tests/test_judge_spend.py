@@ -50,6 +50,19 @@ def test_a_calls_cost_is_the_providers_own_figure_else_its_tokens_at_list_price(
     assert B.cost_usd(settings, "a-model-with-no-price", {"output_tokens": 1_000_000}) == 50.0
 
 
+def test_a_terra_call_at_272000_prompt_tokens_is_priced_at_the_long_tier_as_one_request(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    # The long-prompt tier starts at 272,000 prompt tokens: 271,999 is still the standard rate.
+    assert B.cost_usd(settings, "gpt-6.1-terra", {"input_tokens": 271_999, "output_tokens": 1_000}) == \
+        round((271_999 * 1.25 + 1_000 * 6.25) / 1_000_000, 6)
+    assert B.cost_usd(settings, "gpt-6.1-terra", {"input_tokens": 272_000, "output_tokens": 1_000}) == \
+        round((272_000 * 2.5 + 1_000 * 9.375) / 1_000_000, 6)
+    # Fresh and cached input together make the prompt; each part is billed at the long tier's own rate.
+    assert B.cost_usd(settings, "gpt-6.1-terra",
+                      {"input_tokens": 200_000, "cache_read_input_tokens": 72_000, "output_tokens": 1_000}) == \
+        round((200_000 * 2.5 + 72_000 * 0.125 + 1_000 * 9.375) / 1_000_000, 6)
+
+
 def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallback_answered(api, monkeypatch):
     priced(api.app.state.store.settings)
     jev = fake(api)

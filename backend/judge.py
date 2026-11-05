@@ -190,7 +190,8 @@ def cost_usd(settings, model, usage):
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
     elif priced(settings, model):
-        return round(providers.estimate_cost(model, fresh, cached, out), 6)
+        # The call is one request: its prompt (fresh and cached input together) pays the long-prompt tier when over it.
+        return round(providers.estimate_cost(model, fresh, cached, out, [(fresh, cached, out)]), 6)
     else:
         rate_in, rate_out = CEILING
     return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)

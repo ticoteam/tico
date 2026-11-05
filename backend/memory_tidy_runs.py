@@ -42,7 +42,9 @@ def refresh_costs(c):
                          " u WHERE task_id=?", (p['check_task_id'],)).fetchall()
         total = 0.0
         for r in rows:
-            estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'])
+            # The run's tokens are one request, so a prompt over the long-prompt limit pays that tier.
+            estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'],
+                                               [(r['input_tokens'], r['cached_tokens'], r['output_tokens'])])
             total += max(float(r['est_cost_usd'] or 0), float(estimate or 0))
         c.execute("UPDATE memory_tidy_passes SET cost_usd=max(cost_usd,?) WHERE id=?", (total, p['id']))
     return c.execute("SELECT coalesce(sum(cost_usd),0) FROM memory_tidy_passes").fetchone()[0]

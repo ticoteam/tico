@@ -181,6 +181,19 @@ def test_subscription_estimates_count_and_zero_reports_never_erase_cost(api):
         assert runs.refresh_costs(c) == pytest.approx(3)
 
 
+@pytest.mark.parametrize("prompt, rate", [(271_999, (1.25, 0.062, 6.25)), (272_000, (2.5, 0.125, 9.375))])
+def test_a_terra_check_run_is_priced_as_one_request_at_the_long_prompt_limit(api, prompt, rate):
+    store = setup(api)
+    with store.transaction() as c:
+        last(c)
+        c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
+                  "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  ('synthetic-terra-turn', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
+                   'gpt-6.1-terra', prompt, 0, 1_000, 0, 'api'))
+        assert runs.refresh_costs(c) == pytest.approx((prompt * rate[0] + 1_000 * rate[2]) / 1_000_000)
+
+
 def test_free_skip_excludes_pass_turn_commits_with_ordinary_subjects(api):
     store = setup(api)
     with store.transaction() as c:
