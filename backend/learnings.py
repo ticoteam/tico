@@ -400,7 +400,7 @@ def superseded(c, slug, night):
                          "JOIN tasks t ON t.id=d.task_id WHERE d.recipient=? AND r.night<? AND t.status='open'",
                          (slug, night)).fetchall():
         H.task_close(c, H.KEEPER, row[0], f"Replaced by the packet for {night}; this one was never picked up.",
-                     quiet=True)
+                     quiet=True, strict=False)
 
 
 def dispatch(c, run_id, night, items, chosen, team, detail):

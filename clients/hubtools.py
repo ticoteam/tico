@@ -1108,7 +1108,7 @@ def task_update(api, args):
 
 @tool("hub_task_done", "Finish a task you own with its result. A review or QA subtask adds its verdict and the pull "
       "request head it judged, and the task that asked for it is woken with both (the same as hub_task_update with "
-      "status done).",
+      "status done). Its open subtasks close with it, recursively.",
       {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
@@ -3225,7 +3225,8 @@ def docs_links(api, args):
 
 @tool("hub_task_close", "A human may close a task they can edit (its requester or owner, a party to a task above it, "
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
-      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
+      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done. "
+      "Its open subtasks close with it, recursively; one you may not close refuses the whole action.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
        "wake": {"type": "boolean", "default": True,
                 "description": "false: its bots read the close on their next run instead of being woken for it"},
