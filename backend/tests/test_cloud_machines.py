@@ -1072,7 +1072,7 @@ def deletion_target(cloud, kind, enroll=True):
     if computer:
         ready(cloud.api, computer, ["ops"])
     if kind == "unused":
-        assign(cloud.api, runner(cloud.api), "ops", generation(cloud, "ops"))
+        assign(cloud.api, runner(cloud.api), "ops", generation(cloud, "ops") if computer else 0)
     url = "/api/v2/cloud-machines/shared" if kind == "shared" else "/api/v2/bots/ops/cloud-machine"
     if kind == "replace":
         url += "/replace"
@@ -1095,6 +1095,8 @@ def test_deletion_waits_for_an_inflight_manager_action_and_its_completion_write(
         target.method, target.url = "DELETE", "/api/v2/bots/ops/cloud-machine"
     machine_id = cloud.row(target.key)["machine_id"]
     if action == "start":
+        idle(cloud)
+        work(cloud, text="Resume for the next task.")
         cloud.hq.machines[machine_id]["state"] = "stopped"
         with cloud.store.transaction() as c:
             CM.save(c, target.key, state="stopped")
