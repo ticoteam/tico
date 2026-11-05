@@ -52,10 +52,12 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     with ThreadPoolExecutor(max_workers=2) as requests:
         server = requests.submit(serve)
         try:
+            # Database initialization belongs to startup, before the background-job deadline. Waiting for the
+            # serving client first still fails if an inline job blocks lifespan, without timing migrations under load.
+            client = clients.get(timeout=60)
             # The job must actually be waiting before the health request starts. Its wait cannot expire and
             # get swallowed as a job failure; the request's deadline belongs to the test thread instead.
             assert entered.wait(10), captured
-            client = clients.get(timeout=10)
             assert requests.submit(client.get, "/healthz").result(10).status_code == 200
             assert ran == []
         finally:

@@ -97,6 +97,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # may, and the route itself requires the person's cited words.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
         return True
+    # Queuing mail does not deliver it: the shared send gate owns approval, undo, revocation and dispatch.
+    if path == "/api/v2/email/sends" or re.fullmatch(r"/api/v2/email/sends/[^/]+/cancel", path):
+        return True
     # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
     # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
     if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
@@ -287,6 +290,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/letters/(settings|outboxes/.*|bots/.*/settings)"),
     (None, r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
     ("PUT", r"/api/v2/postal/settings"),
+    # Dispatch leases and permits belong to the authenticated computer, never a chat.
+    (None, r"/api/v2/connectors/email(/.*)?"),
     # A computer's part of a Connect Google sign-in and its Workspace tokens: computers only, never a chat's.
     (None, r"/api/v2/connectors/mail/google/.*"), (None, r"/api/v2/connectors/mail/workspace/token"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),

@@ -481,17 +481,21 @@ def merge_sources(c, row, head, pr=None):
             and verdict_at([t], head) in GOOD]
 
 
+# A push after approval changes the head, so the approvals no longer count and the PR waits for new reviews.
+AS_APPROVED = "Merge it as approved: don't push to the branch; put non-blocking notes in a follow-up PR."
+
+
 def merge_text(c, row, pr, head, *, announce=True):
     if F.pr_checks(c, row):
         prefix = f"Approved at {head}, checks green: " if announce else f"At {head}: "
         return (prefix + f"merge PR #{pr['number']} under the repo's merge rules. "
-                f"Use --match-head-commit {head}. {pr['url']}")
+                f"Use --match-head-commit {head}. {AS_APPROVED} {pr['url']}")
     name = step_of(c, row) or "The last check"
     number = pr.get("number") or "?"
     landing = F.merge_step(c, row["type_id"])
     return (f"Ready to merge: {name} cleared PR #{number} at head {head} and CI is green. Merge it under the merge "
             f"rules (gh pr merge {number} --squash --match-head-commit {head}) and post the MERGED line"
-            + (f"; Tico then moves this ticket to {landing['name']}." if landing else "."))
+            + (f"; Tico then moves this ticket to {landing['name']}." if landing else ".") + f" {AS_APPROVED}")
 
 
 def pr_notice_seen(c, row, kind, pr, head):

@@ -5888,6 +5888,8 @@ def create_app(settings=None):
     @app.post("/api/v2/approvals")
     def approval_request(request: Request, body: M.ApprovalCreate):
         who = request.state.identity
+        if body.kind == "send":
+            raise Problem("email_send", "Email approvals come from the frozen send queue; submit the email to /api/v2/email/sends", 422)
         if body.kind == "support":
             from .support import require_on
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
@@ -5945,6 +5947,10 @@ def create_app(settings=None):
         boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
+            if body.decision == "approved" and row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
+                from .email_sending import require_preview
+                queued = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
+                require_preview(c, who.actor, queued)
             if row["kind"] == "support" and body.decision == "approved":
                 # Sending off the install is a person's own tap, or their confirmed yes: not their token, nor an Assistant
                 # that is not confirmed. A decline sends nothing, so anyone who may decide it may decline it.
@@ -8769,6 +8775,8 @@ def create_app(settings=None):
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
     from .mail_settings import install as install_mail_settings
     install_mail_settings(app, store, auth, mutate)
+    from .email_sending import install as install_email_sending
+    install_email_sending(app, store, auth, mutate)
     from . import personal_alerts
     personal_alerts.install(app, store, settings, auth, mutate)
     from .shared_bots import install as install_branches

@@ -78,14 +78,15 @@ class Gmail:
             self._part_of = was
 
     # -- plumbing ---------------------------------------------------
-    def _exec(self, request, what):
+    def _exec(self, request, what, *, retry=True):
         last = None
-        for attempt in range(MAX_ATTEMPTS):
+        attempts = MAX_ATTEMPTS if retry else 1
+        for attempt in range(attempts):
             try:
                 return request.execute()
             except Exception as e:                      # HttpError, socket errors
                 last = e
-                if attempt == MAX_ATTEMPTS - 1 or not _retryable(e):
+                if attempt == attempts - 1 or not _retryable(e):
                     break
                 self.sleep(2 ** attempt)
         raise Failure(f"Gmail {what} failed for {self.mailbox}: {last}",
@@ -227,13 +228,13 @@ class Gmail:
         return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id),
                           "drafts.delete")
 
-    def send_draft(self, draft_id):
-        """The only path out of the company. Policy, lint and the reviewer sit in front of it."""
+    def send_raw(self, raw, thread_id=""):
+        """Send exactly the frozen MIME in this request, with no mutable draft lookup or automatic retry."""
         oauth.require(self.granted, "drafts", self.mailbox, "send mail")
         oauth.company_allows(self.company, "send", self.mailbox, "send mail")
-        return self._exec(
-            self.service.users().drafts().send(userId="me", body={"id": draft_id}),
-            "drafts.send")
+        draft_body, media = _draft_body(raw, thread_id)
+        return self._exec(self.service.users().messages().send(userId="me", body=draft_body.get("message", {}), **media),
+                          "messages.send", retry=False)
 
 
 def _draft_body(raw, thread_id=""):
@@ -566,6 +567,9 @@ def normalize(msg, label_names=None, tz_name=DEFAULT_TZ):
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
+        "send_facts": {**{key: str(hdrs.get(key) or "")[:1000] for key in ("auto-submitted", "precedence", "return-path", "message-id")},
+                       "delivery-status": "\n".join(decode(p.get("body") or {}, charset_of(p)) for p in walk(payload)
+                                                     if p.get("mimeType") == "message/delivery-status")[:4096]},
     }
 
 
