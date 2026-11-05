@@ -799,7 +799,7 @@ def install(app, store, auth, mutate):
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
         if not row:
             raise Problem("not_found", "Send not found", 404)
-        if not can_cancel(c, request.state.identity, row) and not can_ok(
+        if request.state.identity.actor != row["actor"] and not can_ok(
                 c, auth, request.state.identity.actor, row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])):
             inbox(c, row["mailbox"], request.state.identity)
         return row

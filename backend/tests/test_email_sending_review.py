@@ -244,7 +244,7 @@ def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
 
 def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachment(inbox):
     policy(inbox, who_can_ok="named_people", approvers=["cara"])
-    queued = queue(inbox, raw=mime(body="<script>unsafe</script>", files=True))
+    queued = queue(inbox, actor="bot:ops", raw=mime(body="<script>unsafe</script>", files=True))
     api_post(inbox, "approvals/" + queued["approval_id"], {"decision": "approved"}, token="cara-test", expected=409)
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("ben-test")).status_code == 403
     preview = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("cara-test")).json()

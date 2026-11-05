@@ -11667,7 +11667,7 @@
     },
     "/api/v2/email/sends/{sid}": {
       "get": {
-        "summary": "A send's proof and audit (inbox readers, sender, manager or authorized approver)",
+        "summary": "Frozen preview and audit (inbox readers, the sender or an authorized approver)",
         "operationId": "getEmailSend",
         "parameters": [
           {

@@ -3276,7 +3276,7 @@ STABLE.extend([
     ("/api/v2/bots/{bot}/email-sending-policy", "put", "Email sending", "setBotEmailSendingPolicy", "Set bot override (a person who manages it)", "EmailSendingPolicy"),
     ("/api/v2/email/sends", "post", "Email sending", "queueEmail", "Freeze email content for approval and the undo window; identical content and recipients deduplicate", "EmailSendResult"),
     ("/api/v2/email/sends", "get", "Email sending", "listEmailSends", "Pending sends or the inbox send audit, paged and byte capped", "EmailSendList"),
-    ("/api/v2/email/sends/{sid}", "get", "Email sending", "getEmailSend", "A send's proof and audit (inbox readers, sender, manager or authorized approver)", "EmailSendDetail"),
+    ("/api/v2/email/sends/{sid}", "get", "Email sending", "getEmailSend", "Frozen preview and audit (inbox readers, the sender or an authorized approver)", "EmailSendDetail"),
     ("/api/v2/email/sends/{sid}/attachments/{part}", "get", "Email sending", "getFrozenEmailAttachment", "Download the exact frozen attachment (the send's readers or approvers)", None),
     ("/api/v2/email/sends/{sid}/approve", "post", "Email sending", "attachEmailApproval", "Attach an existing content-bound or in-chat approval", "EmailSendResult"),
     ("/api/v2/email/sends/{sid}/cancel", "post", "Email sending", "cancelEmailSend", "Cancel before dispatch; delivered mail cannot be recalled", "EmailSendResult"),
