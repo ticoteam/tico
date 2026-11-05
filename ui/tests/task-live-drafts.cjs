@@ -20,6 +20,7 @@ const init = () => {
    const sharedBrowser = {newPage: async options => { const page = await context.newPage(); await page.setViewportSize(options.viewport); return page; }};
    const {page, data, errors} = await open(sharedBrowser, {viewport: {width, height: 900}});
    const task = {...data.tasks[0], title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
+   data.tasks[0] = task;
    const writes = []; let hold, offline = false;
    let me = {id: 'ana', name: 'Ana', role: 'owner', mover: true, cloud: true, registered: true, config: {environment_id: 'acme-org'}};
    await page.route('**/api/me', route => route.fulfill({json: me}));
