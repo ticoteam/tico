@@ -20,17 +20,14 @@ def run(c, ctx):
         return _result("skipped", "Privacy consent is off")
     if not ctx["settings"].get("enabled", True):
         return _result("skipped", "Suggest is off")
-    now = ctx.get("now") or H.now()
-    if not isinstance(now, str):
-        now = now.isoformat()
     previous = c.execute("SELECT value FROM registry_metadata WHERE key=?", (suggestions.LAST_FETCH,)).fetchone()
-    lasts = [last for last in (ctx["settings"].get("last_run_at"), previous[0] if previous else None) if last]
-    if lasts and H.parse_ts(now) - max(H.parse_ts(last) for last in lasts) < timedelta(days=1):
-        return _result("skipped", "Already checked today")
+    if previous and H.parse_ts(H.now()) - H.parse_ts(previous[0]) < timedelta(days=1):
+        return _result("skipped", "Already checked today", details={"limited": True})
     try:
         destination = suggestions.target(store)
         if not destination[0]:
             return _result("skipped", "Needs Tico Gateway")
+        now = H.now()
         items = suggestions.fetch(store, destination)
         if items is None:
             return _result("skipped", "Privacy consent is off")

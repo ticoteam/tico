@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from backend import bot_settings as BS, botops_act, credentials, gateway_connection, suggestions, updates
+from backend import maintenance as M
 from backend import usage_facts, usage_limits
 from backend.maintenance_steps import suggest as step
 from backend.maintenance_steps import update as update_step
@@ -175,9 +176,69 @@ def test_demo_and_rehearsal_send_nothing(install, http, monkeypatch, mode):
     assert run_step(install)["status"] == "skipped" and http[0] == []
 
 
-def test_step_last_run_prevents_fetch_without_any_local_receipts(install, http):
-    assert run_step(install, settings={"last_run_at": H.now()})["reason"] == "Already checked today"
-    assert http[0] == []
+def test_fetch_stamp_prevents_fetch_without_any_local_receipts(install, http):
+    with install.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (suggestions.LAST_FETCH, H.now()))
+    result = run_step(install)
+    assert result["status"] == "skipped" and result["reason"] == "Already checked today"
+    assert result["details"] == {"limited": True}
+    assert http[0] == [] and receipt(install) is None
+
+
+def test_fetch_guard_uses_request_time_instead_of_run_start(install, http, monkeypatch):
+    clock = ["2026-11-04T22:00:00.000000Z"]
+    run_started_at = H.shift(clock[0], hours=-2)
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    original = suggestions.target
+
+    def target(store):
+        destination = original(store)
+        clock[0] = H.shift(clock[0], minutes=30)
+        return destination
+
+    monkeypatch.setattr(suggestions, "target", target)
+    assert run_step(install, now=run_started_at)["status"] == "ran"
+    fetched_at = clock[0]
+    with install.read() as c:
+        assert c.execute("SELECT value FROM registry_metadata WHERE key=?",
+                         (suggestions.LAST_FETCH,)).fetchone()[0] == fetched_at
+
+    clock[0] = H.shift(fetched_at, days=1, minutes=-1)
+    result = run_step(install, now=H.shift(run_started_at, days=1))
+    assert result["status"] == "skipped" and result["details"] == {"limited": True}
+    assert len(http[0]) == 1
+    clock[0] = H.shift(fetched_at, days=1)
+    assert run_step(install, now=run_started_at)["status"] == "ran"
+    assert len(http[0]) == 2
+
+
+def test_limited_suggest_skip_leaves_it_due_later_the_same_day(install, http, api, monkeypatch):
+    previous = "2026-11-04T22:00:00.000000Z"  # 14:00 company time.
+    clock = [H.shift(previous, hours=15)]  # The next day's 05:00 run.
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    with install.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key<>'suggest'")
+        c.execute("UPDATE maintenance_steps SET enabled=1,frequency='day',last_started_at=?,last_ran_at=?,cursor_at=? "
+                  "WHERE key='suggest'", (previous, previous, previous))
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (suggestions.LAST_FETCH, previous))
+
+    first, started = M.run_now(install, api.app.state.auth, "human:ana", wait=True)
+    result = next(row for row in first["steps"] if row["step"] == "suggest")
+    assert started and result["status"] == "skipped" and result["reason"] == "Already checked today"
+    assert result["details"]["limited"] is True and http[0] == []
+    with install.read() as c:
+        saved = c.execute("SELECT * FROM maintenance_steps WHERE key='suggest'").fetchone()
+        assert (saved["last_started_at"], saved["last_ran_at"], saved["cursor_at"]) == (previous, previous, previous)
+        assert M.due(saved, H.parse_ts(clock[0]))
+
+    clock[0] = H.shift(previous, days=1)  # 14:00 on that same company day.
+    second, started = M.run_now(install, api.app.state.auth, "human:ana", wait=True)
+    result = next(row for row in second["steps"] if row["step"] == "suggest")
+    assert started and result["status"] == "ran" and len(http[0]) == 1
+    with install.read() as c:
+        saved = c.execute("SELECT * FROM maintenance_steps WHERE key='suggest'").fetchone()
+        assert saved["last_started_at"] == clock[0]
+        assert not M.due(saved, H.parse_ts(clock[0]))
 
 
 def test_install_owned_suggestions_are_hidden_from_sql(install, http, api):

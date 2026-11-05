@@ -371,8 +371,8 @@ def _run_step(store, auth, run_id, key, row, window_start, now, cap, tally):
             c.execute("UPDATE maintenance_runs SET cost_usd=cost_usd+? WHERE id=?", (result["cost_usd"], run_id))
             return
         _finish_row(c, row_id, result)
-        if key == "dream" and result["status"] == "skipped" and result["details"].get("limited"):
-            # A wake refused before Dream can attempt a start leaves it due on a later run of the same day.
+        if result["status"] == "skipped" and result["details"].get("limited"):
+            # A limited skip defers the attempt, leaving the step due on a later run.
             c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key=? AND last_started_at=?",
                       (row["last_started_at"], key, now))
         if result["status"] == "ran":

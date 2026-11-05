@@ -19,7 +19,7 @@ In order:
 | Check health | Plain-code health checks: urgent findings file at once, noisy ones on their second run. Setup problems become BotOps tasks; Tico bugs follow the support report path. | Every run |
 | Find stuck | The task round-up: one grouped list per bot, oldest items first, up to ten bots by default. The standalone timer and System routines control are retired; the legacy Run now endpoint runs this step. | Custom: every 6 hours |
 | Learn (beta) | Scores activity with Tico Decide and keeps up to 15 items per bot for its next Update turn. Off by default. The nightly timer and System routines control are retired; both legacy Run now endpoints run this step. | Once a day |
-| Suggest | Needs Privacy consent. Fetches suggestions from Tico Gateway with count-only stats, at most once a day, and keeps them for each bot's next Update. | Once a day |
+| Suggest | Needs Privacy consent. Fetches suggestions from Tico Gateway with count-only stats, at most once every 24 hours, and keeps them for each bot's next Update. | Once a day |
 | Update | Builds the day's update queue from 05:00, skipping bots with no work unless learnings or suggestions are waiting. The server keeps sending requests and drafting people's updates after the run ends. | Once a day |
 | Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
 
@@ -29,6 +29,8 @@ In order:
 - Day: once per company day, after 05:00.
 - Week: seven days after the step's last attempt.
 - Custom: every N hours or days, counted from the step's last attempt. A failed attempt counts, so a broken step does not retry on every run.
+
+Suggest waits at least 24 hours between successful fetches, measured from the request time. A skip inside that window keeps its daily attempt for a later run that day.
 
 When every Dream start is refused by the shared wake limiter, it keeps its daily attempt for a later run that day. A pass that starts a dream or encounters another refusal or failure counts for the day.
 
