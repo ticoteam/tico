@@ -213,13 +213,16 @@ def test_system_ask_rechecks_a_changed_route_after_a_nonblocking_verdict(ruled_a
 
 
 @pytest.mark.parametrize("kind", ["task", "comment", "message"])
-def test_system_ask_rechecks_a_route_that_matched_no_rules_before_ingest(ruled_asks, monkeypatch, kind):
+@pytest.mark.parametrize("rules_in_force", [True, False])
+def test_system_ask_rechecks_a_route_that_matched_no_rules_before_ingest(ruled_asks, monkeypatch, kind, rules_in_force):
     from backend import ask_ingest
     api, judge = ruled_asks
     ana_rule = color_rule(api, text="Never ask Ana about the beta.", reviewer="ana", **{"with": {"people": ["ana"]}})
     judge.needles["Never ask Ana about the beta."] = "beta"
     with api.app.state.store.transaction() as c:
         task = system_task(c)
+        if not rules_in_force:
+            c.execute("UPDATE org_rules SET status='suggested' WHERE id=?", (ana_rule["id"],))
     real = ask_ingest.preflight
     checked = []
 
@@ -229,6 +232,7 @@ def test_system_ask_rechecks_a_route_that_matched_no_rules_before_ingest(ruled_a
         assert judge.calls == []          # Ben has no matching rule and no rule verdict.
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+            c.execute("UPDATE org_rules SET status='active' WHERE id=?", (ana_rule["id"],))
         return verdict
 
     monkeypatch.setattr(ask_ingest, "preflight", then_move)
@@ -347,6 +351,7 @@ def test_onboarding_claim_exceptions_still_take_questions(api, sender):
         task = system_task(c)
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup',reports_to='ops' WHERE bot='cpo'")
         msg = H.say(c, sender, "bot:cpo", "Should this cover the beta?", kind="ask", refs={"task": task["id"]})
+        assert ask_routing.can_answer(c, "bot:cpo", source=msg)
         H.task_update(c, "bot:ops", task["id"], status="waiting")
         assert not health.unreadable_waits(c)
     assert claim(api, computer)["message"]["id"] == msg["id"]

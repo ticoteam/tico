@@ -5413,7 +5413,7 @@ def create_app(settings=None):
                           422)
         rc = rule_check(who, "comment", body.text, lambda c: rule_comment_audience(
             c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text,
-            body.ask.model_dump() if body.ask else None), place=task_place(who, tid), track_route=True)
+            body.ask.model_dump() if body.ask else None), place=task_place(who, tid), track_route=body.ask is not None)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))

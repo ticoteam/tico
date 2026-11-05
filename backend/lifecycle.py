@@ -102,9 +102,12 @@ def claim_message_sql(bot="j.bot_id", message="m"):
 def claims_message(c, slug, message):
     """Use claim's state gate before a question has a queue row, and when Health reads an old one."""
     from .read_cache import one
+    message = dict(message or {})
+    refs = message.get("refs") or {}
+    refs = refs if isinstance(refs, str) else H._dump(refs)
     return bool(one(c, "SELECT " + claim_message_sql("candidate.bot") +
                     " FROM (SELECT ? bot) candidate CROSS JOIN (SELECT ? sender_id,? refs) m",
-                    (slug, message.get("sender_id") or "", H._dump(message.get("refs") or {})))[0])
+                    (slug, message.get("sender_id") or "", refs))[0])
 
 
 def _bot_slug(actor):
