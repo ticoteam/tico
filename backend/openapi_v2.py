@@ -3261,6 +3261,30 @@ STABLE.extend([
 ])
 
 
+TAGS["Alerts"] = "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
+SCHEMAS.update({
+    "PersonalAlerts": obj({"phone": "n", "status": "s", "verified_at": "n", "call_consent": "b",
+                            "preferences": obj({"urgent_needs": "b", "legal_mail": "b", "bot_stuck": "b",
+                                                "urgent_calls": "b", "timezone": "s", "quiet_start": "s",
+                                                "quiet_end": "s", "emergency_exception": "b", "monthly_cap": "i"}),
+                            "monthly_spend": "i", "company_monthly_cap": "i", "company_monthly_spend": "i",
+                            "price_usd": "i", "paid_by": "s", "recent": items(obj(
+                                {"id": "s", "kind": "s", "state": "s", "error": "s", "created_at": "s"}))}),
+    "AlertPhoneCode": obj({"status": "s", "expires_in": "i"}),
+    "AlertTest": obj({"id": "s", "status": "s"}, required=["id", "status"], price_usd=_t("i"), paid_by=_t("s")),
+    "AlertCompanyCap": obj({"monthly_cap": "i", "monthly_spend": "i", "price_usd": "i"}),
+})
+STABLE.extend([
+    ("/api/v2/alerts/me", "get", "Alerts", "getMyAlerts", "Your phone, consent, preferences and last ten alert outcomes; people acting as themselves only", "PersonalAlerts"),
+    ("/api/v2/alerts/me", "put", "Alerts", "setMyAlerts", "Choose overdue-task, legal-mail and managed-bot stall alerts, quiet hours, timezone, emergency exception and monthly cap", "PersonalAlerts"),
+    ("/api/v2/alerts/me/phone", "post", "Alerts", "verifyMyAlertPhone", "Send a free verification code to your own US/Canada phone with SMS and optional call consent", "AlertPhoneCode"),
+    ("/api/v2/alerts/me/phone/confirm", "post", "Alerts", "confirmMyAlertPhone", "Confirm your own phone using its six-digit code", "PersonalAlerts"),
+    ("/api/v2/alerts/me/phone", "delete", "Alerts", "removeMyAlertPhone", "Revoke your phone and stop queued alerts; retry removal if HQ is unavailable", "PersonalAlerts"),
+    ("/api/v2/alerts/me/test", "post", "Alerts", "testMyAlerts", "Send a test for $1 paid by the company; accept_charge and a stable Idempotency-Key required; the monthly caps apply", "AlertTest"),
+    ("/api/v2/alerts/company", "get", "Alerts", "getAlertCompanyCap", "Company monthly alert cap and accepted/reserved spend, in USD; owner/admin", "AlertCompanyCap"),
+    ("/api/v2/alerts/company", "put", "Alerts", "setAlertCompanyCap", "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin", "AlertCompanyCap"),
+])
+
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""
     import tempfile
