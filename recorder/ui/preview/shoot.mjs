@@ -162,7 +162,7 @@ if (!only.length || only.includes('checks')) {
     await page.click('[data-act="task-picker-link"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")');
     await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = true; });
-    await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Pending")');
+    await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Linking")');
     if (await page.locator('.item.task:has-text("Review pricing") .check.done').count()) throw Error('pending link shown as committed');
     await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = false; });
     await page.waitForSelector('.item.task:has-text("Review pricing") .check.done');
