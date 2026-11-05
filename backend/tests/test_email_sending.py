@@ -1,0 +1,238 @@
+"""Policy, approval, revocation and idempotency boundaries shared by all email send paths."""
+
+import base64
+import importlib.util
+import json
+import sqlite3
+from email.message import EmailMessage
+from pathlib import Path
+
+import pytest
+
+from backend import email_sending as S, mailbox_access as MA
+from backend.store import H
+from backend.tests.test_api import api, headers, post, runner  # noqa: F401
+
+BOX = "ana@acme.example"
+CONTACT = "contact@vendor.example"
+
+
+def mime(body="Thanks for the update.", to=None, files=False, subject="Update", **headers):
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = BOX, ", ".join(to or [CONTACT]), subject
+    for key, value in headers.items():
+        msg[key.replace("_", "-")] = value
+    msg.set_content(body)
+    if files:
+        msg.add_attachment(b"proof", maintype="application", subtype="pdf", filename="proof.pdf")
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+
+@pytest.fixture
+def inbox(api):
+    with api.app.state.store.transaction() as c:
+        row = MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
+        MA.grant(c, "human:ana", row["id"], "bot", "ops", "read_write")
+        incoming(c)
+    return api
+
+
+def incoming(c, *, facts=None, sender=CONTACT, mid="inbound"):
+    c.execute("INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,to_addresses,cc,subject,"
+              "snippet,labels,body,attachments,updated_at,send_facts) VALUES(?,?,?,0,?,?,?,?,?,?,?,?,?,?,?)",
+              (BOX, mid, "thread", H.now(), sender, json.dumps([BOX]), "[]", "Update", "Hello", "[]", "Hello", "[]",
+               H.now(), json.dumps(facts or {})))
+
+
+def policy(api, **values):
+    response = api.put("/api/v2/email/sending-policy", json=values, headers=headers())
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def autonomous(api, **values):
+    return policy(api, **{"mode": "on_their_own", "what": "replies_and_new", "ask_new_address": False,
+                          "ask_attachments": False, "ask_many_recipients": False, "ask_legal_money": False,
+                          "undo_seconds": 0, "pacing_seconds": 0, **values})
+
+
+def queue(api, *, raw=None, actor="human:ana", **values):
+    with api.app.state.store.transaction() as c:
+        return S.enqueue(c, api.app.state.auth, actor, S.Enqueue(mailbox=BOX, raw=raw or mime(), **values),
+                         {"legal_or_money": False, "status": "classified"})
+
+
+def claim(api, token):
+    return post(api, "connectors/email/sends/claim", {"mailbox": BOX}, token=token)["send"]
+
+
+def approved(api, queued, token="ana-test"):
+    post(api, "approvals/" + queued["approval_id"], {"decision": "approved"}, token=token)
+
+
+def test_resolution_default_opt_in_and_unbreakable_restrictions(inbox):
+    with inbox.app.state.store.transaction() as c:
+        assert S.effective(c)["mode"] == "ask_first"
+        assert S.effective(c)["what"] == "replies_only"
+        who = inbox.app.state.auth.identity_for_actor(c, "human:ana")
+        S.update_policy(c, who, "bot:ops", S.PolicyUpdate(mode="on_their_own", daily_cap=200, ask_new_address=False))
+        found = S.effective(c, BOX, "ops")
+        assert found["mode"] == "on_their_own" and found["sources"]["mode"] == "bot"
+        assert found["daily_cap"] == 50 and found["ask_new_address"] is True
+        S.update_policy(c, who, "inbox:" + BOX, S.PolicyUpdate(mode="never"))
+        assert S.effective(c, BOX, "ops")["mode"] == "never"
+        assert S.effective(c, BOX, "ops")["sources"]["mode"] == "inbox"
+        S.update_policy(c, who, "company", S.PolicyUpdate(mode="never"))
+        assert S.effective(c, BOX, "ops")["sources"]["mode"] == "company"
+
+
+@pytest.mark.parametrize("rule,raw,reply,reason", [
+    ("ask_new_address", mime(to=["new@vendor.example"]), False, "new_address"),
+    ("ask_attachments", mime(files=True), False, "attachments"),
+    ("ask_many_recipients", mime(to=[f"person{i}@vendor.example" for i in range(11)]), False, "more_than_10_recipients"),
+    ("ask_legal_money", mime(), False, "legal_or_money_or_unclassified"),
+])
+def test_each_always_ask_rule_cannot_be_bypassed_by_autonomy(inbox, rule, raw, reply, reason):
+    autonomous(inbox, **{rule: True})
+    if rule == "ask_legal_money":
+        # An unknown Decide result asks a person too.
+        with inbox.app.state.store.transaction() as c:
+            queued = S.enqueue(c, inbox.app.state.auth, "human:ana", S.Enqueue(mailbox=BOX, raw=raw),
+                               {"legal_or_money": None})
+    else:
+        queued = queue(inbox, raw=raw)
+    assert queued["state"] == "waiting_approval"
+    assert reason in queued["decision"]["reasons"]
+    assert queued["approval_id"]
+
+
+def test_known_correspondent_and_verified_reply_can_send(inbox):
+    autonomous(inbox, ask_new_address=True, what="replies_only")
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    assert queued["state"] == "pending"
+    assert queued["decision"]["outcome"] == "allow"
+
+
+def test_never_blocks_an_approved_send_at_dispatch(inbox):
+    queued = queue(inbox)
+    approved(inbox, queued)
+    machine = runner(inbox)
+    policy(inbox, mode="never")
+    assert claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        assert row["state"] == "blocked" and "never" in json.loads(row["decision"])["reasons"]
+
+
+def test_undo_pending_restart_cancel_and_no_recall(inbox):
+    autonomous(inbox, undo_seconds=120)
+    queued = queue(inbox)
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"]) is None
+    # A fresh database connection sees the durable queue, without any worker memory.
+    with sqlite3.connect(inbox.app.state.store.settings.db_path) as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+    response = post(inbox, "email/sends/" + queued["id"] + "/cancel", {})
+    assert response["send"]["state"] == "canceled"
+    assert claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.transaction() as c:
+        c.execute("UPDATE email_sends SET state='sent' WHERE id=?", (queued["id"],))
+    response = inbox.post("/api/v2/email/sends/" + queued["id"] + "/cancel", json={}, headers=headers())
+    assert response.status_code == 409
+
+
+def test_due_send_is_dispatched_once_with_a_receipt_and_audit(inbox):
+    autonomous(inbox)
+    queued = queue(inbox, raw=mime(files=True))
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])["id"] == queued["id"]
+    path = "connectors/email/sends/" + queued["id"]
+    permitted = post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"])
+    assert S.snapshot(permitted["send"]["raw"], BOX)["content_sha256"] == queued["content_sha256"]
+    assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"] is None
+    receipt = post(inbox, path + "/result", {"status": "sent", "message": "provider-123"}, token=machine["token"])
+    assert receipt["send"]["provider_message_id"] == "provider-123"
+    assert receipt["send"]["attachments"] == [{"name": "proof.pdf", "sha256": S.digest(b"proof")}]
+    assert claim(inbox, machine["token"]) is None
+
+
+def test_permission_revocation_between_claim_and_dispatch(inbox):
+    autonomous(inbox)
+    queued = queue(inbox, actor="bot:ops")
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])
+    with inbox.app.state.store.transaction() as c:
+        c.execute("DELETE FROM mailbox_accesses WHERE grantee_type='bot' AND grantee_id='ops'")
+    assert post(inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX},
+                token=machine["token"])["send"] is None
+
+
+@pytest.mark.parametrize("cap", ["daily_cap", "mailbox_daily_cap", "company_daily_cap"])
+def test_caps_reserve_concurrent_dispatches_including_unknown_results(inbox, cap):
+    autonomous(inbox, **{cap: 1})
+    first = queue(inbox, raw=mime(body="First"))
+    queue(inbox, raw=mime(body="Second"))
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])["id"] == first["id"]
+    assert claim(inbox, machine["token"]) is None
+    post(inbox, "connectors/email/sends/" + first["id"] + "/result", {"status": "unknown"}, token=machine["token"])
+    assert claim(inbox, machine["token"]) is None
+
+
+def test_pacing_duplicate_hash_and_reply_loop_protection(inbox):
+    autonomous(inbox, pacing_seconds=60)
+    first = queue(inbox, raw=mime(Message_ID="<one@acme.example>"))
+    assert queue(inbox, raw=mime(Message_ID="<two@acme.example>"))["id"] == first["id"]
+    queue(inbox, raw=mime(body="Second"))
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])
+    assert claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.transaction() as c:
+        incoming(c, facts={"auto-submitted": "auto-replied"}, mid="automatic")
+    blocked = queue(inbox, raw=mime(body="No loop"), reply_to_id="automatic", thread_id="thread")
+    assert blocked["state"] == "blocked" and "reply_loop" in blocked["decision"]["reasons"]
+
+
+def test_bounces_suppress_only_attempted_recipients_and_admin_can_restore(inbox):
+    autonomous(inbox)
+    queued = queue(inbox)
+    with inbox.app.state.store.transaction() as c:
+        c.execute("UPDATE email_sends SET state='sent' WHERE id=?", (queued["id"],))
+        S.record_bounces(c, BOX, "mailer-daemon@vendor.example", "Final-Recipient: rfc822; " + CONTACT)
+    blocked = queue(inbox, raw=mime(body="Another email"))
+    assert "bounce_suppression" in blocked["decision"]["reasons"]
+    response = inbox.delete(f"/api/v2/email/inboxes/{BOX}/suppressed-recipients/{CONTACT}", headers=headers())
+    assert response.status_code == 200
+    assert queue(inbox, raw=mime(body="Restored"))["state"] == "pending"
+
+
+def test_named_approvers_and_private_inbox_boundaries(inbox):
+    policy(inbox, who_can_ok="named_people", approvers=["cara"])
+    queued = queue(inbox)
+    response = inbox.post("/api/v2/approvals/" + queued["approval_id"], json={"decision": "approved"}, headers=headers())
+    assert response.status_code == 403
+    approved(inbox, queued, token="cara-test")
+    response = inbox.get("/api/v2/email/sends", params={"mailbox": BOX}, headers=headers("cara-test"))
+    assert response.status_code == 403
+    response = inbox.put("/api/v2/email/sending-policy", json={"mode": "never"}, headers=headers("cara-test"))
+    assert response.status_code == 403
+
+
+def test_migration_snapshots_existing_authorizations_without_granting_new_ones():
+    path = next((Path(__file__).parents[1] / "migrations").glob("*_email_sending_queue.py"))
+    spec = importlib.util.spec_from_file_location("email_policy_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute("CREATE TABLE bot_mail_settings(bot,outbound_send,updated_at)")
+    c.execute("INSERT INTO bot_mail_settings VALUES('counsel',0,'2026-01-01')")
+    c.execute("INSERT INTO bot_mail_settings VALUES('support',1,'2026-01-01')")
+    c.execute("CREATE TABLE automations(id,owner_id,version,deleted_at)")
+    c.execute("INSERT INTO automations VALUES('existing','person:ana',2,NULL)")
+    module.up(c)
+    assert S.saved(c, "bot:counsel")["mode"] == "ask_first"
+    assert S.saved(c, "bot:support")["mode"] == "on_their_own"
+    assert S.saved(c, "bot:new") == {}
+    assert c.execute("SELECT automation_id FROM email_legacy_automations").fetchone()[0] == "existing"
+    assert S.effective(c)["mode"] == "ask_first"

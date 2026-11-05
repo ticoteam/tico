@@ -1063,6 +1063,14 @@ class Auth:
         row = H.approval(c, approval_id)
         if not row:
             raise Problem("not_found", "Approval not found", 404)
+        if row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
+            from .email_sending import can_ok, effective
+            send = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
+            permitted = send and can_ok(c, self, who.actor, send["mailbox"], send["bot"],
+                                       effective(c, send["mailbox"], send["bot"]))
+            if permitted or (not decide and who.actor == row["requested_by_id"]):
+                return row
+            raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
         msg = H.message(c, row["message_id"])
         if decide:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor

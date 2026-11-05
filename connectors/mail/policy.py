@@ -489,6 +489,24 @@ def _default_hub_post(path, body, key=None):
 HUB_POST = _default_hub_post
 
 
+def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id=""):
+    """Fail closed: every provider send must have a durable server queue record first."""
+    body = {"mailbox": mailbox, "raw": raw, "thread_id": thread_id, "reply_to_id": reply_to_id,
+            "approval_id": str(approval_id or ""), "automation_action_id": automation_action_id}
+    try:
+        if automation_action_id:
+            from . import oauth
+            answer = oauth.broker(retries=0).post("email/sends", body)
+        else:
+            answer = HUB_POST("email/sends", body)
+    except Exception as exc:
+        raise Failure("Tico did not queue this email; the draft has not been sent.",
+                      "Try again when Tico answers. Identical content and recipients never queue twice.") from exc
+    if not isinstance(answer, dict) or not isinstance(answer.get("send"), dict):
+        raise Failure("Tico did not confirm a durable queued send; the draft has not been sent.")
+    return answer["send"]
+
+
 def rule_check(slug, to, cc, subject, body, key=None):
     """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
     {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
@@ -838,6 +856,7 @@ def switch(slug, manifest=None):
     asks = bool((manifest or {}).get("outbound_send", False))
     out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
     row = _server_row(slug)
+    out["queue_policy"] = (row or {}).get("sending_policy")
     out["read"] = row is not None
     out["onboarding"] = bool((row or {}).get("onboarding"))
     # The company's What Tico may do (Settings > Inboxes > Settings): with Send mail off no bot sends, whatever its own
@@ -1073,108 +1092,114 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("approval", appr["detail"])
     full = bool(appr and appr["full"])
 
-    if not sw["on"]:
+    if (sw.get("queue_policy") or {}).get("mode") == "never":
+        return no("policy", "Never blocks every send, including approved sends")
+    if not sw.get("queue_policy") or sw["queue_policy"].get("legacy"):
+        if not sw["on"]:
+            if full:
+                ok("outbound_send", f"off ({sw['detail']}), lifted for this message "
+                                    f"by {appr['detail']}")
+            else:
+                return no("outbound_send", f"outbound_send is false for {slug}: {sw['detail']}"
+                          + ("; --approval-issue lifts it for a matching GitHub Issue, a Tico "
+                             "send approval, or the owner's message telling this employee to send"
+                             + (f". {appr['detail']}" if appr and appr.get("detail") else "")
+                             if approval else ""))
+        else:
+            ok("outbound_send", f"true ({sw['detail']})")
+
+        allowance = allowance_for(pol, slug, box)
+        # A person turned sending on in Tico (the switch itself, not an approval lifting it): three kinds of
+        # recipient then need no per-message yes. Internal addresses are not in `ext`; the other two are here.
+        standing = {}
+        if sw["on"]:
+            targets = set(sw["forward_to"])
+            senders = set(a.strip().lower() for a in thread_senders or []) if thread_id and not ext_cc else set()
+            for addr in ext:
+                if addr in targets:
+                    standing[addr] = "a forward target the owner listed"
+                elif addr in to and addr in senders:
+                    standing[addr] = "the sender of the thread being replied to"
+        need = [a for a in ext if a not in standing]
+        if not ext:
+            ok("recipient", "every recipient is internal")
+        elif not need:
+            ok("recipient", "; ".join(f"{a} is {why}" for a, why in standing.items())
+                            + ": no per-message approval while outbound_send is on")
+        else:
+            why = []
+            covered = False
+            if allowance:
+                try:
+                    table = allowed_recipients(allowance, root)
+                except Failure as e:
+                    table, why = set(), why + [e.msg]
+                missing = [a for a in need if a not in table]
+                if not missing:
+                    covered = True
+                    ok("recipient", f"the {slug} allowance covers {', '.join(need)}"
+                       + (f"; {', '.join(standing)} needs no approval" if standing else ""))
+                else:
+                    why.append(f"{', '.join(missing)} is not an eligible row in "
+                               f"{allowance['recipients'].get('path') or 'the allowance list'}")
+            else:
+                why.append(f"no standing allowance for {slug} on {box}")
+            if not covered and appr is not None:
+                if appr["ok"]:
+                    covered = True
+                    ok("recipient", appr["detail"])
+                else:
+                    why.append(appr["detail"])
+            elif not covered:
+                why.append("and no --approval-issue was given")
+            if not covered:
+                unapproved = [a for a in need if a in sw["asks_forward"]]
+                if unapproved:
+                    why.append(f"{', '.join(unapproved)} is in forward_to in bot.yaml but not approved in Tico; "
+                               + SETTING_HINT.format(slug=slug).replace("--send", "--forward-to <addresses>"))
+                return no("recipient", "; ".join(why)
+                          + ". With outbound_send on, only internal addresses, the forward targets approved in Tico and "
+                            "the sender of the thread being replied to go without one")
+
+        caps = caps_for(pol, allowance, mailbox)
         if full:
-            ok("outbound_send", f"off ({sw['detail']}), lifted for this message "
-                                f"by {appr['detail']}")
+            ok("caps", f"recipient count, external Cc and cooldown lifted for this message by "
+                       f"Issue {appr['issue']}, which names every address on it")
         else:
-            return no("outbound_send", f"outbound_send is false for {slug}: {sw['detail']}"
-                      + ("; --approval-issue lifts it for a matching GitHub Issue, a Tico "
-                         "send approval, or the owner's message telling this employee to send"
-                         + (f". {appr['detail']}" if appr and appr.get("detail") else "")
-                         if approval else ""))
-    else:
-        ok("outbound_send", f"true ({sw['detail']})")
-
-    allowance = allowance_for(pol, slug, box)
-    # A person turned sending on in Tico (the switch itself, not an approval lifting it): three kinds of
-    # recipient then need no per-message yes. Internal addresses are not in `ext`; the other two are here.
-    standing = {}
-    if sw["on"]:
-        targets = set(sw["forward_to"])
-        senders = set(a.strip().lower() for a in thread_senders or []) if thread_id and not ext_cc else set()
-        for addr in ext:
-            if addr in targets:
-                standing[addr] = "a forward target the owner listed"
-            elif addr in to and addr in senders:
-                standing[addr] = "the sender of the thread being replied to"
-    need = [a for a in ext if a not in standing]
-    if not ext:
-        ok("recipient", "every recipient is internal")
-    elif not need:
-        ok("recipient", "; ".join(f"{a} is {why}" for a, why in standing.items())
-                        + ": no per-message approval while outbound_send is on")
-    else:
-        why = []
-        covered = False
-        if allowance:
-            try:
-                table = allowed_recipients(allowance, root)
-            except Failure as e:
-                table, why = set(), why + [e.msg]
-            missing = [a for a in need if a not in table]
-            if not missing:
-                covered = True
-                ok("recipient", f"the {slug} allowance covers {', '.join(need)}"
-                   + (f"; {', '.join(standing)} needs no approval" if standing else ""))
-            else:
-                why.append(f"{', '.join(missing)} is not an eligible row in "
-                           f"{allowance['recipients'].get('path') or 'the allowance list'}")
+            if len(ext) > caps["max_external_recipients"]:
+                return no("caps", f"{len(ext)} external recipients, the cap is "
+                                  f"{caps['max_external_recipients']}"
+                                  + ("; an --approval-issue that names every address lifts it"
+                                     if not approval else ""))
+            if ext_cc and not caps["allow_cc_external"]:
+                return no("caps", f"Cc outside {', '.join(pol['internal_domains'])} is not allowed "
+                                  f"({', '.join(ext_cc)})"
+                                  + ("; an --approval-issue that names every address lifts it"
+                                     if not approval else ""))
+        if conn is not None:
+            from . import db                                # noqa: PLC0415
+            day = now.astimezone(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
+            used = db.sends_on_day(conn, slug, box, day)
+            if used >= caps["max_sends_per_day"]:
+                return no("caps", f"{slug} has sent {used} today; the cap is "
+                                  f"{caps['max_sends_per_day']} a day")
+            cooldown = caps["per_recipient_cooldown_days"]
+            for addr in ([] if full else to):
+                last = db.last_send_to(conn, box, addr)
+                if not last:
+                    continue
+                when = parse_since(last, now=now)
+                age = (now - when).days
+                if age < cooldown:
+                    return no("caps", f"{addr} was last written to {age} day(s) ago; the cooldown "
+                                      f"is {cooldown} day(s)")
+            ok("caps", f"{used}/{caps['max_sends_per_day']} today, "
+                       f"{caps['per_recipient_cooldown_days']}-day cooldown clear")
         else:
-            why.append(f"no standing allowance for {slug} on {box}")
-        if not covered and appr is not None:
-            if appr["ok"]:
-                covered = True
-                ok("recipient", appr["detail"])
-            else:
-                why.append(appr["detail"])
-        elif not covered:
-            why.append("and no --approval-issue was given")
-        if not covered:
-            unapproved = [a for a in need if a in sw["asks_forward"]]
-            if unapproved:
-                why.append(f"{', '.join(unapproved)} is in forward_to in bot.yaml but not approved in Tico; "
-                           + SETTING_HINT.format(slug=slug).replace("--send", "--forward-to <addresses>"))
-            return no("recipient", "; ".join(why)
-                      + ". With outbound_send on, only internal addresses, the forward targets approved in Tico and "
-                        "the sender of the thread being replied to go without one")
+            ok("caps", "not checked (no database in this run)")
 
-    caps = caps_for(pol, allowance, mailbox)
-    if full:
-        ok("caps", f"recipient count, external Cc and cooldown lifted for this message by "
-                   f"Issue {appr['issue']}, which names every address on it")
     else:
-        if len(ext) > caps["max_external_recipients"]:
-            return no("caps", f"{len(ext)} external recipients, the cap is "
-                              f"{caps['max_external_recipients']}"
-                              + ("; an --approval-issue that names every address lifts it"
-                                 if not approval else ""))
-        if ext_cc and not caps["allow_cc_external"]:
-            return no("caps", f"Cc outside {', '.join(pol['internal_domains'])} is not allowed "
-                              f"({', '.join(ext_cc)})"
-                              + ("; an --approval-issue that names every address lifts it"
-                                 if not approval else ""))
-    if conn is not None:
-        from . import db                                # noqa: PLC0415
-        day = now.astimezone(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
-        used = db.sends_on_day(conn, slug, box, day)
-        if used >= caps["max_sends_per_day"]:
-            return no("caps", f"{slug} has sent {used} today; the cap is "
-                              f"{caps['max_sends_per_day']} a day")
-        cooldown = caps["per_recipient_cooldown_days"]
-        for addr in ([] if full else to):
-            last = db.last_send_to(conn, box, addr)
-            if not last:
-                continue
-            when = parse_since(last, now=now)
-            age = (now - when).days
-            if age < cooldown:
-                return no("caps", f"{addr} was last written to {age} day(s) ago; the cooldown "
-                                  f"is {cooldown} day(s)")
-        ok("caps", f"{used}/{caps['max_sends_per_day']} today, "
-                   f"{caps['per_recipient_cooldown_days']}-day cooldown clear")
-    else:
-        ok("caps", "not checked (no database in this run)")
+        ok("policy", "The shared server queue enforces sending policy and caps at dispatch")
 
     for addr in to + cc:
         how = listed(pol["blocklist"], addr)

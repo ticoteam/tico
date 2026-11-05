@@ -3922,6 +3922,34 @@ def group_access(api, args):
     return _teammate_access(api, f"groups/{quote(str(args['group']), safe='')}", args)
 
 
+@tool("hub_email_policy", "Read or change the effective email sending policy: company, inbox, or bot. Ask first is "
+      "the default; Never blocks approved sends too. Settings changes require a person acting as themselves.",
+      {"mailbox": _s("Inbox address; omit for company"), "bot": _s("Bot id or slug; omit for inbox/company"),
+       "settings": {"type": "object", "description": "Policy fields to set; omit to read, inherit:true clears the override"}},
+      writes=True)
+def email_policy(api, args):
+    mailbox, bot = args.get("mailbox"), args.get("bot")
+    path = (f"bots/{quote(str(bot), safe='')}/email-sending-policy" if bot else
+            f"email/inboxes/{quote(str(mailbox), safe='')}/sending-policy" if mailbox else "email/sending-policy")
+    if args.get("settings") is not None:
+        return api.call("PUT", path, args["settings"], key=_key(args))
+    return api.get(path, **({"mailbox": mailbox} if bot and mailbox else {}))
+
+
+@tool("hub_email_sends", "Read pending email sends or the send audit for an inbox you may read. Includes the "
+      "policy decision, exact content hash, recipients, attachments, approval and provider receipt.",
+      {"mailbox": _s("Inbox address"), "pending": {"type": "boolean", "description": "Only waiting sends"},
+       "cursor": _s("Next cursor"), "limit": {"type": "integer", "description": "1–100, default 50"}}, required=("mailbox",))
+def email_sends(api, args):
+    return api.get("email/sends", **{key: args[key] for key in ("mailbox", "pending", "cursor", "limit") if key in args})
+
+
+@tool("hub_email_cancel", "Cancel pending email before dispatch: the sender, its manager, or an inbox admin. "
+      "Already delivered mail cannot be recalled.", {"id": _s("Queued send id")}, required=("id",), writes=True)
+def email_cancel(api, args):
+    return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
+
+
 @tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
       "Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. `outbound_send` and "
       "`forward_to` in bot.yaml are only a request: this setting decides (docs/mail.md, \"Turning sending on\").",

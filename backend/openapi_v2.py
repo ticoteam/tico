@@ -3254,6 +3254,35 @@ STABLE.extend([
      "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin", "PostalMailSettings"),
 ])
 
+TAGS["Email sending"] = "One sending policy and durable undo queue for bots, automations and people acting through Tico."
+ANSWERS.update({
+    "EmailSendingPolicy": obj({"company": "o", "inbox": "o", "bot": "o", "effective": "o"}),
+    "EmailSend": obj({"id": "s", "mailbox": "s", "actor": "s", "bot": "s", "content_sha256": "s",
+                      "body_sha256": "s", "subject": "s", "approval_id": "s", "state": "s", "created_at": "s",
+                      "send_after": "s", "claimed_at": "n", "finished_at": "n", "provider_message_id": "n",
+                      "detail": "s", "recipients": items("s"), "attachments": items("o"),
+                      "decision": "o", "classification": "o"}),
+    "EmailSendResult": obj({"send": ref("EmailSend")}),
+    "EmailSendDetail": obj({"send": ref("EmailSend"), "body": "s"}),
+    "EmailSendList": obj({"sends": items(ref("EmailSend")), "next_cursor": "n"}),
+    "EmailSuppressionList": obj({"recipients": items("o"), "next_cursor": "n"}),
+})
+STABLE.extend([
+    ("/api/v2/email/sending-policy", "get", "Email sending", "getEmailSendingPolicy", "Company sending policy", "EmailSendingPolicy"),
+    ("/api/v2/email/sending-policy", "put", "Email sending", "setEmailSendingPolicy", "Set company sending policy (an admin, acting as themselves)", "EmailSendingPolicy"),
+    ("/api/v2/email/inboxes/{mailbox}/sending-policy", "get", "Email sending", "getInboxSendingPolicy", "Inbox policy with effective rule and inheritance", "EmailSendingPolicy"),
+    ("/api/v2/email/inboxes/{mailbox}/sending-policy", "put", "Email sending", "setInboxSendingPolicy", "Set inbox policy (its person or a shared inbox admin)", "EmailSendingPolicy"),
+    ("/api/v2/bots/{bot}/email-sending-policy", "get", "Email sending", "getBotEmailSendingPolicy", "Bot policy, optionally resolved for an inbox", "EmailSendingPolicy"),
+    ("/api/v2/bots/{bot}/email-sending-policy", "put", "Email sending", "setBotEmailSendingPolicy", "Set bot override (a person who manages it)", "EmailSendingPolicy"),
+    ("/api/v2/email/sends", "post", "Email sending", "queueEmail", "Freeze email content for approval and the undo window; identical content and recipients deduplicate", "EmailSendResult"),
+    ("/api/v2/email/sends", "get", "Email sending", "listEmailSends", "Pending sends or the inbox send audit, paged and byte capped", "EmailSendList"),
+    ("/api/v2/email/sends/{sid}", "get", "Email sending", "getEmailSend", "A send's proof and audit (inbox readers, sender, manager or authorized approver)", "EmailSendDetail"),
+    ("/api/v2/email/sends/{sid}/approve", "post", "Email sending", "attachEmailApproval", "Attach an existing content-bound or in-chat approval", "EmailSendResult"),
+    ("/api/v2/email/sends/{sid}/cancel", "post", "Email sending", "cancelEmailSend", "Cancel before dispatch; delivered mail cannot be recalled", "EmailSendResult"),
+    ("/api/v2/email/inboxes/{mailbox}/suppressed-recipients", "get", "Email sending", "listEmailSuppressions", "Inbox admin's bounce suppression list", "EmailSuppressionList"),
+    ("/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}", "delete", "Email sending", "removeEmailSuppression", "Restore sending to a bounced address (inbox admin)", None),
+])
+
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

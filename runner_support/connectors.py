@@ -18,7 +18,7 @@ MAIL_ROUNDS = 20       # claim rounds one pass makes for a mailbox while each ro
 CALENDAR_FIELDS = ("occurrence_id", "event_id", "title", "start", "end", "attendees", "meeting_url")
 MAIL_FIELDS = ("thread_id", "epoch", "date", "from_addr", "from_header", "to", "cc", "subject",
                "snippet", "labels", "body", "body_truncated", "attachments", "list_id",
-               "is_internal", "has_unsubscribe", "rule_hits", "known_sender")
+               "is_internal", "has_unsubscribe", "rule_hits", "known_sender", "send_facts")
 
 
 # Who the connector job runs the mail CLI as: the computer's own connector (connectors/mail/access.py CONNECTOR), which
@@ -350,11 +350,41 @@ class ConnectorPublisher:
                     body = {"ok": bool(answer.get("ok")), "detail": str(answer.get("detail") or "")[:1000],
                             "retry": bool(answer.get("retry", True))}
                     body.update({k: str(answer[k])[:200] for k in ("message", "draft", "thread") if answer.get(k)})
+                    if answer.get("send_queue_id"):
+                        body["send_queue_id"] = str(answer["send_queue_id"])[:100]
                     self.client.post(f"automations/mail-actions/{action['id']}/result", body,
                                      key=f"mail-action-{action['id']}-{action.get('attempt', 0)}")
                     done += 1
                 if not ok:
                     break
+        return done
+
+    def email_send_tick(self):
+        """Dispatch one due email per inbox. Pending work lives on the server across runner and server restarts."""
+        if self.mail_boxes is None:
+            self.mail_boxes = [box["address"] for box in self.client.get("connectors/mail/targets").get("mailboxes") or []]
+        done = 0
+        for address in self.mail_boxes:
+            if self.stop.is_set():
+                break
+            try:
+                claimed = self.client.post("connectors/email/sends/claim", {"mailbox": address}).get("send")
+            except APIError as exc:
+                if exc.status in (403, 404):
+                    continue
+                raise
+            if not claimed:
+                continue
+            try:
+                answer = self.run_action({"id": claimed["id"], "mailbox": address, "action": "dispatch_send"})
+                status = answer.get("status") or ("sent" if answer.get("ok") else "unknown")
+                result = {"status": status, "message": str(answer.get("message") or "")[:200],
+                          "detail": str(answer.get("detail") or "")[:1000]}
+            except Exception:
+                result = {"status": "unknown", "detail": "The local mail dispatch did not confirm delivery"}
+            self.client.post(f"connectors/email/sends/{claimed['id']}/result", result,
+                             key=f"email-receipt-{claimed['id']}")
+            done += 1
         return done
 
     def mail_cli(self, args):
@@ -602,6 +632,7 @@ class ConnectorPublisher:
                 mail.failed(exc)
             try:
                 self.mail_action_tick()     # every pass, not every mail sync: a reply should not wait for one
+                self.email_send_tick()
                 actions.recovered()
             except Exception as exc:
                 actions.failed(exc)

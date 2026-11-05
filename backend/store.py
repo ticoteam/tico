@@ -278,7 +278,7 @@ CREATE TABLE IF NOT EXISTS mail_messages(
  to_addresses TEXT NOT NULL, cc TEXT NOT NULL, subject TEXT NOT NULL, snippet TEXT NOT NULL,
  labels TEXT NOT NULL, body TEXT NOT NULL, body_truncated INTEGER NOT NULL DEFAULT 0,
  attachments TEXT NOT NULL, list_id TEXT NOT NULL DEFAULT '', is_internal INTEGER NOT NULL DEFAULT 0,
- has_unsubscribe INTEGER NOT NULL DEFAULT 0, rule_hits TEXT NOT NULL DEFAULT '[]',
+ has_unsubscribe INTEGER NOT NULL DEFAULT 0, rule_hits TEXT NOT NULL DEFAULT '[]', send_facts TEXT NOT NULL DEFAULT '{}',
  updated_at TEXT NOT NULL, deleted_at TEXT, PRIMARY KEY(mailbox,msg_id));
 CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages(mailbox,thread_id,epoch);
 CREATE INDEX IF NOT EXISTS mail_messages_epoch ON mail_messages(mailbox,epoch DESC);

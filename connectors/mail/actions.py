@@ -23,7 +23,7 @@ from . import unsubscribe as unsub
 from .rules import in_domain
 
 KINDS = {"archive": "archive", "label": "label", "leave": "label", "draft": "draft", "send": "draft",
-         "forward": "draft", "unsubscribe": "unsubscribe"}       # action -> the CLI verb it needs on the mailbox
+         "forward": "draft", "unsubscribe": "unsubscribe", "dispatch_send": "draft"}       # action -> the CLI verb it needs on the mailbox
 FORWARDED = "\n\n---------- Forwarded message ---------\nFrom: {from_header}\nDate: {date}\nSubject: {subject}\n" \
             "To: {to}\n\n{body}"
 
@@ -40,6 +40,8 @@ def perform(ctx, action):
     kind, aid = action["action"], str(action["id"])
     mid, args = str(action.get("msg_id") or ""), action.get("args") or {}
     verb(kind)
+    if kind == "dispatch_send":
+        return _dispatch(ctx, aid)
     if not mid:
         raise Refused(f"the {kind} action names no message.")
     if kind == "archive":
@@ -78,7 +80,10 @@ def perform(ctx, action):
     draft_id = _draft(ctx, aid, raw, thread, to, subject)
     if kind == "draft" or args.get("draft_only"):     # draft_only: the inbox's send switch was off at claim
         return {"ok": True, "detail": "drafted", "draft": draft_id, "thread": thread}
-    return _send(ctx, aid, draft_id, to, subject, thread)
+    from . import policy
+    queued = policy.queue_send(ctx.mailbox, raw, thread, original["id"], automation_action_id=aid)
+    return {"ok": queued["state"] in ("pending", "waiting_approval", "sent"), "retry": False,
+            "detail": queued["state"], "send_queue_id": queued["id"], "draft": draft_id, "thread": thread}
 
 
 def label_name(name):
@@ -188,23 +193,28 @@ def _draft(ctx, aid, raw, thread, to, subject):
     return made.get("id", "")
 
 
-def _send(ctx, aid, draft_id, to, subject, thread):
-    key = compose.key("automation-send", ctx.mailbox, aid)
-    row = db.get_send(ctx.conn, key)
-    if row and row["status"] == "sent":
-        return {"ok": True, "detail": "already sent", "message": row["message_id"], "thread": row["thread_id"]}
-    if not row:     # the row comes first: a crash after the send leaves it pending, never absent
-        day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
-        db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, "automation:" + aid, to, subject, thread, draft_id, day,
-                      source="automation")
+def _dispatch(ctx, ident):
+    """Only the server's frozen payload can leave; uncertain results are never retried into duplicates."""
+    from . import oauth
+    key = compose.key("email-queue", ctx.mailbox, ident)
+    prior = db.get_send(ctx.conn, key)
+    if prior:
+        return {"ok": prior["status"] == "sent", "retry": False,
+                "status": "sent" if prior["status"] == "sent" else "unknown",
+                "message": prior.get("message_id", ""), "detail": "This dispatch was already attempted"}
+    # This final server round trip rechecks permissions, policy and caps immediately before the provider call.
+    permit = oauth.broker(retries=0).post(f"connectors/email/sends/{ident}/dispatch", {"mailbox": ctx.mailbox})
+    action = permit.get("send")
+    if not action:
+        return {"ok": False, "retry": False, "status": "failed", "detail": "Sending permission was revoked"}
+    raw, thread = action["raw"], action.get("thread_id", "")
+    made = ctx.gmail.create_draft(raw, thread)
+    draft_id = made.get("id", "")
+    db.claim_send(ctx.conn, key, "connector", ctx.mailbox, ident, [], "", thread, draft_id,
+                  datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"), source="email-queue")
     try:
         sent = ctx.gmail.send_draft(draft_id)
-    except Failure as e:
-        if e.status != 404:
-            raise                       # pending: the retry finds the draft still there and sends it
-        # The draft is gone: an earlier attempt sent it (its answer lost), or a person discarded it.
-        db.finish_send(ctx.conn, key, "", "sent")
-        return {"ok": True, "detail": "already sent (or the draft was discarded)", "thread": thread}
+    except Exception:
+        return {"ok": False, "retry": False, "status": "unknown", "detail": "The provider result is unknown"}
     db.finish_send(ctx.conn, key, sent.get("id", ""), "sent")
-    return {"ok": True, "detail": "sent", "message": sent.get("id", ""),
-            "thread": sent.get("threadId") or thread}
+    return {"ok": True, "retry": False, "status": "sent", "message": sent.get("id", ""), "detail": "sent"}

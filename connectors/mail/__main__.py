@@ -218,15 +218,9 @@ def cmd_e2e(args):
             c.ok("label the draft", lb.DRAFTED)
         except Failure as e:
             c.fail("label the draft", e.msg, e.hint)
-        sent = g.send_draft(draft_id)
-        draft_id = ""
-        c.ok("send to itself", f"message {sent.get('id', '?')}")
-        found = g.list_ids(f'subject:"{subject}"', limit=5)
-        if found:
-            c.ok("search it back", f"{len(found)} hit(s) for subject:\"{subject}\"")
-        else:
-            c.fail("search it back", f"no hit for subject:\"{subject}\"",
-                   "Gmail may not have indexed it yet; run doctor --e2e again in a minute.")
+        queued = pl.queue_send(box, raw)
+        c.ok("queue test email", f"send {queued['id']}: {queued['state']}")
+        c.ok("delivery", "The shared queue dispatches after approval and the undo window")
         try:
             calendar = cal.Calendar(open_calendar(box), box)
             start = datetime.now(zone(DEFAULT_TZ)) + timedelta(days=2)
@@ -1926,33 +1920,14 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         ctx.gmail.update_draft(draft_id, compose.with_warning(ctx.gmail.get_draft_raw(draft_id), warning_line),
                                thread_id)
         ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
-    key = compose.send_key(ctx.slug, ctx.issue, draft_id)
-    day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
-    row, claimed = db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
-                                 thread_id, draft_id, day)
-    if not claimed:
-        ctx.audit("send-duplicate", draft_id, {"key": key, "message": row.get("message_id")})
-        return dict(base, sent=True, already_sent=True, message=row.get("message_id", ""),
-                    key=key, note="this exact send was already made; nothing was sent again.")
-    try:
-        res = ctx.gmail.send_draft(draft_id)
-    except Failure:
-        db.drop_send(ctx.conn, key)                     # never sent: let a retry try again
-        raise
-    message_id = res.get("id", "")
-    thread_id = res.get("threadId") or thread_id
-    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
-    db.finish_send(ctx.conn, key, message_id, "sent",
-                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
-    handled = lb.handled(ctx.slug)
-    label_thread(ctx, handled, msgs, [message_id], part_of="send")
-    ctx.audit("send", message_id or draft_id,
-              {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
-               "draft": draft_id, "attachments": names, "review": verdict.get("backend"),
-               "review_result": verdict.get("review"),
-               "owner_instruction": verdict.get("owner_instruction")})
-    return dict(base, sent=True, message=message_id, thread=thread_id, key=key,
-                label=handled, checks=decision["checks"])
+    original = next((m for m in reversed(msgs or []) if m.get("from", "").lower() != ctx.mailbox.lower()), {})
+    queued = pl.queue_send(ctx.mailbox, ctx.gmail.get_draft_raw(draft_id), thread_id,
+                           original.get("id", ""), approval or "")
+    ctx.audit("send-queued", queued["id"], {"to": to, "cc": cc, "state": queued["state"]})
+    return dict(base, sent=queued["state"] == "sent", queued=queued["state"] in ("pending", "waiting_approval"),
+                send_id=queued["id"], state=queued["state"], send_after=queued["send_after"],
+                approval_id=queued["approval_id"], checks=decision["checks"],
+                note="Queued in Tico; pending mail can be canceled before dispatch.")
 
 
 def cmd_send(args):

@@ -8674,6 +8674,8 @@ def create_app(settings=None):
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
     from .mail_settings import install as install_mail_settings
     install_mail_settings(app, store, auth, mutate)
+    from .email_sending import install as install_email_sending
+    install_email_sending(app, store, auth, mutate)
     from .shared_bots import install as install_branches
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
