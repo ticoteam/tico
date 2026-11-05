@@ -4,6 +4,9 @@
 def up(conn):
     if "acting_person" not in {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}:
         conn.execute("ALTER TABLE attempts ADD COLUMN acting_person TEXT")
+    # Native databases and a fresh Store boot have no runner jobs to backfill yet.
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+        return
     # Existing receipts retain only a person proven by the server-authored request in their own Assistant room.
     conn.execute("UPDATE attempts SET acting_person=(SELECT v.owner_id FROM jobs j "
                  "JOIN messages m ON m.id=j.message_id JOIN conversations v ON v.id=m.conversation_id "
