@@ -3286,12 +3286,12 @@ impl Recorder {
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
                 let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
-                let chosen = if item.owner.is_empty() {
+                let chosen = if item.owner.is_empty() && !item.id.starts_with("draft-") {
                     self.last_owner.clone()
                 } else {
                     item.owner.clone()
                 };
-                let owner_name = owners
+                let owner_name = self.roster
                     .iter()
                     .find(|row| row.0 == chosen)
                     .map(|row| row.1.clone())
@@ -3692,6 +3692,39 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod saved_panel_tests {
     use super::*;
+    #[test]
+    fn suggested_owners_show_by_name_and_unclear_drafts_do_not_reuse_the_last_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.choosing_org = false;
+        app.last_owner = "human:ana".into();
+        app.roster = vec![("bot:concierge".into(), "Guest Relations".into())];
+        app.context.live_id = "live-planning".into();
+        app.live = json!({"visibility":"private", "owner_actor":"human:ana"});
+        app.context.items = vec![
+            Item {
+                id: "draft-assigned".into(),
+                title: "Negotiate quotes".into(),
+                owner: "bot:concierge".into(),
+                ..Default::default()
+            },
+            Item {
+                id: "draft-unclear".into(),
+                title: "Send prices".into(),
+                ..Default::default()
+            },
+        ];
+        let view = app.actions_view("Acme");
+        assert_eq!(view["items"][0]["owner"], "bot:concierge");
+        assert_eq!(view["items"][0]["owner_name"], "Guest Relations");
+        assert_eq!(view["items"][1]["owner"], "");
+        assert_eq!(view["items"][1]["owner_name"], "");
+        assert_eq!(view["items"][1]["can_send"], false);
+    }
+
     #[test]
     fn private_action_recipients_include_bots_added_by_participants() {
         let dir = tempfile::tempdir().unwrap();
