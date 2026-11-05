@@ -221,14 +221,27 @@ and subsequent recovery, without opening a device; saved raw and processed aid s
 Linux tests verify that WAV writing always uses the raw queue, including after plain fallback.
 macOS PR CI compiles/links the bridge and runs its hardware-free lifecycle test.
 
-## Suggested task owners
+## Suggested tasks: work, titles and owners
 
 `assist_cases.json` covers commitments, named requests, concierge bot/team work, multiple recipients,
-and unknown speakers or absent teammates. Names and actors are fictional. Each case supplies a roster,
-signed-in identity, transcript speaker labels, and expected owner. A miss includes a missing or extra
-item, so the eval cannot pass by returning no suggestions. The opt-in Rust eval calls the production
-draft request, validates the model's owner against the offered PEOPLE, and checks the stored Item.
-It repeats each case at least three times and prints per-case and overall exact owner accuracy.
+and unknown speakers or absent teammates. It also covers bare pings, messages and reminders, pings
+with stated work, vague syncs, immediate meeting steps, EXISTING restatements, and five small real
+commitments in one stretch. Names and actors are fictional. The original twelve owner scenarios
+retain the same transcript and owner expectations.
+
+Each case supplies transcript speaker labels and an `expected` array (empty means no new items).
+Each expected item has an exact `owner` and `title_keywords`: every group must have at least one
+case-insensitive substring in the title. `banned_title_starts` rejects communication-only leading
+verbs at a word boundary. Optional `existing` titles seed the meeting's draft list. The shared
+roster and signed-in identity apply to each case, with `omit` removing absent teammates.
+
+The opt-in Rust eval calls the production draft request, validates owners against PEOPLE, and
+checks stored Items. It repeats each case at least three times and prints per-case and overall
+selection/title accuracy, owner accuracy, and combined accuracy. Items match without relying on
+output order; combined matching checks the title and owner on the same item. Missing or extra
+items and request errors fail all scores, so returning no suggestions cannot pass a positive case.
+Title checks use no judge model. Owners alone are compared as a multiset; use the combined score
+to detect ownership swapped between several deliverables.
 
 Run on RunsOn with `scripts/remote.py --setup rust --minutes 4 -- ...` and a secure credential source
 on the VM, using:
@@ -242,3 +255,7 @@ TICO_RECORDER_ASSIST_KEY=<model key> cargo test --manifest-path recorder/Cargo.t
 Tico recorder relay; defaults match Settings. `TICO_RECORDER_ASSIST_REPEATS` defaults to 3 and must be
 at least 3. This is a paid, manual eval, excluded from ordinary test runs. Never put a provider key
 in a workflow command or its logs.
+
+Drafting reserves up to 2,400 completion tokens for model reasoning plus the JSON reply; private
+answers retain 1,200. The five-item review limit is unchanged. The repeated eval exposed truncated
+replies at the earlier 1,200-token draft budget.

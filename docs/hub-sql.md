@@ -173,7 +173,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `refusals` | `created_at, actor, rule, detail, severity` | the rule a bot broke |
 | `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created_at, updated_at` | your notes; every team meeting |
 | `meeting_items` | `id, meeting_id, section, text, detail, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created_at, updated_at` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
-| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | the thread beside a meeting: anyone who can open it can add to it ([Meetings](meetings.md)). Visible exactly where its meeting is |
+| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | an older thread beside a meeting, no longer written or shown ([Meetings](meetings.md)). Visible exactly where its meeting is |
 | `import_refs` | `source, external_id, meeting_id, runner_id, created_at` | which outside record a meeting was imported from — one row per Close call imported before the transcript-only worker ([Meetings](meetings.md), Close). Visible exactly where its meeting is |
 | `docs` | `id, path, title, body, locked, version, created_by_id, created_at, updated_by_id, updated_at` | internal Docs, readable by teammates |
 | `doc_versions` | `doc_id, version, title, path, body, actor, created_at, note` | versions of visible internal Docs |

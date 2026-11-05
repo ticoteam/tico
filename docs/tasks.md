@@ -1264,10 +1264,15 @@ preference: with none that can run, it runs on an author's own, and the subtask'
 Every task a bot owns has its own thread (a `kind: task` thread), even one filed from a thread: its comments,
 notices, notes and replies go there, and the thread it was filed from gets one quiet line, "Started task: <title>"
 (`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
-say, notice or ask in its task's thread reaches a person only when it @-mentions them: to get someone's attention on
-a task, the bot @-mentions them; otherwise the comment stays on the task (no Inbox row, digest or push). A bot's
-open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A
-person's own tasks, and the Assistant's (whose turns act for the person of the thread), keep their thread.
+say or notice in its task's thread reaches a person only when it @-mentions them. To get someone's attention on a task,
+the bot @-mentions them; otherwise the comment stays on the task, with no Inbox row, digest or push. A bot's ask in its
+task's thread goes to the person or bot it names. With no name, the owner bot's ask goes to the requester,
+and the requester's or a manager's ask goes to the owner. When the recipient is a person, that person's
+**Needs you** lists the task, with no Inbox row, digest or push unless the asking bot @-mentions them. When
+the recipient is a bot, the ask goes to that bot on the task, and no person's **Needs you** lists it. A bot's
+open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed;
+its earlier messages stay in the thread, and the new thread opens with a line saying so. A person's own tasks,
+and the Assistant's (whose turns act for the person of the thread), keep their thread.
 A turn reads only its own lane's messages: the main session reads the Home, with no task traffic, and a task's
 session reads that task (and its subtasks that share the session). The Home hears where its bot's tasks got to
 from short quiet lines (`refs.task_report`): `<title>: blocked.` when the task waits on a person (a person's subtask
@@ -1290,7 +1295,8 @@ bot's DM uses ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **S
 now (right after it, if the bot's harness cannot steer); **Queue** goes right after that turn, or now when the bot is
 idle; **Defer** wakes nobody and goes in with the bot's next turn on this task, at the latest after the time picked
 under it (30m to 7d, or Never; 24h unless picked). A Defer sent while the bot works on this task goes in queued; a turn
-on another task does not count. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
+on another task does not count. Closing, finishing or declining the task cancels every Defer still waiting on it, and
+reopening it does not bring them back. **Set as goal**, apart in the menu, makes the text the goal of the bot's session for
 this task, as `/goal` does in a thread (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its
 owner, requester or a mover) may steer, queue or set the goal; anyone else may defer. Send's icon shows the way, and the caret
 (or a right-click or long press on Send) opens the ways. The web always sends the shown way: your kept way
