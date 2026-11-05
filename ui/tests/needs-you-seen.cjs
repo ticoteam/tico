@@ -65,6 +65,15 @@ const items = [request('t-mine', 'Pick the venue', ask('m-mine', 'human:ana')),
     await page.evaluate(() => taskAsksRead('t-mine'));          // opening the full task on the same page
     await page.waitForTimeout(200);
     assert.deepEqual(sent.slice(mark), [{p: '/api/v2/tasks/t-mine/seen', body: {}}], 'reopening the full task sends again');
+
+    // A complete feed can contain more than one delivery batch. Every question is delivered, with bounded writes.
+    mark = sent.length;
+    await page.evaluate(items => needsTake({items, version: 'many', count: items.length}),
+      Array.from({length: 205}, (_, n) => loose('batch-' + n, 'human:ana')));
+    await page.waitForTimeout(200);
+    const delivered = sent.slice(mark).filter(r => r.p === '/api/v2/needs-you/seen').map(r => r.body.asks);
+    assert.deepEqual(delivered.map(ids => ids.length), [200, 5]);
+    assert.equal(new Set(delivered.flat()).size, 205, 'no question is lost or delivered twice');
     assert.deepEqual(errors, []);
     console.log('Needs you: my questions are delivered once and read when their card shows them');
   } finally { await browser.close(); }

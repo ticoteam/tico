@@ -88,8 +88,8 @@ async function v2Refresh() {
   if (needs && !needs.unchanged && typeof askPeek === 'function') askPeek();   // a peek beside Ask's dot
   if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
 }
-// Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
-// server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next
+// Needs you as the page holds it: a bounded page at a time (GET /v2/needs-you?limit=), in the server's order, with
+// its version, whole attention count and plate count, each bot's count over the whole list (`bots`) and where the next
 // page starts (`needsNext`, null once it is all here), plus counts by kind (`by_kind`) and ids of tasks folded into
 // other cards (`folded_task_ids`) over the whole list.
 // A read names the version held; an unchanged list comes back
@@ -142,24 +142,28 @@ let needsFirstDone = null;
 const NEEDS_FIRST = new Promise(done => { needsFirstDone = done; });
 const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs) {
+  NEEDS_REVISION++;
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
-  needsSeen(S.v2.needs);
+  for (let at = 0; at < S.v2.needs.length; at += 200) needsSeen(S.v2.needs.slice(at, at + 200));
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
+  S.v2.needsPlateCount = needs.plate_count ?? null;
   S.v2.needsByKind = needs.by_kind || null;
   S.v2.needsFoldedIds = needs.folded_task_ids || null;
+  needsListsRedraw();
   if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
-let NEEDS_READ = 0, NEEDS_KEPT = 0;
+let NEEDS_READ = 0, NEEDS_KEPT = 0, NEEDS_REVISION = 0;
 async function v2NeedsRead() {
-  const held = S.v2.needsVersion, seq = ++NEEDS_READ;
+  const held = S.v2.needsVersion, seq = ++NEEDS_READ, revision = NEEDS_REVISION;
   // As many as are held, so a list that moved does not drop the pages already read.
   const limit = Math.min(NEEDS_PAGE_MAX, Math.max(NEEDS_PAGE, (S.v2.needs || []).length));
   const needs = await v2Get(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: true});
   if (!needs) return null;
-  if (seq < NEEDS_KEPT) return needs;
+  if (seq < NEEDS_KEPT || revision !== NEEDS_REVISION) return null;
   NEEDS_KEPT = seq;
   if (!needs.unchanged) needsTake(needs);
+  else if (needs.plate_count != null) { S.v2.needsPlateCount = needs.plate_count; needsListsRedraw(); }
   S.v2.wentAway = needs.went_away || null;
   return needs;
 }
@@ -176,8 +180,11 @@ function v2NeedsMore() {
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
       needsSeen(r.items);
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
+      S.v2.needsPlateCount = r.plate_count ?? null;
       S.v2.needsByKind = r.by_kind || null;
       S.v2.needsFoldedIds = r.folded_task_ids || null;
+      NEEDS_REVISION++;
+      needsListsRedraw();
       return true;
     } finally { NEEDS_MORE = null; }
   })();
@@ -197,9 +204,11 @@ async function v2NeedsMend(d) {
   if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed) || d.folded_task_ids === null) return whole();
   const all = needsAll(), out = new Set([...d.changed, ...d.removed].map(String));
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));
+  let plateCount = d.plate_count;
   if (d.changed.length) {
     const r = await v2Get(`/v2/needs-you?ids=${encodeURIComponent(d.changed.join(','))}`);
     if (!r || r.version !== d.version) return whole();
+    plateCount = r.plate_count ?? plateCount;
     // Unchanged items kept their order against each other, so each changed one goes back at its place, first place
     // first. Past the end of the pages held, the rest wait for their page.
     for (const it of (r.items || []).slice().sort((a, b) => r.positions[String(a.id)] - r.positions[String(b.id)])) {
@@ -211,11 +220,14 @@ async function v2NeedsMend(d) {
   if (all ? items.length !== d.count : items.length > d.count) return whole();
   NEEDS_ONE.clear();
   S.v2.needs = items; S.v2.needsVersion = d.version; S.v2.needsCount = d.count;
+  S.v2.needsPlateCount = plateCount ?? null;
   needsSeen(items);
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
   S.v2.needsByKind = d.by_kind || null;
   if (Array.isArray(d.folded_task_ids)) S.v2.needsFoldedIds = d.folded_task_ids;
+  NEEDS_REVISION++;
+  needsListsRedraw();
   return true;
 }
 // One line above the composer when the bot cannot answer right now: its status says so, or

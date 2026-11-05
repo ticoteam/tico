@@ -7,7 +7,7 @@ each standard status except waiting and declined (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
-other types. A type is always selected, and both the list and board show only its tasks. The board
+other types. A type is always selected, and Open and Board show only its tasks. The board
 uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
 way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
 it. A task that finishes leaves the board unless its finished steps are unfolded. Done tasks are under
@@ -44,10 +44,14 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
-**Needs you** counts the tasks waiting on you in the selected type and filters, plus approvals and
-questions outside any task. The count includes those on unread pages and stays the same on a phone
-and desktop. Tasks folded or merged into another card count only through that card, even before it loads.
-Thread mentions, unread DMs and held messages are counted in Inbox.
+**Needs you** counts everything waiting on you across every board: tasks, questions, waits,
+approvals, asks, stale checks and nightly memory tidy. The tab, **Needs you** list
+header and Tasks navigation badges show the same count on desktop and phone; the badges hide at zero.
+**Catch up** opens the answerable cards one at a time. It has no number and appears only when a card is
+available. Other rows open the full task. Board, search and task filters stay with Open and Board and
+never narrow this queue. Folded or merged tasks count only through their card. The count includes unread
+pages; answering removes an item immediately and Undo restores it. Live changes update the held rows.
+Thread mentions, unread DMs and held messages keep their own count in Threads; updates stay in Updates.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:

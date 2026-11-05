@@ -3807,11 +3807,13 @@ export type NeedsYou = {
   items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
+  plate_count?: number;
   restart?: boolean;
   went_away?: Record<string, unknown>;
 } | {
   actor: string;
   count: number;
+  plate_count: number;
 };
 
 export type NeedsYouItem = {

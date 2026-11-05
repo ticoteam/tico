@@ -1,8 +1,8 @@
 /* ui/styles/decide.css — the Needs you card: one item at a time over the list, ‹ › and the count on top, two big buttons
-   at the bottom; a modal on a wide screen, the whole screen on a phone. The way in on Needs you ("Go through · N").
+   at the bottom; a modal on a wide screen, the whole screen on a phone. The way in on Needs you ("Catch up").
    The cascade runs in the order index.html links these files; keep rules in order. */
-.tl-decide{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);font:600 var(--t-base) var(--sans);white-space:nowrap;text-decoration:none;font-variant-numeric:tabular-nums;cursor:pointer}
-.tl-decide:hover{text-decoration:none;border-color:var(--wait)}
+.tl-decide{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font:500 var(--t-base) var(--sans);white-space:nowrap;text-decoration:none;cursor:pointer}
+.tl-decide:hover{text-decoration:none;background:var(--surface2);color:var(--ink)}
 .tl-decide[hidden]{display:none}
 .tl-decide-bar{height:24px;padding:0 9px;border-radius:6px;font-size:var(--t-sm)}
 @media (min-width:761px){.tl-decide-head{display:none}}

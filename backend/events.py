@@ -1655,19 +1655,19 @@ def needs_baseline(c, auth, who, task_view):
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, went_away
+    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, needs_plate_count, went_away
     items = needs_items(view.c, view.auth, view.who, task_view)
     folded = needs_folded_ids(items)
     away = went_away(view.c, view.who.actor)
     if held is None:
-        return [(rows[-1], {"count": len(items), "items": items, "went_away": away,
+        return [(rows[-1], {"count": len(items), "plate_count": needs_plate_count(items), "items": items, "went_away": away,
                             "folded_task_ids": folded})]
     marks, version = needs_marks(items)
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
     removed = [k for k in before if k not in marks]
     many = len(changed) + len(removed) > NEEDS_CHANGES_MAX
-    entry = {"count": len(items), "version": version, "base": held.get("version"),
+    entry = {"count": len(items), "plate_count": needs_plate_count(items), "version": version, "base": held.get("version"),
              "changed": None if many else changed, "removed": None if many else removed, "went_away": away,
              "bots": needs_bots(items, view.who.actor), "by_kind": needs_kinds(items)}   # whole-list facts, even on a page
     before_folded = held.get("folded_task_ids") or []
