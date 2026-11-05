@@ -702,9 +702,9 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                     refused, first, person = _fenced_queue_reason(row, *claimable)
                     if refused:
                         row["queue_reasons"] = queue_reasons(where[0], slug, ignore_refusals=STALE)
-                        # An intentional wait must not hide another job that needs attention.
+                        # Ready jobs ("slow") and intentional waits must not hide a refusal that needs a fix.
                         refused = next((group["reason"] for group in row["queue_reasons"]
-                                        if group["reason"] not in QUEUE_WAITS), refused)
+                                        if group["reason"] not in ("slow", *QUEUE_WAITS)), refused)
                         held_row = {**row, "reason": refused, "runner_id": where[0], "runtime": ""}
                         if refused in QUEUE_WAITS:
                             slow.append({**held_row, "resting": True})
