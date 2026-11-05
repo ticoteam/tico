@@ -947,8 +947,11 @@ class SettingsAdmin:
             choice = self.models.get(body.model)
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
-            self.refuse_retired(choice)
             current = self.snapshot(c, bot, "model")
+            # A saved held model (Dev 693) stays editable: a save that keeps it is not a fresh pick, so only a different
+            # held model, or a retired one, is refused here.
+            if not (choice.get("held") and choice["id"] == current.get("model")):
+                self.refuse_retired(choice)
             effort = self._effort(choice, getattr(body, "effort", None), current.get("effort"))
             harness = self._harness(choice, getattr(body, "harness", None), current.get("harness"))
             runtime_name = runtime_of(harness) or choice["runtime"]

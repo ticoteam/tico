@@ -67,7 +67,9 @@ function settingsAllChoices() {
   // one keeps its own choice in the editor).
   const enabled = SETTINGS_DATA.enabledProviders || [];
   // Meeting models (providers.py `meeting`) are picked in Settings' Meeting model select, not as a bot's own model.
-  return (SETTINGS_DATA.models || []).filter(model => !model.deprecated && (!model.meeting || model.id === SETTINGS_KEEP_MODEL) &&
+  // A held model (the server lists it only while a bot runs it) is offered to that bot alone, as its saved model.
+  return (SETTINGS_DATA.models || []).filter(model => (!model.deprecated || (model.held && model.id === SETTINGS_KEEP_MODEL)) &&
+    (!model.meeting || model.id === SETTINGS_KEEP_MODEL) &&
     (!enabled.length || !model.provider || enabled.includes(model.provider) || model.id === SETTINGS_KEEP_MODEL)).flatMap(model =>
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
