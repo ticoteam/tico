@@ -265,7 +265,6 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-review-bar .linkish{display:inline-flex;align-items:center;gap:6px;color:var(--muted);text-decoration:none;font-size:var(--t-base);white-space:nowrap}
 .meet-review-bar .linkish:hover,.meet-review-bar .linkish[aria-expanded=true]{color:var(--ink)}
 .meet-review-bar [hidden]{display:none}
-#meet-recorder-hint{font-size:var(--t-sm);white-space:nowrap}
 .meet-src-btn .dot{width:7px;height:7px;background:var(--fail)}
 .meet-review-bulk input,.meet-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--ink)}
 .meet-row.review-pending{grid-template-columns:16px auto minmax(0,1fr) auto}
@@ -282,7 +281,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 @media(max-width:760px){
   .meet-review-tabs button{padding:6px 8px;font-size:var(--t-base);min-height:40px}
   .meet-review-bar{gap:10px}
-  #meet-recorder,#meet-recorder-hint,#meet-recorder-update{display:none}
+  #meet-recorder,#meet-recorder-update{display:none}
   .mg-line .mg-count{display:none}
   #main:has(.meet-review-bar){padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px)}
   .meet-row.review-pending .meet-main{grid-column:3 / -1}

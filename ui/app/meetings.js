@@ -33,7 +33,6 @@ async function pageNotes() {
       <button type="button" role="tab" data-review="dismissed" aria-selected="false">Dismissed</button></div>
       <div class="meet-sources" id="meet-sources" hidden></div>
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
-      <span class="muted" id="meet-recorder-hint" hidden>Drag to Applications</span>
       <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
@@ -212,14 +211,10 @@ async function meetRecorderLink() {
     try { return await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch { return false; }
   };
   const [installed, mine] = await Promise.all([hasRecorder(), get('/v2/meetings/recorder').catch(() => null)]);
-  const link = $('#meet-recorder'), hint = $('#meet-recorder-hint'), update = $('#meet-recorder-update');
+  const link = $('#meet-recorder'), update = $('#meet-recorder-update');
   if (!link) return;
   if (update) update.hidden = !mine?.update_available;
-  if (!installed) {
-    link.hidden = !!mine?.recent;
-    link.onclick = () => { if (hint) hint.hidden = false; };
-    return;
-  }
+  if (!installed) { link.hidden = !!mine?.recent; return; }
   const button = document.createElement('button');
   Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
   button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };

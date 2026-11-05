@@ -44,6 +44,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      // The icon font, so More is an icon (not its ligature name spilling past the card) in checks and shots.
+      if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
       const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (module) {
         const file = uiFile(module[1]);
@@ -136,6 +138,14 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       await page.setViewportSize({width, height});
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no sideways scroll at ${width}px`);
       assert.equal(await row('ben').locator('[data-recorder-version]').isVisible(), true, `the version shows at ${width}px`);
+      await page.evaluate(() => document.fonts.ready);
+      // Every cell, More included, sits inside its row and nothing in it overflows.
+      for (const id of ['ana', 'ben']) assert.deepEqual(await row(id).evaluate(r => {
+        const box = r.getBoundingClientRect();
+        return [...r.querySelectorAll(':scope > *, .people-more')].filter(el => el.offsetParent)
+          .filter(el => { const b = el.getBoundingClientRect(); return b.right > box.right + 0.5 || b.left < box.left - 0.5 || el.scrollWidth > el.clientWidth + 1; })
+          .map(el => el.className);
+      }), [], `${id}'s cells fit at ${width}px`);
       if (shots) for (const theme of ['light', 'dark']) {
         await page.evaluate(v => window.ticoTheme?.set(v), theme);
         await page.locator('.people-list-card').screenshot({path: path.join(shots, `people-recorder-${width}-${theme}.png`), animations: 'disabled'});

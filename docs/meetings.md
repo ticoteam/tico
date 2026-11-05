@@ -57,8 +57,8 @@ action items work identically whatever the source.
 ### Tico Recorder
 
 **Get Tico Recorder** on Meetings downloads the Mac app
-(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`); after the click, **Drag to
-Applications** says what to do with it. The link hides once Tico has seen one of your copies in the last 30 days. The
+(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`); the app moves itself to Applications
+on first launch. The link hides once Tico has seen one of your copies in the last 30 days. The
 Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its calls; Tico keeps
 the last version and time per person and copy, writing at most every ten minutes unless the version changes. The newest
 version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;

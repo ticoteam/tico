@@ -82,7 +82,7 @@ const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) =
     await page.close();
   }
 
-  // Tico has not seen a copy lately: the download, and after a click the one hint. No update line.
+  // Tico has not seen a copy lately: just the download link (no hint), no update line.
   const shots = process.env.TICO_UI_SHOTS;
   const shoot = async (page, name) => {
     if (!shots) return;
@@ -94,14 +94,11 @@ const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) =
   for (const recorder of [{version:'', last_seen_at:null, recent:false, update_available:false},
                           {version:'0.2.0', last_seen_at:'2026-09-01T00:00:00Z', recent:false, update_available:false}]) {
     const {page, errors} = await open(browser, {features:null, recorder});
-    const link = page.locator('a#meet-recorder'), hint = page.locator('#meet-recorder-hint');
+    const link = page.locator('a#meet-recorder');
     await link.waitFor();
-    assert.equal(await hint.isVisible(), false);
+    assert.equal(await link.getAttribute('href'), DMG);
     assert.equal(await page.locator('#meet-recorder-update').isVisible(), false);
-    // The link still downloads; the hint shows on the click itself (the download is not followed here).
-    await link.evaluate(a => a.addEventListener('click', e => e.preventDefault()));
-    await link.click();
-    assert.equal(await hint.innerText(), 'Drag to Applications');
+    assert.equal(await page.locator('.meet-review-bar').evaluate(bar => /Drag to Applications/.test(bar.textContent)), false, 'no install hint');
     if (!recorder.version) await shoot(page, 'meetings-recorder-download');
     assert.deepEqual(errors, []);
     await page.close();
@@ -135,7 +132,7 @@ const posted = (page, name) => page.evaluate(n => window.__posted.filter(([k]) =
   for (const recorder of [{version:'', last_seen_at:null, recent:false, update_available:false},
                           {version:'0.2.0', last_seen_at:new Date().toISOString(), recent:true, update_available:true}]) {
     const {page, errors} = await open(browser, {features:null, recorder, width:390});
-    for (const id of ['#meet-recorder', '#meet-recorder-hint', '#meet-recorder-update']) assert.equal(await page.locator(id).isVisible(), false, id);
+    for (const id of ['#meet-recorder', '#meet-recorder-update']) assert.equal(await page.locator(id).isVisible(), false, id);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 390px');
     if (recorder.update_available) await shoot(page, 'meetings-recorder-phone');
     assert.deepEqual(errors, []);
