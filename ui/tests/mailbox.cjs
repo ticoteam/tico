@@ -9,7 +9,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {googleFake} = require('./support/google-fake.cjs');
-const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs');
+const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
 const READY = '#mailbox-access tr[data-mb-access-row]';
@@ -261,13 +261,13 @@ const scenarios = {
       await page.locator('[data-mb-recent] .ib-recent li').waitFor();
       const widths = await page.evaluate(() => ({scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth}));
       assert.ok(widths.scroll <= widths.client, `page scrolls sideways: ${widths.scroll} > ${widths.client}`);
-      if (process.env.TICO_SHOTS) await page.screenshot({path: `${process.env.TICO_SHOTS}/inboxes-mailbox-phone-${theme}.png`, fullPage: true});
+      await shot(page, `inboxes-mailbox-phone-${theme}.png`, theme);
       assert.deepEqual(seen.errors, []);
       await page.close();
     }
     const {page, seen} = await open(browser, fake, googleFake(), {...at('mb-support'), mail});
     await page.locator('[data-mb-recent] .ib-recent li').waitFor();
-    if (process.env.TICO_SHOTS) await page.screenshot({path: `${process.env.TICO_SHOTS}/inboxes-mailbox-desktop-light.png`, fullPage: true});
+    await shot(page, `inboxes-mailbox-desktop-light.png`, 'light');
     assert.deepEqual(seen.errors, []);
     await page.close();
   },

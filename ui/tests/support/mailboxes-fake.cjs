@@ -113,6 +113,14 @@ const EMPTY = {
   '/api/v2/postal/intake': () => ({intake: null}),
   '/api/v2/automations': () => ({automations: []}),
 };
+// A TICO_SHOTS screenshot once the route's fade has ended, in the theme its name says ('' keeps the page's own).
+exports.shot = async (page, file, theme = '') => {
+  if (!process.env.TICO_SHOTS) return;
+  if (theme) await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
+  await page.screenshot({path: `${process.env.TICO_SHOTS}/${file}`, fullPage: true, animations: 'disabled'});
+};
 exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready, width = 1440, height = 900, automations = {},
   extra = () => undefined, mail = {}, skip = false, theme = ''} = {}) => {
   const page = await browser.newPage({viewport: {width, height}, serviceWorkers: 'block'});

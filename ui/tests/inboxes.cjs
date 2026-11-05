@@ -10,7 +10,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {googleFake, row: workspace} = require('./support/google-fake.cjs');
-const {mailboxesFake, box, open} = require('./support/mailboxes-fake.cjs');
+const {mailboxesFake, box, open, shot} = require('./support/mailboxes-fake.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 const SHOTS = process.env.TICO_SHOTS || '';
 const NOW = Date.now() / 1000;
@@ -97,7 +97,7 @@ const scenarios = {
     assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/tico/ibx_a');
     assert.deepEqual(await page.locator('[data-ib-detail-body] > .card > header h2').allTextContents(), ['Who can use it', 'Automations', 'Recent']);
     assert.deepEqual(await page.locator('#inbox-head .ib-actions button').allTextContents(), ['Check connection', 'Edit', 'Stop using in Tico']);
-    if (SHOTS) await page.screenshot({path: `${SHOTS}/inboxes-detail-desktop-light.png`, fullPage: true});
+    await shot(page, `inboxes-detail-desktop-light.png`, 'light');
     await page.locator('.ib-crumb a').click();
     await page.locator('[data-ib-row="postal:as_2"] .ib-name a').click();
     await page.locator('[data-pm-progress="pending_1583"]').waitFor();
@@ -179,7 +179,7 @@ const scenarios = {
     await page.locator('[data-ib-step=email] #set-google [data-google-mode]').waitFor();
     assert.equal(await page.locator('[data-ib-step="letters-out"] button[disabled]').textContent(), 'Connect Click2Mail');
     assert.ok(await fits(page));
-    if (SHOTS) await page.screenshot({path: `${SHOTS}/inboxes-first-run-desktop-light.png`, fullPage: true});
+    await shot(page, `inboxes-first-run-desktop-light.png`, 'light');
     await page.locator('[data-ib-dismiss=phone]').click();
     assert.equal(await page.locator('[data-ib-step=phone]').count(), 0);
     await page.reload();
@@ -204,7 +204,7 @@ const scenarios = {
     ({page, seen} = await open(browser, fake, bare(), {ready: '[data-ib-first]', width: 390, height: 844, theme: 'dark'}));
     await page.locator('[data-ib-step=email] #set-google [data-google-mode]').waitFor();
     assert.ok(await fits(page), 'first run fits a phone');
-    if (SHOTS) await page.screenshot({path: `${SHOTS}/inboxes-first-run-phone-dark.png`, fullPage: true});
+    await shot(page, `inboxes-first-run-phone-dark.png`, 'dark');
     assert.deepEqual(seen.errors, []);
     await page.close();
     // Once company email is connected the list shows, and a member never sees first run.
@@ -324,7 +324,7 @@ const scenarios = {
     assert.ok(await fits(page));
     if (SHOTS) {
       await page.evaluate(() => scrollTo(0, 0));
-      await page.screenshot({path: `${SHOTS}/inboxes-settings-desktop-light.png`, fullPage: true});
+      await shot(page, `inboxes-settings-desktop-light.png`, 'light');
     }
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -387,22 +387,22 @@ const scenarios = {
       await page.locator('[data-ib-row="postal:intake"]').waitFor();
       assert.ok(await fits(page), `the list fits a phone (${theme})`);
       assert.equal(await page.locator('.ib-table thead').isHidden(), true, 'rows are cards on a phone');
-      if (SHOTS) await page.screenshot({path: `${SHOTS}/inboxes-list-phone-${theme}.png`, fullPage: true});
+      await shot(page, `inboxes-list-phone-${theme}.png`, theme);
       await page.evaluate(() => { location.hash = '#/settings/inboxes/settings'; });
       await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
       await settle(page);
       assert.ok(await fits(page), `Settings fits a phone (${theme})`);
-      if (SHOTS) await page.screenshot({path: `${SHOTS}/inboxes-settings-phone-${theme}.png`, fullPage: true});
+      await shot(page, `inboxes-settings-phone-${theme}.png`, theme);
       await page.evaluate(() => { location.hash = '#/settings/inboxes/tico/ibx_a'; });
       await page.locator('[data-inbound-read]').waitFor();
       assert.ok(await fits(page), `a page fits a phone (${theme})`);
-      if (SHOTS) await page.screenshot({path: `${SHOTS}/inboxes-detail-phone-${theme}.png`, fullPage: true});
+      await shot(page, `inboxes-detail-phone-${theme}.png`, theme);
       assert.deepEqual(seen.errors, []);
       await page.close();
       if (!SHOTS) continue;
       ({page, seen} = await open(browser, fake, googleFake(), {ready: LIST, extra: more.extra, theme}));
       await page.locator('[data-ib-row="postal:intake"]').waitFor();
-      await page.screenshot({path: `${SHOTS}/inboxes-list-desktop-${theme}.png`, fullPage: true});
+      await shot(page, `inboxes-list-desktop-${theme}.png`, theme);
       await page.close();
     }
   },
