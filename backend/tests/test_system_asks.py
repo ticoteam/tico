@@ -319,19 +319,22 @@ def test_migrated_file_review_answers_the_replacement_and_keeps_attachments(api)
         assert H.task(c, task["id"])["status"] == "open"
 
 
-@pytest.mark.parametrize("source", ["private_task", "activity", "additional"])
-def test_health_catches_recipients_who_lose_task_or_source_access(api, source):
+@pytest.mark.parametrize("source", ["private_task", "activity", "additional", "additional_without_cache"])
+def test_health_catches_recipients_who_lose_task_or_source_access(api, monkeypatch, source):
+    from backend import read_cache
     from backend.tests.test_api import restrict
     with api.app.state.store.transaction() as c:
         task = system_task(c, "human:cara", private=source == "private_task")
         refs = {"task": task["id"]}
         restricted = task
-        if source == "additional":
+        if source.startswith("additional"):
             restricted = H.task_create(c, "human:ana", "Check the ledger", "Read the figures.", "bot:inbox", lint=False)
             restrict(c, "inbox", everyone=True)
             refs["sources"] = [restricted["id"]]
         msg = H.say(c, "bot:ops", H.KEEPER, "Should this cover the beta?", conversation_id=task["conversation_id"], kind="ask", refs=refs)
         H.task_update(c, "bot:ops", task["id"], status="waiting")
+        if source == "additional_without_cache":
+            monkeypatch.setattr(read_cache, "cache", lambda c: None)
         assert not health.unreadable_waits(c)
         if source == "private_task":
             c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")

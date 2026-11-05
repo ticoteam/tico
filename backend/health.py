@@ -1483,7 +1483,10 @@ def unreadable_waits(c):
     found, seen = [], set()
     for batch in iter(lambda: rows.fetchmany(500), []):
         # Health polls the whole queue: load its question ancestry and task reads together.
-        messages = H.prime_messages(c, {r["message_id"] for r in batch})
+        mids = sorted({r["message_id"] for r in batch if r["message_id"]})
+        messages = {m["id"]: m for m in c.execute(
+            "SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))", (H._dump(mids),))}
+        H.prime_message_rows(c, messages.values())
         task_privacy.prime_messages(c, messages.values())
         tids = {r["id"] for r in batch}
         for message in messages.values():
