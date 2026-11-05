@@ -3712,10 +3712,10 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
                                                               "task_id": about}, actor, revision=0)
     if about and asked["sender_id"] == "bot:goal-manager" and is_human(actor):
         from . import strategy_merge
-        strategy_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
+        strategy_merge.on_reply(conn, actor, task(conn, about), body, text_sources=refs.get("body_sources", []))
     if about and is_human(actor):
         from . import ask_ingest
-        ask_ingest.on_reply(conn, actor, about, body)     # repeats the ask filter merged here hear the answer too
+        ask_ingest.on_reply(conn, actor, about, body, text_sources=refs.get("body_sources", []))
     return msg
 
 
@@ -5889,10 +5889,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if is_human(actor) and row["owner_id"] == "bot:goal-manager":
         from . import strategy_merge
         # a person's answer to the Strategy Bot's merged item goes to each asker
-        strategy_merge.on_reply(conn, actor, row, text)
+        strategy_merge.on_reply(conn, actor, row, text, text_sources=refs.get("body_sources", []))
     if is_human(actor):
         from . import ask_ingest
-        ask_ingest.on_reply(conn, actor, task_id, text)     # repeats the ask filter merged here hear the answer too
+        ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
     return msg
 
 
@@ -6314,7 +6314,7 @@ ASK_QUOTE_MAX = 4000        # a quoted answer is what the person said, not a doc
 
 
 @private_task_write
-def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False):
+def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False, text_sources=()):
     """Settle an open question on a task that was answered somewhere else, or is no longer wanted.
 
     With `quote`, the person's words from where they answered (a chat, a call): the question's asker, or the task's
@@ -6360,15 +6360,20 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
                 "quoted": True, "for": person}
         if relay:
             del refs["quiet"]
+        sources = list(text_sources)
+        sources.extend(o["source"] for q in asked["refs"].get("questions", []) for o in q["options"]
+                       if o.get("source") and o["label"] == quote)
+        text, refs = sourced_text(f'{name(person)} (quoted by {name(actor)}): "{quote}"', sources, refs)
         if asked["refs"].get("questions"):
             # Read as any other structured answer (`task_answers`): the person's words are its free text.
             refs["answer"] = {"target": {"comment": message_id}, "other": quote, "dismiss": False,
                               "answers": {q["id"]: [] for q in asked["refs"]["questions"]},
                               "by": person, "quoted_by": actor, "at": ts, "quoted": True}
+            _, refs["answer"] = sourced_text(quote, sources, refs["answer"])
         # The answer is the person's words, recorded by `actor`. A bot that asked hears it on its next turn (its inbox)
         # when someone else recorded it; an asker recording its own, or the keeper, needs no message.
         own = actor == asker or not is_bot(asker)
-        reply = _write_message(conn, actor, asker, f'{name(person)} (quoted by {name(actor)}): "{quote}"',
+        reply = _write_message(conn, actor, asker, text,
                                conversation(conn, asked["conversation_id"]), "answer", refs, message_id, None,
                                delivered_at=ts if own else None, read_at=ts if own else None)
     _task_event(conn, task_id, actor, "ask", message_id, "answered" if reply else "withdrawn")

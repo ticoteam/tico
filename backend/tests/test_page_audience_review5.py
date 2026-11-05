@@ -76,9 +76,11 @@ def test_held_review_pick_text_keeps_its_page_source(api):
     tid, _, fid = public_page(api)
     text = "Never publish an unreviewed draft."
     api.app.state.judge = Judge(api.app.state.store, {text: "Confidential draft"})
+    ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
     rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]},
                "if_broken": "escalate", "reviewer": "cara"})
-    held = review_ask(api, "ops-test", [{"file": fid}], on="cara", parent=tid, private=False, pick=True)["held"]["id"]
+    held = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="cara", parent=tid,
+                      private=False, pick=True)["held"]["id"]
     assert "Confidential draft" in get(api, "rule-holds/" + held, token="cara-test")["text"]
     with api.app.state.store.read() as c:
         stored = H._json(c.execute("SELECT payload FROM org_rule_holds WHERE id=?", (held,)).fetchone()[0], {})
@@ -89,3 +91,34 @@ def test_held_review_pick_text_keeps_its_page_source(api):
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         shown = json.dumps(get(api, "rule-holds/" + held, token="cara-test"))
         assert "Confidential draft" not in shown and fid not in shown, shown
+
+
+def test_a_generated_pick_answer_forwarded_to_a_merged_ask_keeps_its_sources(api):
+    from backend import ask_ingest
+    from backend.tests.test_ask_ingest import FakeModel
+    tid, _, fid = public_page(api)
+    api.app.state.judge = model = FakeModel(recommends=0.95)
+    with api.app.state.store.transaction() as c:
+        ask_ingest.save(c, "human:cara", "human:cara", {"mode": "on", "budget": 10, "chores_budget": 5,
+                                                      "criteria": ask_ingest.DEFAULTS["criteria"]})
+    question = ask("cara")
+    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
+    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
+    model.covered = "Review drafts"
+    made = post(api, "tasks", {"owner": "cara", "title": "Choose another draft", "body": "Which draft should ship?",
+                               "private": False}, token="ops-test")
+    second = made.get("task") or made
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT merged_into FROM ask_ingest_items WHERE ref=?", (second["id"],)).fetchone()[0] == tid
+    post(api, f"tasks/{tid}/answers", {"target": {"comment": asked["id"]},
+                                      "answers": {"verdict": ["Confidential draft"]}}, token="cara-test")
+    with api.app.state.store.read() as c:
+        forwarded = [m for m in H.task_comments(c, second["id"]) if "Confidential draft" in m["body"]]
+        assert len(forwarded) == 1 and forwarded[0]["refs"]["body_sources"] == [{"file": fid, "version": 1}]
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        for token in ("cara-test", "finance-test"):
+            shown = json.dumps(get(api, "tasks/" + second["id"] + "/comments", token=token))
+            assert "Confidential draft" not in shown and fid not in shown, shown
