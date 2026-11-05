@@ -231,6 +231,8 @@ adapters and documented for [Claude](https://platform.claude.com/docs/en/build-w
 [Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
+Terra 6.1 (`gpt-6.1-terra`) is not offered for new choices. A bot whose **Task model** is already
+Terra 6.1 keeps running on it.
 No existing bot is migrated automatically.
 
 Cursor Agent and Grok Build already have runner adapters and appear when their providers are enabled.
