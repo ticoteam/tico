@@ -207,11 +207,7 @@ def postal_allowed(c, auth, who, bid):
     scoped = scope(c, who)
     if scoped is None:
         return None
-    carried = tasks(c, auth, who, scoped)
-    if scoped.make_page or not carried or postal_mail.scan_access(c, auth, who, bid) is not True:
-        return False
-    return all(postal_mail.scan_access(c, auth, who if reader.actor == who.actor else reader, bid) is True
-               for task in carried for reader in readers(c, auth, task))
+    return postal_mail.scan_access(c, auth, who, bid) is True
 
 
 def blob_allowed(c, auth, who, bid):

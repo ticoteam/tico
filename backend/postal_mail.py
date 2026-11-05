@@ -71,6 +71,8 @@ EXCERPT = 6000                   # characters of the letter's text the Decide ca
 SUMMARY = 300
 TIMEOUT = 30
 LISTED = 100
+SCAN_MAX = 5000
+SCAN_CHUNK = 200
 GRANT_BYTES = 64 * 1024
 ALL_ADDRESSES = "all"
 SCANS_SQL = "SELECT * FROM mail_items WHERE blob_id=?"
@@ -771,6 +773,8 @@ def scan_granted(c, actor, blob_id):
 def access(c, auth, who, row):
     """A delegated read must independently qualify as both the represented person and the actual bot."""
     auth.task_snapshot(c)
+    if not audience_allowed(c, auth, who, row):
+        return None
     other = getattr(who, "task_actor", "")
     if not other or other == who.actor:
         return _access(c, auth, who, row)
@@ -778,6 +782,22 @@ def access(c, auth, who, row):
               replace(who, actor=other, role="bot", email="", task_actor="", via=""))
     levels = [_access(c, auth, principal, row) for principal in people]
     return None if None in levels else "full" if all(level == "full" for level in levels) else "status"
+
+
+def audience_allowed(c, auth, who, row):
+    """Stored letters use their file's containment; arrivals without a scan use the mailbox's own readers."""
+    from . import turn_scope
+    scoped = turn_scope.scope(c, who)
+    if scoped is None:
+        return True
+    carried = turn_scope.tasks(c, auth, who, scoped)
+    if scoped.make_page or not carried:
+        return False
+    if row["file_id"]:
+        stored = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (row["file_id"],))
+        return bool(stored and not stored["archived"] and turn_scope.allowed(c, auth, who, "file", stored))
+    return all(_access(c, auth, reader, row) == "full"
+               for task in carried for reader in turn_scope.readers(c, auth, task))
 
 
 def _access(c, auth, who, row):
@@ -986,22 +1006,41 @@ def install(app, settings, store, auth):
             if kind not in KINDS:
                 raise Problem("validation", "kind is " + "|".join(KINDS), 422)
             sql, args = sql + " AND kind=?", args + [kind]
-        if after:
-            at, _, ident = after.partition("|")
-            sql, args = sql + " AND (received_at,id)<(?,?)", args + [at, ident]
-        out, next_at = [], None
+        from . import list_cursors
+        out, last, position, scanned = [], None, None, 0
         with store.read() as c:
             member(c, who)
-            rows = c.execute(sql + " ORDER BY received_at DESC, id DESC LIMIT ?", args + [limit * 4]).fetchall()
-            for row in rows:
-                if len(out) >= limit:
+            if after:
+                position = (list_cursors.unseal(c, "postal", after) if after.startswith(list_cursors.PREFIX)
+                            else tuple(after.split("|", 1)))
+                if len(position) != 2:
+                    raise Problem("validation", "That cursor is not valid", 422)
+
+            def continuation():
+                if out:
+                    return f"{out[-1]['received_at']}|{out[-1]['id']}"
+                return list_cursors.seal(c, "postal", (last["received_at"], last["id"])) if last else None
+
+            # A mailbox with mostly rejected arrivals still makes bounded progress without naming those arrivals.
+            while scanned < SCAN_MAX:
+                cut = " AND (received_at,id)<(?,?)" if position else ""
+                window = min(SCAN_CHUNK, SCAN_MAX - scanned)
+                rows = c.execute(sql + cut + " ORDER BY received_at DESC, id DESC LIMIT ?",
+                                 [*args, *(position or ()), window]).fetchall()
+                for row in rows:
+                    seen = access(c, auth, who, row)
+                    if seen:
+                        if len(out) >= limit:
+                            return {"items": out, "next": continuation()}
+                        out.append(view(row) if seen == "full" else redacted(row))
+                    last = row
+                scanned += len(rows)
+                if len(rows) < window:
+                    return {"items": out, "next": None}
+                if scanned >= SCAN_MAX:
                     break
-                next_at = f"{row['received_at']}|{row['id']}"
-                seen = access(c, auth, who, row)
-                if seen:
-                    out.append(view(row) if seen == "full" else redacted(row))
-        more = len(rows) == limit * 4 or len(out) >= limit
-        return {"items": out, "next": next_at if more and next_at else None}
+                position = (last["received_at"], last["id"])
+            return {"items": out, "next": continuation()}
 
     @app.get("/api/v2/postal/items/{item_id}")
     def mail_read(request: Request, item_id: str):

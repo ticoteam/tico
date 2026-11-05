@@ -164,8 +164,18 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
     return bool(read) and read["file_id"] == file_id and (version is None or int(version) == read["version"])
 
 
-def file_visible(c, auth, who, row, cache):
+def file_visible(c, auth, who, row, cache, *, version=None):
     from . import turn_scope
+    if version is not None:
+        from . import postal_mail
+        scan = postal_mail.scan_access(c, auth, who, version["blob_id"])
+        if scan is not None:
+            # An exact postal scan may have its own grant; that grant still carries the task's audience ceiling.
+            return bool(scan and turn_scope.postal_allowed(c, auth, who, version["blob_id"]) is not False
+                        and privacy.blob_readable(c, privacy.actor(who), version["blob_id"]))
+        if asked_to_read(c, who, row["id"], cache=cache) and not asked_to_read(
+                c, who, row["id"], version["version"], cache):
+            return False
     if not turn_scope.allowed(c, auth, who, "file", row) or not _file_visible(c, auth, who, row, cache):
         return False
     turn_scope.record(c, who, "file", row["id"])
@@ -858,9 +868,9 @@ class Files:
                     "next_cursor": nxt, "has_more": more,
                     "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who)}
 
-    def visible_file(self, c, who, fid):
+    def visible_file(self, c, who, fid, *, version=None):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-        if not row or not self.visible(c, who, row, {}):
+        if not row or not file_visible(c, self.auth, who, row, {}, version=version):
             raise Problem("not_found", "File not found", 404)
         return row
 
@@ -897,15 +907,7 @@ class Files:
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
             v = c.execute("SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
                           "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?", (fid, number)).fetchone()
-            from . import postal_mail
-            scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
-            if scan is not None:
-                if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
-                    raise Problem("not_found", "File not found", 404)
-            else:
-                self.visible_file(c, who, fid)
-                if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                    raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
+            self.visible_file(c, who, fid, version=v)
             if not v or row["locator"] != "tico_blob":
                 raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
             if meta:

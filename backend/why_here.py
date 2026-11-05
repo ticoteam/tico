@@ -39,6 +39,9 @@ def show(c, auth, who, ref):
         title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
         task_id = item["id"]
     elif kind == "message":
+        # Origins copies message prose, so project the whole message with its body provenance before taking an excerpt.
+        from . import turn_scope
+        item = turn_scope.project(c, turn_scope.scope(c, who), item, auth=auth)
         made_by, created, title, task_id = item["sender_id"], item["created_at"], (item["body"] or "")[:80], None
         row = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
         cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}

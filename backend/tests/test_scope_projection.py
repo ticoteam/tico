@@ -1,4 +1,5 @@
 """Privacy sweep using the same writes that produce review cards and runner inputs."""
+import base64
 import json
 
 import pytest
@@ -13,6 +14,7 @@ from backend.tests.test_member_bots import botops  # noqa: F401
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
 from backend.tests.test_pages import HTML
+from backend.tests.test_postal_mail import (deliver, drain, hq, items, letter, mail, service)  # noqa: F401
 from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
 
 
@@ -101,6 +103,8 @@ def test_real_write_leak_sweep(api, make):
                   "tasks/" + data["made"]["task"]["id"] + "/answers",
                   "messages/" + data["made"]["question"]["id"],
                   "messages/" + data["answered"]["comment"]["id"],
+                  "origins/" + data["answered"]["comment"]["id"],
+                  "origins/" + data["made"]["question"]["id"],
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/messages",
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/snapshot",
                   "threads/" + data["made"]["task"]["conversation_id"],
@@ -111,6 +115,8 @@ def test_real_write_leak_sweep(api, make):
         get(api, path, token, expected=403)
     for path in ("pages/" + data["hidden"], "meetings/transcript?id=" + data["meeting"]):
         get(api, path, token, expected=404)
+    if not make:
+        assert_file_metadata_hidden(api, data["hidden"], token)
     method = "hub_task_context" if make else "hub_task_show"
     result = post(api, "mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                "params": {"name": method, "arguments": {"id": tid}}}, token)
@@ -205,6 +211,169 @@ def test_sweep_detects_disabling_either_boundary(api, monkeypatch):
         # Make's owner identity otherwise reaches CSV bytes outside the JSON projector.
         with pytest.raises(AssertionError):
             get(api, "history.csv?kind=decision", make["token"], expected=403)
+
+
+def assert_file_metadata_hidden(api, fid, token):
+    for suffix in ("/meta?v=1", "/versions", "/activity"):
+        get(api, "files/" + fid + suffix, token, expected=404)
+
+
+def test_origins_projects_the_message_before_copying_its_title(api):
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    mid, token = data["answered"]["comment"]["id"], attempt["token"]
+    assert data["source_label"] in get(api, "origins/" + mid, token)["title"]
+    narrow(api, data)
+    assert get(api, "messages/" + mid, token)["body"] == ""
+    assert get(api, "origins/" + mid, token)["title"] == ""
+    assert data["source_label"] in get(api, "origins/" + mid)["title"]
+
+
+def postal_sources(api, hq):
+    from backend.tests.test_api import put
+    _, attempt = task_turn(api)
+    put(api, "postal/addresses/all/grants/bot/ops", {})
+    letter(api, "scope-letter", "legal", summary="Restricted postal source")
+    deliver(hq, "scope-letter")
+    service(api).tick()
+    drain(api)
+    deliver(hq, "scope-arrival", checks=True)
+    deliver(hq, "scope-failed")
+    service(api).tick()
+    service(api).process(items(api)["scope-failed"]["id"])
+    return attempt["token"], items(api)
+
+
+def test_postal_file_ids_and_unprocessed_arrivals_share_the_audience_ceiling(api, hq, mail):
+    mail.down.add("scope-failed")
+    token, rows = postal_sources(api, hq)
+    filed = rows["scope-letter"]
+    assert rows["scope-arrival"]["status"] == "new" and not rows["scope-arrival"]["file_id"]
+    assert rows["scope-failed"]["status"] == "failed" and not rows["scope-failed"]["blob_id"]
+    assert get(api, "postal/items", token)["items"] == []
+    for row in rows.values():
+        get(api, "postal/items/" + row["id"], token, expected=404)
+    assert_file_metadata_hidden(api, filed["file_id"], token)
+    for fid in (filed["file_id"], filed["blob_id"]):
+        get(api, "files/" + fid + "/meta?v=1", token, expected=404)
+        for suffix in ("", "/thumb", "/poster"):
+            for method in ("GET", "HEAD"):
+                response = api.request(method, "/api/v2/files/" + fid + suffix, headers=headers(token))
+                assert response.status_code == 403, (method, suffix, response.text)
+    get(api, "files/" + filed["file_id"] + "/versions/1", token, expected=403)
+    # Ordinary mailbox grantees retain their normal reads, including scan metadata.
+    from backend.tests.test_org_rules import as_bot
+    as_bot(api, "ops", "ops-mail-reader")
+    assert len(get(api, "postal/items", "ops-mail-reader")["items"]) == 3
+    assert get(api, "files/" + filed["file_id"] + "/meta?v=1", "ops-mail-reader")["id"] == filed["file_id"]
+
+
+def cursor_sources(api, count=5000):
+    _, publisher = turn(api)
+    seed = published(api, publisher, name="bot-wide.html", scope="bot")
+    # The large rejected prefix is the reviewer's seed; the page and its version start with a production write.
+    with api.app.state.store.transaction() as c:
+        source = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (seed,)).fetchone())
+        columns = list(source)
+        for n in range(count - 1):
+            copy = {**source, "id": f"file-rejected-{n:05d}", "identity": f"rejected-{n:05d}"}
+            c.execute("INSERT INTO bot_files (" + ",".join(columns) + ") VALUES (" + ",".join("?" * len(columns)) + ")",
+                      [copy[k] for k in columns])
+            c.execute("INSERT INTO pages(file_id,cadence,created_at,updated_at) VALUES(?,'none',?,?)",
+                      (copy["id"], source["first_activity_at"], source["last_activity_at"]))
+    t, attempt = task_turn(api)
+    allowed = published(api, publisher, name="last-allowed.html", task=t["id"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET last_activity_at='2000-01-01T00:00:00Z' WHERE id=?", (allowed,))
+    return attempt["token"], seed, source["last_activity_at"], allowed
+
+
+def assert_cursor_hides_rejected_rows(cursor, secrets):
+    assert cursor
+    # Inspect every base64 layer available without the server's encryption key.
+    decoded = base64.urlsafe_b64decode(cursor.removeprefix("opaque:")).decode(errors="replace")
+    no_sources([cursor, decoded], secrets)
+
+
+def test_empty_page_cursor_does_not_name_the_last_rejected_source(api):
+    token, seed, stamp, allowed = cursor_sources(api)
+    page = get(api, "pages?bot=ops&limit=1", token)
+    assert page["pages"] == []
+    assert_cursor_hides_rejected_rows(page["next_cursor"], (seed, stamp, "file-rejected-"))
+    following = api.get("/api/v2/pages", params={"bot": "ops", "limit": 1, "cursor": page["next_cursor"]},
+                        headers=headers(token))
+    assert following.status_code == 200, following.text
+    assert [p["file_id"] for p in following.json()["pages"]] == [allowed]
+    get(api, "pages?cursor=" + page["next_cursor"][:-3] + "AAAA", token, expected=422)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET last_activity_at='2099-01-01' WHERE id=?", (allowed,))
+    mixed = get(api, "pages?bot=ops&limit=2", token)
+    assert [p["file_id"] for p in mixed["pages"]] == [allowed]
+    from backend.file_library import decode_cursor
+    assert decode_cursor(mixed["next_cursor"]) == ("2099-01-01", allowed)
+
+
+def test_new_leak_matrix_detects_each_disabled_guard(api, hq, mail, monkeypatch):
+    from backend import files, list_cursors, postal_mail
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    narrow(api, data)
+    # Origins must use the same projector even before middleware sees the copied title.
+    with monkeypatch.context() as patch:
+        original = turn_scope.project
+        patch.setattr(turn_scope, "project", lambda c, scoped, value, **kw:
+                      value if isinstance(value, dict) and "body" in value and
+                      value.get("id") == data["answered"]["comment"]["id"] else original(c, scoped, value, **kw))
+        with pytest.raises(AssertionError):
+            no_sources(get(api, "origins/" + data["answered"]["comment"]["id"], attempt["token"]), secrets(data))
+    mail.down.add("scope-failed")
+    # Reuse the live scoped attempt rather than claiming a second queued task on this runner.
+    from backend.tests.test_api import put
+    put(api, "postal/addresses/all/grants/bot/ops", {})
+    letter(api, "mutation-letter", "legal")
+    deliver(hq, "mutation-letter")
+    service(api).tick()
+    drain(api)
+    filed = items(api)["mutation-letter"]
+    with monkeypatch.context() as patch:
+        patch.setattr(files, "file_visible", lambda *a, **kw: True)
+        with pytest.raises(AssertionError):
+            assert_file_metadata_hidden(api, filed["file_id"], attempt["token"])
+    deliver(hq, "mutation-arrival")
+    service(api).tick()
+    arrival = items(api)["mutation-arrival"]
+    with monkeypatch.context() as patch:
+        patch.setattr(postal_mail, "audience_allowed", lambda *a: True)
+        with pytest.raises(AssertionError):
+            no_sources(get(api, "postal/items", attempt["token"]), (arrival["external_id"],))
+    # A smaller scan bound exercises the same production list path without another 5,000-row seed.
+    from backend import file_library
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET last_activity_at='2099-01-01' WHERE id=?", (data["hidden"],))
+    with monkeypatch.context() as patch:
+        patch.setattr(file_library, "SCAN_MAX", 1)
+        patch.setattr(list_cursors, "seal", lambda c, ns, pos: file_library.encode_cursor(*pos))
+        with pytest.raises(AssertionError):
+            page = get(api, "pages?bot=ops&limit=1", attempt["token"])
+            assert_cursor_hides_rejected_rows(page["next_cursor"], (data["hidden"], "2099-01-01"))
+
+
+def test_scoped_hub_doc_read_manual_pages(api):
+    from clients import hubcli, remotecli
+    from backend.tests.test_mcp import call
+    _, attempt = task_turn(api)
+    args = hubcli.parser().parse_args(["doc", "read", "manual:pages"])
+    class ScopedApi:
+        def get(self, path, **params):
+            response = api.get("/api/v2/" + path, params={k: v for k, v in params.items() if v is not None},
+                               headers=headers(attempt["token"]))
+            assert response.status_code == 200, response.text
+            return response.json()
+    result = remotecli.via_tool(ScopedApi(), args)
+    assert result["doc"]["body"] and result["doc"]["path"] == "docs/pages.md"
+    error, result = call(api, "hub_doc_read", {"ref": "manual:pages"}, token=attempt["token"])
+    assert not error, result
+    assert result["doc"]["body"] and result["doc"]["path"] == "docs/pages.md"
 
 
 def test_transformed_review_labels_keep_provenance(api):

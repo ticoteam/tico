@@ -134,8 +134,15 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None):
     list of files the viewer mostly may not see stays bounded and still pages on. `budget(row)` may stop a page early
     (bytes), returning False for the row that would not fit."""
     from .files import prime_visible
+    from . import list_cursors
     out, last, scanned = [], None, 0
-    position = decode_cursor(cursor) if cursor else None
+    position = (list_cursors.unseal(c, "files", cursor) if cursor.startswith(list_cursors.PREFIX)
+                else decode_cursor(cursor)) if cursor else None
+
+    def continuation():
+        if out:
+            return encode_cursor(out[-1]["last_activity_at"], out[-1]["id"])
+        return list_cursors.seal(c, "files", (last["last_activity_at"], last["id"])) if last else None
     while True:
         clauses = list(where)
         args = list(params)
@@ -144,20 +151,20 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None):
             args += [position[0], position[0], position[1]]
         sql = select + (" WHERE " + " AND ".join(clauses) if clauses else "") + \
             " ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?"
-        batch = c.execute(sql, (*args, SCAN_CHUNK)).fetchall()
+        window = min(SCAN_CHUNK, SCAN_MAX - scanned)
+        batch = c.execute(sql, (*args, window)).fetchall()
         prime_visible(c, batch)
         for r in batch:
             if keep(r):
                 if len(out) == limit or (budget and not budget(r)):
-                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"]) if out else \
-                        encode_cursor(last["last_activity_at"], last["id"]) if last else None
+                    return out, continuation()
                 out.append(r)
             last = r
         scanned += len(batch)
-        if len(batch) < SCAN_CHUNK:
+        if len(batch) < window:
             return out, None
         if scanned >= SCAN_MAX:
-            return out, encode_cursor(last["last_activity_at"], last["id"])
+            return out, continuation()
         position = (last["last_activity_at"], last["id"])
 
 

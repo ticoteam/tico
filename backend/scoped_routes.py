@@ -49,7 +49,7 @@ ALLOWLIST = (
     # Legacy meeting readers share the same per-meeting containment check.
     ("GET", r"/api/meetings/[^/]+(?:/versions)?", True),
     # Task bots consult rules and the shipped manual, without raw SQL or export routes.
-    ("GET", r"/api/v2/(?:rules(?:/[^/]+)?|docs/manual)", False),
+    ("GET", r"/api/v2/(?:rules(?:/[^/]+)?|docs/manual(?:/[^/]+)?)", False),
     # Task work creates/updates tasks and asks, comments, files or answers through checked writes.
     ("POST", r"/api/v2/(?:tasks(?:/dry-run)?|task-questions|tasks/[^/]+(?:/(?:comments|answers|files|close|reopen|ask|snooze|unsnooze|links|relations|waits|run-now|check-back|later))?)", False),
     # Worktree setup in the runner prompt reserves/attaches a checkout and reports that exact link's state.
@@ -91,10 +91,9 @@ def require_route(c, auth, who, method, path, query=None, route_template=None):
         if row:
             from .files import file_visible
             requested = download[2] or (query or {}).get("v") or row["current_version"]
-            version = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
+            version = c.execute("SELECT blob_id,version FROM bot_file_versions WHERE file_id=? AND version=?",
                                 (ref, requested)).fetchone()
-            scan = turn_scope.postal_allowed(c, auth, who, version[0]) if version else None
-            ok = scan if scan is not None else not row["archived"] and file_visible(c, auth, who, row, {})
+            ok = not row["archived"] and file_visible(c, auth, who, row, {}, version=version)
         else:
             ok = turn_scope.blob_allowed(c, auth, who, ref) is True
         if not ok:
