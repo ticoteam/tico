@@ -323,7 +323,7 @@ async function inboxesAutomations(ctx, address) {
     : '<p class="muted" data-ib-autos-none>None</p>';
 }
 const inboxesAutomationsLink = address =>
-  `<a class="ghost settings-head-act" href="#/automations${address ? '?q=' + encodeURIComponent(address) : ''}">Automations</a>`;
+  `<a class="ghost settings-head-act" href="#/automations${address ? '?q=' + encodeURIComponent(address) : ''}">Open</a>`;
 
 // ---------------------------------------------------------------------------------------------------------- Give inboxes to bots
 inboxesStep('bots', {order: 50, title: 'Give inboxes to bots', optional: true,
