@@ -34,7 +34,7 @@ def project(c, scoped, payload, *, auth=None):
         match = re.search(r"(?:page:|file:|meeting:|/pages?/|/files/|/meetings/|[?&]page=)([A-Za-z0-9_-]+)", value)
         return match[1] if match else value.rsplit("@", 1)[0]
 
-    names, task_ids = set(), set(scoped.tasks)
+    names, task_ids, event_ids, event_sources = set(), set(scoped.tasks), set(), {}
 
     def collect(value, parent=""):
         if isinstance(value, dict):
@@ -42,6 +42,8 @@ def project(c, scoped, payload, *, auth=None):
                 task_ids.add(value["id"])
             if isinstance(value.get("task_id"), str):
                 task_ids.add(value["task_id"])
+                if value.get("field") == "file" and isinstance(value.get("id"), str):
+                    event_ids.add(value["id"])
             for key, item in value.items():
                 if key in REF_FIELDS or key == "id" and parent in SOURCE_LISTS:
                     ref = reference(item)
@@ -57,17 +59,38 @@ def project(c, scoped, payload, *, auth=None):
                         names.add(ref)
                 collect(item, parent)
     collect(payload)
+    # Task history omits its stored data column. Resolve only those event ids, never parse display text.
+    for chunk in H.chunks(sorted(event_ids)):
+        marks = ','.join('?' * len(chunk))
+        for row in c.execute(f"SELECT id,data FROM history_events WHERE id IN ({marks}) AND kind='file'", chunk):
+            source = H._json(row['data'], {}).get('source')
+            if source:
+                event_sources[row['id']] = source
+                collect(source)
     # Legacy choices lost their provenance. Limit the title fallback to sources attached to these tasks.
     legacy_sources = []
     for chunk in H.chunks(sorted(task_ids)):
         marks = ','.join('?' * len(chunk))
         legacy_sources.extend(c.execute(f"SELECT id,title FROM bot_files WHERE task_id IN ({marks}) OR scope IN ({marks})",
                                          (*chunk, *("task:" + tid for tid in chunk))))
+        legacy_sources.extend(c.execute(f"SELECT f.id,v.name AS title FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+                                         f"WHERE f.task_id IN ({marks})", chunk))
         legacy_sources.extend(c.execute(f"SELECT b.id,b.name AS title FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
                                          f"WHERE a.task_id IN ({marks})", chunk))
         legacy_sources.extend(c.execute(f"SELECT m.id,m.title FROM meetings m JOIN meeting_task_links l ON l.meeting_id=m.id "
                                          f"WHERE l.task_id IN ({marks})", chunk))
+    delivered_names = set(names)
     names.update(row['id'] for row in legacy_sources)
+
+    def checking(ref, fn):
+        # The legacy fallback checks titles without delivering their source metadata.
+        reset = turn_scope.READS.set(None) if ref not in delivered_names else None
+        try:
+            return fn()
+        finally:
+            if reset is not None:
+                turn_scope.READS.reset(reset)
+
     files, blobs, meetings, live, versions = {}, {}, set(), {}, []
     for chunk in H.chunks(sorted(names)):
         marks = ','.join('?' * len(chunk))
@@ -81,11 +104,12 @@ def project(c, scoped, payload, *, auth=None):
         marks = ','.join('?' * len(chunk))
         files.update((r['id'], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
     prime_visible(c, list(files.values()))
-    visible = {fid: not row['archived'] and file_visible(c, auth, scoped.who, row, {}) for fid, row in files.items()}
+    visible = {fid: not row['archived'] and checking(fid, lambda: file_visible(c, auth, scoped.who, row, {}))
+               for fid, row in files.items()}
     denied = {fid for fid, ok in visible.items() if not ok}
     digest_access = {}
     for bid, row in blobs.items():
-        ok = turn_scope.blob_allowed(c, auth, scoped.who, bid) is True
+        ok = checking(bid, lambda: turn_scope.blob_allowed(c, auth, scoped.who, bid)) is True
         if not ok:
             denied.add(bid)
         digest_access[row['digest']] = digest_access.get(row['digest'], False) or ok
@@ -98,7 +122,7 @@ def project(c, scoped, payload, *, auth=None):
     meetings.update(mid for mid in live.values() if mid)
     for mid in meetings:
         try:
-            context_search.readable(c, scoped.who, mid, auth=auth)
+            checking(mid, lambda: context_search.readable(c, scoped.who, mid, auth=auth))
         except Problem as exc:
             if exc.status not in (403, 404):
                 raise
@@ -130,6 +154,9 @@ def project(c, scoped, payload, *, auth=None):
 
     def walk(value, parent=''):
         if isinstance(value, dict):
+            if value.get('field') == 'file' and (has_denied(event_sources.get(value.get('id'))) or
+                    value.get('id') not in event_sources and any(value.get(k) in legacy_titles for k in ('old', 'new'))):
+                return gone
             if any(rejected(item) for key, item in value.items() if key in REF_FIELDS):
                 return gone
             if parent in SOURCE_LISTS and rejected(value.get('id')):
@@ -158,7 +185,7 @@ def project(c, scoped, payload, *, auth=None):
             refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
             shown_refs = out.get('refs', {})
             answer, shown_answer = refs.get('answer', {}), shown_refs.get('answer', {})
-            hidden_body = (has_denied(refs.get('body_sources', [])) or
+            hidden_body = (has_denied(refs.get('body_sources', [])) or has_denied(answer.get('target')) or
                            answer.get('answers') != shown_answer.get('answers'))
             if hidden_body:
                 for key in ('body', 'text'):

@@ -12,10 +12,12 @@ from .store import Problem
 ALLOWLIST = (
     # CLI/MCP discover the effective identity before choosing tools.
     ("GET", r"/api/v2/me", True),
+    # The Rust runner's env::environment fetches this turn's granted credentials before starting its harness.
+    ("GET", r"/api/v2/credential-runtime", True),
     # MCP dispatches through HTTP again, so every tool's underlying route passes this policy too.
     ("GET POST", r"/api/v2/mcp", True),
     # Task tools read work, questions, answers and attached context through their bounded schemas.
-    ("GET", r"/api/v2/tasks(?:/[^/]+(?:/(?:comments|answers|files|context))?)?", False),
+    ("GET", r"/api/v2/tasks(?:/[^/]+(?:/(?:comments|answers|files|context|links|tree))?)?", False),
     # Make's task-context tool is its only task read.
     ("GET", r"/api/v2/tasks/[^/]+/context", True),
     # A task's origin and individual messages preserve task/conversation references.
@@ -35,9 +37,15 @@ ALLOWLIST = (
     # Task bots consult rules and the shipped manual, without raw SQL or export routes.
     ("GET", r"/api/v2/(?:rules(?:/[^/]+)?|docs/manual)", False),
     # Task work creates/updates tasks and asks, comments, files or answers through checked writes.
-    ("POST", r"/api/v2/(?:tasks|task-questions|tasks/[^/]+/(?:comments|answers|files|close|reopen|start|wait|snooze|unsnooze))", False),
-    # Task fields retain the existing write/provenance guards.
-    ("PATCH", r"/api/v2/tasks/[^/]+", False),
+    ("POST", r"/api/v2/(?:tasks|task-questions|tasks/[^/]+(?:/(?:comments|answers|files|close|reopen|ask|snooze|unsnooze|links|relations|waits|run-now|check-back|later))?)", False),
+    # Worktree setup in the runner prompt reserves/attaches a checkout and reports that exact link's state.
+    ("POST", r"/api/v2/tasks/[^/]+/worktrees(?:/attach)?", False),
+    # The local worktree CLI reads this computer's writable repository configuration.
+    ("GET", r"/api/v2/runners/me/repositories", False),
+    # Task fields and worktree reports retain the existing write/provenance guards.
+    ("PATCH", r"/api/v2/tasks/[^/]+(?:/links/[^/]+)?", False),
+    # The task prompt sends approval requests to a person before an outward action.
+    ("POST", r"/api/v2/approvals", False),
     # Bot output publication and review use the file service's provenance checks.
     ("POST", r"/api/v2/(?:files/(?:uploads|imports|links)|file-reviews)", False),
     # Both task bots and Make publish pages; step f checks the initiating Make request.

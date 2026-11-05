@@ -21,7 +21,7 @@ def no_sources(value, secrets):
 
 
 def sources(api):
-    t = task(api, owner="bot:ops", private=False)
+    t = task(api, owner="bot:ops", requester="bot:cpo", private=False)
     _, publisher = turn(api, "cpo")
     hidden = published(api, publisher, task=t["id"], name="restricted.html", title="Restricted source")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
@@ -103,7 +103,7 @@ def test_real_write_leak_sweep(api, make):
         no_sources(replay, secrets(data))
         post(api, f'attempts/{attempt["id"]}/started', {"thread_id": "scope-inputs"}, token=machine["token"])
         # The normal task comment API queues a steering input for the active turn.
-        post(api, f"tasks/{tid}/comments", {"body": "Read the review on the task"})
+        post(api, f"tasks/{tid}/comments", {"text": "Read the review on the task"})
         for key in ("real-input", "real-input", "real-input-fresh"):
             no_sources(post(api, f'attempts/{attempt["id"]}/inputs', {}, machine["token"], key=key), secrets(data))
 
