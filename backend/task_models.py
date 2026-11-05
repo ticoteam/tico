@@ -72,6 +72,14 @@ def refuse_retired(choice, kept=""):
         raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)
 
 
+def kept_context(chosen, current):
+    """The context length a save sets for the saved held model: the one named (null clears it), else the saved one when
+    the save leaves the field out. `current` is the saved task model, or {} when the save does not keep it."""
+    if not current or "compact_at" in chosen.model_fields_set:
+        return chosen.compact_at
+    return current.get("compact_at")
+
+
 def harness_of(choice, requested=None, current=None):
     """The harness a model runs on: the one named (it must run the model), else `current` when it still does, else the
     model's first."""

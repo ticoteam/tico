@@ -223,8 +223,9 @@ def test_a_saved_held_terra_task_model_runs_as_the_saved_default_with_no_fallbac
 
 def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_save(api, monkeypatch):
     """Dev 693 (Engineering Lead's ruling on the Terra PR): a save that sends no model, or the saved one again, keeps
-    the saved held task model, with the harness and effort it has unless the save names an effort. A save that picks
-    another held model is refused, and a fresh pick of the held model is refused on a bot without it saved."""
+    the saved held task model. For that model a field the save leaves out is kept, and a context length sent as null
+    clears it. A harness with no model is refused. A save that picks another held model is refused, and so is a fresh
+    pick of the held model on a bot without it saved."""
     from backend import providers
     ops_on_sonnet(api)
     set_task_model(api, {"harness": "codex", "model": "gpt-6.1-terra", "effort": "medium"}, expected=422)
@@ -237,17 +238,22 @@ def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_
              "compact_at": None}
     assert get(api, "bots/ops")["task_model"] == terra
     assert set_task_model(api, {"effort": "high"})["task_model"] == {**terra, "reasoning_effort": "high"}
-    assert set_task_model(api, {"compact_at": 400000})["task_model"] == {**terra, "reasoning_effort": "high",
-                                                                         "compact_at": 400000}
     kept = {**terra, "reasoning_effort": "high", "compact_at": 400000}
+    assert set_task_model(api, {"compact_at": 400000})["task_model"] == kept
     assert get(api, "bots/ops")["task_model"] == kept
     same_again = set_task_model(api, {"model": "gpt-6.1-terra", "compact_at": 400000}, expected=409)
     assert same_again["error"]["code"] == "unchanged"
     moved = set_task_model(api, {"model": "gpt-6.1-terra", "compact_at": 600000})
     assert moved["task_model"] == {**kept, "compact_at": 600000}
-    same =set_task_model(api, {"harness": "codex", "model": "gpt-6.1-terra", "effort": "low"})
-    assert same["task_model"] == {**terra, "reasoning_effort": "low"}
-    assert get(api, "bots/ops")["task_model"]["model"] == "gpt-6.1-terra"
+    # A harness on its own is refused for the held model, and nothing changes.
+    set_task_model(api, {"harness": "codex"}, expected=422)
+    assert get(api, "bots/ops")["task_model"] == {**kept, "compact_at": 600000}
+    # The same model with a harness and an effort keeps the context length it does not name.
+    same_with_harness = set_task_model(api, {"harness": "codex", "model": "gpt-6.1-terra", "effort": "low"})
+    assert same_with_harness["task_model"] == {**kept, "reasoning_effort": "low", "compact_at": 600000}
+    # A context length sent as null clears it, and the effort the save names stays.
+    cleared = set_task_model(api, {"effort": "low", "compact_at": None})
+    assert cleared["task_model"] == {**terra, "reasoning_effort": "low"}
     # Another held model is still refused, whether it is named with its harness or alone, and the saved one stays.
     monkeypatch.setitem(providers.MODEL_BY_ID["claude-haiku-5-5"], "held", True)
     set_task_model(api, {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}, expected=422)

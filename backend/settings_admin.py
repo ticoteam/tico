@@ -1398,10 +1398,13 @@ class SettingsAdmin:
             H.event(c, who.actor, "settings.undo", bot, {"change": change_id, "field": change["field"]})
             return {"undone": True, "bot": bot, "field": change["field"], "revision": config["revision"] + 1}
         if change["field"] == "task_model":
+            # Every field is named, so the undo restores the record it replaced, nulls included.
+            restored = before and SimpleNamespace(
+                harness=before.get("harness") or None, model=before.get("model") or None,
+                effort=before.get("reasoning_effort") or None, compact_at=before.get("compact_at"),
+                model_fields_set={"harness", "model", "effort", "compact_at"})
             return self.set_task_model(c, who, bot, SimpleNamespace(
-                task_model=SimpleNamespace(harness=before.get("harness") or None, model=before.get("model") or None,
-                                           effort=before.get("reasoning_effort") or None,
-                                           compact_at=before.get("compact_at")) if before else None,
+                task_model=restored or None,
                 expected_revision=body.expected_revision), undo_change_id=change_id)
         raise Problem("not_reversible", "This settings change cannot be undone", 409)
 
@@ -1522,11 +1525,13 @@ class SettingsAdmin:
     def set_task_model(self, c, who, bot, body, undo_change_id=None):
         """What the bot's tasks run on (backend/task_models.py): a harness, model, effort and context length, each
         optional on its own. No model means the bot's own model, so an effort or context length can be set alone; the
-        effort is checked against the bot's own model then. Null clears all of it. A saved held model (Dev 693) is the
-        exception: a save with no model, or the same one, keeps it, and a different held model is refused. Only this
-        key changes: the bot's own model, and so its sessions, stay as they are. A model the bot's computer cannot run
-        is saved all the same, and its tasks run on the bot's model until it can: the answer's `readiness` says so
-        now."""
+        effort is checked against the bot's own model then. Null clears all of it. Only this key changes: the bot's own
+        model, and so its sessions, stay as they are. A model the bot's computer cannot run is saved all the same, and
+        its tasks run on the bot's model until it can: the answer's `readiness` says so now.
+
+        A saved held model (Dev 693) is the exception: a save with no model, or the same one, keeps it, and a different
+        held model is refused. For that model a field the save leaves out (effort, context length) is kept, a context
+        length sent as null clears it, and a harness with no model is refused."""
         CA.gate(c, who.actor, "cost", f"change the model {(H.bot(c, bot) or {}).get('slug', bot)}'s tasks run on")
         self._manager(c, who, bot, report="task_model")
         shared_bots.refuse_copy(c, bot)
@@ -1540,6 +1545,8 @@ class SettingsAdmin:
         kept = (before or {}).get("model") or ""
         saved = self.models.get(kept) if kept else None
         held = bool(saved and saved.get("held"))
+        if held and chosen is not None and chosen.harness and not chosen.model:
+            raise Problem("harness", "Choose a task model to pick a harness for it", 422)
         if chosen is None or not (chosen.model or chosen.effort or chosen.compact_at):
             target = None
         elif chosen.model:
@@ -1551,16 +1558,16 @@ class SettingsAdmin:
             harness = self._harness(choice, chosen.harness, same.get("harness"))
             target = {"harness": harness, "model": choice["id"],
                       "reasoning_effort": self._effort(choice, chosen.effort, same.get("reasoning_effort")),
-                      "runtime": runtime_of(harness) or choice["runtime"], "compact_at": chosen.compact_at}
+                      "runtime": runtime_of(harness) or choice["runtime"],
+                      "compact_at": task_models.kept_context(chosen, same)}
         elif held:
-            # An effort or context length alone: the saved held model stays, with the harness and effort it has unless
-            # the save names an effort.
-            if chosen.harness:
-                raise Problem("harness", "Choose a task model to pick a harness for it", 422)
+            # An effort or context length alone: the saved held model stays, with the harness, effort and context
+            # length it has unless the save names them.
             harness = self._harness(saved, None, before.get("harness"))
             target = {"harness": harness, "model": kept,
                       "reasoning_effort": self._effort(saved, chosen.effort, before.get("reasoning_effort")),
-                      "runtime": runtime_of(harness) or saved["runtime"], "compact_at": chosen.compact_at}
+                      "runtime": runtime_of(harness) or saved["runtime"],
+                      "compact_at": task_models.kept_context(chosen, before)}
         else:
             if chosen.harness:
                 raise Problem("harness", "Choose a task model to pick a harness for it", 422)
