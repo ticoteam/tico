@@ -558,6 +558,10 @@ impl Recorder {
                 // Drafts added and items sent in the background since this copy was loaded are
                 // kept; removing an item goes through `remove_item`.
                 let mut items = edited.items;
+                // Link actions write directly to the store. A stale window cannot restore a skipped or removed link.
+                items.retain(|item| {
+                    item.kind != "link" || current.items.iter().any(|stored| stored.id == item.id)
+                });
                 for item in std::mem::take(&mut current.items) {
                     match items.iter_mut().find(|row| row.id == item.id) {
                         Some(row) if !item.task_id.is_empty() => *row = item,

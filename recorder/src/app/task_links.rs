@@ -290,6 +290,7 @@ mod tests {
             },
         ];
         app.context.notes = "Current notes".into();
+        app.store.save_context(&id, &app.context).unwrap();
         app.save_context();
         app.keep_local(&id);
         assert!(app.context.kept_on_mac);
@@ -337,5 +338,30 @@ mod tests {
         assert_eq!(local[0]["id"], "second");
         assert_eq!(local[0]["sent"], true);
         assert_eq!(view["linked"]["tasks"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_stale_window_cannot_restore_a_link_skipped_by_save() {
+        let (_dir, mut app, id) = local_app();
+        app.context.items.push(Item {
+            id: "link".into(),
+            kind: "link".into(),
+            task_id: "gone".into(),
+            ..Default::default()
+        });
+        app.store.save_context(&id, &app.context).unwrap();
+        app.store
+            .update_context(&id, |c| {
+                c.items.clear();
+                c.skipped_task_links = 1;
+                Ok(())
+            })
+            .unwrap();
+        app.context.notes = "Notes after the skip".into();
+        app.close();
+        let stored = app.store.context(&id).unwrap();
+        assert!(stored.items.is_empty());
+        assert_eq!(stored.skipped_task_links, 1);
+        assert_eq!(stored.notes, "Notes after the skip");
     }
 }
