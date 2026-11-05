@@ -30,6 +30,38 @@ pub fn acquire(path: &Path) -> Result<RunnerLock, String> {
     Ok(RunnerLock { _file: file })
 }
 
+/// Hold inherited descriptors across the parent's lock release, without relying on fork/exec timing.
+#[cfg(test)]
+pub(crate) fn inherited_files() -> impl Drop {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    struct Child { release: UnixStream, pid: libc::pid_t }
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.release.write_all(b"x");
+            // SAFETY: wait only for the child this helper starts, retrying an interrupted wait.
+            while unsafe { libc::waitpid(self.pid, std::ptr::null_mut(), 0) } < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {}
+        }
+    }
+    let (release, wait) = UnixStream::pair().unwrap();
+    let (release_fd, wait_fd) = (release.as_raw_fd(), wait.as_raw_fd());
+    // SAFETY: the child calls only async-signal-safe functions, then exits without running Rust destructors.
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "{}", std::io::Error::last_os_error());
+    if pid == 0 {
+        unsafe {
+            libc::close(release_fd);
+            let mut byte = 0u8;
+            libc::read(wait_fd, (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    drop(wait);
+    Child { release, pid }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,6 +70,20 @@ mod tests {
 
     const PY_TRY: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\ntry:\n fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\n print('got')\nexcept BlockingIOError:\n print('held')\n";
     const PY_HOLD: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\nfcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nprint('holding',flush=True)\nsys.stdin.read()\n";
+
+    #[test]
+    fn released_registration_lock_does_not_wait_for_a_forked_child() {
+        let dir = std::env::temp_dir().join(format!("tico-lock-fork-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("runner.lock");
+        let held = acquire(&path).unwrap();
+        let child = inherited_files();
+        assert_eq!(acquire(&path).err().as_deref(), Some(HELD));
+        drop(held);
+        assert!(acquire(&path).is_ok(), "a forked child retained the released registration lock");
+        drop(child);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn the_lock_interlocks_with_pythons_fcntl_flock_both_ways() {

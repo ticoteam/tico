@@ -152,6 +152,22 @@ pub fn check_locked(root: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn released_git_gate_does_not_wait_for_a_forked_child() {
+        let _guard = TEST_FIXTURES.lock().await;
+        let root = std::env::temp_dir().join(format!("tico-git-fork-{}", uuid::Uuid::new_v4().simple()));
+        let common = root.join(".git");
+        std::fs::create_dir_all(&common).unwrap();
+        own(std::slice::from_ref(&root));
+        let held = recovery_lock(&common).unwrap();
+        let child = crate::lock::inherited_files();
+        assert!(check(&common).is_err());
+        drop(held);
+        assert!(check(&common).is_ok(), "a forked child retained the released Git gate");
+        drop(child);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn age(path: &Path) {
         std::fs::File::open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - OLD * 2)).unwrap();
     }
