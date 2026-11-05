@@ -369,6 +369,7 @@ pub struct Recorder {
     pub calendar: Value,
     pub live: Value,
     pub roster: Vec<(String, String)>,
+    draft_people: (String, Vec<assist::Person>),
     chat_private: bool,
     asking: String,
     asking_for: Option<String>,
@@ -503,6 +504,7 @@ impl Recorder {
             calendar,
             live: json!({}),
             roster: vec![],
+            draft_people: Default::default(),
             chat_private: false,
             asking: String::new(),
             asking_for: None,
@@ -1109,6 +1111,34 @@ impl Recorder {
         }
         let (config, store) = (self.config.clone(), self.store.clone());
         let destination = self.draft_destination(&id);
+        let people = (self.draft_people.0 == destination).then(|| self.draft_people.1.clone());
+        let me = config
+            .destinations
+            .iter()
+            .find(|d| d.id == destination)
+            .map(|d| d.actor.clone())
+            .unwrap_or_default();
+        let mut participants = vec![];
+        if self.meeting.as_deref() == Some(id.as_str()) {
+            for field in ["humans", "access"] {
+                participants.extend(
+                    self.live[field]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|p| p["actor"].as_str())
+                        .map(str::to_owned),
+                );
+            }
+            participants.extend(
+                self.live["bots"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p["bot"].as_str())
+                    .map(|slug| format!("bot:{slug}")),
+            );
+        }
         self.job_for("autodraft", Some(id.clone()), move || {
             let mut config = config;
             if speech::source(&config) == speech::TICO
@@ -1116,11 +1146,15 @@ impl Recorder {
             {
                 config.destinations.swap(0, at);
             }
-            let tasks = Tico::saved(&config, &destination)
-                .and_then(|tico| tico.draft_tasks(&store, &id))
-                .unwrap_or_default();
+            let tico = Tico::saved(&config, &destination).ok();
+            let tasks = tico.as_ref().and_then(|tico| tico.draft_tasks(&store, &id).ok()).unwrap_or_default();
+            let roster = assist::Roster {
+                people: people.or_else(|| tico.as_ref().and_then(|tico| tico.draft_people().ok())).unwrap_or_default(),
+                me,
+                participants,
+            };
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
+            Ok(json!({"added":assist::draft_with_roster(&store, &config, &key, &id, &tasks, &roster)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
@@ -1392,7 +1426,16 @@ impl Recorder {
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
                         "roster" => {
-                            self.roster = serde_json::from_value(value).unwrap_or_default();
+                            let people: Vec<assist::Person> =
+                                serde_json::from_value(value["people"].clone()).unwrap_or_default();
+                            self.roster = people
+                                .iter()
+                                .map(|p| (p.actor.clone(), p.name.clone()))
+                                .collect();
+                            self.draft_people = (
+                                value["destination"].as_str().unwrap_or_default().into(),
+                                people,
+                            );
                         }
                         "send" => self.say("Saved to Tico"),
                         "import" => {
@@ -1953,7 +1996,9 @@ impl Recorder {
     pub fn load_roster(&mut self) {
         if !self.router_name().is_empty() {
             self.roster_for = self.router();
-            self.network_job("roster", |tico, _, _| Ok(json!(tico.roster()?)));
+            self.network_job("roster", |tico, _, _| {
+                Ok(json!({"destination":tico.destination.id,"people":tico.draft_people()?}))
+            });
         }
     }
 
