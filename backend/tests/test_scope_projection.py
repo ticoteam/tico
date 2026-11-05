@@ -69,6 +69,8 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
     bid, digest = version["blob_id"], version["digest"]
     refs = all_shapes(hidden, bid, digest, "Forbidden page title", mid)
     append_allowed(refs, allowed, good["blob_id"], good["digest"])
+    if version["source_digest"]:
+        refs["versions"].append({"source_digest": version["source_digest"], "title": "Forbidden page title"})
     with store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO task_assets(task_id,blob_id) VALUES(?,?)", (other["id"], bid))
         question = H.task_comment(c, "bot:ops", t["id"], "Review the source versions", wake=False,
@@ -92,12 +94,16 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
         if assistant:
             original["make_page"] = {"task": t["id"]}
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(original), origin["id"]))
-    secrets = (hidden, hidden + "@1", bid, digest, "Forbidden page title", mid, "Forbidden meeting title")
+    secrets = (hidden, hidden + "@1", bid, digest, "Forbidden page title", "forbidden-page.html", mid, "Forbidden meeting title")
+    if version["source_digest"]:
+        secrets += (version["source_digest"],)
     attempt = claim(api, machine, bot, key="all-shapes-claim")
     assert attempt
     no_sources(attempt, secrets)
     assert allowed in json.dumps(attempt) and "Allowed page title" in json.dumps(attempt)
     assert shared in json.dumps(attempt)
+    assert [r["file_id"] for r in attempt["message"]["refs"]["attachments"]] == [allowed]
+    assert json.loads(attempt["message"]["refs_json"])["attachments"] == attempt["message"]["refs"]["attachments"]
     # The initiating message and history really carry the seeded references on disk.
     with store.read() as c:
         assert hidden in H.message(c, origin["id"])["refs"]["files"][0]
@@ -193,3 +199,38 @@ def test_claim_and_runner_inputs_reproject_saved_wire_refs_after_scope_narrows(a
         inputs = post(api, f'attempts/{attempt["id"]}/inputs', {}, token=machine["token"], key=key)
         no_sources(inputs, (fid, bid, digest, "Narrowed page title"))
         assert inputs["messages"]
+
+
+def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkeypatch):
+    import sqlite3
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.test_turn_scope import make_scope
+
+    t = task(api, private=False)
+    _, publisher = turn(api, "cpo")
+    fid = published(api, publisher, task=t["id"])
+    _, attempt = assistant_turn(api, "ana-test")
+    make_scope(api, attempt, t["id"])
+
+    @api.app.get("/api/v2/projection-fixture")
+    def fixture(request: Request):
+        return JSONResponse({"attachments": [{"file_id": fid, "title": "Allowed source"}]}, status_code=409)
+
+    response = api.get("/api/v2/projection-fixture", headers={**headers(attempt["token"]), "Accept-Encoding": "gzip"})
+    assert response.status_code == 409 and fid in response.text
+    store = api.app.state.store
+    with store.read() as c:
+        assert c.execute("SELECT 1 FROM attempt_reads WHERE attempt_id=? AND ref=?", (attempt["id"], fid)).fetchone()
+    original = store.mutate
+
+    def unavailable(who, operation, *args, **kwargs):
+        if operation == "attempt.reads":
+            raise sqlite3.OperationalError("Synthetic write failure")
+        return original(who, operation, *args, **kwargs)
+
+    monkeypatch.setattr(store, "mutate", unavailable)
+    response = api.get("/api/v2/projection-fixture", headers=headers(attempt["token"]))
+    assert response.status_code == 503
+    assert fid not in response.text and "Allowed source" not in response.text

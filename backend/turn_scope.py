@@ -50,7 +50,7 @@ def scope(c, who):
                 return Scope(who.attempt_id, frozenset(tasks), who=who)
         return None
 
-    return read_cache.value(c, ("turn_scope", who.attempt_id, who.role, who.via), build, shared=True)
+    return read_cache.value(c, ("turn_scope", who), build, shared=True)
 
 
 def project(c, scoped, payload, *, auth=None):
@@ -93,7 +93,7 @@ def project(c, scoped, payload, *, auth=None):
             for item in value:
                 strings(item)
     strings(payload)
-    denied, files, blob_rows, meeting_ids = set(), {}, {}, set()
+    denied, files, blob_rows, meeting_ids, live = set(), {}, {}, set(), {}
     # Blob digests have their own index. Version source digests may differ from stored bytes.
     digests = {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
     for chunk in H.chunks(sorted(names)):
@@ -101,6 +101,8 @@ def project(c, scoped, payload, *, auth=None):
         files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
         blob_rows.update((r["id"], r) for r in c.execute(f"SELECT id,digest FROM blobs WHERE id IN ({marks})", chunk))
         meeting_ids.update(r[0] for r in c.execute(f"SELECT id FROM meetings WHERE id IN ({marks})", chunk))
+        live.update(c.execute(f"SELECT id,imported_meeting_id FROM live_meetings WHERE id IN ({marks})", chunk))
+    meeting_ids.update(mid for mid in live.values() if mid)
     versions = []
     for chunk in H.chunks(sorted(digests)):
         marks = ",".join("?" * len(chunk))
@@ -133,6 +135,7 @@ def project(c, scoped, payload, *, auth=None):
             if exc.status not in (403, 404):
                 raise
             denied.add(mid)
+    denied.update(rid for rid, mid in live.items() if not mid or mid in denied)
     # Missing structured file ids must not leave stale attachment metadata behind either.
     denied.update(s for s in names if re.fullmatch(r"file-[0-9a-f]{24}", s) and s not in visible)
     gone = object()
