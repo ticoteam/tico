@@ -255,6 +255,9 @@ let browser = null;
 
     // The Ask's question, with a thread's composer on screen, is its own row above the composer, never over it.
     await page.evaluate(() => {
+      // The scheduled peek refresh keeps only questions that are still pending.
+      S.v2 ||= {};
+      S.v2.needs = [{id: 'q1', kind: 'ask', ask: {recipient_id: 'human:ana', sender_id: 'bot:ops', body: 'Got a quick question for you'}}];
       const el = document.getElementById('ask-peek');
       el.querySelector('[data-peek-text]').textContent = 'Got a quick question for you';
       el.dataset.item = 'q1'; el.classList.add('ask-on'); askPeekDock();
