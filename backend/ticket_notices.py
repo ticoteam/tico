@@ -95,9 +95,9 @@ def post(conn, kind, row, actor=None, blocker=None):
             # and later (task_privacy.message_tasks): not a guest of the ticket, nor anyone after the blocker narrows.
             refs['blocker'] = blocker['id']
         from .scope_projection import body_sources
-        sources = [body_sources(refs), *H.sourced_record_sources(conn, 'task', row['id'])]
+        sources = [body_sources(refs), *H.sourced_record_sources(conn, 'task', row['id'], fields=('title',))]
         if _names_blocker(conn, kind, blocker, to):
-            sources.extend(H.sourced_record_sources(conn, 'task', blocker['id']))
+            sources.extend(H.sourced_record_sources(conn, 'task', blocker['id'], fields=('title',)))
         said, refs = H.sourced_text(text(conn, kind, row, blocker, reader=to), sources, refs)
         msg = H._write_message(conn, H.KEEPER, to, said, conv, 'say', refs,
                                None, None)
