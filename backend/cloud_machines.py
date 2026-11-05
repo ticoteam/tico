@@ -1571,7 +1571,9 @@ def install(app, settings, store, auth, execution, mutate):
             # Receipts from before revisions cannot be retried safely after a newer choice.
             raise Problem("hq_unconfirmed", "Could not confirm the change at Tico HQ. Read the switch again.", 409)
         try:
-            answer = support_state(body.on, revision=revision, idempotency_key=request.headers["idempotency-key"])
+            # HQ allows only 1-200 printable characters without spaces; a digest keeps any key core accepts stable and valid.
+            hq_key = "core-" + hashlib.sha256(request.headers["idempotency-key"].encode()).hexdigest()
+            answer = support_state(body.on, revision=revision, idempotency_key=hq_key)
         except Problem as exc:
             if exc.code != "stale_revision":
                 raise

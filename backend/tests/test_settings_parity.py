@@ -267,7 +267,7 @@ def ask(api, attempt, e, objects, person, token):
     if e.route == "cloud-machines/support":
         # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
         # the shared sweep proves the owner's confirmation as well as refusing everyone else.
-        hq = SimpleNamespace(support=lambda on=None: {"on": on is not False, "machines": []})
+        hq = SimpleNamespace(support=lambda on=None, **_: {"on": on is not False, "machines": []})
         with patch.object(cloud_machines, "cloud_company", return_value=True), \
                 patch.object(api.app.state.cloud_machines, "client", hq):
             tap = tapped(api, planned.json(), token)

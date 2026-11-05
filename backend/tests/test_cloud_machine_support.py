@@ -1,6 +1,8 @@
 """HQ owns the cloud-machine helper switch; core checks the caller and never keeps a local choice."""
 
+import hashlib
 import json
+import re
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, local
@@ -48,7 +50,9 @@ class SupportHQ:
         if body is not None:
             assert type(body["on"]) is bool and set(body) == {"on", "revision"}
             assert type(body["revision"]) is int and 0 < body["revision"] < 2**63
-            self.keys.append(request.headers["idempotency-key"])
+            key = request.headers["idempotency-key"]
+            assert re.fullmatch(r"[\x21-\x7e]{1,200}", key)    # HQ's Idempotency-Key rule
+            self.keys.append(key)
         if isinstance(self.error, Exception):
             self.delayed.append(request)
             raise self.error
@@ -178,8 +182,18 @@ def test_an_uncertain_write_reuses_its_saved_revision(api, hq):
     retried = api.put(PATH, json={"on": True}, headers=enable)
     assert retried.status_code == 200 and retried.json()["on"] is True
     assert hq.calls == [("PUT", {"on": True, "revision": 1}), ("PUT", {"on": True, "revision": 1})]
-    assert hq.keys == ["retry-enable", "retry-enable"]
+    assert hq.keys == [hq_key("retry-enable")] * 2
     assert len(audit(api)) == 1
+
+
+def hq_key(key):
+    return "core-" + hashlib.sha256(key.encode()).hexdigest()
+
+
+def test_a_client_key_hq_would_refuse_reaches_hq_as_a_stable_digest(api, hq):
+    revoke = headers(key="support off 1")
+    assert api.put(PATH, json={"on": False}, headers=revoke).status_code == 200
+    assert hq.keys == [hq_key("support off 1")]
 
 
 def test_hq_replays_an_applied_write_with_a_lost_answer_before_checking_its_revision(api, hq):
