@@ -1651,6 +1651,8 @@ def create_app(settings=None):
         # An onboarding bot only learns: it answers in chat and talks with its manager, and sends nothing else.
         lifecycle.refuse_send(c, who, to, H.conversation(c, conversation_id) if conversation_id else None)
         ask_routing.require_recipient(c, who, to, refs, conversation_id, body.in_reply_to, kind=body.kind)
+        privacy.require_destination(c, who, to, conversation_id, refs,
+                                    H.message(c, body.in_reply_to) if body.in_reply_to else None)
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if way == "defer" and to.startswith("bot:") and who.role != "bot" and conversation_id \
                 and delivery.running_in_session(c, H.actor_id(to), [conversation_id]):

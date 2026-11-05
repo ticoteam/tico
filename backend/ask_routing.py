@@ -59,7 +59,8 @@ def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_
                 and threads.readable(c, threads.actor_viewer(c, target), conv["id"]))
         if not allowed:
             raise Problem("forbidden", "Recipient is not a conversation participant", 403)
-    task_privacy.require_destination(c, who, target, conversation_id, refs,
+    # A repair in the same room keeps its audience; send also checks the whole room before writing.
+    task_privacy.require_destination(c, who, target, None, refs,
                                      H.message(c, in_reply_to) if in_reply_to else None)
 
 
