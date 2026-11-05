@@ -127,7 +127,6 @@ function auMaintSettingsHTML(m) {
   const rows = m.steps.map((st, i) => {
     const on = st.enabled, isOpen = open.has(st.key), always = st.key === 'collect';
     const pills = (AU_MAINT_BETA.has(st.key) ? '<span class="pill beta">Beta</span>' : '')
-      + (st.old_timer ? '<span class="pill" data-mt-old>On its old timer</span>' : '')
       + (st.key === 'suggest' && st.consent === false ? `<a class="pill waiting" href="${AU_MAINT_PRIVACY}" data-mt-consent>Needs Privacy consent</a>` : '');
     return `<li class="mt-step${on ? '' : ' off'}${isOpen ? ' open' : ''}" data-mt-step="${esc(st.key)}">
       <div class="mt-row">

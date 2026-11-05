@@ -1,7 +1,7 @@
 // Maintenance on the Automations page (ui/app/automations-maintenance.js) against the fake hub's maintenance routes
 // (support/automations-fake.cjs, `maintenance: true`). Maintenance leads the list as a built-in system row, and the
 // mirrors of the jobs it replaced are gone from it. Its screen lists the eight steps in run order with their switches
-// (Collect is always on), old-timer, beta and consent pills; a row opens How often and, for Find stuck and Dream, the
+// (Collect is always on), beta and consent pills; a row opens How often and, for Find stuck and Dream, the
 // number of bots; Learn shows its beta numbers. Each control saves one PATCH; Run now posts and follows the run; Runs
 // lists the run history and a tap opens each step's line. A member reads it with every control off; a phone fits.
 const {chromium} = require('playwright');
@@ -64,18 +64,15 @@ async function themed(page, name) {
       assert.equal(await step('collect').locator('input[role="switch"]').count(), 0, 'Collect has no switch');
       assert.match(await step('collect').innerText(), /Always/);
       assert.equal(await page.locator('.mt-step [data-mt-on]').count(), 7);
-      assert.deepEqual(await page.locator('.mt-step:has([data-mt-old])').evaluateAll(r => r.map(x => x.dataset.mtStep)), ['learn', 'suggest']);
       assert.match(await step('learn').locator('.pill.beta').innerText(), /Beta/);
       assert.equal(await step('learn').locator('[data-mt-on]').isChecked(), false, 'Learn is off by default');
-      assert.equal(await step('suggest').locator('[data-mt-consent]').count(), 0, 'no consent field means unknown');
       const suggest = db.maint.steps.find(x => x.key === 'suggest');
-      suggest.consent = false;
-      await page.evaluate(() => auMaintLoad(AU));
       assert.equal(await step('suggest').locator('[data-mt-consent]').getAttribute('href'), '#/settings/general/settings-privacy');
       suggest.consent = true;
       await page.evaluate(() => auMaintLoad(AU));
       assert.equal(await step('suggest').locator('[data-mt-consent]').count(), 0, 'consent granted');
-      delete suggest.consent;
+      suggest.consent = false;
+      await page.evaluate(() => auMaintLoad(AU));
       assert.match(await step('find_stuck').locator('.mt-when').innerText(), /Every 6 hours/);
       assert.match(await step('dream').locator('.mt-when').innerText(), /Once a day/);
 
@@ -209,7 +206,7 @@ async function themed(page, name) {
       assert.match(await page.locator('tr.au-rx [data-mt-line="dream"]').innerText(), /failed[\s\S]*Dream · model timed out/i);
       assert.equal(await page.locator('tr.au-rx [data-mt-line="dream"] .au-tag.mt-bad').count(), 1);
       assert.match(await page.locator('tr.au-rx [data-mt-line="collect"]').innerText(), /120 checked · 14 found/);
-      assert.match(await page.locator('tr.au-rx [data-mt-line="check_health"]').innerText(), /on its old timer/);
+      assert.match(await page.locator('tr.au-rx [data-mt-line="suggest"]').innerText(), /Privacy consent is off/);
       assert.match(await page.locator('tr.au-rr[data-mt-run="mrun_96"]').innerText(), /Run now · Dream/);
       await themed(page, 'maintenance-runs-desktop');
       await page.locator('[data-mt-more]').click();

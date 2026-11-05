@@ -108,8 +108,9 @@ function maintSteps() {
   const d = {find_stuck: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}, learn: {enabled: false, frequency: 'day'},
     suggest: {frequency: 'day'}, update: {frequency: 'day'}, dream: {frequency: 'day', max_bots: 3}};
   return MAINT_ORDER.map(key => ({key, name: MAINT_NAMES[key], enabled: true, frequency: 'run', custom_every: null, custom_unit: null,
-    max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key), old_timer: ['learn', 'suggest'].includes(key),
+    max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key), old_timer: false,
     last_started_at: null, last_ran_at: key === 'learn' ? null : new Date(Date.now() - 3600000).toISOString(), cursor_at: null,
+    ...(key === 'suggest' ? {consent: false} : {}),
     ...(key === 'learn' ? {stats: {days: 7, runs: 6, items_read: 42, items_sent: {support: 3, 'eng-lead': 2}, saved: 4, dropped: 1,
       unreported: 0, not_sent: 0, expired: 0, cost_usd: 0.18}} : {})}));
 }
@@ -119,8 +120,8 @@ function maintRuns(now = Date.now()) {
     const line = (step, status, extra = {}) => ({step, status, reason: '', checked: null, found: null, woke: null, cost_usd: 0,
       started_at: new Date(at).toISOString(), finished_at: new Date(at + 2000).toISOString(), ...extra});
     const steps = one ? [line('dream', 'ran', {checked: 5, found: 2, woke: 2, cost_usd: 0.05})] : [
-      line('collect', 'ran', {checked: 120, found: 14}), line('clean_up', 'ran'), line('check_health', 'skipped', {reason: 'on its old timer'}),
-      line('find_stuck', 'skipped', {reason: 'not due'}), line('learn', 'off'), line('suggest', 'skipped', {reason: 'on its old timer'}),
+      line('collect', 'ran', {checked: 120, found: 14}), line('clean_up', 'ran'), line('check_health', 'skipped', {reason: 'not due'}),
+      line('find_stuck', 'skipped', {reason: 'not due'}), line('learn', 'off'), line('suggest', 'skipped', {reason: 'Privacy consent is off'}),
       line('update', 'skipped', {reason: 'not due'}),
       line('dream', failed ? 'failed' : 'skipped', failed ? {reason: 'model timed out', cost_usd: 0.02} : {reason: 'not due'})];
     return {id: 'mrun_' + (100 - i), occurrence_key: one ? null : 'hourly:' + i, trigger: one ? 'run_now' : 'schedule', step: one ? 'dream' : null,
