@@ -231,14 +231,18 @@ format is a `422` that names the problem.
   while a field is focused. Retry and Send submit only changed keys. Send applies the final fields atomically,
   advancing the version once.
   Incoming edits preserve open forms, focus and caret.
+  If another editor Sends or Dismisses an item with unsaved edits, both clients keep a closed card with
+  their name, your draft and **Copy** and **Close** buttons until you copy or close it.
   The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
   every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
   a meeting removes its sessions. Participant grants end with access to the source meeting; task parties and guests
   retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
-  If Save partly succeeds, its retry reconciles existing item rows with tasks created in the meantime.
+  If Save partly succeeds, Create uses any known server item and adopts its existing task if another editor
+  already sent it. Retrying Save recovers without creating another task.
   `POST /api/v2/meetings/{rid}/items/{iid}/push` accepts `version` and an authorized `result_ref` to record that
-  existing task without creating another; repeating it keeps the same result.
+  existing task without creating another; repeating it keeps the same result. Pushing an already sent item
+  returns its current item and `pushed: false`, including when the supplied version is stale.
 - **Comments.** Anyone who can open the meeting can add to the thread beside it.
 - **Routines.** `meeting.ready` fires when a team meeting with a transcript is first imported,
   once per meeting however often it is re-imported; a routine written `on: meeting.ready` gets one

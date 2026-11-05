@@ -67,7 +67,7 @@ fn shared_item(
     action: Option<String>,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    let (config, destination, meeting, generation) = {
+    let (config, destination, meeting, epoch) = {
         let app = lock(&state);
         let (destination, meeting) = app.saved_target().ok_or("Save the meeting first")?;
         (app.config.clone(), destination, meeting, app.saved_scope())
@@ -88,11 +88,7 @@ fn shared_item(
         .call(&format!("/api/v2/meetings/{meeting}/items"), None, "")
         .map_err(|e| format!("{e:#}"))?;
     let mut app = lock(&state);
-    if app.saved_target() == Some((destination, meeting)) && app.saved_scope() == generation {
-        app.shared_items_reply(data.clone());
-    } else {
-        return Err("The Tico connection changed".into());
-    }
+    app.accept_saved_reply((destination, meeting), epoch, data.clone())?;
     match reply {
         Ok(value) => Ok(value),
         Err(error) if error.contains("(version_conflict)") => {

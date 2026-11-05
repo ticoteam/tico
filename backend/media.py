@@ -234,14 +234,16 @@ def may_write(who, record):
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
     # A meeting saved for its participants only is the recorder's, not the company owner's too.
-    owner = who.role == "owner" and not participants_only(record)
+    owner = who.role == "owner" and effective_audience(record["metadata"]) != "participants"
     return owner or (who.role in ("human", "owner") and bool(who.email)
                      and record["owner"].lower() == who.email.lower())
 
 
-def participants_only(record):
-    """Saved "Participants only" from the Recorder: readable by the people it names, owners excluded."""
-    return (record.get("metadata") or {}).get("audience") == "participants"
+def effective_audience(meta):
+    """The explicit participant restriction wins over a historical private:false flag."""
+    if meta.get("audience") == "participants":
+        return "participants"
+    return "private" if meta.get("private") else "team"
 
 
 def shared_meeting(record, who):
@@ -257,9 +259,10 @@ def shared_meeting(record, who):
     if meta.get("kind") != "meeting":
         return False
     email = (who.email or "").lower()
-    if participants_only(record):
+    audience = effective_audience(meta)
+    if audience == "participants":
         return bool(email) and email in {str(a).strip().lower() for a in meta.get("audience_emails") or []}
-    if not meta.get("private"):
+    if audience == "team":
         return True
     attendees = [*((meta.get("calendar") or {}).get("attendees") or []),
                  *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict))]
@@ -1146,6 +1149,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 meta["preview"] = body.note[:160]
             if body.private is not None:
                 meta["private"] = bool(body.private)
+                if not body.private:
+                    meta.pop("audience", None)
+                    meta.pop("audience_emails", None)
             save(c, meta)
             c.execute("UPDATE media_control SET version=version+1 WHERE meeting_id=?", (rid,))
             return view(c, request.state.identity, rid, auth=auth)

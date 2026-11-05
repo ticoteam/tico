@@ -151,7 +151,7 @@ def listing(c, who, rid, auth):
     record = media.authorized(c, who, rid)
     rows = [view(r, c, who, auth) for r in c.execute(
         "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))]
-    private = record['metadata'].get('private')
+    private = media.effective_audience(record['metadata']) != 'team'
     allowed = meeting_audience.audience(c, auth, record=record) if private and auth else None
     return {"id": rid, "can_send": record.get("review_state", "live") == "live",
             "can_push": record.get("review_state", "live") == "live",
@@ -430,18 +430,20 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         human_only(who)
         def work(c):
             record, row = pushable(c, who, rid, iid)
-            require_version(row, body.version)
             if body.result_ref is not None:
                 auth.task(c, who, body.result_ref)
                 if body.text is not None or body.detail is not None:
                     raise Problem("validation", "Save edits before linking a sent task", 422)
                 if row["status"] == "pushed" and row["result_ref"] != body.result_ref:
                     raise Problem("status", "Already sent to another task", 409)
+                if row["status"] != "pushed":
+                    require_version(row, body.version)
                 item = record_push(c, who, rid, iid, body.result_ref)
                 meeting_audience.record_sent_link(c, rid, body.result_ref, who.actor)
                 return {"item": item, "pushed": row["status"] != "pushed"}
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
+            require_version(row, body.version)
             if body.text is not None or body.detail is not None:
                 # The final edits and task creation are one atomic version change.
                 edit(c, rid, who.actor, iid, ItemEdit(version=body.version, text=body.text, detail=body.detail), bump_version=False)

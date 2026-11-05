@@ -400,9 +400,18 @@
     if (!data || !data.sections) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
     const here = (data.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
     return `<section class="section" data-shared-panel><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
-      Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
+      Object.values(data.sections).flat().map(it => {
+        const draft = sharedDraft(it.id);
+        if (it.status !== 'proposed' && !(draft.sending && it.updated_by === a.actor) && !draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length)) {
+          clearTimeout(draft.timer);
+          draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
+          const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
+          const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
+          return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : 'Dismissed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
+        }
+        if (it.status === 'dismissed' || draft.closedAcknowledged) return '';
         if (it.status === 'pushed') return `<div class="item sent" data-shared-row="${esc(it.id)}">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
-        const draft = sharedDraft(it.id), server = draft.base?.version > it.version ? draft.base : it;
+        const server = draft.base?.version > it.version ? draft.base : it;
         const current = mergeShared(mergeShared(server, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
         if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
         const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
@@ -460,7 +469,7 @@
   async function sharedSave(id) {
     const draft = sharedDraft(id);
     clearTimeout(draft.timer);
-    if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
+    if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
     const patch = draft.patch; draft.patch = {}; draft.error = '';
     draft.inflightPatch = patch;
     draft.flight = invoke('shared_item', {id, body:{...patch, version:draft.version}});
@@ -481,10 +490,21 @@
       if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
       const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...draft.patch,version:draft.version} : {status:'dismissed',version:draft.version}});
       if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); }
-      draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null;
+      if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
+        draft.closed ||= mergeShared(draft.base, draft.patch);
+      } else {
+        draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null; draft.closed=null;
+      }
     } catch (e) { draft.error = String(e); }
     finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }
     await poll(); render();
+  }
+  async function sharedClose(id, copy) {
+    const draft = sharedDraft(id);
+    if (!draft.closed) return;
+    if (copy) await copyText([draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n'));
+    draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {};
+    render();
   }
   /** Tico's task number, when the task's id or link ends in one. */
   function taskNumber(it) {
@@ -1588,6 +1608,8 @@
       if (c?.retry) act('ask', { question: c.retry });
     },
     'shared-retry': el => sharedSave(el.dataset.id),
+    'shared-copy': el => sharedClose(el.dataset.id, true),
+    'shared-close': el => sharedClose(el.dataset.id, false),
     'shared-send': el => sharedFinish(el, true),
     'shared-dismiss': el => sharedFinish(el, false),
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),

@@ -769,7 +769,19 @@ impl Recorder {
             .map(|d| (d.id.clone(), d.actor.clone(), d.base_url.clone()))
     }
     pub fn saved_scope(&self) -> u64 {
-        self.items_generation
+        self.items_epoch
+    }
+    pub fn accept_saved_reply(
+        &mut self,
+        target: (String, String),
+        epoch: u64,
+        data: Value,
+    ) -> Result<(), String> {
+        if self.saved_target() != Some(target) || self.saved_scope() != epoch {
+            return Err("The Tico connection changed".into());
+        }
+        self.shared_items_reply(data);
+        Ok(())
     }
     fn reset_saved(&mut self) {
         self.leave_saved();
@@ -3507,6 +3519,53 @@ mod saved_panel_tests {
                 assert!(app.saved_target().is_none());
             }
         }
+    }
+    #[test]
+    fn overlapping_item_saves_accept_both_replies_in_one_connection_epoch() {
+        let (_dir, mut app) = fixture();
+        let target = app.saved_target().unwrap();
+        let first_epoch = app.saved_scope();
+        let second_epoch = app.saved_scope();
+        let generation = app.items_generation;
+        app.accept_saved_reply(
+            target.clone(),
+            first_epoch,
+            json!({"sections":{"task":[{"id":"a","text":"A saved"}]}}),
+        )
+        .unwrap();
+        assert!(app.items_generation > generation);
+        app.accept_saved_reply(
+            target,
+            second_epoch,
+            json!({"sections":{"task":[{"id":"a","text":"A saved"},{"id":"b","text":"B saved"}]}}),
+        )
+        .unwrap();
+        assert_eq!(
+            app.saved_items["sections"]["task"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(app.saved_scope(), first_epoch);
+    }
+    #[test]
+    fn item_save_reply_is_discarded_after_org_switch_even_if_switched_back() {
+        let (_dir, mut app) = fixture();
+        let target = app.saved_target().unwrap();
+        let epoch = app.saved_scope();
+        app.choose_org("two");
+        app.choose_org("one");
+        assert_eq!(app.saved_target(), Some(target.clone()));
+        assert!(
+            app.accept_saved_reply(
+                target,
+                epoch,
+                json!({"sections":{"task":[{"text":"Old reply"}]}})
+            )
+            .is_err()
+        );
+        assert!(app.saved_items.is_null());
     }
     #[test]
     fn saved_panel_connection_error_clears_cached_words() {

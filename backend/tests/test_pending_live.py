@@ -18,7 +18,9 @@ def test_reader_merges_edits_and_send_applies_final_fields_once(api):
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda token: api.post(f'/api/meetings/{rid}/items/{item}/push', json=final, headers=headers(token)),
                                 ['ben-test', 'cara-test']))
-    assert sorted(r.status_code for r in results) == [200, 409]
+    assert [r.status_code for r in results] == [200, 200]
+    assert sorted(r.json()['pushed'] for r in results) == [False, True]
+    assert len({r.json()['item']['result_ref'] for r in results}) == 1
     tid = next(r.json()['item']['result_ref'] for r in results if r.status_code == 200)
     task = get(api, 'tasks/' + tid)['task']
     assert task['title'] == 'Final words' and 'Final details' in task['body']
@@ -261,8 +263,8 @@ def test_stale_save_and_send_return_current_without_overwriting_or_creating(api)
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == before
     sent = push(api, rid, item['id'], {'version':newer['version'], 'text':'A unsent title'})['item']
     assert sent['version'] == newer['version'] + 1
-    again = push(api, rid, item['id'], {'version':newer['version']}, expected=409)
-    assert again['error']['item'] == sent
+    again = push(api, rid, item['id'], {'version':newer['version']})
+    assert again == {'item': sent, 'pushed': False}
     assert items(api, rid)['sections']['task'][0]['detail']['body'] == 'B details'
 
 
@@ -422,3 +424,53 @@ def test_sent_link_and_legacy_item_provenance_both_follow_current_access(api):
         assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
         with api.app.state.store.read() as c:
             assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'",(tid,)).fetchone()
+
+
+def test_historical_participants_flag_and_edit_route_share_the_effective_audience(api):
+    from backend import learnings
+    from backend.tests.test_api import post
+    rid = record(api, {'private': True, 'audience': 'participants'})
+    iid = add(api, rid, {'section': 'task', 'text': 'Private quote', 'quote': 'Confidential words',
+                         'detail': {'owner': 'human:cara'}})['item']['id']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE meetings SET metadata=json_set(metadata,'$.private',json('false')) WHERE id=?", (rid,))
+        before = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
+    assert api.get('/api/v2/meetings/' + rid, headers=headers('cara-test')).status_code == 403
+    assert items(api, rid)['audience'] == ['human:ana']
+    push(api, rid, iid, expected=409)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == before
+        collected, _ = learnings.collect(c, api.app.state.store.settings, events.H.now(), {})
+        assert rid not in {item['ref'].get('meeting') for item in collected}
+    version = get(api, 'meetings/' + rid)['version']
+    edited = post(api, f'meetings/{rid}/edit', {'private': False, 'version': version})
+    assert edited['private'] is False and 'audience' not in edited and 'audience_emails' not in edited
+    assert items(api, rid, 'cara-test')['audience'] is None
+    with api.app.state.store.read() as c:
+        collected, _ = learnings.collect(c, api.app.state.store.settings, events.H.now(), {})
+        assert rid in {item['ref'].get('meeting') for item in collected}
+    edited = post(api, f'meetings/{rid}/edit', {'private': True, 'version': edited['version']})
+    assert edited['private'] is True and 'audience' not in edited
+    assert api.get('/api/v2/meetings/' + rid, headers=headers('cara-test')).status_code == 403
+    post(api, f'meetings/{rid}/review', {'action': 'approve', 'audience': 'participants'})
+    edited = get(api, 'meetings/' + rid)
+    edited = post(api, f'meetings/{rid}/edit', {'private': True, 'version': edited['version']})
+    assert edited['private'] is True and edited['audience'] == 'participants'
+    assert items(api, rid)['audience'] == ['human:ana']
+
+
+def test_recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
+    rid = record(api)
+    first = add(api, rid, {'section': 'task', 'text': 'A', 'detail': {'owner': 'human:ana'}})['item']
+    sent = push(api, rid, first['id'], token='ben-test')['item']
+    with api.app.state.store.read() as c:
+        count = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
+    adopted = push(api, rid, first['id'], {'version': first['version'], 'text': 'Recorder A',
+                                         'detail': {'owner': 'human:cara'}})
+    assert adopted == {'item': sent, 'pushed': False}
+    assert get(api, 'tasks/' + sent['result_ref'])['task']['title'] == 'A'
+    assert push(api, rid, first['id'], {'version': first['version'], 'result_ref': sent['result_ref']})['pushed'] is False
+    add(api, rid, {'section': 'task', 'text': 'B', 'detail': {'owner': 'human:ana'}})
+    assert len(items(api, rid)['sections']['task']) == 2
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == count

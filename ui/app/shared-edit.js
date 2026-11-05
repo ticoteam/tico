@@ -26,7 +26,7 @@ function sharedDraftAccepted(draft, patch, item) {
 }
 async function sharedDraftSave(draft, options) {
   clearTimeout(draft.timer);
-  if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
+  if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
   const patch = draft.patch;
   draft.patch = {}; draft.error = ''; draft.inflightPatch = patch;
   draft.flight = Promise.resolve().then(() => options.write(patch, draft.version));
