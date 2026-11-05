@@ -83,3 +83,21 @@ def test_link_proposals_keep_person_and_assistant_permissions_and_refuse_bot_tok
     accept(api, rid, iid, claimed['token'], expected=403)
     _, attempt = assistant_turn(api, 'cara-test')
     assert accept(api, rid, iid, attempt['token'])['item']['result_ref'] == target['id']
+
+
+def test_task_trash_keeps_proposals_with_the_meeting_and_restores_only_the_pointer(api):
+    rid = record(api, {'private': True, 'audience': 'participants'}, 'ben-test')
+    target = task(api, private=False)
+    iid = add(api, rid, {'section': 'task', 'text': 'Follow up', 'proposed_task_id': target['id']}, 'ben-test')['item']['id']
+    get(api, f'meetings/{rid}', expected=403)
+    post(api, f"tasks/{target['id']}/delete", {})
+    proposal = items(api, rid, 'ben-test')['sections']['task'][0]
+    assert proposal['id'] == iid and proposal['proposed_task_id'] is None
+    restored = post(api, f"tasks/{target['id']}/restore", {})
+    assert not restored['skipped']
+    assert items(api, rid, 'ben-test')['sections']['task'][0]['proposed_task_id'] == target['id']
+    post(api, f"tasks/{target['id']}/delete", {})
+    with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM meeting_items WHERE id=?', (iid,))
+    restored = post(api, f"tasks/{target['id']}/restore", {})
+    assert not restored['skipped'] and not restored.get('unlinked')
