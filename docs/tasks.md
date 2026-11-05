@@ -635,6 +635,26 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 
 ### When nobody answers a bot's ask
 
+`keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
+asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
+Bot states use the runner's claim check. An onboarding manager cannot take a report's question, so Tico tries
+the next manager. Synced bots qualify only with desktop delivery; their sync inbox takes only their person's chat messages.
+Each candidate must pass the same checks as a send: Nearby reach, access to the task, every source and the room,
+contact policy, Write access, onboarding limits, and a way to receive the question. If any check refuses a
+candidate, Tico tries the next manager, then the company owner.
+These active-state and answer checks apply only when Tico picks the recipient. An ask sent to a named paused bot
+is saved and queued with a warning, and runs when the bot resumes.
+Org rules check the person or bot who will receive the ask, including a comment's question with no named recipient.
+Tico records the checked route even when no rule matches, and compares it again before sending.
+If it changed, nothing is sent; send the question again to check the new route.
+**Send anyway** checks that same route. If it now goes to someone else, it stays held; send a new question to check it.
+The send says who received it. An existing open system ask already in its task room is re-sent there once,
+keeping its text, files, reviews and meeting limits. An ask in another room stays there with its meeting limits
+and files. The task gets a fresh notice asking the recipient to have the owner restate the question there.
+The old ask links to its replacement, and the hold names the new recipient.
+A failed repair leaves that ask for Health and continues with the others.
+Health names a task waiting on a recipient who cannot read or answer.
+
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
 --default-kind reversible [--by <date>]`; MCP `if_no_answer: {do, kind, by}`), and the card says it: "If you don't
 answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and internal and the person has said

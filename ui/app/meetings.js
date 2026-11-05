@@ -1240,8 +1240,16 @@ function meetPendingRender(state, rec, data) {
         node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
         try {
           if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
-          const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
-                     send ? {...draft.patch, force, version: draft.version} : {status: 'dismissed', version: draft.version});
+          const proposal = node._item?.section === 'task' && node._item.proposed_task_id;
+          if (send && proposal && Object.keys(draft.patch).length) {
+            const patch = draft.patch;
+            const saved = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}`, {...patch, version: draft.version});
+            draft.patch = {};
+            meetPendingAccepted(draft, patch, saved.item);
+          }
+          const route = send ? (proposal ? '/link' : '/push') : '';
+          const reply = await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${route}`,
+                     send ? (proposal ? {} : {...draft.patch, force, version: draft.version}) : {status: 'dismissed', version: draft.version});
           if (send && reply.pushed === false && Object.keys(draft.dirty).length) {
             draft.closed ||= meetPendingMerge(draft.base, draft.patch);
           } else {
@@ -1297,8 +1305,9 @@ function meetPendingRender(state, rec, data) {
     conflict.hidden = !draft.current;
     conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
     const owner = displayed.detail.owner;
-    node.querySelector('[data-send]').textContent = owner ? `Send to ${actorLabel(owner)}` : 'Send';
-    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (item.section === 'task' && !owner);
+    const proposal = item.section === 'task' && item.proposed_task_id;
+    node.querySelector('[data-send]').textContent = proposal ? 'Link' : item.section === 'task' ? 'Create' : owner ? `Send to ${actorLabel(owner)}` : 'Send';
+    node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && item.section === 'task' && !owner);
   }
 }
 function meetSharedStop(state) { sharedPlaceStop(state); }

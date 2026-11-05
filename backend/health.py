@@ -1499,6 +1499,49 @@ def _server_settings(c, settings):
 SILENT_WAIT_HOURS = 1       # a task set waiting on a person this long with nothing said to them is stuck unseen
 
 
+def unreadable_waits(c):
+    """Name held questions whose recipient cannot sign in, run, or read every task source."""
+    from . import ask_routing, task_privacy
+    task_privacy.snapshot(c)
+    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
+    rows = c.execute(
+        f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
+        "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE {H.MESSAGE_TASK_SQL}=t.id AND t.status='waiting' "
+        f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
+        f"UNION SELECT {fields},t.waiting_on AS recipient,NULL AS message_id FROM tasks t "
+        "WHERE t.status='waiting' AND t.waiting_on IS NOT NULL) w "
+        "ORDER BY w.id")
+    found, seen = [], set()
+    for batch in iter(lambda: rows.fetchmany(500), []):
+        # Health polls the whole queue: load its question ancestry and task reads together.
+        mids = sorted({r["message_id"] for r in batch if r["message_id"]})
+        messages = {m["id"]: m for m in c.execute(
+            "SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))", (H._dump(mids),))}
+        H.prime_message_rows(c, messages.values())
+        task_privacy.prime_messages(c, messages.values())
+        tids = {r["id"] for r in batch}
+        for message in messages.values():
+            try:
+                tids.update(task_privacy.message_tasks(c, message))
+            except Problem:
+                pass                    # The individual check refuses unreadable provenance.
+        H.prime_tasks(c, tids)
+        for r in batch:
+            row = dict(r)
+            key = row["id"], row["recipient"]
+            if key in seen:
+                continue
+            source = messages.get(row.pop("message_id"))
+            if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source, sender=row["owner_id"]):
+                continue
+            seen.add(key)
+            found.append(row)
+            if len(found) == 20:
+                return found
+    return found
+
+
 def silent_waits(c, at=None):
     """Tasks waiting on a person who was never asked: no open question to them in the task's thread and no message
     from the task's owner to them since it started waiting. A bot whose ask failed can still set the task waiting,
@@ -1986,6 +2029,13 @@ def view(c, who, settings, auth, github, config):
                 f"{item['title'] if not item['private'] or H.task_private_readable(c, who.actor, H.task(c, item['task_id'])) else 'A private task'}"
                 f" {task_loops.describe(item)}" for item in loops[:3]) + ". Likely a bug; nothing is blocked.",
                 [_fix("Open tasks", "#/tasks")]))
+    if full and (unreadable := unreadable_waits(c)):
+        named = [(row, H.task_private_readable(c, who.actor, row)) for row in unreadable[:3]]
+        checks.append(_check("unreadable_waits", "Questions nobody can read", "warn", "; ".join(
+            f"{row['title']} waits on {row['recipient']}, who cannot read or answer the question"
+            if readable else "A private task waits on someone who cannot read or answer the question"
+            for row, readable in named) + ("." if len(unreadable) <= 3 else f"; and {len(unreadable) - 3} more."),
+            [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named]))
     if full and (silent := silent_waits(c)):
         named = [(row, H.task_private_readable(c, who.actor, row)) for row in silent[:3]]     # only three are named
         checks.append(_check("silent_waits", "Waiting on people", "warn", "; ".join(

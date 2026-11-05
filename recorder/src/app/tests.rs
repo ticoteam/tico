@@ -9,6 +9,62 @@ use tico_recorder_native::{
     workspace::{Item, Turn},
 };
 
+#[test]
+fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "Picker did not reach HTTP");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut headers = vec![];
+        while !headers.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            headers.push(byte[0]);
+        }
+        let headers = String::from_utf8(headers).unwrap();
+        assert!(headers.starts_with("GET /api/v2/tasks?q=%2342&limit=30&brief=true&offset=30 "));
+        let body = r##"{"tasks":[{"id":"task","number":42,"title":"Review pricing","status":"open"}],"next_offset":60}"##;
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    });
+    let reply = tauri::async_runtime::block_on(super::picker_search(
+        move || {
+            tico_recorder_native::network::Tico::new(
+                Destination {
+                    id: "synthetic".into(),
+                    name: "Acme".into(),
+                    base_url: url,
+                    actor: "human:test".into(),
+                },
+                "synthetic-token".into(),
+            )
+        },
+        "#42".into(),
+        30,
+    ))
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(reply["tasks"][0]["number"], 42);
+    assert_eq!(reply["next_offset"], 60);
+}
+
 fn app(store: Store, directory: &std::path::Path) -> Recorder {
     let lock = AppLock::acquire(directory).unwrap();
     Recorder::new(store, Some(lock), true).unwrap()

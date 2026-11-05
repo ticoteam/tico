@@ -1,6 +1,8 @@
 //! The recorder's state and actions. It owns the library, the recording in progress and the
 //! background jobs; the window only draws `view()` and calls the actions below. Nothing here
 //! knows about Tauri, so it is tested as plain Rust.
+#[path = "task_links.rs"]
+mod task_links;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -60,7 +62,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 9] = [
+const BACKGROUND: [&str; 11] = [
     "live",
     "calendar",
     "autodraft",
@@ -68,6 +70,8 @@ const BACKGROUND: [&str; 9] = [
     "ask",
     "roster",
     "speech",
+    "task-links",
+    "more-links",
     "items",
     "presence",
 ];
@@ -308,6 +312,7 @@ pub struct Recorder {
     _lock: Option<AppLock>,
     transcriber: Transcriber,
     pub live_sync: Option<LiveSync>,
+    _task_link_sync: Option<tico_recorder_native::task_links::TaskLinkSync>,
     pub config: Settings,
     pub records: Vec<Summary>,
     current: Option<Recording>,
@@ -341,6 +346,8 @@ pub struct Recorder {
     message: (String, Instant),
     pub error: String,
     draft_status: String,
+    link_tasks: Value,
+    link_tasks_at: Instant,
     chat_error: String,
     /// A question or message that failed, offered back in the input.
     chat_retry: String,
@@ -427,12 +434,15 @@ impl Recorder {
         } else {
             String::new()
         };
+        let task_link_sync =
+            (!demo).then(|| tico_recorder_native::task_links::TaskLinkSync::start(store.clone()));
         let mut app = Self {
             screen: Default::default(),
             store,
             _lock: lock,
             transcriber,
             live_sync,
+            _task_link_sync: task_link_sync,
             destination: config
                 .destinations
                 .first()
@@ -469,6 +479,8 @@ impl Recorder {
             message: (String::new(), Instant::now()),
             error: String::new(),
             draft_status: String::new(),
+            link_tasks: Value::Null,
+            link_tasks_at: Instant::now() - Duration::from_secs(60),
             chat_error: String::new(),
             chat_retry: String::new(),
             adding: None,
@@ -574,14 +586,28 @@ impl Recorder {
                 // Drafts added and items sent in the background since this copy was loaded are
                 // kept; removing an item goes through `remove_item`.
                 let mut items = edited.items;
+                // Link actions write directly to the store. A stale window cannot restore a skipped or removed link.
+                items.retain(|item| {
+                    item.kind != "link" || current.items.iter().any(|stored| stored.id == item.id)
+                });
                 for item in std::mem::take(&mut current.items) {
                     match items.iter_mut().find(|row| row.id == item.id) {
                         Some(row) if !item.task_id.is_empty() => *row = item,
-                        Some(_) => {}
+                        Some(row) => {
+                            if item.closed_draft.is_some() {
+                                row.closed_draft = item.closed_draft;
+                            }
+                        }
                         None => items.push(item),
                     }
                 }
                 current.items = items;
+                if current.kept_on_mac {
+                    current.items.retain(|item| item.kind != "link");
+                    for item in &mut current.items {
+                        item.proposed_task_id.clear();
+                    }
+                }
                 current.participants = edited.participants;
                 current.calendar = edited.calendar;
                 Ok(())
@@ -602,6 +628,8 @@ impl Recorder {
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
         self.current = Some(record);
+        self.link_tasks = Value::Null;
+        self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         self.reset_saved();
         self.items_cursor = 0;
         self.meeting = Some(id.to_owned());
@@ -619,6 +647,7 @@ impl Recorder {
         if !self.context.live_id.is_empty() && self.context.live_state != "ended" {
             self.last_sync = Instant::now() - Duration::from_secs(5);
         }
+        self.store.poke();
         Ok(())
     }
     pub fn close(&mut self) {
@@ -744,6 +773,14 @@ impl Recorder {
     }
     /// The open meeting refreshes often; the whole library only every few seconds.
     fn reload_open(&mut self) {
+        if let Some(id) = &self.meeting
+            && let Ok(stored) = self.store.context(id)
+            && stored.task_link_operations != self.context.task_link_operations
+        {
+            // Merge background link results without losing notes or unsent edits in the window.
+            self.save_context();
+            self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+        }
         self.seen_open = self.store.version();
         if let Some(id) = &self.meeting {
             self.ui_version += 1;
@@ -1053,9 +1090,19 @@ impl Recorder {
             return;
         }
         let (config, store) = (self.config.clone(), self.store.clone());
+        let destination = self.draft_destination(&id);
         self.job_for("autodraft", Some(id.clone()), move || {
+            let mut config = config;
+            if speech::source(&config) == speech::TICO
+                && let Some(at) = config.destinations.iter().position(|d| d.id == destination)
+            {
+                config.destinations.swap(0, at);
+            }
+            let tasks = Tico::saved(&config, &destination)
+                .and_then(|tico| tico.draft_tasks(&store, &id))
+                .unwrap_or_default();
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft(&store, &config, &key, &id)?}))
+            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
@@ -1072,6 +1119,35 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            if reply.kind == "more-links" {
+                if here
+                    && let Ok(value) = reply.result
+                    && value["scope"] == self.link_scope()
+                {
+                    if let Some(rows) = value["linked"]["tasks"].as_array()
+                        && let Some(loaded) = self.link_tasks["linked"]["tasks"].as_array_mut()
+                    {
+                        loaded.extend(rows.iter().cloned());
+                    }
+                    self.link_tasks["linked"]["next_cursor"] =
+                        value["linked"]["next_cursor"].clone();
+                }
+                continue;
+            }
+            if reply.kind == "task-links" {
+                if here {
+                    self.link_tasks = reply
+                        .result
+                        .ok()
+                        .filter(|v| v["scope"] == self.link_scope())
+                        .unwrap_or(Value::Null);
+                }
+                continue;
+            }
+            if reply.kind == "link" && here {
+                self.save_context();
+                self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+            }
             if ["items", "presence"].contains(&reply.kind.as_str())
                 && (!here
                     || reply.generation != self.items_generation
@@ -1336,6 +1412,7 @@ impl Recorder {
         {
             self.reload();
         }
+        self.refresh_task_links();
         self.sync_presence();
         self.sync_saved();
         self.watch_inputs();
@@ -1670,14 +1747,21 @@ impl Recorder {
         } else {
             0
         };
+        let item_id = uuid::Uuid::new_v4().to_string();
         self.context.items.push(Item {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: item_id.clone(),
             kind: "task".into(),
             title,
             at_ms,
             ..Default::default()
         });
         self.save_context();
+        if self.saved_target().is_some() {
+            self.network_job("add-item", move |tico, store, id| {
+                tico.upload_pending_item(&store, &id, &item_id)?;
+                Ok(json!({}))
+            });
+        }
     }
     pub fn edit_item(&mut self, item_id: &str, title: &str) {
         let title: String = title.trim().chars().take(300).collect();
@@ -1759,6 +1843,7 @@ impl Recorder {
         if org.is_empty()
             || self.choosing_org
             || self.sending.is_some()
+            || self.busy
             || owner.is_empty()
             || item.title.trim().is_empty()
             || !item.task_id.is_empty()
@@ -1783,10 +1868,10 @@ impl Recorder {
         self.item_error = None;
         // A task from a private meeting is between me and whoever gets it.
         let private = self.live["visibility"] != "team";
-        self.sending = Some(item_id.to_owned());
+        let sending_item = item_id.to_owned();
         let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
-        self.job_for("task", Some(id.clone()), move || {
+        if self.job_for("task", Some(id.clone()), move || {
             Tico::saved(&config, &destination)?.send_task_confirmed(
                 &store,
                 &id,
@@ -1797,7 +1882,9 @@ impl Recorder {
                 paused_confirmed,
             )?;
             Ok(json!({"message":format!("Sent to {name}")}))
-        });
+        }) {
+            self.sending = Some(sending_item);
+        }
     }
     /// The Tico that action items go to, when several are connected.
     pub fn choose_org(&mut self, destination: &str) {
@@ -2184,18 +2271,33 @@ impl Recorder {
         }
         self.send_meeting_to(id, destination, paused_confirmed, audience);
     }
-    /// Stops the recording and keeps it on this computer; a live share ends and leaves Tico.
+    /// Keeps the recording here and removes its live share and pending meeting from Tico.
     pub fn keep_local(&mut self, id: &str) {
         self.screen.stop_meeting(id);
         if self.active.as_ref().is_some_and(|(active, _)| active == id) {
             self.stop();
         }
-        let context = self.store.context(id).unwrap_or_default();
-        if context.live_id.is_empty() || context.live_removed {
-            return;
-        }
         if self.meeting.as_deref() == Some(id) {
             self.save_context();
+        }
+        let context = self.store.context(id).unwrap_or_default();
+        if context.live_id.is_empty() || context.live_removed {
+            let result = self.store.update_context(id, |c| {
+                c.kept_on_mac = true;
+                c.task_link_operations.clear();
+                c.items.retain(|item| item.kind != "link");
+                for item in &mut c.items {
+                    item.proposed_task_id.clear();
+                }
+                Ok(())
+            });
+            self.report(result);
+            if self.meeting.as_deref() == Some(id) {
+                self.context = self.store.context(id).unwrap_or_default();
+                self.link_tasks = Value::Null;
+            }
+            self.reload_open();
+            return;
         }
         let config = self.config.clone();
         let store = self.store.clone();
@@ -2669,6 +2771,7 @@ impl Recorder {
                 .and_then(|base| settings::safe_url(base).ok())
                 .is_some_and(|base| url.starts_with(&format!("{base}/#/task/")));
         let allowed = known_item
+            || self.may_open_linked_task(url)
             || shared_url
             || self.config.destinations.iter().any(|row| {
                 settings::safe_url(&row.base_url)
@@ -2984,7 +3087,7 @@ impl Recorder {
             // The Finish sheet: the org it was shared live to (its default), and how.
             "live_org": if live && !self.context.live_removed { Some(router.clone()) } else { None },
             "team": team,
-            "kept_local": self.context.live_removed,
+            "kept_local": self.context.kept_on_mac,
             "live": if live { Some(match (ended, team) {
                 (true, _) => "Ended in Tico",
                 (false, true) => "Team can join",
@@ -3052,14 +3155,40 @@ impl Recorder {
             });
         }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
-        let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
+        let can_send =
+            mode == "ready" && !self.busy && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
+        let unsaved = |item: &Item| {
+            self.current
+                .as_ref()
+                .and_then(|record| {
+                    record
+                        .deliveries
+                        .iter()
+                        .find(|delivery| delivery.destination_id == self.router())
+                })
+                .map(|delivery| {
+                    delivery.receipt["local_fields"]
+                        .get(&item.id)
+                        .unwrap_or(&delivery.receipt["items"][&item.id])
+                })
+                .is_some_and(|row| {
+                    !row["text"].is_null()
+                        && !tico_recorder_native::workspace::item_fields_match(item, row)
+                })
+        };
         let order = items
             .iter()
             .filter(|item| item.task_id.is_empty())
             .chain(items.iter().filter(|item| !item.task_id.is_empty()));
         let rows: Vec<Value> = order
+            .filter(|item| item.closed_draft.is_some() || unsaved(item) || item.task_id.is_empty() || self.link_tasks["scope"] != self.link_scope()
+                || !self.link_tasks["linked"]["tasks"].as_array().into_iter().flatten()
+                    .any(|remote| remote["task_id"] == item.task_id))
+            .filter(|item| item.closed_draft.is_some() || unsaved(item) || item.kind != "link" || self.linked_task(&item.task_id).is_some())
             .map(|item| {
+                let linked = self.linked_task(&item.task_id);
+                let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
                 let chosen = if item.owner.is_empty() {
                     self.last_owner.clone()
                 } else {
@@ -3078,7 +3207,17 @@ impl Recorder {
                     .unwrap_or_default();
                 json!({
                     "id": item.id,
-                    "title": item.title,
+                    "unsaved": unsaved(item),
+                    "server_item_id": (!unsaved(item)).then(|| self.current.as_ref().and_then(|r| r.deliveries.iter()
+                        .find(|d| d.destination_id == self.router()))
+                        .map(|d| d.receipt["items"][&item.id]["id"].clone())).flatten(),
+                    "title": if unsaved(item) { json!(item.title) } else { linked.map(|task| task["title"].clone()).unwrap_or(json!(item.title)) },
+                    "number": linked.map(|task| task["number"].clone()),
+                    "status": linked.map(|task| task["status"].clone()),
+                    "proposed_task_id": proposal.map(|task| task["id"].clone()),
+                    "proposed_number": proposal.map(|task| task["number"].clone()),
+                    "due": item.due,
+                    "body": item.body,
                     "kind": item.kind,
                     "document": item.document,
                     "quote": item.quote,
@@ -3086,10 +3225,12 @@ impl Recorder {
                     "owner": chosen,
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
+                    "pending": self.pending_task_link(&item.task_id),
                     "sent_to": item.sent_to,
                     "closed_draft": item.closed_draft,
-                    "task_id": item.task_id,
-                    "task_url": item.task_url,
+                    "task_id": if linked.is_some() { item.task_id.clone() } else { String::new() },
+                    "task_url": if item.kind == "link" { self.link_tasks["browser"].as_str().map(|base| format!("{base}/#/task/{}", item.task_id)).unwrap_or_default() } else if linked.is_some() { item.task_url.clone() } else { String::new() },
+                    "can_link": proposal.is_some() && mode == "ready" && !self.context.kept_on_mac,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,
                     "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
@@ -3099,9 +3240,13 @@ impl Recorder {
             })
             .collect();
         json!({
+            "linked": self.linked_tasks_view(),
+            "linked_browser": self.link_tasks["browser"],
+            "link_scope": self.link_scope(),
+            "can_link": mode == "ready" && !self.context.kept_on_mac,
             "actor": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.actor),
             "saved": self.saved_target().is_some(),
-            "shared": self.saved_items,
+            "shared": self.saved_items_with_links(),
             "shared_url": self.saved_items["browser_url"],
             "shared_scope": format!("{}:{}", self.router(), self.items_epoch),
             "mode": mode,
@@ -3110,6 +3255,7 @@ impl Recorder {
             "multiple": self.config.destinations.len() > 1,
             "can_change": self.context.live_destination.is_empty(),
             "draft_status": self.draft_status,
+            "skipped_links": self.context.skipped_task_links,
             "items": rows,
             "waiting": items.iter().filter(|item| item.task_id.is_empty()).count(),
             "owners": owners.iter().map(|(actor, name)| json!({"actor":actor,"name":name,"bot":actor.starts_with("bot:")})).collect::<Vec<_>>(),
@@ -3577,6 +3723,73 @@ mod saved_panel_tests {
         app.tx.send(reply).unwrap();
         app.tick();
         assert_eq!(app.saved_items, json!({"gone":true}));
+    }
+    #[test]
+    fn create_during_add_upload_never_sets_sending_and_can_start_after_completion() {
+        let (_dir, mut app) = fixture();
+        app.context.items.push(Item {
+            id: "added".into(),
+            kind: "task".into(),
+            title: "One task".into(),
+            owner: "human:ana".into(),
+            ..Default::default()
+        });
+        app.save_context();
+        let (release, held) = mpsc::channel();
+        assert!(app.job("add-item", move || {
+            held.recv()?;
+            Ok(json!({}))
+        }));
+        app.send_item("added", "human:ana");
+        assert!(app.sending.is_none());
+        assert_eq!(app.actions_view("one")["items"][0]["can_send"], false);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while app.busy {
+            assert!(Instant::now() < deadline);
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.actions_view("one")["items"][0]["can_send"], true);
+        assert!(app.sending.is_none());
+        // The next Create can start a job and its reply clears sending normally.
+        assert!(app.job("task", || Ok(json!({}))));
+        app.sending = Some("added".into());
+        while app.background.contains("task") {
+            assert!(Instant::now() < deadline);
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.sending.is_none());
+    }
+    #[test]
+    fn linked_refresh_preserves_closed_cards_and_any_unsaved_local_fields() {
+        let (_dir, mut app) = fixture();
+        let server = json!({"id":"server-a","section":"task","status":"pushed","version":2,"text":"Server title","result_ref":"existing","detail":{"owner":"human:ana"}});
+        app.context.items.push(Item {
+            id: "a".into(),
+            kind: "task".into(),
+            title: "My unsaved title".into(),
+            owner: "human:ana".into(),
+            task_id: "existing".into(),
+            closed_draft: Some(
+                json!({"item":server,"text":"My unsaved title","detail":{"body":"My details"}}),
+            ),
+            ..Default::default()
+        });
+        app.save_context();
+        app.current.as_mut().unwrap().deliveries[0].receipt = json!({"items":{"a":server}});
+        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"existing","title":"Server title"}],"linked":{"tasks":[{"task_id":"existing","title":"Server title"}]}});
+        app.link_tasks_at = Instant::now();
+        let rows = app.actions_view("one")["items"].clone();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["closed_draft"]["text"], "My unsaved title");
+        app.context.items[0].closed_draft = None;
+        let rows = app.actions_view("one")["items"].clone();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["unsaved"], true);
+        assert_eq!(rows[0]["title"], "My unsaved title");
+        assert!(rows[0]["server_item_id"].is_null());
     }
     #[test]
     fn saved_panel_presence_deadline_is_independent_of_continuous_edits() {

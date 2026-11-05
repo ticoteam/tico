@@ -1541,7 +1541,7 @@ def test_one_hold_naming_many_long_rules_stays_within_the_list_budget(ruled):
     assert all(len(r["text"]) <= K.SUMMARY_CHARS for r in one["rules"])
 
 
-def test_a_conversation_post_whose_recipient_moved_goes_out_unchecked(ruled, monkeypatch):
+def test_a_conversation_post_whose_recipient_moved_needs_a_new_check(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
     cid = post(api, "chat/ops", {"text": "What is new?"})["conversation_id"]
@@ -1554,9 +1554,14 @@ def test_a_conversation_post_whose_recipient_moved_goes_out_unchecked(ruled, mon
                       (json.dumps(["bot:ops", "human:ben"]), cid))
         return verdict
     monkeypatch.setattr(K, "preflight", then_move)
-    got = post(api, f"conversations/{cid}/messages", {"text": "Our favorite color is red."}, token="ops-test")
-    assert "held" not in got and got["message"]["recipient_id"] == "human:ben"
-    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["changed"]
+    text = "Our favorite color is red."
+    refused = post(api, f"conversations/{cid}/messages", {"text": text}, token="ops-test", expected=409)
+    assert refused["error"]["code"] == "moved" and bodies(api, text) == []
+    assert events(api, "rules.unchecked") == []
+    monkeypatch.setattr(K, "preflight", real)
+    held = post(api, f"conversations/{cid}/messages", {"text": text}, token="ops-test")["held"]
+    assert json.loads(hold_row(api, held["id"])["destinations"]) == ["human:ben"]
+    assert bodies(api, text) == []
 
 
 def ask_turn(api, label):
