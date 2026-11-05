@@ -231,7 +231,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
 @pytest.mark.skipif(not os.environ.get('TICO_NATIVE_CLI'), reason='Build CLI and set TICO_NATIVE_CLI')
 def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp_path):
     from backend.tests.test_api import post
-    targets = [post(api, 'tasks', {'title': f'Review pricing {n}', 'body': 'Review pricing and report back.', 'owner': 'human:ana'}, 'ana-test')['task']['id']
+    targets = [post(api, 'tasks', {'title': f'Review pricing {n}', 'body': 'Review pricing and report back.', 'owner': 'human:ana'}, 'ana-test')['id']
                for n in range(45)]
     batches, uploads = [], []
     lost_item = False
