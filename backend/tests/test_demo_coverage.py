@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import time_machine
 
 from backend import demo
 from backend.tests.test_demo import NOW, signed_in
@@ -81,6 +82,13 @@ def test_every_nav_page_has_a_demo_mapping():
         assert name in PAGES or name in NO_DEMO_DATA, (
             f"{name}: add a demo_sections module for {name}, then map it here "
             "(PAGES in backend/tests/test_demo_coverage.py)")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
