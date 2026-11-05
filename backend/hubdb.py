@@ -7953,7 +7953,7 @@ HISTORY_SUBJECTS = ("task", "goal", "company", "strategy",
                     "market_entity", "market_edge", "market_evidence", "market_document")
 MARKET_SUBJECTS_SQL = "('market_entity','market_edge','market_evidence','market_document')"
 TASK_EVENT_COLUMNS = ("id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, "
-                      "action_id, via, data")
+                      "action_id, via")
 
 
 def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=None, note=None, data=None, *,
@@ -9822,8 +9822,9 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
                              key=lambda row: (-sum(v for k, v in row.items() if k != "actor"), row["actor"]))}
 
 
-def task_history(conn, task_id):
-    return _rows(conn.execute(f"SELECT {TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
+def task_history(conn, task_id, *, provenance=False):
+    columns = TASK_EVENT_COLUMNS + (", data" if provenance else "")
+    return _rows(conn.execute(f"SELECT {columns} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
 
 
 def unanswered_ask(conn, task_row, *, actor=None):

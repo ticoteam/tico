@@ -4268,8 +4268,11 @@ def create_app(settings=None):
                 can_comment = True
             except Problem:
                 can_comment = False
+            history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            for event in history:
+                event.pop("data", None)
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
-                    "events": privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid)),
+                    "events": history,
                     "can_comment": can_comment,
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
