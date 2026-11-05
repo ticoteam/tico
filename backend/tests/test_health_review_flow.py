@@ -9,14 +9,14 @@ HEAD, OLD = 'a' * 40, 'b' * 40
 
 def ticket(api, number=206, step='Second look'):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, 'human:morgan', 'Factory ' + str(number), [
+        typ = H.type_create(c, H.KEEPER, 'Factory ' + str(number), [
             {'name': 'Build', 'status': 'doing'},
             {'name': 'First look', 'status': 'review', 'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}},
             {'name': 'Second look', 'status': 'review', 'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}},
             {'name': 'In QA', 'status': 'review', 'flow': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA Fixes'}},
             {'name': 'QA Fixes', 'status': 'doing', 'flow': {'after_green': 'merge'}},
         ])
-        task = H.task_create(c, 'human:morgan', f'Build change {number}', '', 'bot:builder', type=typ['id'], step=step, private=False)
+        task = H.task_create(c, 'human:morgan', f'Build change {number}', '', 'bot:builder', type=typ['id'], step=step, private=False, mover=True)
         link = H.task_link(c, 'human:morgan', task['id'], f'https://github.com/Acme/atlas/pull/{number}')
         detail = {'head_sha': HEAD, 'health_wait': {'reason': 'review', 'head': HEAD, 'since': H.shift(H.now(), hours=-24)}}
         c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
