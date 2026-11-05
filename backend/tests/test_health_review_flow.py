@@ -370,3 +370,24 @@ def test_shared_fixes_uses_the_review_that_last_returned_the_ticket(environment,
     assert item['whose_move'] == 'bot:builder'
     assert 'address review changes on PR #206' in item['fix']
     assert 'move PR' not in item['fix'] and 'merge PR' not in item['fix']
+
+
+@pytest.mark.parametrize('first,second', [('First look', 'Second look'), ('Second look', 'First look')])
+def test_shared_fixes_keeps_changes_visible_after_a_manual_return(environment, first, second):
+    api = setup(environment)
+    task = ticket(api, step=first)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute('UPDATE task_steps SET check_pool=NULL WHERE type_id=?', (task['type_id'],))
+        H._task_event(c, task['id'], H.KEEPER, 'step', None, task['step_id'], '')
+    child(api, task, title=f'{first}: PR #206', verdict='changes')
+    with store.transaction() as c:
+        H.task_update(c, 'bot:builder', task['id'], step=second)
+    child(api, task, title=f'{second}: PR #206', verdict='changes')
+    with store.transaction() as c:
+        H.task_update(c, 'bot:builder', task['id'], step='Build')
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='verdict_move'",
+                             (task['id'],)).fetchone()
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:builder'
+    assert 'address review changes on PR #206' in item['fix']

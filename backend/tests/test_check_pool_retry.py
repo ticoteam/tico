@@ -62,6 +62,49 @@ def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeyp
         assert outcome and outcome['moved'] == 'Build'
 
 
+@pytest.mark.parametrize('kind', ['review', 'qa', 'release_qa'])
+def test_retry_rechecks_the_snapshot_head_under_the_writer(api, monkeypatch, kind):
+    team(api)
+    task, wait = waiting_ticket(api, 511, 'rev-a', kind=kind)
+    store, service = api.app.state.store, api.app.state.github_app
+    github(api, monkeypatch, {'python': 'success'})
+    with store.transaction() as c:
+        if kind == 'release_qa':
+            c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (task['id'],))
+        before = dict(c.execute('SELECT * FROM check_waits WHERE id=?', (wait['id'],)).fetchone())
+    transaction = store.transaction
+    raced = False
+
+    @contextmanager
+    def webhook_before_admission(*args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            # The read preflight has accepted H; the webhook commits J before the admission writer opens.
+            with transaction() as c:
+                c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
+                          (json.dumps({'head_sha': OLD}), task['id']))
+        with transaction(*args, **kwargs) as c:
+            yield c
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, 'transaction', webhook_before_admission)
+        assert P.retry(store, service=service) == []
+    assert raced, 'the snapshot must pass the read preflight and reach writer admission'
+    assert checks(api, task) == []
+    with store.read_transaction() as c:
+        assert P.waiting(c, task['id']) == [before]
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='check_not_filed'",
+                             (task['id'],)).fetchone()
+
+    github(api, monkeypatch, {'python': 'success'}, head=OLD)
+    [cid] = P.retry(store, service=service)
+    with store.read_transaction() as c:
+        assert f'at head {OLD}.' in H.task(c, cid)['body']
+        assert c.execute('SELECT state,child_id,heads FROM check_waits WHERE id=?',
+                         (wait['id'],)).fetchone()[:] == ('filed', cid, OLD)
+
+
 def test_a_qa_retry_waits_without_writes_when_the_fresh_head_is_unavailable(api, monkeypatch):
     team(api)
     task, wait = waiting_ticket(api, 510, 'rev-a', kind='qa')
@@ -352,13 +395,15 @@ def test_retry_keeps_a_new_heads_wait_while_the_cached_heads_check_is_open(api, 
             def unavailable(*args, **kwargs):
                 raise ConnectionError('GitHub unavailable')
             patched.setattr(service, 'mint', unavailable)
-        filed = P.retry(store, service=service)
-    if ci != 'success':
-        assert filed == []
-        with store.read_transaction() as c:
-            assert P.waiting(c, task['id']) == [wait]
-        reads = github(api, monkeypatch, {'python': 'success'}, head=OLD)
-        filed = P.retry(store, service=service)
+        assert P.retry(store, service=service) == []
+    with store.read_transaction() as c:
+        assert P.waiting(c, task['id']) == [wait]
+    # A fresh snapshot that disagrees with the link leaves the wait intact until both observe J.
+    with store.transaction() as c:
+        c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'head_sha': OLD}), task['id']))
+    reads = github(api, monkeypatch, {'python': 'success'}, head=OLD)
+    filed = P.retry(store, service=service)
 
     [cid] = filed
     assert cid != old_check['id']
@@ -396,6 +441,11 @@ def test_refused_ci_only_waits_need_no_writer_until_gate_inputs_change(api, monk
                              (task['id'],)).fetchone()
     current_head = OLD if conclusion == 'failure' else HEAD
     github(api, monkeypatch, {'python': 'success'}, head=current_head)
+    if current_head != HEAD:
+        assert P.retry(store, service=service) == []
+        with store.transaction() as c:
+            c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
+                      (json.dumps({'head_sha': current_head}), task['id']))
     [cid] = P.retry(store, service=service)
     assert [t['id'] for t in checks(api, task)] == [cid]
     with store.read_transaction() as c:

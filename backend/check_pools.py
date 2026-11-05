@@ -644,10 +644,15 @@ def _admission_problem(c, wait, plan, snapshots):
     from . import review_gate
     if "drop" in plan or not plan["free"]:
         return None
-    if snapshots is not None and any(not (snapshots.get(pr["id"]) or {}).get("head_sha")
-                                     or (snapshots.get(pr["id"]) or {}).get("error")
-                                     for pr in _prs(c, plan["ticket"], plan["step"])):
-        return "the current PR head could not be read"
+    if snapshots is not None:
+        for pr in _prs(c, plan["ticket"], plan["step"]):
+            snapshot = snapshots.get(pr["id"]) or {}
+            if not snapshot.get("head_sha") or snapshot.get("error"):
+                return "the current PR head could not be read"
+            current = (H._json(pr.get("detail"), {}) or {}).get("head_sha") or pr.get("pr_sha") or ""
+            # Admission runs again under the writer: a webhook after collection invalidates every check kind.
+            if str(snapshot["head_sha"]).lower() != str(current).lower():
+                return "the PR head changed before admission"
     if review_gate.is_review(c, plan["ticket"], wait["title"]):
         return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
 

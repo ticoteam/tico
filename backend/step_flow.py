@@ -266,10 +266,11 @@ def reviews_before(c, s):
 
 
 def fixes_for(c, s, ticket, *, evidence=None):
-    """The check step that last sent this ticket to work step `s`, or its sole configured source.
+    """The check step that sent this ticket to work step `s`, or the latest source of changes on a manual return.
 
     A shared fixes target needs the recorded move, not board order. Pair each verdict move with its step event:
     step ids survive renames, and later checks that moved nothing cannot replace the source of the feedback.
+    A manual return has no verdict move; standing changes at the current head take priority over old feedback.
     """
     board = evidence["board"] if evidence is not None else steps(c, s["type_id"])
     sources = {x["id"]: x for x in board if of(x).get("on_fail") == s["id"]}
@@ -282,10 +283,21 @@ def fixes_for(c, s, ticket, *, evidence=None):
     for event in events:
         if event["kind"] == "step":
             entered = event
+            if entered["new"] == s["id"]:
+                source = None
         elif event["kind"] == "verdict_move" and entered and entered["new"] == s["id"]:
             source = entered["old"]
-    if source is not None:
-        return sources.get(source)
+    if source in sources:
+        return sources[source]
+    from . import verdict_moves as V
+    failed = [t for t in V.review_checks(c, ticket, evidence=evidence)
+              if (t["check_step"] or {}).get("id") in sources and V._verdict(t) and V._verdict(t) not in V.GOOD]
+    if failed:
+        heads = [V._head(pr) for pr in V._prs(c, ticket, evidence=evidence) if V._head(pr)]
+        latest = max(failed, key=lambda t: (any(V.verdict_at([t], head) for head in heads),
+                                           t.get("updated_at") or t.get("created_at") or "",
+                                           t.get("created_at") or "", t["id"]))
+        return sources[latest["check_step"]["id"]]
     return next(iter(sources.values())) if len(sources) == 1 else None
 
 

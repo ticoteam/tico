@@ -395,7 +395,11 @@ def _judged_by(c, row, step, *, evidence=None):
     check = F.fixes_for(c, step, row, evidence=evidence)
     if not check:
         return None
-    found = next((t for t in reversed(_checks(c, row, check, evidence=evidence)) if _verdict(t)), None)
+    checks = _checks(c, row, check, evidence=evidence)
+    heads = [_head(pr) for pr in _prs(c, row, evidence=evidence) if _head(pr)]
+    failed = [t for t in checks if _verdict(t) and _verdict(t) not in GOOD
+              and any(verdict_at([t], head) for head in heads)]
+    found = next((t for t in reversed(failed or checks) if _verdict(t)), None)
     return str(found.get("verdict_head") or found["judged_head"] or "").lower() if found else None
 
 
