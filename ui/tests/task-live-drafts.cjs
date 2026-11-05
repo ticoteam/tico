@@ -19,8 +19,10 @@ const init = () => {
    const {page, data, errors} = await open(browser, {viewport: {width, height: 900}});
    const task = {...data.tasks[0], title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
    const writes = []; let hold, offline = false;
+   let me = {id: 'ana', name: 'Ana', role: 'owner', mover: true, cloud: true, registered: true, config: {environment_id: 'acme-org'}};
+   await page.route('**/api/me', route => route.fulfill({json: me}));
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
-   await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; });
+   await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; S.config.environment_id = 'acme-org'; sessionReturn(); });
    await page.evaluate(init); await page.addInitScript(init);
    await page.route('**/api/v2/tasks/' + task.id, async route => {
     if (route.request().method() === 'GET') return route.fulfill({json: {task, comments: [], children: [], events: []}});
@@ -29,6 +31,7 @@ const init = () => {
     if (offline) return route.abort('internetdisconnected');
     if (patch.version !== task.version) return route.fulfill({status: 409, json: {error: {code: 'version_conflict', detail: 'Task changed'}}});
     Object.assign(task, patch, {version: task.version + 1});
+    if ('due' in patch) task.due_at = patch.due;
     return route.fulfill({json: {task}});
    });
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
@@ -66,6 +69,52 @@ const init = () => {
    assert.equal(await details.inputValue(), 'Original details plus A');
    await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
    await retry(); assert.equal(task.body, 'Original details plus A');
+   // The publication fields use the same field base as title/details, even through a clean focused redraw.
+   task.type_id = 'draft-roadmap'; task.public_title = 'Public A'; task.public_summary = 'Summary A';
+   await page.evaluate(() => { TASK_TYPES.push({id: 'draft-roadmap', role: 'product-roadmap', name: 'Roadmap', steps: []}); TASK_TYPES_READ = true; });
+   await page.route('**/api/v2/task-types', route => route.fulfill({json: {types: [{id: 'draft-roadmap', role: 'product-roadmap', name: 'Roadmap', steps: []}]}}));
+   await update();
+   for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']]) {
+    const box = page.getByRole('textbox', {name: label, exact: true}), base = task.version, original = task[key];
+    await box.focus();
+    task[key] = 'Other editor ' + key; task.version++;
+    await update();
+    assert.equal(await box.inputValue(), original);
+    const count = writes.length;
+    await box.evaluate(el => el.blur()); await idle();
+    assert.equal(writes.length, count, 'blur without typing cannot save stale ' + key);
+    assert.equal(task[key], 'Other editor ' + key);
+    // Restore/focus once more and type after a newer server value arrives.
+    await box.focus();
+    const focusedBase = await box.evaluate(el => taskModal().taskLive.fields[el.dataset.taskField].version);
+    task[key] = 'Newer editor ' + key; task.version++;
+    await update();
+    await box.fill('My ' + key); await box.evaluate(el => el.blur());
+    await error.waitFor(); await idle();
+    assert.equal(writes.at(-1).version, focusedBase);
+    assert.equal(task[key], 'Newer editor ' + key);
+    await retry(); assert.equal(task[key], 'My ' + key);
+    assert.ok(focusedBase >= base);
+   }
+   // Size and the due-date fallback also retain the version of the field they displayed.
+   for (const [key, selector, value, remote] of [
+    ['size', '[data-task-size]', '3', 8], ['due', '[data-prop-date]', '2026-12-04', '2026-12-08T17:00:00.000Z']
+   ]) {
+    const box = page.locator('#task-modal ' + selector);
+    await box.evaluate(el => { el.classList.add('shown'); el.focus(); });
+    task[key === 'due' ? 'due_at' : key] = remote; task.version++;
+    await update();
+    const count = writes.length;
+    await box.evaluate(el => el.blur()); await idle();
+    assert.equal(writes.length, count, 'clean property blur never saves');
+    await box.evaluate(el => el.focus());
+    const base = await box.evaluate(el => taskModal().taskLive.fields[el.dataset.taskField].version);
+    task.version++; await update();
+    await box.evaluate((el, value) => { el.focus(); el.value = value; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }, value);
+    await error.waitFor(); await idle();
+    assert.equal(writes.at(-1).version, base);
+    await retry();
+   }
    // Every Add box and the comment box keep all their texts while each one has focus during both redraw paths.
    await page.locator('[data-task-more]').click(); await page.getByText('Add subtask', {exact: true}).click();
    await page.getByRole('button', {name: 'Add a link', exact: true}).click();
@@ -100,9 +149,20 @@ const init = () => {
    assert.notEqual(await page.evaluate(() => taskModal().taskLive.owner), owner);
    pending.resolve(); await idle();
    assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().taskLive.id) === taskModal().taskLive.draft), true, 'late success cannot evict the reopened draft');
+   // B opens clean before A edits; both actual pages share localStorage in one browser context.
+   const clean = await open({newPage: async options => {
+    const second = await page.context().newPage(); await second.setViewportSize(options.viewport); return second;
+   }}, {viewport: {width, height: 900}});
+   await clean.page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
+   await clean.page.evaluate(() => { S.config.environment_id = 'acme-org'; });
    offline = true;
    await fillTitle('New view failed draft'); await title.evaluate(el => el.blur());
    await error.waitFor(); await idle();
+   await clean.page.evaluate(() => taskModal().close());
+   await clean.page.waitForFunction(() => !taskModal().taskLive);
+   await clean.page.close();
+   assert.deepEqual(clean.errors, []);
+   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'title'))).value), 'New view failed draft', 'closing clean B preserves A’s failed text');
    await page.evaluate(() => taskModal().close()); await page.waitForFunction(() => !taskModal().taskLive);
    await page.evaluate(async task => taskModalShow(task), task);
    assert.equal(await title.textContent(), 'New view failed draft');
@@ -148,9 +208,32 @@ const init = () => {
    await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
    await page.waitForFunction(() => !taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length);
    assert.equal(task.title, 'Sign-in title to keep');
+   // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
+   offline = true;
+   await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
+   await page.getByRole('textbox', {name: 'Message', exact: true}).fill('Ana private comment');
+   await page.evaluate(() => { SESSION.seen = true; signedOut('/auth/login'); });
+   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).identity), JSON.stringify(['acme-org', 'ana']));
+   const count = writes.length;
+   me = {...me, id: 'ben', name: 'Ben'}; offline = false;
+   await page.reload(); await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   assert.equal(await title.textContent(), task.title);
+   assert.equal(await page.getByRole('textbox', {name: 'Message', exact: true}).inputValue(), '');
+   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
+   assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().dataset.task)?.patch.title), undefined);
+   assert.equal(writes.length, count, 'no text from Ana autosaves as Ben');
+   // A reload as another org with the same person id also drops both recovery paths.
+   offline = true;
+   await fillTitle('Ben old org draft'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
+   await page.evaluate(() => sessionKeep());
+   me = {...me, config: {environment_id: 'other-org'}}; offline = false;
+   await page.reload(); await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   assert.equal(await title.textContent(), task.title);
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
+   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
    assert.deepEqual(errors, []);
    await page.close();
   }
-  console.log('Task draft regressions: phone/desktop stale revision, Add forms, refresh/presence, ownership, offline reload, debounce and sign-out passed');
+  console.log('Task draft regressions: phone/desktop stale revision, Add forms, refresh/presence, ownership, offline reload, publication/property revisions, shared storage, debounce and identity-safe sign-in passed');
  } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

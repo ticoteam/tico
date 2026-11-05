@@ -9,10 +9,16 @@
 // with `WWW-Authenticate: Cloudflare-Access`. So a request that fails as a network error asks GET /v2/me once without
 // following redirects (sessionProbe): a redirect there, or a 401, is signed out; no answer at all is offline, and the
 // page keeps reconnecting as before.
-const SESSION = {out: false, seen: false, probe: null, probedAt: 0, login: '', bar: null, reopen: null, restoring: null};
+const SESSION = {out: false, seen: false, probe: null, probedAt: 0, login: '', bar: null, reopen: null, restoring: null, identity: '', watch: null};
 // What the page had when it was signed out (where it was, the text in its boxes), kept for this tab while the
 // person signs in again on another site, and put back when they return (sessionReturn).
 const SESSION_RETURN = 'tico.signin.return';
+// The authenticated config's environment id names the org; local unnamed installs use their origin.
+function sessionIdentity() {
+  if (typeof S === 'undefined' || !S.me?.id) return '';
+  return JSON.stringify([String(S.config.environment_id || location.origin), String(S.me.id)]);
+}
+
 const signedOutError = write => Object.assign(new Error(write ? "Not saved: you've been signed out. Sign in again, then try again."
   : "You've been signed out. Sign in again to continue."), {signedOut: true});
 const sessionHere = () => location.pathname + location.search + location.hash;
@@ -66,6 +72,7 @@ function signedOut(to) {
     return;
   }
   if (SESSION.out) return;
+  SESSION.watch?.disconnect(); SESSION.watch = null;
   SESSION.out = true; SESSION.login = login;
   sessionKeep();
   if (typeof taskLiveClear === 'function') taskLiveClear();
@@ -115,8 +122,8 @@ function signInAgain() {
 // the same box of the same task or page, never into another task's.
 const sessionKey = el => el.id || el.name || el.getAttribute('aria-label') || el.placeholder || '';
 const sessionScope = el => {
-  const task = el.closest('[data-task]')?.dataset.task, d = el.closest('dialog');
-  return task ? 'task:' + task : location.hash + (d ? '|' + (d.id || d.getAttribute('aria-label') || '') : '');
+  const task = el.closest('[data-task]')?.dataset.task, d = el.closest('dialog'), question = el.closest('[data-qc-key]');
+  return task ? 'task:' + task + (question ? '|question:' + question.dataset.qcKey : '') : location.hash + (d ? '|' + (d.id || d.getAttribute('aria-label') || '') : '');
 };
 // A bot's or the Assistant's chat box keeps its own draft (pill.js chatDraftSave, by slug) and clears it once the
 // message is sent; kept here too, its text came back into the emptied box after sign-in, ready to send a second time.
@@ -127,7 +134,7 @@ const chatBox = el => {
   return [...pills].some(P => P.mode === 'chat' && P.slug && P.el?.contains(el));
 };
 const sessionBoxValue = el => el.hasAttribute('contenteditable') ? el.textContent : el.value;
-const sessionBoxes = () => [...document.querySelectorAll('textarea, input[type="text"], [contenteditable][data-task-field]')]
+const sessionBoxes = () => [...document.querySelectorAll('textarea, input[type="text"], input[data-task-field], [contenteditable][data-task-field]')]
   .filter(el => !el.readOnly && !el.disabled && !/search|filter/i.test(sessionKey(el)) && !chatBox(el));
 const sessionSave = kept => {
   try {
@@ -153,9 +160,14 @@ function sessionKeep() {
   // A bot's chat box keeps its own draft per bot (pill.js chatDraftSave), across reloads too.
   for (const P of [typeof BOT_PILL !== 'undefined' && BOT_PILL, typeof ASSISTANT_PILL !== 'undefined' && ASSISTANT_PILL])
     if (P) try { chatDraftSave(P); } catch {}
+  const identity = sessionIdentity();
+  if (!identity) return;
   const fields = new Map();
   // Texts from an earlier sign-in that have not found their box yet stay kept.
-  try { for (const f of JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []) fields.set(f.scope + '\n' + f.key, f); } catch {}
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null');
+    if (kept?.identity === identity) for (const f of kept.fields || []) fields.set(f.scope + '\n' + f.key, f);
+  } catch {}
   // A task's comment box keeps its draft only while the page lives (task-modal.js TASK_DRAFTS), for tasks closed
   // since too.
   if (typeof TASK_DRAFTS !== 'undefined')
@@ -170,32 +182,44 @@ function sessionKeep() {
   // The task open in full, to open again on return (sessionResume).
   const d = document.getElementById('task-modal');
   const task = d?.open && d.dataset.task ? {id: d.dataset.task, thread: d.classList.contains('thread')} : null;
-  sessionSave({at: Date.now(), hash: location.hash, task, fields: [...fields.values()]});
+  sessionSave({identity, at: Date.now(), hash: location.hash, task, fields: [...fields.values()]});
 }
 // Back from signing in: the same place and the task that was open, and each text put back into its own empty box as
 // the page draws it, however late (a task opened an hour on). Each text stays kept for this tab until it is back in its box.
-(function sessionReturn() {
+function sessionReturn() {
+  const identity = sessionIdentity();
+  SESSION.watch?.disconnect(); SESSION.watch = null;
+  taskLiveIdentity(identity);
+  SESSION.identity = identity;
+  SESSION.restoring = null; SESSION.reopen = null;
   let kept = null;
   try { kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null'); } catch {}
-  if (!kept || !(Date.now() - kept.at < 86400000)) { try { sessionStorage.removeItem(SESSION_RETURN); } catch {} return; }
+  if (!identity || !kept || kept.identity !== identity || !(Date.now() - kept.at < 86400000)) { try { sessionStorage.removeItem(SESSION_RETURN); } catch {} return; }
   // A proxy's login sends the browser back to the address without its #, which never reached the server.
   if (kept.hash && (!location.hash || location.hash === '#')) history.replaceState(null, '', location.pathname + location.search + kept.hash);
   if (kept.task && typeof kept.task.id === 'string') SESSION.reopen = kept.task;
-  kept = {at: kept.at, hash: '', task: null,
+  kept = {identity, at: kept.at, hash: '', task: null,
     fields: (kept.fields || []).filter(f => f && typeof f.scope === 'string' && typeof f.key === 'string' && typeof f.value === 'string')};
   SESSION.restoring = kept;
   sessionSave(kept);
   if (!kept.fields.length) return;
   const fill = () => {
+    if (SESSION.out || SESSION.restoring !== kept || sessionIdentity() !== identity) return true;
     let put = false;
     for (const el of sessionBoxes()) {
       const field = el.dataset.taskField, live = el.closest('dialog')?.taskLive;
       if (sessionBoxValue(el) && !field) continue;
-      const key = sessionKey(el), scope = sessionScope(el), i = kept.fields.findIndex(f => f.key === key && f.scope === scope);
+      const key = sessionKey(el), scope = sessionScope(el), question = el.closest('[data-qc-key]');
+      if (question) {
+        const before = kept.fields.length, prefix = 'task:' + question.dataset.qcard + '|question:';
+        kept.fields = kept.fields.filter(f => !f.scope.startsWith(prefix) || f.scope === scope);
+        put ||= before !== kept.fields.length;
+      }
+      const i = kept.fields.findIndex(f => f.key === key && f.scope === scope);
       if (i < 0 || (field && !live)) continue;
       const saved = kept.fields[i];
       if (!field || !(field in live.draft.dirty)) {
-        if (field && saved.base && Number.isFinite(saved.base.version) && typeof saved.base.value === 'string') live.fields[field] = saved.base;
+        if (field && saved.base && Number.isFinite(saved.base.version) && (typeof saved.base.value === 'string' || field === 'size' && (saved.base.value === null || Number.isFinite(saved.base.value)))) live.fields[field] = saved.base;
         if (el.hasAttribute('contenteditable')) el.textContent = saved.value; else el.value = saved.value;
         el.dispatchEvent(new Event('input', {bubbles: true}));
       }
@@ -206,10 +230,10 @@ function sessionKeep() {
   };
   // At most once a frame, however busy the page is (a reply streaming in).
   let soon = 0;
-  const watch = new MutationObserver(() => { soon ||= requestAnimationFrame(() => { soon = 0; if (fill()) watch.disconnect(); }); });
+  const watch = SESSION.watch = new MutationObserver(() => { soon ||= requestAnimationFrame(() => { soon = 0; if (fill()) watch.disconnect(); }); });
   const start = () => { if (!fill()) watch.observe(document.body, {childList: true, subtree: true}); };
   if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
-})();
+}
 // Called once the first page is drawn (boot.js): the task that was open opens again over it.
 function sessionResume() {
   const t = SESSION.reopen;
