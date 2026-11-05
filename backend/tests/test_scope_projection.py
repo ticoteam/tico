@@ -1211,3 +1211,69 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
         finally:
             turn_scope.AUTH.reset(granting)
             turn_scope.WHO.reset(principal)
+
+
+def test_stored_task_copies_and_deferred_notes_keep_the_message_sources(api, monkeypatch):
+    from backend import scope_projection, threads
+    data = sources(api)
+    mid, secret = data['answered']['comment']['id'], data['source_label']
+    machine = runner(api)
+    assign(api, machine, 'finance')
+    ready(api, machine, ['finance'])
+    path = f'threads/messages/{mid}/task'
+    made = post(api, path, {'title': 'Forward the review', 'owner': 'finance'})
+    assert secret in made['body']
+    with monkeypatch.context() as patch:
+        patch.setattr(H, 'remember_sourced_text', lambda c, kind, rid, field, text, sources: text)
+        bare = post(api, path, {'title': 'Forward another review', 'owner': 'finance'})
+    with api.app.state.store.transaction() as c:
+        stored = c.execute("SELECT refs FROM sourced_text_records WHERE kind='task' AND record_id=? AND field='body'",
+                           (made['id'],)).fetchone()
+        assert stored and data['hidden'] in stored[0]
+        threads._defer_note(c, H.message(c, mid), 'bot:finance')
+        note = dict(c.execute('SELECT * FROM notes WHERE message_id=? AND to_actor=?', (mid, 'bot:finance')).fetchone())
+        assert secret in note['body']
+    response = api.patch('/api/v2/files/' + data['hidden'], json={'archived': True}, headers=headers())
+    assert response.status_code == 200, response.text
+    attempt = claim(api, machine, 'finance')
+    assert attempt and attempt['task']['id'] == made['id']
+    no_sources(attempt, (secret,))
+    no_sources(get(api, 'tasks/' + made['id'], attempt['token']), (secret,))
+    exposed = get(api, 'tasks/' + bare['id'], attempt['token'])
+    with pytest.raises(AssertionError):
+        no_sources(exposed, (secret,))
+    with api.app.state.store.read() as c:
+        auth = api.app.state.auth
+        who = auth.authenticate({'authorization': 'Bearer ' + attempt['token']})
+        scoped = turn_scope.scope(c, who)
+        no_sources(turn_scope.project(c, scoped, note, auth=auth), (secret,))
+        with monkeypatch.context() as patch:
+            patch.setattr(scope_projection, 'project_notes', lambda c, scoped, payload, auth: payload)
+            with pytest.raises(AssertionError):
+                no_sources(turn_scope.project(c, scoped, note, auth=auth), (secret,))
+
+
+def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeypatch):
+    from backend import task_holds
+    from backend.tests.test_task_review import ask as version_ask
+    t, attempt = task_turn(api)
+    filename = 'confidential-hold.html'
+    fid = published(api, attempt, task=t['id'], name=filename)
+    with monkeypatch.context() as patch:
+        patch.setattr(H, 'remember_sourced_text', lambda c, kind, rid, field, text, sources: text)
+        response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
+                             headers=headers(attempt['token']))
+        assert response.status_code == 200, response.text
+        post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
+                                     'status': 'waiting', 'on': 'ana'}, attempt['token'])
+    with api.app.state.store.read() as c:
+        row = H.task(c, t['id'])
+        assert filename in row['blocked_reason']
+        assert row['blocked_kind'] == 'dependency'
+    response = api.patch('/api/v2/files/' + fid, json={'archived': True}, headers=headers())
+    assert response.status_code == 200, response.text
+    no_sources(get(api, 'tasks/' + t['id'], attempt['token']), (filename,))
+    with monkeypatch.context() as patch:
+        patch.setattr(turn_scope, 'message_view', lambda c, message, **kw: message)
+        with pytest.raises(AssertionError):
+            no_sources(get(api, 'tasks/' + t['id'], attempt['token']), (filename,))

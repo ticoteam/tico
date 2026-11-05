@@ -44,15 +44,9 @@ def body_sources(value, parent=""):
     return value if parent in SOURCE_LISTS and isinstance(value, str) else None
 
 
-def project(c, scoped, payload, *, auth=None):
-    from . import turn_scope, context_search
-    from .files import file_visible, prime_visible
-    if scoped is None:
-        return payload
-    auth = auth or turn_scope.AUTH.get()
-    if auth is None or scoped.who is None:
-        raise Problem("privacy", "Source projection requires a scoped principal", 403)
-
+def project_notes(c, scoped, payload, auth):
+    """Deferred notes are rebuilt through their stored message, before their cached prose is delivered."""
+    from . import turn_scope
     def notes(value):
         if isinstance(value, dict):
             value = {key: notes(item) for key, item in value.items()}
@@ -65,7 +59,18 @@ def project(c, scoped, payload, *, auth=None):
             return value
         return [notes(item) for item in value] if isinstance(value, (list, tuple)) else value
 
-    payload = notes(payload)
+    return notes(payload)
+
+
+def project(c, scoped, payload, *, auth=None):
+    from . import turn_scope, context_search
+    from .files import file_visible, prime_visible
+    if scoped is None:
+        return payload
+    auth = auth or turn_scope.AUTH.get()
+    if auth is None or scoped.who is None:
+        raise Problem("privacy", "Source projection requires a scoped principal", 403)
+    payload = project_notes(c, scoped, payload, auth)
 
     def reference(value):
         if not isinstance(value, str):

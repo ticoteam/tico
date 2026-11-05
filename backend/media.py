@@ -736,7 +736,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 for field in ('title', 'body'):
                     H.remember_sourced_text(c, 'task', tid, field, made['task'].get(field),
                                            [{'file': entry['file'], 'version': entry['version']}
-                                            for entry in review['files']])
+                                            for entry in review])
         # The person must be able to read the task by every rule a read checks, or the question would reach
         # them (Slack, mail) while the task stays hidden from them.
         try:
