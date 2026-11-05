@@ -5431,8 +5431,9 @@ def create_app(settings=None):
         """What a task answer says, as the rule check reads it: each question's picks and the free text."""
         if body.dismiss:
             return ""
-        lines = [f"{q}: {', '.join(a)}" for q, a in sorted(body.answers.items()) if a]
-        return "\n".join([*lines, *([body.other] if body.other else [])])
+        with store.read() as c:
+            asked = H.answer_question(c, body.target.model_dump(exclude_none=True))
+            return H.answer_text(asked, body.answers, other=body.other)[0]
 
     @app.post("/api/v2/tasks/{tid}/answers")
     def task_answer(request: Request, tid: str, body: M.TaskAnswer):

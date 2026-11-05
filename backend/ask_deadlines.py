@@ -108,16 +108,14 @@ def settle(conn, asked, task, text, outcome, *, answers=None):
     """Answer the ask as the keeper with `text`, which wakes the bot that asked, and take it off the person's list."""
     conv = H.conversation(conn, asked["conversation_id"])
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), "if_no_answer": outcome}
-    from .task_review import answer_sources
-    copied = answers or _picked(asked, (asked.get("refs") or {}).get("if_no_answer") or {}) or {}
-    label_sources, body_sources = answer_sources((asked.get("refs") or {}).get("questions") or [], copied)
-    body_sources.append(((asked.get("refs") or {}).get("if_no_answer") or {}).get("source"))
     if task:
         refs.update({"task": task["id"], "comment": True})
     if answers:
         refs["answer"] = {"target": {"comment": asked["id"]}, "answers": answers, "other": None, "dismiss": False,
-                          "by": H.KEEPER, "at": H.now(), **({"label_sources": label_sources} if label_sources else {})}
-    text, refs = H.sourced_text(text, body_sources, refs)
+                          "by": H.KEEPER, "at": H.now()}
+    text, refs = H.answer_text(asked, answers or {}, text=text, refs=refs)
+    text, refs = H.answer_text(asked, ((asked.get("refs") or {}).get("if_no_answer") or {}).get("do") or "",
+                               text=text, refs=refs)
     H._write_message(conn, H.KEEPER, asked["sender_id"], text, conv, "answer", refs, asked["id"], None)
     person = asked["recipient_id"]
     if task:

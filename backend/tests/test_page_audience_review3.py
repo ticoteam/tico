@@ -141,6 +141,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     from backend.tests.test_events import ready as stream_ready
     from backend.tests.test_assistant import room
     from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
+    from backend.tests.test_page_audience_review6 import held_answers
 
     org(api)
     counsel_on(api)
@@ -203,6 +204,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
                                    (recommended["file_id"],)).fetchone()[0]
     post(api, "needs-you/recommended", {"ask": recommended_id}, token="cara-test")
     assert title in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
+    holds = held_answers(api, tid, fid, picked_label)
     # Version uploads and blob archives use the same production writers as the task's Files panel.
     uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
     assert uploaded["file_id"] == fid and uploaded["version"] == 2
@@ -284,6 +286,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "messages/" + comment["id"], "messages/" + answered["comment"]["id"], "messages/" + assistant["id"],
               "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",
               "threads", "threads/search?q=Review", "threads/search?q=Canary", "context/search?q=Canary",
+              "rule-holds", *("rule-holds/" + hid for hid in holds),
               "threads/" + cid, "threads/" + cid + "/timeline", "threads/" + cid + "/members",
               "rules?status=any", "rules/" + rid, "rules/counts", "bots/ops/rules", "bots/finance/rules", "audit",
               "needs-you", "needs-you/summary", "updates", "updates/unread", "updates/tree", "inbox", "answers?ids=" + comment["id"], "status", "live/brief",

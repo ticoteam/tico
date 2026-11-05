@@ -168,18 +168,6 @@ def default_source(ask):
                 default["source"] = option["source"]
 
 
-def answer_sources(questions, answers, passed=None):
-    """Source maps travel with every copied answer, including an automatic deadline fallback."""
-    passed = passed or {}
-    sources = {q["id"]: {o["label"]: o.get("source") or {"file": o["file"]}
-                         for o in q["options"] if o.get("source") or o.get("file")}
-               for q in questions}
-    sources = {qid: labels for qid, labels in sources.items() if labels}
-    body = [source for qid, labels in sources.items() for label, source in labels.items()
-            if label in answers.get(qid, []) or label in passed.get(qid, [])]
-    return sources, body
-
-
 def version_review(c, fid, number, *, actor):
     row = c.execute("SELECT * FROM task_file_reviews WHERE file_id=? AND version=?", (fid, number)).fetchone()
     asked = H.message(c, row["ask_message_id"]) if row and row["ask_message_id"] else None
@@ -358,12 +346,6 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}
-    # Selected and passed labels, and the generated prose that copies them, retain source provenance.
-    label_sources, body_sources = answer_sources(questions.values(), body.answers, passed)
-    if label_sources:
-        value["label_sources"] = label_sources
-    if version:
-        body_sources.append({"file": body.target.file, "version": body.target.version})
     # Files under review (backend/file_reviews.py): the answer says what it judged of each exact version.
     from . import file_reviews
     review, spend = asked["refs"].get("review"), asked["refs"].get("spend")
@@ -382,7 +364,9 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
-    text, refs = H.sourced_text(text, body_sources, {"answer": value})
+    text, refs = H.answer_text(asked, body.answers, text=text, passed=passed, refs={"answer": value},
+                               file_subject=bool(version))
+    value = refs["answer"]
     msg = H.task_comment(c, who.actor, task_id, text, wake=wake, extra_refs=refs,
                          answer_to=asked["id"], answer_text=body.other or "")
     if value.get("reviewed"):

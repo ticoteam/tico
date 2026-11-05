@@ -159,9 +159,8 @@ def spend_approval(c, who, asked, task_id, spend, previous):
     made = H.approval_request(c, asked["sender_id"], "spend", spend_payload(spend), task_id=task_id, to=who.actor)
     # The request's own notice to the person is answered by this pick: it never sits unread in their inbox.
     c.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL", (H.now(), made["message_id"]))
-    sources = [o["source"] for q in asked["refs"].get("questions", []) for o in q["options"]
-               if o["label"] == spend["label"] and o.get("source")]
-    H.approval_decide(c, who.actor, made["id"], "approved", note=f'Picked "{spend["label"]}".', note_sources=sources)
+    note, refs = H.answer_text(asked, spend["label"], text=f'Picked "{spend["label"]}".')
+    H.approval_decide(c, who.actor, made["id"], "approved", note=note, note_sources=refs.get("body_sources", []))
     return made["id"]
 
 

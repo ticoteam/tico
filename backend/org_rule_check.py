@@ -815,8 +815,16 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    body = (replay or {}).get("body") or {}
+    if operation == "task_answer":
+        asked = H.answer_question(c, body.get("target") or {})
+        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
+    elif operation == "answer":
+        text, text_refs = H.answer_text(H.message(c, replay["message"]), body.get("text") or "", text=text)
+    else:
+        text_refs = {}
     from .files import page_references
-    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))])
+    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))], text_refs)
     # The run the output came from: Send anyway writes as the bot with it, so the run's private tasks and meetings are
     # checked against the destination again, as the original write was.
     # The check's own input (`input`) too: a rule changed since is checked on what this check was shown, and Send anyway

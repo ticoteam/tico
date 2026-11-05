@@ -1124,6 +1124,50 @@ def sourced_text(text, sources=(), refs=None):
     return text, refs
 
 
+def answer_question(conn, target):
+    """The stored question behind either kind of structured answer target."""
+    if target.get("comment"):
+        return message(conn, target["comment"])
+    row = conn.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
+                       (target.get("file"), target.get("version"))).fetchone()
+    return message(conn, row[0]) if row and row[0] else None
+
+
+def answer_text(question, answers, *, text=None, other=None, passed=None, refs=None, file_subject=False):
+    """Pair answer prose with sources resolved from the stored question, never from the submitted picks.
+
+    A map names structured picks; a string quotes an option or the question's fallback. Callers may supply their
+    prose, but source resolution stays here for held, automatic, quoted and delivered answers alike.
+    """
+    asked = (question or {}).get("refs") or {}
+    questions = asked.get("questions") or []
+    passed = passed or {}
+    labels = {q["id"]: {o["label"]: o.get("source") or {"file": o["file"]}
+                         for o in q.get("options") or [] if o.get("source") or o.get("file")}
+              for q in questions}
+    labels = {qid: sources for qid, sources in labels.items() if sources}
+    if isinstance(answers, str):
+        wanted = answers.strip().casefold()
+        copied = {q["id"]: [o["label"] for o in q.get("options") or []
+                            if str(o["label"]).strip().casefold() == wanted] for q in questions}
+    else:
+        copied = answers or {}
+    sources = [source for qid, options in labels.items() for label, source in options.items()
+               if label in copied.get(qid, []) or label in passed.get(qid, [])]
+    default = asked.get("if_no_answer") or {}
+    if isinstance(answers, str) and answers.strip().casefold() == str(default.get("do") or "").strip().casefold():
+        sources.append(default.get("source"))
+    if file_subject and (asked.get("target") or {}).get("file"):
+        sources.append(asked["target"])
+    if text is None:
+        lines = [f"{qid}: {', '.join(picks)}" for qid, picks in sorted(copied.items()) if picks]
+        text = "\n".join([*lines, *([other] if other else [])])
+    refs = dict(refs or {})
+    if isinstance(answers, dict) and labels and refs.get("answer"):
+        refs["answer"] = {**refs["answer"], "label_sources": labels}
+    return sourced_text(text, sources, refs)
+
+
 def payload_hash(payload):
     """The exact-payload hash rule 6 matches duplicates on."""
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -3688,6 +3732,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
         refuse(conn, actor, "identity", f"{message_id} was not addressed to {actor}")
     path_mentioned(conn, actor, "reply", body if classify_text is None else classify_text, (comment_refs or {}).get("task"))
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
+    body, refs = answer_text(asked, body if classify_text is None else classify_text, text=body, refs=refs)
     if unknown:
         refs["unknown"] = True
     if turn_id:
@@ -6360,16 +6405,14 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
                 "quoted": True, "for": person}
         if relay:
             del refs["quiet"]
-        sources = list(text_sources)
-        sources.extend(o["source"] for q in asked["refs"].get("questions", []) for o in q.get("options") or []
-                       if o.get("source") and o["label"] == quote)
-        text, refs = sourced_text(f'{name(person)} (quoted by {name(actor)}): "{quote}"', sources, refs)
+        _, refs = sourced_text(quote, text_sources, refs)
+        text, refs = answer_text(asked, quote, text=f'{name(person)} (quoted by {name(actor)}): "{quote}"', refs=refs)
         if asked["refs"].get("questions"):
             # Read as any other structured answer (`task_answers`): the person's words are its free text.
             refs["answer"] = {"target": {"comment": message_id}, "other": quote, "dismiss": False,
                               "answers": {q["id"]: [] for q in asked["refs"]["questions"]},
                               "by": person, "quoted_by": actor, "at": ts, "quoted": True}
-            _, refs["answer"] = sourced_text(quote, sources, refs["answer"])
+            _, refs["answer"] = sourced_text(quote, refs.get("body_sources", []), refs["answer"])
         # The answer is the person's words, recorded by `actor`. A bot that asked hears it on its next turn (its inbox)
         # when someone else recorded it; an asker recording its own, or the keeper, needs no message.
         own = actor == asker or not is_bot(asker)
