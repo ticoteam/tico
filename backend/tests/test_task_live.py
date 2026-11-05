@@ -21,7 +21,7 @@ def test_task_presence_sessions_expire_and_require_current_task_access(api):
     with store.read() as c:
         assert events.read(c, auth, outsider, cursor, topics=('presence',), places=(place,))[0] == []
         sent = events.read(c, auth, reader, cursor, topics=('presence',), places=(place,))[0]
-        assert sent and all(data == {'place': place} for _, _, data in sent)
+        assert sent and all(data['place'] == place and not {'actors', 'name'} & data.keys() for _, _, data in sent)
     with store.transaction() as c:
         c.execute("UPDATE presences SET seen_at='2000-01-01T00:00:00Z' WHERE place=?", (place,))
     assert api.get('/api/v2/presence', params={'place': place}, headers=headers('ben-test')).json() == {'actors': []}

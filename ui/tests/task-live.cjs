@@ -8,7 +8,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
  const pages = [];
  try {
   for (const width of [390, 1440]) {
-   let task, events = [], sessions = new Map(), writes = [], hold, fail = false, inflight = 0, max = 0, reads = 0;
+   let readHold, readStarted, task, events = [], sessions = new Map(), writes = [], hold, fail = false, inflight = 0, max = 0, reads = 0;
    const viewers = [];
    const emit = async data => {
     for (const page of viewers) if (!page.isClosed()) await page.evaluate(data => {
@@ -34,7 +34,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
      await route.fulfill({json: {actors}});
     });
     await page.route('**/api/v2/tasks/' + task.id, async route => {
-     if (route.request().method() === 'GET') { reads++; return route.fulfill({json: {task, events, children: [], comments: []}}); }
+     if (route.request().method() === 'GET') { reads++; if (viewer === 'ana' && readHold) { const wait = readHold; readHold = null; readStarted.resolve(); await wait.promise; } return route.fulfill({json: {task, events, children: [], comments: []}}); }
      const patch = route.request().postDataJSON();
      writes.push({viewer, patch}); if (viewer === 'ana') { inflight++; max = Math.max(max, inflight); }
      if (viewer === 'ana' && hold) { const wait = hold; hold = null; await wait.promise; }
@@ -47,6 +47,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
     });
     await page.evaluate(async task => { await taskModalShow(task); }, task);
     await page.waitForFunction(() => !!taskModal().taskLive?.shared);
+    await page.locator('details.task-orig').filter({has: page.locator('[data-task-edit-body]')}).evaluateAll(rows => rows.forEach(el => { el.open = true; }));
     assert.deepEqual(errors, []);
    }
    const [a, b] = viewers;
@@ -94,6 +95,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    fail = true;
    await title.fill('Keep these words'); await title.evaluate(el => el.blur());
    await a.locator('[data-task-edit-error]:not([hidden])').waitFor();
+   await a.locator('details.task-orig').filter({has: a.locator('[data-task-edit-body]')}).evaluateAll(rows => rows.forEach(el => { el.open = true; }));
    await a.getByRole('button', {name: 'Edit details', exact: true}).click();
    const details = a.getByRole('textbox', {name: 'Details', exact: true});
    await details.evaluate(el => el.setSelectionRange(2, 5));
@@ -119,8 +121,13 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await emit({topic: 'presence', body: {place: 'task:' + task.id}});
    await a.waitForFunction(() => !document.querySelector('[data-task-presence]').textContent);
    assert.equal(sessions.size, 1);
+   const delayed = gate(); readHold = delayed; readStarted = gate();
+   await a.evaluate(() => { window.leavingLive = taskModal().taskLive; });
+   await update(); await readStarted.promise;
    await emit({topic: 'tasks', body: {task_id: task.id, gone: true}});
    await a.waitForFunction(() => !taskModal().open && !taskModal().taskLive);
+   delayed.resolve();
+   await a.waitForFunction(() => !leavingLive.reading);
    assert.equal(await a.evaluate(() => TASK_EDIT_DRAFTS.size), 0);
    await b.waitForFunction(async () => !(await get('/v2/presence?place=task:t-checkout', {fresh: true})).actors.length);
    assert.equal(sessions.size, 0);

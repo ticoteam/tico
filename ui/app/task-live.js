@@ -25,7 +25,7 @@ function taskLiveFocusKeep(d) {
   if (!live || !d.contains(field) || !field.matches('[data-task-field]')) return;
   const selection = window.getSelection();
   const offset = (node, at) => { const range = document.createRange(); range.selectNodeContents(field); range.setEnd(node, at); return range.toString().length; };
-  live.focus = {field, text: field.isContentEditable && selection.rangeCount
+  live.focus = {field, text: field.isContentEditable && selection.rangeCount && field.contains(selection.anchorNode) && field.contains(selection.focusNode)
     ? [offset(selection.anchorNode, selection.anchorOffset), offset(selection.focusNode, selection.focusOffset)] : null,
     caret: field.tagName === 'TEXTAREA' ? [field.selectionStart, field.selectionEnd, field.selectionDirection] : null};
 }
