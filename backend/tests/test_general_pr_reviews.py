@@ -53,7 +53,8 @@ def finish(api, child, verdict="approve", head=HEAD, capture=True):
         attempt = H.new_id()
         c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES(?,?,?,?)",
                   (attempt, H.actor_id(child["owner_id"]), H.now(), child["id"]))
-        H.task_update(c, child["owner_id"], child["id"], status="done", verdict=verdict, verdict_head=head,
+        H.task_update(c, child["owner_id"], child["id"], status="done",
+                      **({"verdict": verdict, "verdict_head": head} if verdict else {}),
                       note="Fix the broken link." if verdict == "changes" else "Reviewed the current diff.")
         if capture:
             c.execute("UPDATE attempts SET settled_at=? WHERE id=?", (H.now(), attempt))
@@ -170,6 +171,52 @@ def test_private_reviewer_cannot_send_a_private_verdict_to_a_public_task(api):
     assert not children(api, task)
     with api.app.state.store.read() as c:
         assert "private" in P.waiting(c, task["id"])[0]["reason"]
+
+
+@pytest.mark.parametrize("private", [True, False], ids=["private-findings", "public-findings"])
+@pytest.mark.parametrize("title,bad,good", [
+    ("Review 1", "changes", "approve"), ("QA", "fail", "pass"), ("Review 1", None, "approve"),
+])
+def test_later_public_pass_keeps_the_findings_source_audience(api, private, title, bad, good):
+    from backend import task_privacy
+    from backend.auth import Identity
+    from backend.tests.test_api import unrelated_task_managers
+
+    setup(api, qa=True)
+    task = task_pr(api, labels=["qa"])
+    observer = Identity("bot:rev-c", "bot", agent="test")
+    api.app.state.auth.settings.test_identities["observer-test"] = observer
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        first = H.task_create(c, "bot:cpo", f"{title}: PR #12", f"Check head {HEAD}", "bot:rev-a",
+                              parent_id=task["id"], private=private, lint=False)
+    finish(api, first, bad)
+    with api.app.state.store.transaction() as c:
+        second = H.task_create(c, "bot:cpo", f"{title}: PR #12", f"Check head {HEAD}", "bot:rev-b",
+                               parent_id=task["id"], private=False, lint=False)
+    finish(api, second, good)
+    with api.app.state.store.transaction() as c:
+        outcome = V.delivery(c, H.task(c, second["id"]))
+        assert outcome["source_tasks"] == [first["id"], second["id"]]
+        assert "only a new head clears it" in outcome["say"]
+        assert task_privacy.content_readable(c, observer.actor, outcome) is not private
+        wake = H.message(c, c.execute("SELECT id FROM messages WHERE conversation_id=? "
+                                      "AND json_extract(refs,'$.handoff')='verdict' ORDER BY rowid DESC LIMIT 1",
+                                      (task["conversation_id"],)).fetchone()[0])
+        assert wake["refs"]["trigger_source"] == first["id"]
+        # A later Done note/final reply reuses the saved outcome, not just the public child's audience.
+        H._deliver_subtask_result(c, H.task(c, second["id"]), H.task(c, task["id"]), "Later result.", quiet=True)
+        replay = H.message(c, c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
+                                        (task["conversation_id"],)).fetchone()[0])
+        for msg in (wake, replay):
+            assert first["id"] in msg["refs"]["source_tasks"]
+            assert ("Fix the broken link." if bad == "changes" else "Reviewed the current diff.") in msg["body"]
+            assert task_privacy.message_readable(c, observer.actor, msg) is not private
+            assert task_privacy.message_readable(c, "bot:cpo", msg)
+        assert H.task_private_readable(c, observer.actor, H.task(c, first["id"])) is not private
+    for msg in (wake, replay):
+        response = api.get("/api/v2/messages/" + msg["id"], headers={"Authorization": "Bearer observer-test"})
+        assert response.status_code == (404 if private else 200), response.text
 
 
 def test_backfill_is_oldest_first_and_limited_per_reviewer_per_hour(api, monkeypatch):

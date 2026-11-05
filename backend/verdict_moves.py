@@ -49,6 +49,18 @@ def at_step(c, task_id, refs):
     return {**refs, "at_step": row.get("step_id")} if row and row.get("step_id") else refs
 
 
+def forward(c, ticket, target, text, refs=None, *, sources, source=None, **wake):
+    """Copy task text with every source's audience, in addition to the destination's audience.
+
+    A later check can deliver an earlier check's findings. The trigger alone cannot describe those readers;
+    source task refs also survive saved outcomes and later result delivery through another child's thread.
+    """
+    refs = {**(refs or {})}
+    sources = list(dict.fromkeys([*sources, *refs.get("source_tasks", [])]))
+    refs["source_tasks"] = sources
+    return H._wake(c, ticket, target, text, refs, source=source or sources[0], **wake)
+
+
 def _ticket(c, row, *, evidence=None):
     """The ticket a bot builds, or None: an open ticket owned by a bot, on a type whose steps have a flow, and not
     held: a hold keeps the ticket at its check step, where a verdict must wait for it to clear (`resumed`).
@@ -131,7 +143,7 @@ def _verdict(check):
     return value or (NO_VERDICT if check.get("status") == "done" else "")
 
 
-def move(c, row, target, why):
+def move(c, row, target, why, *, sources=()):
     """Move the ticket to step `target` (a step row or id) as Tico. True when it moved. A refusal (the review gate)
     undoes only this move, tells the builder what clears it, and is remembered so Tico retries it then
     (backend/move_retry.py), as the notice promises."""
@@ -142,7 +154,8 @@ def move(c, row, target, why):
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
         H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), strict=False)
-        H._task_event(c, row["id"], H.KEEPER, "verdict_move", None, target["name"], why)
+        H._task_event(c, row["id"], H.KEEPER, "verdict_move",
+                      json.dumps({"source_tasks": list(sources)}) if sources else None, target["name"], why)
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
         c.execute("RELEASE verdict_move")
@@ -240,12 +253,13 @@ def after_capture(c, check_id, head, attempt_id):
     route = verdict_route(c, ticket, head, step=step, pr=pr)
     standing = verdict if verdict not in GOOD else route["verdict"]
     if standing not in GOOD:
-        out = _failed(c, ticket, step, standing, head, passed=verdict if verdict in GOOD else None)
+        out = _failed(c, ticket, step, standing, head, passed=verdict if verdict in GOOD else None, pr=pr)
     else:
-        out = _passed(c, ticket, step, f"{name} gave {verdict} at head {head}")
+        out = _passed(c, ticket, step, f"{name} gave {verdict} at head {head}", sources=[check_id])
     out["eligibility"] = eligible  # Historical field name; this is provenance, not a gate.
     out["consumed"] = True
     out["attempt_id"] = attempt_id
+    out["source_tasks"] = list(dict.fromkeys([*out.get("source_tasks", []), check_id]))
     H._task_event(c, check["id"], H.KEEPER, "verdict_move", None,
                   json.dumps({"verdict": verdict, "head": head, **out}, sort_keys=True), "")
     if step.get("detached"):
@@ -255,7 +269,8 @@ def after_capture(c, check_id, head, attempt_id):
         refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
         if out["handoff"] == "merge":
             refs["pr_head"] = head
-        H._wake(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket["id"], refs), source=check_id)
+        forward(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket["id"], refs),
+                sources=out["source_tasks"])
     return out
 
 
@@ -278,25 +293,30 @@ def resumed(c, task_id):
     return after_capture(c, last["id"], head, attempt["id"]) if attempt else None
 
 
-def _failed(c, ticket, step, verdict, head, passed=None):
+def _failed(c, ticket, step, verdict, head, passed=None, *, pr=None):
     """A check at `step` gave `verdict`, not good, at `head`: the ticket moves to the step's `on_fail`, and the builder
     hears of it on that hand-off. `passed` is a pass at the same head that the failure still stands against."""
     name = step["name"]
     gave = "no verdict (its comments are the feedback)" if verdict == NO_VERDICT else verdict
     target = F.step(c, F.of(step).get("on_fail"))
-    moved = bool(target) and move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}")
     said = (f"{name} gave {passed} at head {head}, but {name} already gave {gave} at that head, and only a new head "
             "clears it" if passed else f"{name} gave {gave} at head {head}")
+    head = _full_head(c, ticket, head)
+    failed = [t for t in _checks(c, ticket, step, pr=pr) if verdict_at([t], head) not in (None, *GOOD)]
+    sources = [t["id"] for t in failed if _verdict(t) == verdict][:1]
     if step.get("detached"):
-        findings = next((t.get("note") for t in reversed(_checks(c, ticket, step))
-                         if _verdict(t) not in GOOD and verdict_at([t], head) and t.get("note")), "")
-        said += f". {findings[:4000]}" if findings else ""
+        findings = next((t for t in reversed(failed) if t.get("note")), None)
+        if findings:
+            said += f". {findings['note'][:4000]}"
+            sources = list(dict.fromkeys([findings["id"], *sources]))
+    moved = bool(target) and move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}", sources=sources)
     return {"moved": target["name"] if moved else None, "handoff": "verdict", "quiet": False,
+            "source_tasks": sources,
             "say": (f"Tico moved this ticket to {target['name']}: {said}." if moved else
                     said + (f"; Tico could not move this ticket to {target['name']}." if target else "."))}
 
 
-def _passed(c, ticket, step, why):
+def _passed(c, ticket, step, why, *, sources=()):
     """The ticket's check at `step` passed (or its round was skipped): on to the step's `on_pass`, or, when the merge
     is next, the merged step if it already merged, else the builder is woken to merge once CI is green."""
     if step.get("detached"):
@@ -314,7 +334,7 @@ def _passed(c, ticket, step, why):
     target = F.step(c, target) if target and not isinstance(target, dict) else target
     if not target:
         return {"moved": None, "handoff": None, "quiet": True, "say": f"{why}."}
-    moved = move(c, ticket, target, why)
+    moved = move(c, ticket, target, why, sources=sources)
     # A move to the next check needs nothing from the builder; a move back to the builder's own step is its cue.
     cue = moved and target["status"] in ("open", "doing")
     return {"moved": target["name"] if moved else None, "handoff": "verdict" if cue else None, "quiet": moved and not cue,
@@ -627,6 +647,7 @@ def timeouts(c, at=None):
             # comes after the check (green CI and the merge), and says so rather than that no verdict came (Dev 646).
             # A fail is not skipped over: the ticket goes to the step's on_fail, as when the check gave it.
             verdict = _verdict_at(c, ticket, step, head)
+            sources = [t["id"] for t in _checks(c, ticket, step) if verdict_at([t], head) == verdict] if verdict else []
             for check in _checks(c, ticket, step):
                 if check["status"] in H.ACTIVE_STATUSES:
                     H.task_close(c, H.KEEPER, check["id"],
@@ -635,16 +656,18 @@ def timeouts(c, at=None):
                 note = f"{step['name']}: {verdict} at head {head[:12]}; round closed after {hours:g} h"
             else:
                 note = f"{step['name']}: no usable verdict in {hours:g} h"
-            H._task_event(c, ticket_id, H.KEEPER, "round_skipped", None, f"{step['id']}:{head}", note)
+            H._task_event(c, ticket_id, H.KEEPER, "round_skipped",
+                          json.dumps({"source_tasks": sources}) if sources else None, f"{step['id']}:{head}", note)
             if verdict and verdict not in GOOD:
                 out = _failed(c, H.task(c, ticket_id), step, verdict, head)
                 refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
             else:
                 why = (f"{step['name']} gave {verdict} at head {head}" if verdict else
                        f"{step['name']} had no usable verdict for {hours:g} h; Tico skipped the round")
-                out = _passed(c, H.task(c, ticket_id), step, why)
+                out = _passed(c, H.task(c, ticket_id), step, why, sources=sources)
                 refs = {HANDOFF: out["handoff"]}
             if out.get("handoff"):
-                H._wake(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket_id, refs))
+                forward(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket_id, refs),
+                        sources=out.get("source_tasks") or sources or [ticket_id])
             skipped.append(ticket_id)
     return skipped

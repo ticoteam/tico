@@ -5669,8 +5669,9 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     if resume_hint:
         text = ("Subtask result returned to this task's session. Continue this task here; the result needs "
                 "no relay, separate delivery turn or task run command.\n\n" + text)
-    _wake(conn, parent, parent["owner_id"], text, refs=refs, source=source or row["id"],
-          quiet_bots=silent, quiet=silent)
+    verdict_moves.forward(conn, parent, parent["owner_id"], text, refs,
+                          sources=[*(moved or {}).get("source_tasks", []), row["id"]], source=source,
+                          quiet_bots=silent, quiet=silent)
 
 
 def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
