@@ -315,6 +315,16 @@ jobs:
           # uv installs the same pinned lock as pip, in seconds instead of about a minute.
           python3 -m pip install --disable-pip-version-check uv==0.13.1
           python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
+      # One real collection validates the filesystem shard plan while native-linux is still building. The other
+      # 23 Python VMs never collect the whole suite; python-1 has about two minutes of binary-wait slack here.
+      - name: Check Python shard coverage during the native build
+        if: matrix.name == 'python-1'
+        working-directory: candidate
+        run: |
+          # Frozen candidates predating filesystem sharding still collect on each shard.
+          if grep -q -- '--check-shard-coverage' scripts/release_checks.py; then
+            "$RUNNER_TEMP/release-venv/bin/python" scripts/release_checks.py --check-shard-coverage --release
+          fi
       # The browser VM runs the browser tests; for a candidate frozen before --part existed, the helper runs its whole
       # gate on the product VM instead, so that VM needs browsers too.
       - name: Does this VM run browser tests
