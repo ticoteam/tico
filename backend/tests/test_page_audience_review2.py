@@ -7,7 +7,7 @@ from backend import counsel, events, files, task_privacy, teammate_access, threa
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
 from backend.tests.test_assistant import room
 from backend.tests.test_counsel import counsel_on, counsel_run, source
 from backend.tests.test_files import turn
@@ -30,9 +30,10 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     fid, _ = promoted(api)
     edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
-    original = get(api, "tasks/" + tid, token="cara-test")["task"]["body"]
+    task = get(api, "tasks/" + tid, token="cara-test")["task"]
+    original = task["body"]
     assert "42 deals" in original
-    changed = {"body": original + "\nReview this document.", "note": "The document says 42 deals."}
+    changed = {"body": original + "\nReview this document.", "note": "The document says 42 deals.", "version": task["version"]}
     post(api, "tasks/" + tid, changed, token="cara-test", key="edit-page-copy")
     machine, attempt = counsel_run(api)
     aid = attempt["id"]
@@ -161,7 +162,7 @@ def test_assistant_page_links_use_the_shared_recognizer_on_all_transports(api):
         assert_placeholder(timeline, "A page you can't open", fid)
     with api.app.state.store.transaction() as c:
         before = events.latest(c)
-        c.execute("UPDATE messages SET revision=revision+1 WHERE id=?", (message["id"],))
+        c.execute("UPDATE messages SET body='Review this page now',revision=revision+1 WHERE id=?", (message["id"],))
     shared = {}
     for actor in ("cara", "ben", "cara"):
         viewer = Identity("human:" + actor, "human", actor + "@acme.example")
@@ -171,9 +172,18 @@ def test_assistant_page_links_use_the_shared_recognizer_on_all_transports(api):
             assert not reset
             assert_placeholder(delivered, "A page you can't open", fid)
     assert_placeholder(get(api, "messages/" + message["id"], token="cara-test"), "A page you can't open", fid)
+    machine = runner(api)
+    assign(api, machine, "coo")
+    ready(api, machine, ["coo"])
+    attempt = claim(api, machine, "coo")
+    assert_placeholder(attempt["message"], "A page you can't open", fid)
+    assert_placeholder(attempt["history"], "A page you can't open", fid)
 
 
 def test_pin_positions_are_dense_and_headers_do_not_name_hidden_items(api):
+    saved = put(api, "places/dashboard", {})
+    for pin in saved["pins"]:
+        assert api.delete("/api/v2/pins/" + pin["id"], headers=headers()).status_code == 200
     _, attempt = turn(api)
     ids = []
     for i in range(3):
