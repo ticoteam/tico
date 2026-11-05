@@ -137,7 +137,11 @@ and **Mute** take effect at the first of these:
 - closing Catch up, or
 - leaving the page.
 
-A message that arrives while Undo shows stays unread. Details: [threads contract §10.1](dev/threads-contract.md).
+A message that arrives while Undo shows stays unread, as long as the read goes out within 10 minutes of the click.
+Normally it goes out within 5 seconds. If the browser holds the page for longer, for example a background tab it has
+paused, the read covers only what was written up to 10 minutes before it goes out. A message that came after the
+click, and more than 10 minutes before the read, can then be marked read.
+Details: [threads contract §10.1](dev/threads-contract.md).
 
 ## Editing and deleting
 
