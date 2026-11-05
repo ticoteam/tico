@@ -459,6 +459,12 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     newer = new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
     failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": newer}, token=token)
     assert failed and "Globex" not in json.dumps(got), got
+    # Probe Counsel's independent version guard after asserting the shared perimeter's denial.
+    from backend import scoped_routes
+    with monkeypatch.context() as patch:
+        patch.setattr(scoped_routes, "require_route", lambda *args, **kwargs: None)
+        failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": newer}, token=token)
+        assert failed and "Globex" not in json.dumps(got), got
     assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
     seen[:] = [s for s in seen if s[2] is None]
     finish(api, r, attempt)
