@@ -327,6 +327,11 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
                 start_ms: chunk.start_ms,
                 end_ms: chunk.end_ms,
                 text: chunk.text.trim().into(),
+                speaker: if me {
+                    String::new()
+                } else {
+                    chunk.speaker.clone()
+                },
                 ..Default::default()
             }]
         } else {

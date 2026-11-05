@@ -162,6 +162,38 @@ fn provisional_stream_voices_are_scoped_away_from_offline_voice_numbers() {
     assert_eq!(named(&record).chunks[0].words[0].speaker, "Ana Example");
 }
 #[test]
+fn a_tied_voice_cluster_stays_anonymous_instead_of_switching_identity_per_word() {
+    let mut record = record();
+    record.meeting_speakers.intervals = vec![
+        interval(300, 1300, "Ana Example"),
+        interval(2300, 3300, "Ben Example"),
+    ];
+    record.chunks.push(chunk(
+        "them",
+        vec![word(0, 1000, "Speaker 2"), word(2000, 3000, "Speaker 2")],
+    ));
+    assert!(
+        named(&record).chunks[0]
+            .words
+            .iter()
+            .all(|word| word.speaker == "Speaker 2")
+    );
+}
+#[test]
+fn untimed_utterances_get_names_and_manual_edits_keep_the_chosen_speaker() {
+    let mut record = record();
+    record.meeting_speakers.intervals = vec![interval(300, 10_300, "Ana Example")];
+    record.chunks.push(chunk("them", vec![]));
+    assert_eq!(named(&record).chunks[0].speaker, "Ana Example");
+    assert_eq!(
+        crate::transcript::chunk_words(&record)["them"][0].speaker,
+        "Ana Example"
+    );
+    record.chunks[0].provider = json!({"source":"edit"});
+    record.chunks[0].speaker = "Chosen speaker".into();
+    assert_eq!(named(&record).chunks[0].speaker, "Chosen speaker");
+}
+#[test]
 fn meet_layout_contracts_preserve_names_and_never_name_the_others_tile_or_pinned_tile_as_speaker() {
     let fixtures = [
         (

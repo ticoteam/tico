@@ -866,6 +866,9 @@ impl Store {
         chunk.text = text.trim().into();
         // Edited text replaces the provider's words, and with them any diarized speakers.
         chunk.words.clear();
+        if !chunk.provider.is_object() {
+            chunk.provider = serde_json::json!({});
+        }
         chunk.provider["source"] = serde_json::json!("edit");
         save_chunk(&transaction, &chunk)?;
         transaction.commit()?;

@@ -291,6 +291,7 @@ impl Tico {
             queue.finished(&transaction, &record)?;
         }
         queue.corrections(&transaction, &record, &streamed)?;
+        crate::speaker_names::correct_shared_names(&transaction, &record, &self.destination.id)?;
         transaction.commit()?;
         if live {
             let mut query=db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
@@ -1851,6 +1852,43 @@ mod speaker_name_tests {
                 [],
                 |r| r.get(0),
             )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+    #[test]
+    fn speaker_names_revise_finished_lines_shared_before_identity_was_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut record = store.create("Meeting").unwrap();
+        record.chunks.push(chunk(&record.id, words()));
+        let mut db = store.db().unwrap();
+        let tx = db.transaction().unwrap();
+        let mut queue = Queue::read(&tx, &record.id, "destination").unwrap();
+        queue.finished(&tx, &record).unwrap();
+        record.meeting_speakers = timeline();
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM live_corrections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let text: String = tx
+            .query_row("SELECT payload_json FROM live_corrections", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let row: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(row["speaker"], "Ana Example");
+        assert_eq!(row["text"], "First Second");
+        tx.execute(
+            "INSERT INTO live_edits VALUES(?,'destination',1)",
+            [&record.id],
+        )
+        .unwrap();
+        record.meeting_speakers.intervals[0].name = "Ben Example".into();
+        crate::speaker_names::correct_shared_names(&tx, &record, "destination").unwrap();
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM live_corrections", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
     }

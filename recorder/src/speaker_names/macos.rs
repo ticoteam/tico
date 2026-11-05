@@ -306,6 +306,9 @@ fn project(
     })
 }
 fn poll(canceled: Arc<AtomicBool>) -> (bool, Observation) {
+    objc2::rc::autoreleasepool(|_| poll_inner(canceled))
+}
+fn poll_inner(canceled: Arc<AtomicBool>) -> (bool, Observation) {
     let windows = browser_windows();
     if !unsafe { AXIsProcessTrusted() } {
         return (
