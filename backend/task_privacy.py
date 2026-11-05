@@ -380,6 +380,24 @@ def readable(c, actor, ids):
                for row in rows.values())
 
 
+def make_page_actor(c, actor, message):
+    """The Assistant reads its person's own Make page request with that person's rights."""
+    message = dict(message or {})
+    refs = H._json(message.get("refs"), {}) or {}
+    if (not isinstance(actor, str) or not actor.startswith("bot:") or actor != message.get("recipient_id")
+            or not isinstance(refs.get("make_page"), dict) or refs.get("assistant") is not True
+            or refs.get("via") or message.get("deleted_at")):
+        return actor
+    from . import rooms
+    room = H.conversation(c, message.get("conversation_id")) or {}
+    owner = room.get("owner_id")
+    if (room.get("scope") == "personal" and room.get("room_key") == rooms.ASSISTANT_ROOM
+            and not room.get("closed_at") and owner == message.get("sender_id")
+            and str(owner).startswith("human:")):
+        return owner
+    return actor
+
+
 def message_readable(c, actor, message, current=False):
     """`current`: `message` is its full messages row, read in this snapshot (a join's `m.*`)."""
     snapshot(c)
@@ -388,6 +406,7 @@ def message_readable(c, actor, message, current=False):
     message = dict(message)
     stored = message if current else H.message(c, message.get("id"), include_deleted=True)
     message = stored or message
+    actor = make_page_actor(c, actor, message)
     if message.get("deleted_at") or message.get("deleted"):
         return False
     if has_letters(c) and message.get("id"):
@@ -689,6 +708,9 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
+        origin = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                           "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,)).fetchone()
+        actor = make_page_actor(c, actor, origin)
         return (meeting_sources(c).attempt_readable(actor, aid)
                 and readable(c, actor, attempt_tasks(c, aid, memo)))
     except Problem:

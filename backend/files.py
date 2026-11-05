@@ -566,8 +566,8 @@ class Files:
 
     def writer_bot(self, c, who, given=""):
         """The bot a write is for: the authenticated bot, or the bot a runner ran a turn for."""
-        if who.via == "assistant" and who.task_actor and who.attempt_id:
-            return H.actor_id(who.task_actor)
+        if who.via == "assistant" and who.attempt_id:
+            return self.store.settings.assistant_bot
         if who.role == "bot":
             return H.actor_id(who.actor)
         if who.role == "runner":

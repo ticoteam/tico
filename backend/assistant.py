@@ -667,7 +667,7 @@ def make_page_task(c, auth, who, task):
     if (who.via != "assistant" or not principal or principal.actor != who.actor
             or principal.task_actor != who.task_actor or not message or message.get("deleted_at")
             or message["kind"] != "say" or message["sender_id"] != who.actor
-            or message["recipient_id"] != who.task_actor or edited(c, message)
+            or message["recipient_id"] != "bot:" + attempt["bot_id"] or edited(c, message)
             or (message.get("refs") or {}).get("via") or not room or room.get("closed_at")
             or not isinstance(target, dict) or target.get("task") != task or not task):
         raise Problem("forbidden", "Publish from the person's own Make page request", 403)

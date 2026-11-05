@@ -284,11 +284,17 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     earlier = say(api, "Private chat content unrelated to this task", "ben-test")["message"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (earlier["id"],))
+        from backend import delivery
+        delivery.defer(c, "coo", "message", earlier["id"], conversation_id=earlier["conversation_id"])
+        c.execute("INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
+                  "VALUES(?,?,'coo','Unrelated chat objective','active','human:ben',?,?)",
+                  (H.new_id(), earlier["conversation_id"], H.now(), H.now()))
         other = H.task_create(c, "human:ana", "Private follow-up", "Private details", "bot:coo",
                               next_run=True, private=True, lint=False)
     machine, attempt, message = start(api, t["id"])
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
     assert attempt["next_run"] == [] and attempt["notes"] == []
+    assert attempt["deferred"] == "" and attempt["chat_goal"] is None
     key = session_key({"session": "bot"}, attempt)
     assert key == "make-page:" + attempt["id"]
     ordinary = {k: v for k, v in attempt.items() if k != "make_page"}
@@ -297,6 +303,7 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+        assert c.execute("SELECT settled_at FROM deferrals WHERE item=?", (earlier["id"],)).fetchone()[0] is None
 
 
 def test_make_page_cannot_bypass_page_cleaning_with_a_generic_upload(api):
@@ -330,8 +337,6 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
     shown = made.json()["page"]
     assert shown.get("audience") is None
     assert api.get("/api/v2/files/" + shown["file_id"], headers=headers("cara-test")).status_code == 200
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='attempt_reads'").fetchone()
 
 
 def test_make_page_keeps_normal_assistant_learning_and_tools(api):

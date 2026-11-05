@@ -7985,8 +7985,8 @@ AUDIENCE = {
     **{name: PEOPLE for name in ("hub_seat_create", "hub_seat_update", "hub_seat_close")},
     "hub_org_models": KINDS,
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
-    **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import",
-                               "hub_page_publish")},
+    **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import")},
+    "hub_page_publish": BOTS + ("assistant",),  # the route authenticates the initiating Make page request
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "hub_file_delete": ("owner", "botops"),
     "hub_page_archive": PEOPLE + BOTS,

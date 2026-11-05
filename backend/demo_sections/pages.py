@@ -25,7 +25,8 @@ def seed(b):
     token = "demo-make-page"
     settings = b.api.app.state.auth.settings
     with b.store.read() as c:
-        settings.test_identities[token] = b.api.app.state.auth.chat_person(c, "human:ana", "coo", aid, runner)
+        settings.test_identities[token] = b.api.app.state.auth.assistant_principal(
+            c, c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone())
     try:
         b.call("POST", "pages", {"name": "holiday-review.html", "title": "Holiday budget review", "task": task,
                                  "text": "<h1>Holiday budget review</h1><p>Review the campaign plan, budget and results.</p>"},

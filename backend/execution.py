@@ -3990,7 +3990,7 @@ class Execution:
         # met. A deferred task this turn works as its own is met too, though not counted: it is the turn's task.
         from . import delivery
         own = [task["id"]] if task and task.get("id") else []
-        deferred = delivery.summary(
+        deferred = "" if making_page else delivery.summary(
             delivery.carried(c, row["bot_id"], aid, [conv["id"], (task or {}).get("conversation_id")],
                              [item["id"] for item in carried] + own, [item["id"] for item in notes],
                              job=row["id"], current=msg["id"]),
@@ -4010,7 +4010,7 @@ class Execution:
             history = [msg]
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
-        if chat_goal and chat_goal["bot"] != row["bot_id"]:
+        if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
         # Runner wire names (backend/runner_wire.py): the stored text beside the decoded values, as runners read them.

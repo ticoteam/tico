@@ -448,13 +448,17 @@ class Auth:
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
         row = c.execute(
-            "SELECT v.owner_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "SELECT v.owner_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
             "AND v.room_key=? AND m.sender_id=v.owner_id AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key)).fetchone()
         if not row:
             return None
-        return self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        person = self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        if person and isinstance((H._json(row["refs"], {}) or {}).get("make_page"), dict):
+            # The page request acts with the person's full rights; the attempt still identifies its Assistant.
+            return replace(person, task_actor="")
+        return person
 
     def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
         """The person a turn of their chat bot (`bot`: the Assistant) acts as, with their rights and nobody more, or
