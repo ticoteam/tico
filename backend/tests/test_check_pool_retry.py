@@ -259,11 +259,12 @@ def test_scheduler_files_a_review_admitted_by_fresh_ci_without_a_receipt(api, mo
 def test_retry_keeps_a_new_heads_wait_while_the_cached_heads_check_is_open(api, monkeypatch, ci):
     team(api)
     task = ticket(api)
-    set_pool(api, task, 'Review 1', ['rev-a'], limit=2)
+    set_pool(api, task, 'Review 1', ['rev-a', 'rev-b'], limit=1)
     github(api, monkeypatch, {'python': 'success'})
     response = move(api, task)
     assert response.status_code == 200, response.text
     [old_check] = checks(api, task)
+    assert old_check['owner_id'] == 'bot:rev-a'
     response = move(api, task, 'In Progress')
     assert response.status_code == 200, response.text
     store, service = api.app.state.store, api.app.state.github_app
@@ -308,6 +309,7 @@ def test_retry_keeps_a_new_heads_wait_while_the_cached_heads_check_is_open(api, 
     assert {check['id'] for check in checks(api, task)} == {old_check['id'], cid}
     assert any('/commits/' + OLD + '/check-runs' in path for path in reads)
     with store.read_transaction() as c:
+        assert H.task(c, cid)['owner_id'] == 'bot:rev-b'
         assert c.execute('SELECT state,child_id,heads FROM check_waits WHERE id=?',
                          (wait['id'],)).fetchone()[:] == ('filed', cid, OLD)
         assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
