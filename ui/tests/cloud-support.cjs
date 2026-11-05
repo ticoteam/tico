@@ -24,6 +24,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       {id: 'cm-helper', key: 'helper', helper: 'offline', seen: null}, {id: 'cm-scout', key: 'scout', helper: 'none', seen: null}];
     let me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config: CONFIG};
     let support = {available: true, on: true, machines}, failPut = false, failGet = false;
+    let rules = {};
     const reads = [], writes = [];
     await context.route('**/*', async route => {
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
@@ -54,10 +55,14 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
         {id: 'r8', label: 'Shared cloud machine', owner_id: 'ana', bots: [], cloud_machine: {bot: null, shared: true, size: 'default', state: 'running'}},
         {id: 'r7', label: 'Scout (cloud)', owner_id: 'ana', bots: [], cloud_machine: {bot: 'scout', shared: false, size: 'small', state: 'stopped'}}]});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/access/rules' && method === 'PUT') {
+        rules = {...rules, ...request.postDataJSON()};
+        return json(rules);
+      }
       if (p === '/api/v2/access' && method === 'GET') return json({
         owner: {email: 'ana@acme.example', revision: 1, person: 'ana'},
         people: people.map(x => ({...x, left: false, owner: x.id === 'ana', role: x.id === 'ana' ? 'owner' : 'admin', can_sign_in: true, sign_in: true})),
-        allowed: [], allowed_domains: [], admins: [], bot_admins: [], member_bot_limit: 25, rules: {}, company_domains: [],
+        allowed: [], allowed_domains: [], admins: [], bot_admins: [], member_bot_limit: 25, rules, company_domains: [],
         revision: 1, proxy: '', home_domain: '', domain_sign_in: false, directory: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -94,7 +99,9 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.ok((await page.locator('#set-people [data-field-err]').innerText()).trim());
     failPut = false;
     // Another rule's save redraws the page from what HQ last answered, without reading it again.
+    const redrawn = page.waitForResponse(response => response.url().endsWith('/api/v2/access') && response.request().method() === 'GET');
     await page.locator('[data-rule=admin_sql]').uncheck();
+    await redrawn;
     await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);
     assert.equal(await page.locator('#people-cloud-support').isChecked(), false);
     assert.equal(reads.length, 1, 'one read per page load');
