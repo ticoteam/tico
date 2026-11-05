@@ -18,6 +18,10 @@ function taskLiveGone(d, live) {
   TASK_EDIT_DRAFTS.delete(live.id); TASK_DRAFTS.delete(live.id);
   sharedPlaceStop(live);
   d.close(); d.innerHTML = '';
+  if (TASKS_ST?.tasks.some(task => String(task.id) === live.id)) {
+    TASKS_ST.tasks = TASKS_ST.tasks.filter(task => String(task.id) !== live.id);
+    tasksRender(TASKS_ST);
+  }
 }
 const TASK_EDIT_DRAFTS = new Map();
 function taskLiveFocusKeep(d) {

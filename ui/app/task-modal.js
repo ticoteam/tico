@@ -886,8 +886,8 @@ async function taskChatRead(state) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
       if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
+      else if (TASKS_ST) void tasksLoad(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
       return;
     }
     if (e.status === 400) {state.stopped = true; clearInterval(state.poll); state.liveOff?.();}

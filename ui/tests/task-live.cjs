@@ -154,12 +154,14 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    const lateWrite = gate(); hold = lateWrite;
    await fillTitle('Words from a departed editor');
    await a.waitForFunction(() => !!leavingLive.draft.flight);
+   const listsBeforeGone = listReads;
    await emit({topic: 'tasks', body: {task_id: task.id, gone: true}});
    await a.waitForFunction(() => !taskModal().open && !taskModal().taskLive);
-   await a.evaluate(id => { TASKS_ST.tasks = TASKS_ST.tasks.filter(task => task.id !== id); }, task.id);
+   assert.equal(await a.evaluate(id => TASKS_ST.tasks.some(task => task.id === id), task.id), false, 'gone removes the unreadable task row');
    delayed.resolve(); lateWrite.resolve();
    await a.waitForFunction(() => !leavingLive.reading && !leavingLive.draft.flight);
    assert.equal(await a.evaluate(id => TASKS_ST.tasks.some(task => task.id === id), task.id), false, 'a late save cannot reinsert a revoked task');
+   assert.equal(listReads, listsBeforeGone, 'revocation removes one task without rereading the list');
    assert.equal(await a.evaluate(() => TASK_EDIT_DRAFTS.size), 0);
    await b.waitForFunction(async () => !(await get('/v2/presence?place=task:t-checkout', {fresh: true})).actors.length);
    assert.equal(sessions.size, 0);
