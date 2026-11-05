@@ -8483,6 +8483,8 @@ def create_app(settings=None):
     install_docs(app, store, auth, mutate)
     from .context_search import install_context_search
     install_context_search(app, store, auth)
+    from . import task_context
+    task_context.install(app, store, auth)
     from .market import install as install_market
     install_market(app, store, auth, mutate)
     from .market_watch import install as install_market_watch

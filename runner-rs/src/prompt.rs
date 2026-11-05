@@ -42,6 +42,31 @@ fn s(v: &Value) -> String {
     text_of(v)
 }
 
+/// Only metadata goes into the prompt; content is pulled with the normal read commands.
+fn task_context(context: &Value) -> String {
+    let mut out = String::new();
+    for (key, header) in [("pages", "Task pages (`hub file read <id>`):"),
+                          ("meetings", "Task meetings (`hub meeting read <id>`; `--notes` for notes):")] {
+        let Some(rows) = context[key].as_array().filter(|r| !r.is_empty()) else { continue };
+        let mut block = format!("{header}\n");
+        let line_budget = (748 - block.chars().count()) / rows.len().min(10);
+        for row in rows.iter().take(10) {
+            let id = s(&row["id"]);
+            let date: String = s(&row[if key == "pages" { "updated_at" } else { "date" }]).chars().take(10).collect();
+            let version = if key == "pages" { format!(" v{}", row["version"].as_u64().unwrap_or(0)) } else { String::new() };
+            let fixed = format!("{id}{version} {date} ").chars().count() + 1;
+            let title: String = s(&row["title"]).chars().map(|c| if c.is_control() { ' ' } else { c })
+                .take(32.min(line_budget.saturating_sub(fixed))).collect();
+            let line = format!("{id}{version} {date} {title}\n");
+            if block.chars().count() + line.chars().count() > 748 { break; }
+            block.push_str(&line);
+        }
+        if !out.is_empty() { out.push_str("\n\n"); }
+        out.push_str(block.trim_end());
+    }
+    out
+}
+
 fn from_human(v: &Value) -> bool {
     s(&v["from_actor"]).starts_with("human:")
 }
@@ -261,6 +286,10 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
         }
         put(&mut lines, Part::Standing, format!("{head}\n{}", py_dumps(&Value::Object(learned))));
     }
+    let context = task_context(&attempt["task_context"]);
+    if !context.is_empty() {
+        put(&mut lines, Part::Turn, context);
+    }
     // Asked from the Updates chat: only that turn is handed the updates (backend/updates_chat.py for_turn).
     if attempt["updates"].is_object() {
         put(&mut lines, Part::Turn, format!("{UPDATES_HEADER}\n{}", py_dumps(&attempt["updates"])));
@@ -422,6 +451,24 @@ fn py_str(v: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn task_context_is_bounded_metadata_for_twenty_sources() {
+        let pages: Vec<Value> = (0..12).map(|i| json!({"id": format!("file-{i:024}"),
+            "title": "Long title 🦀".repeat(40), "version": 123, "updated_at": "2026-11-04T10:00:00Z",
+            "content": "SECRET PAGE CONTENT"})).collect();
+        let meetings: Vec<Value> = (0..12).map(|i| json!({"id": format!("20261104-120000-{i:04}"),
+            "title": "Planning\nmeeting".repeat(40), "date": "2026-11-04T10:00:00Z",
+            "transcript": "SECRET TRANSCRIPT", "notes": "SECRET NOTES"})).collect();
+        let sources = json!({"pages": pages, "meetings": meetings});
+        let block = task_context(&sources);
+        assert!(block.chars().count() <= 1500, "{}", block.chars().count());
+        assert_eq!(block.lines().count(), 23);
+        assert!(block.contains("hub file read <id>") && block.contains("hub meeting read <id>"));
+        assert!(!block.contains("SECRET"));
+        let built = prompt(&json!({"id": "a", "bot": "ops", "task_context": sources}), &Names::from_config(None), None, false);
+        assert!(built.contains(&block) && !built.contains("SECRET"));
+    }
 
     /// What the Python runner's `Runner.prompt` wrote for each case below (names Acme/Tico), kept since that runner is gone.
     fn python_prompt(id: &str) -> &'static str {

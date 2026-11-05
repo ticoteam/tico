@@ -30,6 +30,11 @@ current contract against each kept release copy in both directions and fails on 
 Answers are read leniently: a runner ignores fields it does not know. Requests are read strictly: the server's models
 forbid unknown fields (a 422 `validation` error naming the field).
 
+Claim attempts may include `task_context`: up to ten pages and ten meetings as ids, titles, versions and dates.
+It contains no source content. An older server omits it; the runner then renders no context block. The bot pulls
+content with its normal read commands and its own permissions, the same during task work as in any other turn.
+Claim retries rebuild the reference list using current access ([Pages](pages.md#publishing)).
+
 - **New answer field**: add it as optional. A new required field breaks the old server for a new runner.
 - **Removing or retyping an answer field**: not inside the window. Stop reading it first, and drop it two minors later.
 - **Nullability**: making a field nullable is a retype. Readers that do not expect `null` break.
