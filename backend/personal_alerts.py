@@ -8,6 +8,7 @@ import hashlib
 import re
 import logging
 import threading
+from datetime import timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -117,6 +118,7 @@ def update(c, ident, body):
     if after["urgent_calls"] and not after["call_consent"]:
         raise Problem("call_consent_required", "Verify your phone with call consent first", 422)
     save(c, ident, values)
+    c.execute("UPDATE personal_alerts SET next_attempt_at=NULL WHERE person_id=? AND state='pending'", (ident,))
     H.event(c, "human:" + ident, "alerts.preferences", ident, {"fields": sorted(values)})
     return local_view(c, ident)
 
@@ -136,6 +138,38 @@ def quiet(row, at, emergency):
         return False
     hour = at.astimezone(ZoneInfo(row["timezone"])).strftime("%H:%M")
     return start <= hour < end if start < end else hour >= start or hour < end
+
+
+def quiet_end(row, at, emergency):
+    # Walk UTC minutes: the first local minute outside the window also handles skipped/repeated DST times.
+    minute = at.replace(second=0, microsecond=0)
+    for offset in range(1, 26 * 60 + 1):
+        candidate = minute + timedelta(minutes=offset)
+        if not quiet(row, candidate, emergency):
+            return candidate.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return H.shift(H.now(), hours=24)
+
+
+def next_month(at):
+    return ((at.replace(day=1) + timedelta(days=32)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+def future_deadlines(c, at):
+    """Personal task deadlines wake a sleeping install so its next collection can page or defer to quiet-hours end."""
+    rows = c.execute("SELECT DISTINCT t.due_at FROM tasks t JOIN alert_preferences p ON "
+                     "(t.owner_id='human:'||p.person_id OR t.waiting_on='human:'||p.person_id) "
+                     "WHERE p.verified_at IS NOT NULL AND p.urgent_needs=1 AND p.monthly_cap>0 "
+                     "AND t.status IN ('open','doing','waiting') AND t.due_at IS NOT NULL "
+                     "AND (SELECT monthly_cap FROM alert_company_settings WHERE id=1)>0 ORDER BY t.due_at LIMIT 100")
+    out = []
+    for (value,) in rows:
+        due = H.parse_ts(value)
+        if due and due.tzinfo is None:
+            due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+        if due and due.timestamp() > at:
+            out.append(due.timestamp())
+    return out
 
 
 def spend(c, ident=None, month=None):
@@ -323,13 +357,15 @@ class Alerts:
                     c.execute("UPDATE personal_alerts SET state='canceled' WHERE id=?", (alert_id,))
                     return {"id": alert_id, "status": "canceled"}
                 if quiet(row, H.parse_ts(H.now()), alert["emergency"]) and alert["kind"] != "test":
-                    c.execute("UPDATE personal_alerts SET attempted_at=? WHERE id=?", (H.now(), alert_id))
+                    c.execute("UPDATE personal_alerts SET attempted_at=?,next_attempt_at=? WHERE id=?",
+                              (H.now(), quiet_end(row, H.parse_ts(H.now()), alert["emergency"]), alert_id))
                     return {"id": alert_id, "status": "quiet_hours"}
                 month = H.now()[:7]
                 company_cap = c.execute("SELECT monthly_cap FROM alert_company_settings WHERE id=1").fetchone()[0]
                 extra = 0 if alert["reserved"] else 1
                 if spend(c, row["person_id"], month) + extra > row["monthly_cap"] or spend(c, month=month) + extra > company_cap:
-                    c.execute("UPDATE personal_alerts SET attempted_at=? WHERE id=?", (H.now(), alert_id))
+                    c.execute("UPDATE personal_alerts SET attempted_at=?,next_attempt_at=? WHERE id=?",
+                              (H.now(), next_month(H.parse_ts(H.now())), alert_id))
                     return {"id": alert_id, "status": "spend_cap"}
                 channel = "call" if alert["emergency"] and row["urgent_calls"] and row["call_consent"] else "sms"
                 if alert["state"] == "sending":
@@ -337,8 +373,8 @@ class Alerts:
                     if channel == "call" and not row["urgent_calls"]:
                         c.execute("UPDATE personal_alerts SET state='canceled' WHERE id=?", (alert_id,))
                         return {"id": alert_id, "status": "canceled"}
-                c.execute("UPDATE personal_alerts SET state='sending',reserved=1,month=?,channel=?,attempted_at=? WHERE id=?",
-                          (month, channel, H.now(), alert_id))
+                c.execute("UPDATE personal_alerts SET state='sending',reserved=1,month=?,channel=?,attempted_at=?,next_attempt_at=? WHERE id=?",
+                          (month, channel, H.now(), H.shift(H.now(), seconds=60), alert_id))
             try:
                 current = self.status(row["person_id"], row)
                 if not current or current.get("opted_out"):
@@ -398,8 +434,8 @@ class Alerts:
             self.collect()
             with self.store.read() as c:
                 ids = [r[0] for r in c.execute("SELECT id FROM personal_alerts WHERE state IN ('pending','sending') "
-                                              "AND (attempted_at IS NULL OR attempted_at<?) ORDER BY coalesce(attempted_at,''),created_at LIMIT 20",
-                                              (H.shift(H.now(), seconds=-60),))]
+                                              "AND coalesce(next_attempt_at,'')<=? ORDER BY coalesce(attempted_at,''),created_at LIMIT 20",
+                                              (H.now(),))]
             for ident in ids:
                 self.dispatch(ident)
         except Exception:
@@ -491,6 +527,7 @@ def install(app, store, settings, auth, mutate):
         admin(request)
         def write(c):
             c.execute("UPDATE alert_company_settings SET monthly_cap=? WHERE id=1", (body.monthly_cap,))
+            c.execute("UPDATE personal_alerts SET next_attempt_at=NULL WHERE state='pending'")
             H.event(c, request.state.identity.actor, "alerts.company_cap", "", {"monthly_cap": body.monthly_cap})
             return {"monthly_cap": body.monthly_cap, "monthly_spend": spend(c), "price_usd": 1}
         with service.lock:

@@ -38,6 +38,7 @@ CREATE TABLE personal_alerts (
  error TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL,
  attempted_at TEXT,
+ next_attempt_at TEXT,
  UNIQUE(person_id,incident_key)
 );
 CREATE INDEX personal_alerts_pending ON personal_alerts(state,created_at);

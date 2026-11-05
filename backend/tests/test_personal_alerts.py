@@ -284,3 +284,23 @@ def test_future_offset_deadline_is_not_deduped_before_it_is_due(api, hq):
     api.app.state.personal_alerts.collect()
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM personal_alerts").fetchone()[0] == 0
+
+
+def test_quiet_alerts_and_future_deadlines_wake_a_sleeping_install(api, hq):
+    from backend import sleep_idle
+    connect(api)
+    put(api, "alerts/me", {"urgent_needs": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"})
+    due_task(api)
+    service = api.app.state.personal_alerts
+    service.collect()
+    with api.app.state.store.read() as c:
+        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
+    assert service.dispatch(alert)["status"] == "quiet_hours"
+    at = H.parse_ts(NOW).timestamp()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed'")
+        assert c.execute("SELECT next_attempt_at FROM personal_alerts").fetchone()[0] == "2026-11-04T20:00:00Z"
+        assert H.parse_ts("2026-11-04T20:00:00Z").timestamp() in sleep_idle.later_sends(c, at)
+        future = H.task_create(c, "human:ana", "Review the next filing", "Review the next filing.", "human:ana",
+                               due="2026-11-05T18:00:00Z", lint=False, deduplicate=False)
+        assert H.parse_ts(future["due_at"]).timestamp() in A.future_deadlines(c, at)
