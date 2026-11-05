@@ -116,6 +116,7 @@
  "hub_listening_save": "422 invalid",
  "hub_listening_show": "404 not_found",
  "hub_mail_read": "404 not_found",
+ "hub_maintenance_set": "usage",
  "hub_market_apply": "422 not-found",
  "hub_market_briefing_post": "422 validation",
  "hub_market_figure_add": "404 not_found",

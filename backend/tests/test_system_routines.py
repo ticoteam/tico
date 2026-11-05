@@ -25,12 +25,11 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "bookkeeper_check", "memory_tidy",
-        "task_roundup"}
+        "bookkeeper_check", "memory_tidy"}
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "thread_routing", "thread_rank"}
-    # Housekeeping is always on, except the one housekeeping job a person may switch (Task roundup).
+    # Housekeeping has no switch; Task roundup's switch moved to Maintenance Find stuck.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
-    assert jobs["task_roundup"]["group"] == "housekeeping" and jobs["task_roundup"]["needed"] is False
+    assert "task_roundup" not in jobs
     assert jobs["thread_followups"]["name"] == "Earlier messages"
     assert jobs["thread_followups"]["then"] == [SR.ACTIONS["tell_earlier_messages"][0]]
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"

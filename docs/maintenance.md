@@ -17,7 +17,7 @@ In order:
 | Collect | Records which bots did work in the window: a settled turn that wrote something. Messages and memory commits do not count. Always on. | Every run |
 | Clean up | Prunes old rows: events, mail, retry keys, recorder data, finished webhook and automation runs, and Maintenance's own runs older than 30 days. Deadline work stays in the server's hourly check. | Every run |
 | Check health | The health scan. Still on its own timer for now. | Every run |
-| Find stuck | The task round-up: one grouped list per bot. Still on its own timer (06:00, 12:00 and 18:00) for now. | Custom: every 6 hours |
+| Find stuck | The task round-up: one grouped list per bot, oldest items first, up to ten bots by default. The standalone timer and System routines control are retired; the legacy Run now endpoint runs this step. | Custom: every 6 hours |
 | Learn | Nightly learnings. Still on its own timer for now. Off by default. | Once a day |
 | Suggest | Still on its own timer for now. | Once a day |
 | Update | Still on its own timer for now. | Once a day |
@@ -31,6 +31,8 @@ A step that is not moved here yet shows "on its old timer".
 - Day: once per company day, after 05:00.
 - Week: seven days after the step's last attempt.
 - Custom: every N hours or days, counted from the step's last attempt. A failed attempt counts, so a broken step does not retry on every run.
+
+When every Dream start is refused by the shared wake limiter, it keeps its daily attempt for a later run that day. A pass that starts a dream or encounters another refusal or failure counts for the day.
 
 ## Run now
 
@@ -64,6 +66,7 @@ each of its tasks.
   nothing about Find stuck and does not turn it off.
 
 A switch you chose keeps its value. A switch you never chose takes the new default. The stalled task check switch was removed.
+Find stuck takes the latest saved Task roundup switch when its cutover migration runs, then retires the legacy switch, schedule and Automations mirrors.
 
 ## Where to see it
 

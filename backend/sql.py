@@ -441,7 +441,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
+                      ("1" if owner else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
         "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_settings": bots_visible("bot_id"),

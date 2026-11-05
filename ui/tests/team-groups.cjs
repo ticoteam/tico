@@ -49,7 +49,7 @@ async function open(browser, me, branches = false) {
     bot('writer', 'Writer', 'seo', 'b:cmo', {reports_to: 'cmo'}),
     bot('scout', 'Scout', '', 'p:ana', {reports_to: 'human:ana'}),
     bot('botops', 'BotOps', '', 'p:ana', {reports_to: 'human:ana', helper: true}),
-    bot('inbox', 'Inbox Manager', '', 'p:ana'),
+    bot('inbox', 'Inbox Manager', '', 'p:ana', {helper: true}),
     bot('channel', 'Channel Inbox', 'marketing', 'b:botops', {helper: true}),
   ];
   if (branches) bots.push(
@@ -409,7 +409,7 @@ async function owner(browser) {
   await row(page, 'Marketing').locator('.chev').click();
   assert.equal(await page.locator('#tree a.node[href="#/bot/writer"]').isVisible(), true);
   assert.equal(await node(page, 'b:botops').count(), 0, 'built-in bots stay out of the chart');
-  assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"]').count(), 0, 'message bots stay off the chart');
+  assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"]').count(), 0, 'explicit helpers stay off the chart');
   assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, 'nor are their mailboxes in the sidebar');
 
   // Add a group even when Team is collapsed and showing history.
