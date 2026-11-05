@@ -33,7 +33,7 @@ def waiting_task(cloud):
 
 def test_health_names_the_task_wait_without_calling_a_sleeping_bot_stuck(cloud):
     computer = asleep_bot(cloud)
-    waiting_task(cloud)
+    task = waiting_task(cloud)
     with cloud.store.read() as c:
         assert execution.bot_claimable(c, cloud.store.settings, computer['runner_id'], 'ops')[0] == 'task_wait'
         assert CM.bot_want(c, cloud.store.settings, 'ops', computer['runner_id'], cloud.at[0])[1] is None
@@ -44,6 +44,24 @@ def test_health_names_the_task_wait_without_calling_a_sleeping_bot_stuck(cloud):
     assert health.HELD['task_wait'][0] in queue['summary']
     assert 'Starting' not in queue['summary'] and not body['stuck']
     assert cloud.tick(10) == []
+    with cloud.store.transaction() as c:
+        c.execute('UPDATE tasks SET waiting_on=NULL WHERE id=?', (task['id'],))
+    assert cloud.tick(10) == ['start']
+    body = get(cloud.api, 'health')
+    queue = next(row for row in body['checks'] if row['id'] == 'queue')
+    assert queue['status'] == 'bad' and 'Cloud machine: Starting' in queue['summary']
+
+
+def test_health_keeps_a_resting_bots_reason_when_another_bot_is_stuck(cloud):
+    asleep_bot(cloud)
+    waiting_task(cloud)
+    work(cloud, 'cpo')
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE id='cpo'")
+    body = get(cloud.api, 'health')
+    queue = next(row for row in body['checks'] if row['id'] == 'queue')
+    assert {row['bot']: row['reason'] for row in queue['items']} == {'ops': 'task_wait', 'cpo': 'paused'}
+    assert [row['bot'] for row in body['stuck']] == ['cpo']
 
 
 @pytest.mark.parametrize('spent', [False, True])

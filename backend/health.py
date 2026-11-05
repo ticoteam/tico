@@ -696,6 +696,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                         continue
                     if not refused and not (first and first < (person_cutoff if person else cutoff)):
                         continue        # the next claimable job is young; older held jobs do not age its wake
+                    if not refused:
+                        row["oldest_queued"], row["oldest"] = row["oldest"], first
                 problem = ("Starting" if cloud["state"] == "starting" else
                            f"Not started after {QUEUE_MINUTES} min" if cloud["state"] in GOING else
                            f"Not connected after {QUEUE_MINUTES} min")
@@ -2176,17 +2178,17 @@ def view(c, who, settings, auth, github, config):
     readable = auth.bot_accesses(c, who, [row["bot"] for row in busy + resting]) if (busy or resting) and not full else {}
     busy_rows = _stuck(c, [{**row, "reason": row["wait_reason"], "runtime": ""} for row in busy
                           if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth)
+    resting_rows = _stuck(c, [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]],
+                          online_ids, who, full, auth)
     if blocking:
-        items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
+        items = _queue_items(blocking + busy_rows + resting_rows, full, kind == "bot") if full or kind == "bot" else []
         bad = any(s["reason"] not in ("slow", *QUEUE_WAITS)
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),
                              [_fix("Open Runs", "#/settings", "runs")] if full else [], items=items))
     elif resting:
-        rows = _stuck(c, [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]],
-                      online_ids, who, full, auth)
-        items = _queue_items(rows + busy_rows, full, kind == "bot") if full or kind == "bot" else []
+        items = _queue_items(resting_rows + busy_rows, full, kind == "bot") if full or kind == "bot" else []
         checks.append(_check("queue", "Work queueing", "info", _diagnostic_summary("Work is waiting on purpose.", items),
                              [_fix("Open Runs", "#/settings", "runs")] if full else [], items=items))
     elif slow and len(busy) == len(slow):
