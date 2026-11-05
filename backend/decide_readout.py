@@ -177,7 +177,7 @@ def readout(c, settings, days=7, at=None):
                     "jev_share": round(row["jev"] / row["calls"], 4) if row["calls"] else None,
                     "cost_usd": round(row["cost_usd"], 6), "ceiling_priced": row["ceiling_priced"],
                     "answers": {q: dict(sorted(v.items())) for q, v in sorted(row["answers"].items())}})
-    # Ask ingest's own outcomes (backend/ask_ingest.py): through, merged, FYI, hands needed, sent back, failed open,
+    # Ask ingest's own outcomes (backend/ask_ingest.py): through, merged, refused (SENT_BACK or FYI), failed open,
     # and how many a person let through. Counts only; the items are the person's to read.
     # Each of the set's judge calls is reconciled to its item row, or a named reason, or counted as unexplained.
     from .ask_ingest import QUESTION_SET, outcome_counts, reconcile

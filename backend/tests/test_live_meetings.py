@@ -313,14 +313,14 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     }
 
 
-def test_joined_human_can_remove_bot_and_revoke_queued_turn_access(live):
+def test_attaching_human_can_remove_bot_and_revoke_queued_turn_access(live):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider", "ms": 1,
         "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
     meeting = connect(live, cooldown_seconds=0)
     mid = meeting["id"]
-    attach(live, mid, "ops")
     post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
+    attach(live, mid, "ops", token="ben-test")
     chunk(live, mid, 1, 0, 30_000, "Queue a bot reply")
     turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
 
@@ -596,7 +596,7 @@ def test_private_meeting_is_hidden_until_owner_adds_people_or_opens_it_to_the_te
     # The owner can always add a bot; the bot reads only this meeting.
     assert attach(live, mid, "ops")["added"] == ["ops"]
     assert get(live, f"live-meetings/{mid}", token="ops-live")["id"] == mid
-    # Only the owner changes who can see it.
+    # People outside the meeting cannot add themselves.
     denied = live.post(f"/api/v2/live-meetings/{mid}/access", json={"add": ["ben"]}, headers=headers("cara-test"))
     assert denied.status_code == 404
     shared = post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})

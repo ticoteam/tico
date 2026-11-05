@@ -594,6 +594,12 @@ def changed_files(base, head="HEAD", root=ROOT, only=None):
 
 
 def collect(root=ROOT):
+    # Reuse the plan's existing collection as the sharding coverage guard: no extra collection or CI job.
+    # Direct script execution puts scripts/ on sys.path; package imports (including tests) use the relative form.
+    if __package__:
+        from .release_checks import validate_shard_coverage
+    else:
+        from release_checks import validate_shard_coverage
     result = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0"],
                             cwd=root, capture_output=True, text=True)
     if result.returncode:
@@ -602,6 +608,7 @@ def collect(root=ROOT):
                      if "::" in line and not line.startswith(" "))
     if not counts:
         raise RuntimeError("Default suite collected no tests")
+    validate_shard_coverage(counts, selection=(), root=root)
     return counts
 
 

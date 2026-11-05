@@ -68,6 +68,12 @@ function sameData(a, b) {
 // changes only that, once a minute per tree.
 const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
 function liveTasksApply(events) {
+  events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
+  if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
+    if (TASK_CHAT.dialog.taskLive) taskLiveGone(TASK_CHAT.dialog, TASK_CHAT.dialog.taskLive);
+    else TASK_CHAT.dialog.querySelector('[data-modal-close]')?.click();
+    taskChatStop();
+  }
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
   // cursor resets), and the other lists below reload as for any change.
@@ -146,7 +152,7 @@ function liveWire() {
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
   for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's

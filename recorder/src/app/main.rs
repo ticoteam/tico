@@ -59,7 +59,61 @@ fn view(
     Ok(view)
 }
 
+// Network writes run outside the Recorder mutex, so typing and redraws keep working while a save waits.
+#[tauri::command(async)]
+fn shared_item(
+    state: State<'_, Shared>,
+    id: Option<String>,
+    action: Option<String>,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let (config, destination, meeting, epoch) = {
+        let app = lock(&state);
+        let (destination, meeting) = app.saved_target().ok_or("Save the meeting first")?;
+        (app.config.clone(), destination, meeting, app.saved_scope())
+    };
+    let tico = tico_recorder_native::network::Tico::saved(&config, &destination)
+        .map_err(|e| format!("{e:#}"))?;
+    let mut path = format!("/api/v2/meetings/{meeting}/items");
+    if let Some(id) = &id {
+        path.push_str(&format!("/{id}"));
+    }
+    match action.as_deref() {
+        Some("send") => path.push_str("/push"),
+        Some("link") => path.push_str("/link"),
+        _ => {}
+    }
+    let reply = tico
+        .call(&path, body.as_ref(), &uuid::Uuid::new_v4().to_string())
+        .map_err(|e| format!("{e:#}"));
+    let data = tico
+        .call(&format!("/api/v2/meetings/{meeting}/items"), None, "")
+        .map_err(|e| format!("{e:#}"))?;
+    let mut app = lock(&state);
+    app.accept_saved_reply((destination, meeting), epoch, data.clone())?;
+    match reply {
+        Ok(value) => Ok(value),
+        Err(error) if error.contains("(version_conflict)") => {
+            let item = data["sections"]
+                .as_object()
+                .into_iter()
+                .flat_map(|s| s.values())
+                .filter_map(|v| v.as_array())
+                .flatten()
+                .find(|item| item["id"].as_str() == id.as_deref())
+                .cloned();
+            Ok(serde_json::json!({"conflict":item,"error":error}))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 commands! {
+    more_task_links() => |app| app.more_task_links();
+    link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
+    accept_link_item(id: String) => |app| app.accept_link_item(&id);
+    unlink_item(id: String) => |app| app.unlink_item(&id);
+    edit_task_detail(id: String, due: String, body: String) => |app| app.edit_task_detail(&id, &due, &body);
     stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
@@ -105,7 +159,36 @@ commands! {
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
-    set_visible(visible: bool) => |app| app.visible = visible;
+    set_visible(visible: bool) => |app| app.set_visible(visible);
+}
+
+#[tauri::command]
+async fn task_picker(
+    state: State<'_, Shared>,
+    query: String,
+    offset: usize,
+) -> Result<Value, String> {
+    let (config, destination) = lock(&state).task_picker_context();
+    picker_search(
+        move || tico_recorder_native::network::Tico::saved(&config, &destination),
+        query,
+        offset,
+    )
+    .await
+}
+
+async fn picker_search(
+    connect: impl FnOnce() -> anyhow::Result<tico_recorder_native::network::Tico> + Send + 'static,
+    query: String,
+    offset: usize,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        connect()
+            .and_then(|tico| tico.search_tasks(&query, offset))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(async)]
@@ -180,7 +263,7 @@ fn meeting_link(
     })().map(|mut value| {
         value["copied"] = serde_json::json!(copy && value["url"].as_str().is_some_and(|url| copy_meeting_url(&handle, url)));
         value
-    }).map_err(|e| e.to_string())
+    }).map_err(|e| format!("{e:#}"))
 }
 #[tauri::command(async)]
 fn share_screen(
@@ -211,7 +294,7 @@ fn share_screen(
             expected_team,
         )
     })()
-    .map_err(|e| e.to_string())
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Background work, and telling the window when to redraw. Runs whether or not the window is
@@ -341,6 +424,12 @@ fn main() {
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
+            more_task_links,
+            task_picker,
+            link_selected_tasks,
+            accept_link_item,
+            unlink_item,
+            edit_task_detail,
             view,
             meeting_link,
             share_screen,
@@ -358,6 +447,7 @@ fn main() {
             set_notes,
             add_item,
             edit_item,
+            shared_item,
             set_owner,
             remove_item,
             send_item,

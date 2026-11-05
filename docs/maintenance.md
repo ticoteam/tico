@@ -79,6 +79,9 @@ Automations mirror are retired, and unfinished mirror runs are skipped.
 
 The Learn step's settings include the last seven days of runs, items read, items sent per bot, saved, dropped and cost. `GET /api/v2/maintenance` returns these as the Learn row's `stats` (`days`, `runs`, `items_read`, `items_sent`, `saved`, `dropped`, `cost_usd`).
 
+- Web: Automations › Maintenance. It is the first row of the list. Its screen has the run's schedule, the pause switch
+  and the monthly cap, one row per step with its switch, How often and number of bots, Run now, and a Runs tab with each
+  step's line. Anyone signed in can read it; only an owner or an admin can change it.
 - API: `GET /api/v2/maintenance`, `PATCH /api/v2/maintenance`, `GET /api/v2/maintenance/runs`, `POST /api/v2/maintenance/run`.
 - CLI: `hub maintenance status`, `hub maintenance set`, `hub maintenance run`, `hub maintenance runs`.
 - MCP: the `hub_maintenance*` tools.

@@ -17,6 +17,7 @@ from . import models as M
 from . import task_privacy as privacy
 from .harnesses import is_external
 from .judge import over_spend_cap, primary_engine, server_engine
+from .media import effective_audience
 from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
@@ -216,7 +217,7 @@ def collect(c, settings, now, team):
                        "AND mc.deleted_at IS NULL AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at",
                        (since["meeting"], now)).fetchall():
         meta = H._json(r["metadata"], {}) or {}
-        if meta.get("kind") != "meeting" or meta.get("private"):
+        if meta.get("kind") != "meeting" or effective_audience(meta) != "team":
             continue
         summary = meta.get("source_summary") or r["notes"] or ""
         text = clip(f"{r['title']}\n\n{summary}".strip(), MEETING_CHARS)
@@ -402,10 +403,10 @@ def shared_item(c, item, bot):
     if item["source"] == "mail":
         return False              # Mailbox grants never establish a company-wide audience.
     if item["source"] == "meeting":
-        return bool(c.execute("SELECT 1 FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                              "WHERE m.id=? AND m.review_state='live' AND mc.deleted_at IS NULL "
-                              "AND json_extract(m.metadata,'$.kind')='meeting' "
-                              "AND coalesce(json_extract(m.metadata,'$.private'),0)=0", (ref.get("meeting"),)).fetchone())
+        row = c.execute("SELECT m.metadata FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+                        "WHERE m.id=? AND m.review_state='live' AND mc.deleted_at IS NULL "
+                        "AND json_extract(m.metadata,'$.kind')='meeting'", (ref.get("meeting"),)).fetchone()
+        return bool(row and effective_audience(H._json(row['metadata'], {})) == "team")
     return False
 
 

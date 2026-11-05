@@ -243,6 +243,8 @@ def cascade_archive(c, actor, source):
         config["branch_previous_status"] = state
         config["status"] = "archived"
         c.execute("UPDATE bots SET state='archived' WHERE id=?", (slug,))
+        from . import pages
+        pages.forget_audience_member(c, actor, "bots", slug)
         BS.write(c, slug, config)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (slug,))
         H.event(c, actor, "bot.branch_archived", slug, {"source": source, "previous": state})
@@ -308,6 +310,8 @@ def retire_assignments(c):
         if row["state"] != "archived" or config.get("status") != "archived":
             config["status"] = "archived"
             c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
+            from . import pages
+            pages.forget_audience_member(c, H.KEEPER, "bots", bot)
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.setup_finished(c, bot, archived=True)

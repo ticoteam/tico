@@ -47,8 +47,9 @@ def test_sent_links_require_the_requester_and_batches_are_atomic(api):
     assert link(api, rid, [mine['id']], kind='sent')['tasks'][0]['kind'] == 'sent'
     # A pair's first kind and author survive a retry or a later ordinary link.
     assert link(api, rid, [mine['id']])['tasks'][0]['kind'] == 'sent'
-    link(api, rid, [other['id'], 'missing-task'], expected=404)
-    assert len(get(api, f'meetings/{rid}/tasks')['tasks']) == 1
+    result = link(api, rid, [other['id'], 'missing-task'])
+    assert result['results'] == [{'status': 200}, {'status': 404}]
+    assert len(get(api, f'meetings/{rid}/tasks')['tasks']) == 2
     link(api, rid, [mine['id']] * 21, expected=422)
     link(api, rid, [mine['id']], kind='proposal', expected=422)
 
@@ -82,14 +83,14 @@ def test_each_answer_checks_full_task_access_including_bot_read(api):
     link(api, rid, [public['id'], gated['id']])
     assert [t['task_id'] for t in get(api, f'meetings/{rid}/tasks', 'cara-test')['tasks']] == [public['id']]
     assert get(api, f'meetings/{rid}/tasks?limit=1', 'cara-test')['next_cursor'] is None
-    link(api, rid, [gated['id']], 'cara-test', expected=404)
+    assert link(api, rid, [gated['id']], 'cara-test')['results'] == [{'status': 404}]
     get(api, f"tasks/{gated['id']}/meetings", 'cara-test', expected=404)
     remove(api, rid, gated['id'], 'cara-test', expected=404)
     # Link receipts contain no stored task summaries; a retry filters against current rights.
     link(api, rid, [public['id']], 'cara-test', key='link-retry')
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (public['id'],))
-    assert link(api, rid, [public['id']], 'cara-test', key='link-retry') == {'tasks': [], 'next_cursor': None}
+    assert link(api, rid, [public['id']], 'cara-test', key='link-retry') == {'tasks': [], 'next_cursor': None, 'results': [{'status': 404}]}
     assert get(api, f'meetings/{rid}/tasks', 'cara-test') == {'tasks': [], 'next_cursor': None}
 
 
@@ -238,9 +239,9 @@ def test_item_references_are_redacted_in_lists_mutations_replays_and_outbox(api)
         value = task_references.redact(c, api.app.state.auth, Identity('human:cara', 'human', email='cara@acme.example'),
                                       {'proposed_task_id': hidden['id']})
         assert value['proposed_task_id'] is None
-    changed = change(api, rid, item['id'], {'text': 'Review pricing again'}, 'cara-test', key='edit-retry')
+    changed = change(api, rid, item['id'], {'version': item['version'], 'text': 'Review pricing again'}, 'cara-test', key='edit-retry')
     assert changed['item']['result_ref'] is None
-    assert change(api, rid, item['id'], {'text': 'Review pricing again'}, 'cara-test', key='edit-retry')['item']['result_ref'] is None
+    assert change(api, rid, item['id'], {'version': item['version'], 'text': 'Review pricing again'}, 'cara-test', key='edit-retry')['item']['result_ref'] is None
     assert items(api, rid, 'cara-test')['sections']['task'][0]['result_ref'] is None
     response = api.get('/api/meetings/' + rid, headers=headers('cara-test'))
     assert response.status_code == 200, response.text
@@ -299,3 +300,15 @@ def test_recorder_participant_audiences_keep_the_current_media_read_boundary(api
     assert get(api, f"tasks/{t['id']}/meetings") == {'meetings': [], 'next_cursor': None}
     get(api, f'meetings/{rid}/tasks', expected=403)
     link(api, rid, [t['id']], expected=403)
+
+
+def test_distinct_link_unlink_link_actions_finish_linked_and_each_action_replays(api):
+    rid, target = record(api), task(api)
+    link(api, rid, [target['id']], key='first-link')
+    for _ in range(2):
+        response = api.delete(f"/api/v2/meetings/{rid}/tasks/{target['id']}", headers=headers(key='unlink-action'))
+        assert response.status_code == 200
+    assert not get(api, f'meetings/{rid}/tasks')['tasks']
+    for _ in range(2):
+        assert link(api, rid, [target['id']], key='second-link')['results'] == [{'status': 200}]
+    assert [row['task_id'] for row in get(api, f'meetings/{rid}/tasks')['tasks']] == [target['id']]

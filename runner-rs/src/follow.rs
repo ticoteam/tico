@@ -6,7 +6,8 @@
 //! `kind`, `commit`, `update`), so Settings > Computers and Health see a Rust computer as they see a Python one.
 //!
 //! A failed update is tried again after six hours, on the server's next release, or as soon as disk space frees
-//! after one that ran out of it. On a server that names no release (a development server) a supervised checkout
+//! after one that ran out of it. Deferrals release claims until the status file's not_before time, with growing
+//! waits capped at an hour. On a server that names no release (a development server) a supervised checkout
 //! follows origin/main instead (service.py checkout_status, self_update), restarting only once the new runner binary
 //! is prepared, and the heartbeat's `checkout` says how it stands against main (backend/models.py Checkout).
 
@@ -21,10 +22,16 @@ use crate::client::Client;
 use crate::util::{epoch_s, log, text_of};
 
 const STATUS_FILE: &str = "update-status.json";
+/// Held by release_update.py from process start through health checks and rollback, before the checkout lock.
+const PROCESS_LOCK: &str = "update-process.lock";
 /// The Docker update this runner saw changing containers, until the updater reports how it ended (Follower::unsettled).
 const HOLD_FILE: &str = "docker-update-hold.json";
 const DRAIN_S: u64 = 20 * 60; // older servers retain their claim window
+const DRAIN_WAIT_S: u64 = 10 * 60; // release_update.py waits this long for a drain to settle
 const RETRY_AFTER_S: f64 = 6.0 * 3600.0;
+const DEFERRAL_DELAYS_S: &[u64] = &[120, 300, 900, 1800, 3600]; // release_update.py DEFERRAL_DELAYS_S
+const MAX_DEFERRALS: u64 = 3;
+const DEFERRAL_LIMIT_S: f64 = 2.0 * 3600.0;
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
@@ -109,7 +116,7 @@ async fn git_in(root: &Path, args: &[&str], timeout_s: u64) -> Option<(i32, Stri
     let mut argv = vec!["git".to_string(), "-C".into(), root.to_string_lossy().into_owned()];
     argv.extend(args.iter().map(|a| a.to_string()));
     let out = crate::gitrun::run(&argv, &env, None, timeout_s).await.ok()?;
-    Some((out.code, out.stdout.trim().to_string()))
+    Some((out.code, out.stdout.trim_end().to_string()))
 }
 
 /// How the checkout stands against origin/main (service.py checkout_status, #492): commits behind, commits ahead
@@ -138,16 +145,92 @@ async fn runner_code_changed(root: &Path, old: &str, new: &str) -> bool {
     }
 }
 
+/// Share the link check and swap with the release updater. Repairs require the caller's checkout lock.
+async fn checkout_links(root: &Path, repair: bool) -> Value {
+    let mut cmd = tokio::process::Command::new(crate::env::python());
+    cmd.args(["-m", "runner_support.checkout_links", "--root"]).arg(root);
+    if repair { cmd.arg("--repair-locked"); }
+    cmd.current_dir(crate::env::root())
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(60), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => serde_json::from_slice(&out.stdout).unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
+fn flattened_note(found: &Value) -> String {
+    let names: Vec<_> = found["flattened"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if found["only_flattened"] == true {
+        format!("only flattened Tico links: {}; repaired automatically on the next update", names.join(", "))
+    } else if !names.is_empty() {
+        format!("flattened links: {}", names.join(", "))
+    } else {
+        String::new()
+    }
+}
+
+/// Re-read old branch blocks with the updater's own read-only rules, without switching the install from a heartbeat.
+async fn branch_note(root: &Path, want: &str) -> Option<String> {
+    let mut cmd = tokio::process::Command::new(crate::env::python());
+    cmd.args(["-m", "runner_support.release_branch", "--version", want, "--root"]).arg(root)
+        .current_dir(crate::env::root()).stdin(Stdio::null()).stdout(Stdio::piped())
+        .stderr(Stdio::null()).kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(60), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => serde_json::from_slice::<Value>(&out.stdout).ok()
+            .and_then(|v| v["error"].as_str().filter(|s| !s.is_empty()).map(str::to_string)),
+        _ => None,
+    }
+}
+
 /// Fast-forward the checkout to origin/main when that is safe (service.py self_update): (restart, note), restart
 /// when HEAD is now newer than what this process runs, the note saying why nothing was done.
 async fn self_update(root: &Path, running: &str) -> (bool, String) {
     let out = |r: Option<(i32, String)>| r.map(|(_, o)| o).unwrap_or_default();
+    let common = out(git_in(root, &["rev-parse", "--git-common-dir"], 30).await);
+    if common.is_empty() {
+        return (false, "cannot find the checkout update lock".into());
+    }
+    let _lock = match crate::lock::acquire(&root.join(common).join("tico-update.lock")) {
+        Ok(lock) => lock,
+        Err(_) => return (false, "waiting for the checkout update lock".into()),
+    };
     let branch = out(git_in(root, &["rev-parse", "--abbrev-ref", "HEAD"], 30).await);
     if branch != "main" {
         return (false, format!("checkout is on {}, not main", if branch.is_empty() { "an unknown branch" } else { &branch }));
     }
-    if !out(git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await).is_empty() {
-        return (false, "checkout has uncommitted changes".into());
+    let mut repair_note = String::new();
+    let mut status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+        Some((0, status)) => status,
+        _ => return (false, "could not inspect checkout changes".into()),
+    };
+    let mut found = Value::Null;
+    if !status.is_empty() {
+        found = checkout_links(root, true).await;
+        let restored = found["restored"].as_array().map_or(0, Vec::len);
+        if restored > 0 {
+            repair_note = found["note"].as_str().unwrap_or_default().to_string();
+            log(&format!("Tico update: {repair_note}"));
+        }
+        status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+            Some((0, status)) => status,
+            _ => return (false, "could not inspect checkout changes".into()),
+        };
+    }
+    // A refused batch must reach the dirty-checkout path without a second repair changing part of it.
+    if status.is_empty() || found["flattened"].as_array().is_none_or(Vec::is_empty) {
+        if let Some(note) = crate::repositories::repair_instruction_links(root, &crate::safegit::clean_environment(&crate::env::process_environment())).await {
+            let status = git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await.map(|(_, status)| status).unwrap_or_default();
+            return (false, format!("{note}; changed files: {}", crate::repositories::changed_file_names(&status)));
+        }
+        status = match git_in(root, &["status", "--porcelain", "--untracked-files=no"], 30).await {
+            Some((0, status)) => status,
+            _ => return (false, "could not inspect checkout changes".into()),
+        };
+    }
+    if !status.is_empty() {
+        let note = flattened_note(&found);
+        return (false, format!("checkout has uncommitted changes: {}{}", crate::repositories::changed_file_names(&status),
+            if note.is_empty() { note } else { format!("; {note}") }));
     }
     let old = out(git_in(root, &["rev-parse", "HEAD"], 30).await);
     if git_in(root, &["fetch", "--quiet", "origin", "main"], 60).await.is_none_or(|(c, _)| c != 0) {
@@ -164,7 +247,7 @@ async fn self_update(root: &Path, running: &str) -> (bool, String) {
     if head != old {
         log(&format!("Tico runner: updated its checkout {}..{}; restarting when no turn is running", &old[..old.len().min(7)], &head[..head.len().min(7)]));
     }
-    (!running.is_empty() && !head.is_empty() && head != running, String::new())
+    (!running.is_empty() && !head.is_empty() && head != running, repair_note)
 }
 
 fn checkout_commit(root: &Path) -> String {
@@ -187,7 +270,7 @@ fn current_release(root: &Path) -> String {
 }
 
 fn manifest_commit(root: &Path) -> String {
-    let text = std::fs::read_to_string(root.join("release-manifest.json")).unwrap_or_default();
+    let text = crate::regular_file::text(root.join("release-manifest.json"), crate::regular_file::CONTENT).unwrap_or_default();
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     Some(text_of(&value["commit"])).filter(|c| is_commit(c)).unwrap_or_default()
 }
@@ -215,13 +298,18 @@ fn adopt_revision(directory: &Path, head: &str) {
     let _ = std::fs::write(path, data.to_string());
 }
 
+fn try_read_status(directory: &Path) -> Result<Value, String> {
+    let text = match crate::regular_file::text(directory.join(STATUS_FILE), crate::regular_file::SMALL) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
+        Err(e) => return Err(format!("cannot read update status: {e}")),
+    };
+    let value: Value = serde_json::from_str(&text).map_err(|e| format!("cannot read update status: {e}"))?;
+    if value.is_object() { Ok(value) } else { Err("update status must be an object".into()) }
+}
+
 fn read_status(directory: &Path) -> Value {
-    let v: Value = std::fs::read_to_string(directory.join(STATUS_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    if v.is_object() {
-        v
-    } else {
-        json!({})
-    }
+    try_read_status(directory).unwrap_or_else(|_| json!({}))
 }
 
 /// The saved Docker update hold: None when there is none, an error when one is there but cannot be read.
@@ -248,6 +336,112 @@ fn write_status(directory: &Path, fields: Value) {
     if std::fs::write(&tmp, fields.to_string()).is_ok() {
         let _ = std::fs::rename(tmp, path);
     }
+}
+
+/// The same bounded retry and cause history as release_update.py, also for failures before Python starts.
+fn defer_update(directory: &Path, want: &str, reason: &str, transient: bool) -> (String, String) {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(250).collect::<String>();
+    let before = read_status(directory);
+    let before = if before["target"] == want { before } else { json!({}) };
+    let now = epoch_s();
+    let count = before["deferrals"].as_u64().unwrap_or(0).saturating_add(1).min(DEFERRAL_DELAYS_S.len() as u64);
+    let repeats = before["cause_count"].as_u64().unwrap_or(0);
+    let since = before["deferred_since"].as_f64().filter(|s| repeats > 0 && *s >= 0.0 && *s <= now).unwrap_or(now);
+    let repeats = if transient { 0 } else if before["deferral_cause"] == reason { repeats.saturating_add(1).min(MAX_DEFERRALS) } else { 1 };
+    let blocked = !transient && (repeats == MAX_DEFERRALS || now - since >= DEFERRAL_LIMIT_S);
+    let prefix = if repeats == MAX_DEFERRALS { format!("update blocked after {repeats} tries: ") }
+        else if blocked { "update blocked after two hours: ".into() } else { "update paused: ".into() };
+    let delay = DEFERRAL_DELAYS_S[count as usize - 1];
+    let error = format!("{}; retrying in {} minutes", format!("{prefix}{reason}").chars().take(250).collect::<String>(), delay / 60);
+    let state = if blocked { "blocked" } else { "idle" };
+    write_status(directory, json!({"state": state, "target": want, "error": error, "at": now,
+        "not_before": now + delay as f64, "deferrals": count, "deferred_since": if transient { now } else { since },
+        "deferral_cause": if transient { "" } else { &reason }, "cause_count": repeats}));
+    (state.into(), error)
+}
+
+fn deferred_outcome(status: &Value, want: &str) -> Option<(String, String)> {
+    (status["target"] == want && matches!(status["state"].as_str(), Some("idle" | "waiting" | "busy" | "blocked"))
+        && status["not_before"].as_f64().is_some_and(|t| epoch_s() < t))
+        .then(|| (text_of(&status["state"]), text_of(&status["error"])))
+}
+
+fn updater_running(directory: &Path) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::io::AsRawFd;
+    let file = crate::regular_file::open(&directory.join(PROCESS_LOCK), std::fs::OpenOptions::new().create(true).append(true), crate::regular_file::SMALL).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.nlink() != 1 { return Err("not a regular update lock file".into()); }
+    // SAFETY: flock acts on this open file; the guard releases a successful probe even across concurrent forks.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        let _guard = crate::lock::FileLock::from_locked(file);
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock { Ok(true) } else { Err(error.to_string()) }
+}
+
+fn update_unit(pid: u32) -> String {
+    format!("tico-update-{pid}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(180).collect()
+}
+
+fn update_log(path: &Path, message: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = crate::regular_file::open(path, std::fs::OpenOptions::new().create(true).append(true), u64::MAX) {
+        let _ = writeln!(file, "Tico update: {message}");
+    }
+}
+
+/// A lingering user manager need not inherit a login shell's bus variables. Keep explicit settings intact.
+fn user_bus_env(env: &crate::env::Env, uid: u32) -> crate::env::Env {
+    if !env.contains_key("XDG_RUNTIME_DIR") {
+        if let Some(address) = env.get("DBUS_SESSION_BUS_ADDRESS").filter(|s| !s.is_empty()) {
+            // systemd uses an explicit session bus only when XDG_RUNTIME_DIR is unset.
+            return [("DBUS_SESSION_BUS_ADDRESS".into(), address.clone())].into();
+        }
+    }
+    let mut bus = crate::env::Env::new();
+    let runtime = env.get("XDG_RUNTIME_DIR").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("/run/user/{uid}"));
+    let address = env.get("DBUS_SESSION_BUS_ADDRESS").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("unix:path={runtime}/bus"));
+    bus.insert("XDG_RUNTIME_DIR".into(), runtime);
+    bus.insert("DBUS_SESSION_BUS_ADDRESS".into(), address);
+    bus
+}
+
+/// Only failures before contacting the manager can safely use another launch path. An ambiguous start must not
+/// launch a second updater. setsid leaves the cgroup intact, so only KillMode=process/none lets it survive restart.
+fn systemd_start(
+    cmd: &mut Command, unit: &str, bus: &crate::env::Env, log_path: &Path,
+    run: &mut impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
+) -> Result<bool, String> {
+    let (error, can_detach) = match run(cmd) {
+        Ok(done) if done.status.success() => return Ok(true),
+        Ok(done) => {
+            let stderr = one_line(&String::from_utf8_lossy(&done.stderr));
+            let can_detach = stderr.starts_with("Failed to connect to bus:")
+                || stderr.starts_with("Failed to set bus address:")
+                || stderr.starts_with("Failed to connect to user scope bus via local transport:");
+            let detail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") };
+            (format!("systemd-run exited {}{detail}", done.status.code().unwrap_or(-1)), can_detach)
+        }
+        Err(e) => (format!("systemd-run: {e}"), e.kind() == std::io::ErrorKind::NotFound),
+    };
+    update_log(log_path, &error);
+    if !can_detach {
+        return Err(error);
+    }
+    let mut show = Command::new("systemctl");
+    show.args(["--user", "show", "--property=KillMode", "--value", unit]).envs(bus).stdin(Stdio::null());
+    let mode = run(&mut show).ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    if matches!(mode.as_str(), "process" | "none") {
+        update_log(log_path, &format!("using a detached updater (KillMode={mode})"));
+        return Ok(false);
+    }
+    let mode = if mode.is_empty() { "unknown" } else { &mode };
+    Err(format!("{error}; detached update unsafe (KillMode={mode})"))
 }
 
 /// What a fast-forward to main meant for this process (Follower::advance).
@@ -324,6 +518,7 @@ pub struct Follower {
     started: String,
     commit: String,
     pinned: bool,
+    drain_timeout: Duration,
     /// Supervised, and neither `self_update: false` nor TICO_RUNNER_SELF_UPDATE=0 (service.py under_supervisor).
     self_update: bool,
     /// Gets the runner binary for the checkout as it now is (`python -m runner_support.engine prepare`); non-zero on failure.
@@ -354,6 +549,7 @@ pub fn init(config: &Map<String, Value>, directory: &Path) {
         release,
         commit,
         pinned,
+        drain_timeout: Duration::from_secs(config.get("drain_timeout_seconds").and_then(Value::as_u64).filter(|s| *s > 0).unwrap_or(crate::drain::DEFAULT_LIMIT_S).max(DRAIN_WAIT_S)),
         self_update,
         prepare: [crate::env::python().to_string_lossy().into_owned(), "-m".into(), "runner_support.engine".into(), "prepare".into()].into(),
         sidecar: Sidecar::from_env(),
@@ -437,18 +633,56 @@ impl Follower {
                 _ => None,
             };
         }
-        let status = read_status(&self.directory);
+        let status = try_read_status(&self.directory);
+        match updater_running(&self.directory) {
+            Ok(true) => return Some(("updating".into(), String::new())),
+            Err(e) => return Some(status.as_ref().ok().and_then(|s| deferred_outcome(s, want))
+                .unwrap_or_else(|| defer_update(&self.directory, want, &format!("cannot check the updater: {e}"), false))),
+            Ok(false) => {}
+        }
+        let status = match status {
+            Ok(status) => status,
+            Err(e) => return Some(defer_update(&self.directory, want, &e, false)),
+        };
         if text_of(&status["target"]) != want {
+            return None;
+        }
+        // A repaired launcher gets one fresh attempt, including failures saved before launchers had build IDs.
+        if status["state"] == "failed" && text_of(&status["error"]).starts_with("could not start the update:") && status["launcher"] != crate::BUILD_ID {
             return None;
         }
         let at = status["at"].as_f64().or_else(|| text_of(&status["at"]).parse().ok()).unwrap_or(0.0);
         let age = epoch_s() - at;
+        if matches!(status["state"].as_str(), Some("idle" | "waiting" | "busy" | "blocked")) {
+            if let Some(not_before) = status["not_before"].as_f64() {
+                return (epoch_s() < not_before).then(|| (text_of(&status["state"]), text_of(&status["error"])));
+            }
+        }
         match status["state"].as_str().unwrap_or_default() {
             "updating" if age < STALE_UPDATING_S => Some(("updating".into(), String::new())),
-            "updating" => Some(("failed".into(), "the update stopped without an outcome".into())),
+            "updating" => {
+                let error = "the update stopped without an outcome";
+                write_status(&self.directory, json!({"state": "failed", "target": want, "error": error, "at": epoch_s()}));
+                Some(("failed".into(), error.into()))
+            }
             s @ ("failed" | "rolled_back" | "blocked") if age < RETRY_AFTER_S => {
-                let error = text_of(&status["error"]);
-                (!self.space_freed(&status, &error)).then(|| (s.into(), disk_error_message(&error)))
+                let mut error = text_of(&status["error"]);
+                if s == "blocked" && error.starts_with("the checkout is on branch ") {
+                    if let Some(note) = branch_note(&self.root, want).await {
+                        error = note;
+                    }
+                }
+                if s == "blocked" && error.starts_with("the checkout has ") {
+                    let found = checkout_links(&self.root, false).await;
+                    let note = flattened_note(&found);
+                    if found["only_flattened"] == true {
+                        error = note;
+                    } else if !note.is_empty() && !error.contains("flattened link") {
+                        error = format!("{error}; {note}");
+                    }
+                }
+                // Checkout file names are not disk errors.
+                (!self.space_freed(&status, &error)).then(|| (s.into(), if s == "blocked" { error } else { disk_error_message(&error) }))
             }
             _ => None,
         }
@@ -600,7 +834,17 @@ impl Follower {
         };
         if !active {
             self.launch(&pending).await;
-            return true;
+            return self.draining();
+        }
+        if self.kind != "docker" && since.is_some_and(|t| t.elapsed() >= if drain { self.drain_timeout } else { Duration::from_secs(DRAIN_S + DRAIN_WAIT_S) }) {
+            // Preparation can outlast the turn cap. Give claims back instead of draining without an end.
+            let (state, error) = defer_update(&self.directory, &pending, "this computer still has work running", true);
+            let mut s = self.inner.lock().unwrap();
+            s.pending = None;
+            s.pending_since = None;
+            s.state = state;
+            s.error = error;
+            return false;
         }
         drain || since.is_some_and(|t| t.elapsed().as_secs() >= DRAIN_S)
     }
@@ -616,8 +860,15 @@ impl Follower {
         } else {
             self.spawn(want)
         };
+        self.launched(want, started);
+    }
+
+    fn launched(&self, want: &str, started: Result<(), String>) {
+        let deferred = started.as_ref().err().filter(|_| self.kind != "docker")
+            .map(|why| defer_update(&self.directory, want, why, false));
         let mut s = self.inner.lock().unwrap();
         s.pending = None;
+        s.pending_since = None;
         match started {
             Ok(()) => {
                 log(&format!("Tico runner: updating to {want}"));
@@ -625,9 +876,16 @@ impl Follower {
                 s.running = true;
             }
             Err(why) => {
-                s.state = "failed".into();
-                s.error = format!("could not start the update: {why}");
-                write_status(&self.directory, json!({"state": "failed", "target": want, "error": s.error, "at": epoch_s()}));
+                s.running = false;
+                if let Some((state, error)) = deferred {
+                    s.state = state;
+                    s.error = error;
+                } else {
+                    s.state = "failed".into();
+                    s.error = format!("could not start the update: {why}");
+                    write_status(&self.directory, json!({"state": "failed", "target": want, "error": s.error, "at": epoch_s(), "launcher": crate::BUILD_ID}));
+                }
+                update_log(&self.directory.join("update.log"), &s.error);
             }
         }
     }
@@ -635,42 +893,68 @@ impl Follower {
     /// `python -m runner_support.release_update` as its own process, so it outlives the runner it restarts. Under systemd the
     /// runner's unit kills its whole cgroup on restart, so the update is a transient unit of its own (release_update.py spawn).
     fn spawn(&self, want: &str) -> Result<(), String> {
+        self.spawn_with(want, &std::env::vars().collect(), |cmd| cmd.output(), |cmd| cmd.spawn().map(|_| ()))
+    }
+
+    fn spawn_with(
+        &self, want: &str, env: &crate::env::Env,
+        mut run: impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
+        mut detach: impl FnMut(&mut Command) -> std::io::Result<()>,
+    ) -> Result<(), String> {
+        if updater_running(&self.directory).map_err(|e| format!("cannot check the updater: {e}"))? {
+            return Ok(());
+        }
         let python = crate::env::python();
         let pid = std::process::id().to_string();
         let dir = self.directory.to_string_lossy().to_string();
         let root = self.root.to_string_lossy().to_string();
-        let args = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started];
+        let args: Vec<String> = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started].iter().map(|s| s.to_string()).collect();
+        // Another environment can move the shared checkout back to an updater with the old CLI.
+        let roots: Vec<_> = crate::gitlocks::owned_roots().iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let owned = serde_json::to_string(&roots).map_err(|e| e.to_string())?;
         let log_path = self.directory.join("update.log");
-        let unit = std::env::var("TICO_SYSTEMD_UNIT").unwrap_or_default();
+        let unit = env.get("TICO_SYSTEMD_UNIT").cloned().unwrap_or_default();
+        // SAFETY: geteuid reads this process's effective UID.
+        let bus = user_bus_env(env, unsafe { libc::geteuid() });
         if unit.ends_with(".service") && !unit.contains('/') {
             let mut cmd = Command::new("systemd-run");
-            cmd.args(["--user", "--quiet", "--collect", &format!("--unit=tico-update-{pid}"), &format!("--working-directory={root}")]);
+            cmd.args(["--user", "--quiet", "--collect", "--service-type=exec", &format!("--unit={}", update_unit(std::process::id())), &format!("--working-directory={root}")]);
+            cmd.envs(&bus).env("SYSTEMD_COLORS", "0").env("SYSTEMD_URLIFY", "0");
             for name in ["PATH", "HOME", "TICO_SUPERVISED", "TICO_RUNNER_KIND"] {
-                if let Ok(v) = std::env::var(name) {
+                if let Some(v) = env.get(name) {
                     if !v.is_empty() {
                         cmd.arg(format!("--setenv={name}={v}"));
                     }
                 }
             }
+            for (name, value) in &bus {
+                cmd.arg(format!("--setenv={name}={value}"));
+            }
             cmd.arg(format!("--setenv=TICO_SYSTEMD_UNIT={unit}"));
+            cmd.arg(format!("--setenv=TICO_GIT_OWNED_ROOTS={owned}"));
+            cmd.arg("--setenv=TICO_UPDATE_RETRY=short");
             let log = log_path.to_string_lossy();
             cmd.args(["-p", &format!("StandardOutput=append:{log}"), "-p", &format!("StandardError=append:{log}")]);
-            let done = cmd.arg(&python).args(args).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
-            return if done.status.success() { Ok(()) } else { Err(format!("systemd-run exited {}", done.status.code().unwrap_or(-1))) };
+            cmd.arg(&python).args(&args).stdin(Stdio::null());
+            if systemd_start(&mut cmd, &unit, &bus, &log_path, &mut run)? {
+                return Ok(());
+            }
         }
         use std::os::unix::process::CommandExt;
-        let out = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
-        let err = out.try_clone().map_err(|e| e.to_string())?;
+        let out = crate::regular_file::open(&log_path, std::fs::OpenOptions::new().create(true).append(true), u64::MAX).map_err(|e| format!("cannot open update.log: {e}"))?;
+        let err = out.try_clone().map_err(|e| format!("cannot copy update.log handle: {e}"))?;
         let mut cmd = Command::new(&python);
-        cmd.args(args).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
+        cmd.args(&args).env("TICO_GIT_OWNED_ROOTS", &owned).env("TICO_UPDATE_RETRY", "short").current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
+        if unit.ends_with(".service") && !unit.contains('/') {
+            cmd.envs(&bus);
+        }
         // SAFETY: setsid is async-signal-safe; the child gets its own session, as Popen(start_new_session=True).
         unsafe {
             cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
+                if libc::setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
             });
         }
-        cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+        detach(&mut cmd).map_err(|e| e.to_string())
     }
 
     /// What a heartbeat adds; nothing for a server that does not name a release.
@@ -759,6 +1043,9 @@ impl Follower {
             return Moved::Not(self.inner.lock().unwrap().update_note.clone());
         }
         let (restart, note) = self_update(&self.root, running).await;
+        if note.starts_with("restored ") {
+            write_status(&self.directory, json!({"state": "healthy", "target": "main", "error": "", "note": note, "at": epoch_s()}));
+        }
         let head = if restart { checkout_commit(&self.root) } else { String::new() };
         if !restart || head.is_empty() {
             return Moved::Not(note);
@@ -803,6 +1090,368 @@ impl Follower {
 mod tests {
     use super::*;
 
+    fn checkout_follower() -> Follower {
+        let dir = std::env::temp_dir().join(format!("tico-update-start-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = docker_follower(&dir, "", "0.3.44");
+        f.kind = "linux";
+        f
+    }
+
+    fn command_output(code: i32, stdout: &str, stderr: &str) -> std::io::Result<std::process::Output> {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec() })
+    }
+
+    fn systemd_env() -> crate::env::Env {
+        [("TICO_SYSTEMD_UNIT".into(), "tico-bot.service".into())].into()
+    }
+
+    #[test]
+    fn updater_launch_arguments_work_with_the_origin_main_parser() {
+        let f = checkout_follower();
+        let projects = f.directory.join("projects with 'quotes' and : colons");
+        crate::gitlocks::own(std::slice::from_ref(&projects));
+        let check = |cmd: &Command, systemd: bool| {
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let owned = if systemd {
+                args.iter().find_map(|a| a.strip_prefix("--setenv=TICO_GIT_OWNED_ROOTS=")).unwrap().to_string()
+            } else {
+                cmd.get_envs().find(|(k, _)| *k == "TICO_GIT_OWNED_ROOTS").unwrap().1.unwrap().to_string_lossy().into_owned()
+            };
+            let roots: Vec<String> = serde_json::from_str(&owned).unwrap();
+            assert!(roots.contains(&projects.to_string_lossy().into_owned()));
+            if systemd {
+                assert!(args.iter().any(|a| a == "--setenv=TICO_UPDATE_RETRY=short"));
+            } else {
+                assert_eq!(cmd.get_envs().find(|(k, _)| *k == "TICO_UPDATE_RETRY").unwrap().1.unwrap(), "short");
+            }
+            let module = args.iter().position(|a| a == "-m").unwrap();
+            assert_eq!(args[module + 1], "runner_support.release_update");
+            // Execute only origin/main's real parser, without starting an update or touching its status.
+            let out = Command::new("python3").arg("-c").arg(r#"
+import argparse, ast, subprocess, sys
+from pathlib import Path
+source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
+main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+parse = next(n for n in ast.walk(main) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+             and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
+main.body = [n for n in main.body if n.end_lineno < parse.lineno] + [parse]
+scope = {'argparse': argparse, 'ROOT': Path('.')}
+exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
+scope['main'](sys.argv[1:])
+"#).args(&args[module + 2..]).env("TICO_GIT_OWNED_ROOTS", owned).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        for mode in ["systemd", "detached", "fallback"] {
+            let mut launches = 0;
+            let env = if mode == "detached" { crate::env::Env::new() } else { systemd_env() };
+            f.spawn_with("0.3.45", &env, |cmd| {
+                if cmd.get_program() == "systemctl" { return command_output(0, "process", ""); }
+                check(cmd, true);
+                if mode == "fallback" { command_output(1, "", "Failed to connect to bus: No such file or directory") }
+                else { command_output(0, "", "") }
+            }, |cmd| { check(cmd, false); launches += 1; Ok(()) }).unwrap();
+            assert_eq!(launches, usize::from(mode != "systemd"));
+        }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn update_attempts_from_one_pid_use_distinct_units_and_restore_missing_bus_settings() {
+        let f = checkout_follower();
+        let mut units = vec![];
+        for _ in 0..2 {
+            f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+                assert_eq!(cmd.get_program(), "systemd-run");
+                let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+                units.push(args.iter().find(|a| a.starts_with("--unit=")).unwrap().clone());
+                assert!(args.contains(&"--service-type=exec".into()));
+                assert!(args.iter().any(|a| a.starts_with("--setenv=XDG_RUNTIME_DIR=/run/user/")));
+                assert!(args.iter().any(|a| a.starts_with("--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/")));
+                command_output(0, "", "")
+            }, |_| panic!("systemd started the updater")).unwrap();
+        }
+        assert_ne!(units[0], units[1]);
+        assert!(units.iter().all(|u| u.starts_with(&format!("--unit=tico-update-{}-", std::process::id()))));
+        let env = [("XDG_RUNTIME_DIR".into(), "/custom/runtime".into()), ("DBUS_SESSION_BUS_ADDRESS".into(), "unix:path=/custom/bus".into())].into();
+        assert_eq!(user_bus_env(&env, 123), env);
+        assert_eq!(user_bus_env(&crate::env::Env::new(), 123)["XDG_RUNTIME_DIR"], "/run/user/123");
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn a_custom_session_bus_does_not_add_a_runtime_directory() {
+        let f = checkout_follower();
+        let mut env = systemd_env();
+        let address = "unix:path=/custom/bus";
+        env.insert("DBUS_SESSION_BUS_ADDRESS".into(), address.into());
+        f.spawn_with("0.3.45", &env, |cmd| {
+            assert_eq!(cmd.get_program(), "systemd-run");
+            assert!(cmd.get_envs().any(|(name, value)| name == "DBUS_SESSION_BUS_ADDRESS" && value == Some(std::ffi::OsStr::new(address))));
+            assert!(!cmd.get_envs().any(|(name, _)| name == "XDG_RUNTIME_DIR"));
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert!(args.contains(&format!("--setenv=DBUS_SESSION_BUS_ADDRESS={address}")));
+            assert!(!args.iter().any(|a| a.starts_with("--setenv=XDG_RUNTIME_DIR=")));
+            command_output(0, "", "")
+        }, |_| panic!("systemd started the updater")).unwrap();
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn systemd_stderr_reaches_the_error_and_log_without_retrying_an_ambiguous_start() {
+        let f = checkout_follower();
+        let error = f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+            assert_eq!(cmd.get_program(), "systemd-run");
+            command_output(1, "", "  Failed to start transient service unit:\n Unit tico-update-42.service already exists.  \n")
+        }, |_| panic!("a unit collision must not use a second launch path")).unwrap_err();
+        assert_eq!(error, "systemd-run exited 1: Failed to start transient service unit: Unit tico-update-42.service already exists.");
+        assert!(std::fs::read_to_string(f.directory.join("update.log")).unwrap().contains(&error));
+        assert_eq!(one_line(&"é".repeat(400)).chars().count(), 180);
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn a_bus_failure_detaches_only_when_the_runner_cgroup_will_survive_restart() {
+        let f = checkout_follower();
+        for stderr in [
+            "Failed to connect to bus: No such file or directory",
+            "Failed to set bus address: No such file or directory",
+            "Failed to connect to user scope bus via local transport: No such file or directory",
+        ] {
+            for mode in ["control-group", "mixed", "", "process", "none"] {
+                let mut detached = false;
+                let mut calls = 0;
+                let result = f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+                    calls += 1;
+                    if cmd.get_program() == "systemd-run" {
+                        return command_output(1, "", stderr);
+                    }
+                    assert_eq!(cmd.get_program(), "systemctl");
+                    assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["--user", "show", "--property=KillMode", "--value", "tico-bot.service"]);
+                    command_output(if mode.is_empty() { 1 } else { 0 }, mode, "")
+                }, |_| { detached = true; Ok(()) });
+                assert_eq!(calls, 2, "{stderr}; KillMode={mode}");
+                let safe = matches!(mode, "process" | "none");
+                assert_eq!(detached, safe, "{stderr}; KillMode={mode}");
+                assert_eq!(result.is_ok(), safe, "{stderr}; KillMode={mode}: {result:?}");
+                if let Err(error) = result {
+                    assert!(error.contains(stderr));
+                    assert!(error.contains(&format!("KillMode={}", if mode.is_empty() { "unknown" } else { mode })));
+                }
+            }
+        }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn saved_branch_blocks_report_current_recovery_safety_without_moving_head() {
+        let mut f = checkout_follower();
+        f.root = f.directory.join("checkout");
+        std::fs::create_dir(&f.root).unwrap();
+        let sh = |args: &[&str]| {
+            let out = Command::new("git").arg("-C").arg(&f.root)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example"]).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        sh(&["init", "-q", "-b", "tico/b427e9ee-fix-runner"]);
+        std::fs::write(f.root.join("app.py"), "keep").unwrap();
+        sh(&["add", "."]);
+        sh(&["commit", "-qm", "init"]);
+        let before = sh(&["rev-parse", "HEAD"]);
+        let error = "the checkout is on branch tico/b427e9ee-fix-runner; switch it to main to follow releases";
+        write_status(&f.directory, json!({"state": "blocked", "target": "0.3.45", "error": error, "at": epoch_s()}));
+        let (_, note) = f.outcome("0.3.45").await.unwrap();
+        assert!(note.contains("tico/b427e9ee-fix-runner") && note.contains("automatically"), "{note}");
+        std::fs::write(f.root.join("app.py"), "work").unwrap();
+        let (_, note) = f.outcome("0.3.45").await.unwrap();
+        assert!(note.contains("cannot recover") && note.contains("app.py"), "{note}");
+        std::fs::write(f.root.join("app.py"), "keep").unwrap();
+        std::fs::write(f.root.join(".git/MERGE_HEAD"), format!("{before}\n")).unwrap();
+        assert!(f.outcome("0.3.45").await.unwrap().1.contains("merge in progress"));
+        assert_eq!(sh(&["rev-parse", "HEAD"]), before);
+        assert_eq!(sh(&["branch", "--show-current"]), "tico/b427e9ee-fix-runner");
+        assert!(sh(&["for-each-ref", "refs/tico/recovered/"]).is_empty());
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_live_updater_holds_even_with_stale_status_or_a_new_target_and_a_dead_one_can_retry() {
+        let f = checkout_follower();
+        write_status(&f.directory, json!({"state": "updating", "target": "0.3.45", "at": 1}));
+        let lock = crate::lock::acquire(&f.directory.join(PROCESS_LOCK)).unwrap();
+        assert_eq!(f.outcome("0.3.46").await, Some(("updating".into(), String::new())));
+        f.spawn_with("0.3.46", &systemd_env(), |_| panic!("an updater holds the lock"), |_| panic!("an updater holds the lock")).unwrap();
+        drop(lock);
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "failed");
+        assert_eq!(read_status(&f.directory)["state"], "failed");
+        let mut status = read_status(&f.directory);
+        status["at"] = json!(epoch_s() - RETRY_AFTER_S - 1.0);
+        write_status(&f.directory, status);
+        assert!(f.outcome("0.3.45").await.is_none());
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_repaired_launcher_retries_a_start_failure_once_then_obeys_the_retry_delay() {
+        let f = checkout_follower();
+        let mut status = json!({"state": "failed", "target": "0.3.45", "error": "could not start the update: systemd-run exited 1", "at": epoch_s()});
+        write_status(&f.directory, status.clone());
+        assert!(f.outcome("0.3.45").await.is_none());
+        status["launcher"] = json!(crate::BUILD_ID);
+        write_status(&f.directory, status.clone());
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "failed");
+        assert!(f.outcome("0.3.46").await.is_none());
+        status["at"] = json!(epoch_s() - RETRY_AFTER_S - 1.0);
+        write_status(&f.directory, status);
+        assert!(f.outcome("0.3.45").await.is_none());
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_native_prelaunch_failure_defers_and_releases_claims() {
+        if !crate::regular_file::in_child("follow::tests::every_native_prelaunch_failure_defers_and_releases_claims").await { return; }
+        std::env::set_var("TICO_SUPERVISED", "1");
+        for step in ["process_open", "process_race", "process_size", "process_symlink", "process_fifo", "status_read", "status_shape", "status_symlink", "status_fifo",
+            "log_open", "log_symlink", "log_fifo", "systemd_start", "systemd_missing", "systemd_bus", "detach"] {
+            let f = checkout_follower();
+            let target = f.directory.join("keep");
+            std::fs::write(&target, "keep this inode and content").unwrap();
+            let path = f.directory.join(if step.starts_with("process_") { PROCESS_LOCK } else if step.starts_with("status_") { STATUS_FILE } else { "update.log" });
+            match step {
+                "process_open" | "process_race" | "log_open" => std::fs::create_dir(&path).unwrap(),
+                "process_size" => std::fs::File::create(&path).unwrap().set_len(crate::regular_file::SMALL + 1).unwrap(),
+                "process_symlink" | "status_symlink" | "log_symlink" => std::os::unix::fs::symlink(&target, &path).unwrap(),
+                "process_fifo" | "status_fifo" | "log_fifo" => crate::regular_file::fifo(&path),
+                "status_read" => std::fs::write(&path, "{").unwrap(),
+                "status_shape" => std::fs::write(&path, "[]").unwrap(),
+                _ => {}
+            }
+            for attempt in 1..=MAX_DEFERRALS {
+                {
+                    let mut s = f.inner.lock().unwrap();
+                    s.desired = Some("0.3.45".into());
+                    s.pending = Some("0.3.45".into());
+                    s.pending_since = Some(Instant::now());
+                    s.features = json!({"runner_drain": true});
+                }
+                if step.starts_with("status_") || (step.starts_with("process_") && step != "process_race") {
+                    f.decide().await;
+                } else {
+                    let env = if step.starts_with("systemd_") { systemd_env() } else { crate::env::Env::new() };
+                    let mut detached = false;
+                    let result = f.spawn_with("0.3.45", &env, |cmd| {
+                        if cmd.get_program() == "systemctl" { return command_output(0, "control-group", ""); }
+                        match step {
+                            "systemd_start" => command_output(1, "", "Failed to start transient service unit: denied"),
+                            "systemd_missing" => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "systemd-run missing")),
+                            "systemd_bus" => command_output(1, "", "Failed to connect to bus: denied"),
+                            _ => panic!("unexpected systemd launch at {step}"),
+                        }
+                    }, |_| {
+                        detached = true;
+                        assert_eq!(step, "detach");
+                        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "detached launch denied"))
+                    });
+                    let cause = result.as_ref().unwrap_err().clone();
+                    assert_eq!(detached, step == "detach");
+                    f.launched("0.3.45", result);
+                    assert!(read_status(&f.directory)["deferral_cause"] == cause);
+                }
+                let status = read_status(&f.directory);
+                assert_eq!(status["state"], if attempt == MAX_DEFERRALS { "blocked" } else { "idle" }, "{step}");
+                assert_eq!(status["deferrals"], attempt, "{step}");
+                assert_eq!(status["cause_count"], attempt, "{step}");
+                assert!(status["not_before"].as_f64().unwrap() > epoch_s(), "{step}");
+                assert!(text_of(&status["error"]).contains(&text_of(&status["deferral_cause"])), "{step}");
+                assert!(!f.draining() && !f.blocks_claims(true).await && !f.blocks_claims(false).await, "{step}");
+                for _ in 0..2 {
+                    f.decide().await;
+                    assert!(!f.draining() && !f.blocks_claims(false).await, "{step}");
+                    assert_eq!(read_status(&f.directory), status, "a poll must keep the retry time at {step}");
+                }
+                assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep this inode and content");
+                if !step.starts_with("process_") { assert_eq!(updater_running(&f.directory), Ok(false)); }
+                if step.starts_with("status_") { break; } // The deferral replaces the unreadable status.
+                let mut due = status;
+                due["not_before"] = json!(epoch_s() - 1.0);
+                write_status(&f.directory, due);
+            }
+            std::fs::remove_dir_all(f.directory).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn deferral_statuses_obey_the_due_and_claim_rules() {
+        // The released Python follower runs the same table but ignores not_before.
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../runner_support/tests/fixtures/update-status-cases.json")).unwrap();
+        let f = checkout_follower();
+        std::env::set_var("TICO_SUPERVISED", "1");
+        for case in cases {
+            let state = case["state"].as_str().unwrap();
+            let due = case["rust_due"].as_bool().unwrap();
+            let mut status = json!({"state": state, "target": "0.3.45", "error": "test cause", "at": epoch_s() - case["age"].as_f64().unwrap()});
+            if let Some(wait) = case["retry_in"].as_f64() { status["not_before"] = json!(epoch_s() + wait); }
+            write_status(&f.directory, status);
+            {
+                let mut s = f.inner.lock().unwrap();
+                s.desired = Some("0.3.45".into());
+                s.pending_since = Some(Instant::now());
+                s.features = json!({"runner_drain": true});
+            }
+            f.decide().await;
+            assert_eq!(f.inner.lock().unwrap().pending.is_some(), due, "{case}");
+            assert_eq!(f.draining(), due || state == "updating", "{case}");
+            assert_eq!(f.blocks_claims(true).await, due || state == "updating", "{case}");
+            if !due && state != "updating" {
+                assert!(!f.blocks_claims(false).await, "{case}");
+                assert!(f.inner.lock().unwrap().pending_since.is_none(), "{case}");
+                let mut body = json!({});
+                f.fields(&mut body);
+                assert_eq!(body["update"]["state"], state);
+                assert_eq!(body["update"]["error"], "test cause");
+            }
+        }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unfinished_drains_release_claims_on_the_short_schedule_and_reset_after_a_new_release() {
+        let f = checkout_follower();
+        std::env::set_var("TICO_SUPERVISED", "1");
+        for delay in [120, 300, 900, 1800, 3600, 3600] {
+            {
+                let mut s = f.inner.lock().unwrap();
+                s.desired = Some("0.3.45".into());
+                s.pending = Some("0.3.45".into());
+                s.pending_since = Some(Instant::now());
+                s.features = json!({"runner_drain": true});
+            }
+            assert!(f.blocks_claims(true).await); // quiet work still gets its normal drain time
+            f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(f.drain_timeout);
+            assert!(!f.blocks_claims(true).await);
+            assert!(!f.draining());
+            let status = read_status(&f.directory);
+            assert_eq!(status["state"], "idle");
+            assert_eq!(status["not_before"].as_f64().unwrap() - status["at"].as_f64().unwrap(), delay as f64);
+            f.decide().await;
+            assert!(!f.blocks_claims(false).await && !f.blocks_claims(true).await);
+            let restarted = checkout_follower();
+            write_status(&restarted.directory, status.clone());
+            assert_eq!(restarted.outcome("0.3.45").await.unwrap().0, "idle");
+            assert!(restarted.outcome("0.3.46").await.is_none());
+            std::fs::remove_dir_all(restarted.directory).unwrap();
+        }
+        f.inner.lock().unwrap().desired = Some("0.3.46".into());
+        f.decide().await;
+        assert!(f.draining());
+        f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(f.drain_timeout);
+        assert!(!f.blocks_claims(true).await);
+        assert_eq!(read_status(&f.directory)["deferrals"], 1);
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
     #[test]
     fn versions_sort_as_release_update_does() {
         assert!(behind("0.3.44", "0.3.45"));
@@ -845,6 +1494,7 @@ mod tests {
             started: String::new(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar { url: String::new(), token_file: dir.join("t") },
@@ -888,6 +1538,7 @@ mod tests {
             started: String::new(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["true".into()],
             // Nothing listens on the discard port: the sidecar is stopped.
@@ -930,6 +1581,7 @@ mod tests {
             started: String::new(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar { url: url.into(), token_file: dir.join("t") },
@@ -1066,6 +1718,8 @@ mod tests {
         };
         std::fs::create_dir_all(origin.join("runner_support")).unwrap();
         std::fs::write(origin.join("runner_support/a.py"), "1").unwrap();
+        std::fs::write(origin.join("CLAUDE.md"), "# Rules\n").unwrap();
+        std::os::unix::fs::symlink("CLAUDE.md", origin.join("AGENTS.md")).unwrap();
         sh(&origin, &["init", "-q"]);
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "one"]);
@@ -1074,12 +1728,55 @@ mod tests {
         let stands = checkout_status(&here, &first).await.unwrap();
         assert_eq!((stands["ahead"].as_u64(), stands["behind"].as_u64()), (Some(0), Some(0)));
         assert!(stands["checked_at"].as_str().unwrap().ends_with('Z'));
+        let check_backup = |note: &str| {
+            let backup = Path::new(note.strip_prefix("restored 1 flattened links; originals kept in ").unwrap());
+            assert_eq!(backup.parent().unwrap(), here.join(".git/tico-flattened-links"));
+            assert_eq!(std::fs::read_to_string(backup.join("AGENTS.md")).unwrap(), "# Rules\n");
+        };
+
+        // The same check serves release Health and the main follower, including core.symlinks=false clones.
+        for symlinks in ["true", "false"] {
+            sh(&here, &["config", "core.symlinks", symlinks]);
+            std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+            std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+            let found = checkout_links(&here, false).await;
+            assert_eq!(found["only_flattened"], true);
+            assert!(flattened_note(&found).contains("repaired automatically on the next update"));
+            let (restart, note) = self_update(&here, &first).await;
+            assert!(!restart);
+            check_backup(&note);
+            assert!(here.join("AGENTS.md").is_symlink());
+        }
+
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+        std::fs::write(here.join("runner_support/a.py"), "local work\n").unwrap();
+        let (restart, note) = self_update(&here, &first).await;
+        assert!(!restart && note.contains("flattened links: AGENTS.md"));
+        assert!(note.contains("runner_support/a.py"));
+        assert!(!here.join("AGENTS.md").is_symlink());
+        assert_eq!(std::fs::read_to_string(here.join("runner_support/a.py")).unwrap(), "local work\n");
+        sh(&here, &["-c", "core.symlinks=true", "checkout", "HEAD", "--", "runner_support/a.py", "AGENTS.md"]);
+
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
+        std::fs::write(here.join("CLAUDE.md"), "local work\n").unwrap();
+        assert_ne!(checkout_links(&here, false).await["only_flattened"], true);
+        assert_eq!(self_update(&here, &first).await.1, "checkout has uncommitted changes: AGENTS.md, CLAUDE.md");
+        assert!(!here.join("AGENTS.md").is_symlink());
+        sh(&here, &["-c", "core.symlinks=true", "checkout", "HEAD", "--", "CLAUDE.md", "AGENTS.md"]);
+
+        // A matching copy is repaired before the follower fast-forwards to the next commit.
+        std::fs::remove_file(here.join("AGENTS.md")).unwrap();
+        std::fs::write(here.join("AGENTS.md"), "# Rules\n").unwrap();
 
         std::fs::write(origin.join("README.md"), "docs").unwrap();
         sh(&origin, &["add", "."]);
         sh(&origin, &["commit", "-qm", "docs"]);
         assert_eq!(checkout_status(&here, &first).await.unwrap()["behind"], 1);
-        assert_eq!(self_update(&here, &first).await, (true, String::new()));
+        let (restart, note) = self_update(&here, &first).await;
+        assert!(restart);
+        check_backup(&note);
         let head = checkout_commit(&here);
         assert!(!runner_code_changed(&here, &first, &head).await);
         std::fs::write(origin.join("runner_support/a.py"), "2").unwrap();
@@ -1096,6 +1793,7 @@ mod tests {
             started: head.clone(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["sh".into(), "-c".into(), "echo no cargo >&2; exit 1".into()],
             sidecar: Sidecar { url: String::new(), token_file: dir.join("t") },
@@ -1110,7 +1808,8 @@ mod tests {
         sh(&here, &["reset", "-q", "--hard", &head]);
 
         std::fs::write(here.join("runner_support/a.py"), "dirty").unwrap();
-        assert_eq!(self_update(&here, &head).await.1, "checkout has uncommitted changes");
+        assert_eq!(self_update(&here, &head).await.1, "checkout has uncommitted changes: runner_support/a.py");
+        assert_eq!(std::fs::read_to_string(here.join("runner_support/a.py")).unwrap(), "dirty");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

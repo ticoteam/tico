@@ -102,7 +102,7 @@ class OwnerInstruction(Stage2):
         self.order()
         self.answer.update(ok=True, problems=[])
         out = self.send(draft["draft"], "--approval-issue", ORDER)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertFalse(out["review_reused"])
         self.assertEqual(len(self.prompts), 2)
         prompt = self.prompts[-1]
@@ -115,7 +115,7 @@ class OwnerInstruction(Stage2):
         self.assertNotIn("text", reviews[-1]["owner_instruction"])
         stored = self.conn().execute("SELECT verdict FROM reviews ORDER BY id DESC LIMIT 1").fetchone()
         self.assertEqual(json.loads(stored[0])["owner_instruction"], reviews[-1]["owner_instruction"])
-        sent = [r["detail"] for r in self.audit_lines() if r["action"] == "send"][-1]
+        sent = [r["detail"] for r in self.audit_lines() if r["action"] == "send-queued"][-1]
         self.assertEqual(sent["review_result"], "approved with owner instruction")
 
     def test_reply_passes_the_verified_message_to_its_review(self):
@@ -124,7 +124,7 @@ class OwnerInstruction(Stage2):
                                      "--body-file", self.body_file(GOOD_BODY), "--issue", "42",
                                      "--approval-issue", ORDER, "--json")
         self.assertEqual(rc, 0, err)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
 
     def test_a_server_authorized_senders_instruction_reaches_the_reviewer_without_a_local_owner(self):
@@ -132,19 +132,18 @@ class OwnerInstruction(Stage2):
         self.order(sender_id="human:ana", sender_can_approve_send=True)
         with mock.patch.object(pl, "OWNER", "owner"):
             out = self.send(draft["draft"], "--approval-issue", ORDER)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
         self.assertIn(f"verified: human:ana, in Tico message; approval {ORDER}", self.prompts[-1])
 
-    def test_a_verified_issue_reaches_the_backend_with_its_original_text(self):
-        title = "Owner's Mailbox Test"
-        body = f"Send to: {AVA}\nSubject: Mailbox test\nBody:\n{GOOD_BODY}"
-        pl.RUN = gh_answer(title=title, body=body)
+    def test_a_closed_issue_does_not_grant_review_or_sending_permission(self):
+        pl.RUN = gh_answer(body=f"Send to: {AVA}\nSubject: Mailbox test\nBody:\n{GOOD_BODY}")
         draft = self.draft()
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertTrue(out["sent"], out)
-        self.assertEqual(instruction_in(self.prompts[-1]), title + "\n" + body)
-        self.assertIn(f"verified: owner:{access.OWNER}, in GitHub Issue; approval 77", self.prompts[-1])
+        self.assertFalse(out["sent"])
+        self.assertIn("Tico send approval", out["reason"])
+        self.assertIsNone(instruction_in(self.prompts[-1]))
+        self.assertEqual(self.queue_requests, [])
 
     def test_another_sender_or_another_bots_message_is_not_review_permission(self):
         for change in ({"sender_id": "bot:influencer"}, {"recipient_id": "bot:inbox"}):
@@ -185,18 +184,19 @@ class OwnerInstruction(Stage2):
             "owner_instruction": INSTRUCTION}}
         pl.HUB_GET = lambda path: row if path == f"approvals/{APPROVAL}" else None
         out = self.send(draft["draft"], "--approval-issue", APPROVAL)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertIsNone(instruction_in(self.prompts[-1]))
         self.assertNotIn("The bot claims", self.prompts[-1])
 
-    def test_an_issue_naming_other_files_does_not_bind_files_and_still_reaches_the_reviewer(self):
+    def test_a_github_issue_cannot_approve_attached_mail(self):
         # Attachments follow the send rules: only a Tico send approval that names files binds them.
         (self.root / "emp-influencer" / "answer.pdf").write_bytes(b"%PDF-1.4 answer")
         draft = self.draft("--attach", "answer.pdf")
         pl.RUN = gh_answer(body=f"Send to: {AVA}\nSend different.pdf, sha256 {'a' * 64}")
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertTrue(out["sent"], out)
-        self.assertIn("different.pdf", instruction_in(self.prompts[-1]))
+        self.assertFalse(out["sent"])
+        self.assertIn("Tico send approval", out["reason"])
+        self.assertIsNone(instruction_in(self.prompts[-1]))
 
     def test_owner_permission_does_not_override_unsupported_claims_or_commitments(self):
         self.order()
@@ -248,7 +248,7 @@ class OwnerInstruction(Stage2):
     def test_a_plain_send_keeps_reusing_its_fresh_review(self):
         draft = self.draft()
         out = self.send(draft["draft"])
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertTrue(out["review_reused"])
         self.assertEqual(len(self.prompts), 1)
 

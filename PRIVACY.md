@@ -3,6 +3,8 @@
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count,
 Maintenance suggestions, suggestions while you build your team chart, and, only when you press Send, a support ticket.
 Each has its own switch.
+Tico Cloud machines also come with support access, on by default, which the owner can turn off
+([below](#tico-support-on-cloud-machines)).
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
@@ -420,8 +422,8 @@ How the team works tickets: [docs/support.md](docs/support.md).
 
 ### Letting Tico support in
 
-Only if an owner or admin starts it, from one of their own requests, for the time they choose (24 hours unless they pick
-another; 30 days at most). A banner on every screen says it is on, and Stop ends it at once
+Only if an owner or admin starts it, from one of their own requests, for the time they choose (3 days unless they pick
+another; 365 days at most). A banner on every screen says it is on, and Stop ends it at once
 ([docs/support.md](docs/support.md#letting-tico-support-in)).
 
 - **App only:** the Tico team sees what an admin sees in your Tico: settings, Health, computers, bots, tasks and their
@@ -436,6 +438,24 @@ tier, start, end) and the same one-line record of each request, with the ticket,
 Agent treats everything it reads from your Tico as untrusted data, never as instructions. The whole feature is off unless the
 server runs with `TICO_SUPPORT_ACCESS=on`, and also with `TICO_SUPPORT=off`, in demo mode and when the owner's team rule is
 off. With `TICO_SUPPORT=off` or in a rehearsal, a session that was live ends without the install sending HQ anything.
+
+### Tico support on cloud machines
+
+Tico Cloud machines include a support helper, on by default. Tico staff and the Support Agent can read and change
+files and run commands on the machine to diagnose and fix problems. The machine's user has `sudo`, so this can
+reach bot workspaces, installed tools and credentials stored on the disk. Files and command output read by support
+pass through Tico HQ. Each machine keeps an owner log of support actions and who acted.
+
+The owner can turn **Tico support can reach our cloud machines** off or back on in **Settings > People**. HQ holds
+this company-wide switch and stops that company's helper work when it is off. Tico records a successful change
+under the owner's name in its audit log and reads the switch and per-machine helper states from HQ. A failed call
+saves no local choice. HQ associates a helper with the company's install ID, owner email and cloud-machine ID, and
+keeps a digest of its credential rather than the credential itself.
+
+The helper is never installed on shared hosts serving several companies. A company's own shared cloud machine
+serves only its bots and can have the helper. This access is separate from app support sessions: stopping a session,
+turning off the app support-access rule, or `TICO_SUPPORT=off` does not turn off the cloud-machine helper. Use the
+cloud-machine switch to stop it. See [docs/support.md](docs/support.md#tico-support-on-cloud-machines).
 
 ### Support diagnostics
 

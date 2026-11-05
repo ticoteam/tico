@@ -36,7 +36,8 @@ for additional results. Transcript reads accept `--offset` and `--limit` in char
 (default 20,000, maximum 50,000); follow `next_offset` until it is null.
 
 Every teammate (owner, human or bot) can list and read internal and linked team Docs ([Docs](docs.md)). Market knowledge follows the
-existing market access rules. Bots may read explicitly non-private team meetings;
-they do not inherit their owner's access to private meetings or personal notes.
+existing market access rules. Bots may read explicitly non-private Team meetings and filed meetings
+they were attached to, including Participants only, regardless of who added them.
+They do not inherit their owner's access to other private meetings or personal notes.
 Human access follows the existing owner/attendee rules. Deleted meetings are excluded.
 The read tools do not expose audio, attachments, or credentials.

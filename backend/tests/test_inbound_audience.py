@@ -1,4 +1,4 @@
-"""Email & Phone audience (backend/inbound.py): an inbox is the company's unless an admin narrows it to a group, and a
+"""Who reads a Tico address or number (backend/inbound.py): an inbox is the company's unless an admin narrows it to a group, and a
 narrowed inbox is not there for anyone outside that group and the groups under it, on every read path: the inbox list,
 messages, search, the cursor, waits, a message and its code. The owner and admins always read it.
 

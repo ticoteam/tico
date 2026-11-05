@@ -9,10 +9,12 @@ database, made-up bots and repositories, and no request leaves the test server.
 import json
 import sqlite3
 from contextlib import closing
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-from backend import providers, settings_catalog
+from backend import cloud_machines, providers, settings_catalog
 from backend.settings_entries import ENTRIES
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner  # noqa: F401  (fixture)
@@ -63,6 +65,7 @@ SAMPLES = {
     "release.times": "09:30",
     "release.bot": "finance",
     "release.writer": "finance",
+    "mail.legal_bot": {"legal_bot_id": "finance"},
     "rules.task_rule": {"on": False},
     "rules.task_rule.create": {"name": "Parity rule", "when": {}, "then": {}},
     "rules.system": {"enabled": True},
@@ -112,6 +115,7 @@ NOT_PROVEN = {
     "inbound.phone_request": "tap 409: inbound is not configured",
     "inbound.phone_request.accept": "422: needs the price shown (and inbound is not configured)",
     "bot.cloud_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "bot.cloud_machine.replace": "tap 409: the fixture company is not on Tico Cloud",
     "cloud.shared_machine": "tap 409: the fixture company is not on Tico Cloud",
     "mail.address.order": "422: the body shape (an address order with its Idempotency-Key)",
 }
@@ -173,12 +177,13 @@ def _saved_subscription(api, objects):
 
 
 def _target(e, objects, person):
-    target = {"bot": "finance", "computer": objects["computers"], "person": "cara" if e.target == "person" else ""}
-    if e.target == "id":
-        target["id"] = next((v for k, v in objects.items() if e.route.startswith(k + "/")), "parity-missing")
+    target = {"bot": "finance", "computer": objects["computers"], "person": "cara"}
+    if "{id}" in e.route:
+        target["id"] = ("all" if e.route.startswith("postal/addresses/") else
+                        next((v for k, v in objects.items() if e.route.startswith(k + "/")), "parity-missing"))
     if e.who == "self" and e.target == "person":
         target["person"] = person
-    return {k: v for k, v in target.items() if v and (k == e.target)}
+    return {k: v for k, v in target.items() if v and "{" + k + "}" in e.route}
 
 
 def _allowed(c, e, role, person):
@@ -260,7 +265,15 @@ def ask(api, attempt, e, objects, person, token):
     LAST[e.key] = f"{planned.status_code} {planned.text[:300]}"
     if got != "card":
         return got
-    tap = tapped(api, planned.json(), token)
+    if e.route == "cloud-machines/support":
+        # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
+        # the shared sweep proves the owner's confirmation as well as refusing everyone else.
+        hq = SimpleNamespace(support=lambda on=None, **_: {"on": on is not False, "machines": []})
+        with patch.object(cloud_machines, "cloud_company", return_value=True), \
+                patch.object(api.app.state.cloud_machines, "client", hq):
+            tap = tapped(api, planned.json(), token)
+    else:
+        tap = tapped(api, planned.json(), token)
     if tap != "ran":
         LAST[e.key] = f"tap: {TAP_DETAIL.get('detail', '')}"
     return "card" if tap == "ran" else "card, then " + tap

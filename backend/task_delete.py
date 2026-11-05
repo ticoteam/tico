@@ -28,7 +28,7 @@ from .migrations import renames
 
 
 # The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
-READABLE = "(SELECT *, owner AS owner_id, requester AS requester_id FROM task_trash)"
+READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash) tasks"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
@@ -69,7 +69,7 @@ MESSAGE_ROWS = (("message_assets", "message_id"), ("slack_posts", "message_id"),
                 ("task_file_reviews", "comment_id"), ("task_file_reviews", "ask_message_id"))
 CONVERSATION_ROWS = (("slack_digests", "conversation_id"), ("slack_threads", "conversation_id"))
 # Rows that point at the task but belong to something else, by their key: restored only if still unset.
-POINTERS = (("market_insights", "id", "filed_task"),)
+POINTERS = (("market_insights", "id", "filed_task"), ("meeting_items", "id", "proposed_task_id"))
 LINKS = ("conversation_id",)
 # Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
 LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}

@@ -736,13 +736,15 @@ def draft_facts(c, author, kind, day):
     # not private, not deleted, with a summary.
     email = ((P.person(author[6:], _chart(c)[0]) or {}).get("email") or "").strip().lower()
     meetings = c.execute(
-        "SELECT m.title, m.notes FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+        "SELECT m.title, m.notes, m.metadata FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
         "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata,'$.kind')='meeting' "
         "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created_at>=? AND ("
         "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
         "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.participants')) "
         "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created_at DESC LIMIT ?",
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []
+    from .media import effective_audience
+    meetings = [row for row in meetings if effective_audience(H._json(row['metadata'], {})) == 'team']
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     facts = [f"{name}'s {'week in review' if week else 'daily update'} for {day}.", "",
              f"Finished {'this week' if week else 'since yesterday'}:", line(done, lambda r: r["title"]),

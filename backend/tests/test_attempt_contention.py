@@ -286,6 +286,7 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
 
 
 @pytest.mark.slow
+@pytest.mark.alone
 def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch, two_cpu_cap):
     computer = fleet(api)
     store = api.app.state.store
@@ -359,6 +360,6 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch, two
     assert not failures, failures
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE state='running' AND lease_until>?", (H.now(),)).fetchone()[0] == 100
-    # Held to the health monitor's 1 s warning: the gate runs this beside other tests on the same VM, which roughly
-    # doubles the 300 ms an idle 4-vCPU VM takes here.
+    # Held to the health monitor's 1 s warning. Marked alone: the release gate runs it by itself after the parallel
+    # tests, since three other xdist workers on the same 4-vCPU VM pushed a route's p95 past 1 s (v0.5.165 try 1).
     assert all(row["p95_ms"] < 1000 for row in receipt.values()), receipt

@@ -159,6 +159,12 @@ Details of the API as built:
 - Audit objects are `reach_setting:<party>` and `reach_line:<id>`; events are `reach.setting_changed`,
   `reach.line_added`, `reach.line_changed`, `reach.line_removed`.
 
+## On a phone
+
+The map stays on the Internal tab. Scroll it to see the parts off screen. Tap a party to draw its lines and open its
+panel under the map. While you type in **Search people, bots and teams**, the matches replace the map; tap one to
+open it.
+
 ## The panel
 
 - Header: the party's name.

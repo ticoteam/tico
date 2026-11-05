@@ -45,6 +45,7 @@ const scenes = {
   connect: [],
   demo: [],
   meeting: [open('m1')],
+  'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); }],
   owner: [open('m1'), async (page) => page.click('.owner.empty')],
   recording: [open('m0')],
   retrying: [open('m0')],
@@ -97,7 +98,9 @@ const scenes = {
   settings: [settingsPage],
   'settings-own': [settingsPage],
   'settings-nostream': [settingsPage],
+  'settings-add': [settingsPage],
   orgs: ['library', async (page) => page.click('[data-pop="orgs"]')],
+  'orgs-add': ['settings-add', async (page) => page.click('[data-pop="orgs"]')],
   long: [open('m2')],
   'long-library': ['long'],
   sources: [async (page) => page.click('.record-pill .caret')],
@@ -147,6 +150,36 @@ if (!only.length || only.includes('checks')) {
     await context.close();
   };
   const go = async (page, scene) => { await page.goto(`${base}?scene=${scene}`); await page.waitForSelector('#r-page > *'); };
+  await check('task links and detail drafts', async (page) => {
+    await go(page, 'meeting'); await open('m1')(page);
+    await page.click('[data-act="task-picker-open"]');
+    await page.waitForSelector('[data-act="task-pick"]');
+    await page.click('[data-id="t42"]'); await page.click('[data-id="t43"]');
+    await page.click('[data-act="task-picker-link"]');
+    await page.waitForSelector('.item.task:has-text("Review pricing")');
+    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = true; });
+    await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Pending")');
+    if (await page.locator('.item.task:has-text("Review pricing") .check.done').count()) throw Error('pending link shown as committed');
+    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = false; });
+    await page.waitForSelector('.item.task:has-text("Review pricing") .check.done');
+    await page.click('.item.task:has-text("Review pricing") [data-act="unlink-item"]');
+    await page.waitForSelector('.item.task:has-text("Review pricing")', { state: 'detached' });
+    if (!(await page.locator('.item.task:has-text("Test recovery")').count())) throw Error('second link lost');
+    await page.click('[data-act="task-detail"][data-id="i1"]');
+    await page.fill('[data-model="detailDue"]', '2026-12-01');
+    await page.fill('[data-model="detailBody"]', 'Synthetic details');
+    await page.click('[data-act="task-detail-save"]');
+    const due = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1').due);
+    const expectedDue = await page.evaluate(() => new Date(2026, 11, 1, 17, 0).toISOString());
+    if (due !== expectedDue) throw Error('due date is not the task API timestamp');
+    await page.click('[data-act="task-detail"][data-id="i1"]');
+    if (await page.inputValue('[data-model="detailBody"]') !== 'Synthetic details') throw Error('details lost');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[aria-label="Task details"]', { state: 'detached' });
+    await page.click('[data-act="create-item"][data-id="i1"]');
+    await page.waitForSelector('.item.task:has-text("Confirm the transcript link")');
+  });
+
 
   // Delete asks first, and only Delete removes the row.
   await check('delete', async (page) => {
@@ -268,6 +301,22 @@ if (!only.length || only.includes('checks')) {
     await page.waitForSelector('.lib-head');
     const connected = await page.evaluate(() => window.__PREVIEW__.state.desktop_orgs.filter((org) => org.connected).map((org) => org.name));
     if (connected.join() !== 'TIDY') errors.push(`signin: Allow signed in to ${connected.join() || 'nothing'}, not TIDY`);
+  });
+  // After the first org, the desktop app's other orgs stay one tap away: Settings and the org menu.
+  await check('add-org', async (page) => {
+    await go(page, 'settings-add');
+    await settingsPage(page);
+    const rows = await page.locator('.settings-group [data-act="signin-desktop"]').evaluateAll((b) => b.map((x) => x.dataset.url));
+    if (rows.join() !== 'https://tidy.tico.page') errors.push(`add-org: Settings offers ${rows.join() || 'nothing'}, not TIDY`);
+    if (!(await page.locator('.other-address [data-model="signin"]').count())) errors.push('add-org: no Other address');
+    if (await page.locator('.settings-group .btn.primary[data-act="signin"]').count()) errors.push('add-org: typed address is primary');
+    await page.click('.settings-group [data-act="signin-desktop"]');
+    await page.waitForSelector('.settings-group [data-act="sign-out"][data-id="tidy"]');
+    if (await page.locator('.settings-group [data-act="signin-desktop"]').count()) errors.push('add-org: TIDY still offered once connected');
+    await go(page, 'settings-add');
+    await page.click('[data-pop="orgs"]');
+    await page.click('#popover [data-act="signin-desktop"][data-url="https://tidy.tico.page"]');
+    await page.waitForSelector('.settings-group [data-act="sign-out"][data-id="tidy"]');
   });
   await check('signin-address', async (page) => {
     await go(page, 'signin-address');

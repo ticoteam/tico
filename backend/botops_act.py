@@ -329,6 +329,13 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("PUT", rf"letters/bots/{_S}/settings"),
+    ("PUT", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("PUT", r"postal/settings"),
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
     ("DELETE", rf"automations/{_S}"), ("POST", rf"automations/{_S}/delete"),
@@ -354,6 +361,9 @@ MESSAGES = re.compile(API + r"messages")
 
 # Confirm-card routes only an owner or an admin may ask for: a member is told so at once, not handed a card that fails.
 ADMIN_ONLY = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
     ("PUT", r"providers"), ("PUT", r"access/(limits|allow)"), ("PUT", r"usage/limits"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),

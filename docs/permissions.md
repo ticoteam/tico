@@ -181,6 +181,10 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
+A page's maintainer bot and its managers may narrow **Who can see it**, archive and restore it. The audience applies
+to people and bots after inherited file visibility, including wider pins; the maintainer and managers always pass
+that audience check. Only managers see its chosen names ([Pages](pages.md#who-can-see-it)).
+
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
