@@ -267,3 +267,18 @@ def test_make_page_is_queued_separately_from_an_already_running_assistant_turn(a
     assert message["id"] not in {m["id"] for m in inputs["messages"]}
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (message["id"],)).fetchone()[0] == "queued"
+
+
+def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attempt(api):
+    from backend.tests.test_mcp import call, rpc
+    t = task(api, private=False)
+    _, attempt, _ = start(api, t["id"])
+    tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
+    assert "hub_page_publish" in {tool["name"] for tool in tools}
+    error, result = call(api, "hub_page_publish", {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]},
+                         token=attempt["token"])
+    assert not error, result
+    assert result["page"]["updated_by"] == "human:ben"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT attempt_id FROM bot_file_versions WHERE file_id=?",
+                         (result["page"]["file_id"],)).fetchone()[0] == attempt["id"]
