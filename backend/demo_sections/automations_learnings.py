@@ -171,7 +171,7 @@ CONTENT = {
          "data": {"stars": 4, "product": "Home Pro", "text": "Good, but set-up took a while."}},
         {"at": [2, 10.0], "name": "custom.review.posted", "subject": "review/R-2230", "actor": "bot:marketplace",
          "data": {"stars": 5, "product": "Home Pro", "text": "Easy to calibrate."}},
-        {"at": [2, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
+        {"at": [0, 1.2], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
          "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."}},
         {"at": [0, 0.9], "name": "custom.review.posted", "subject": "review/R-2240", "actor": "bot:marketplace",
          "data": {"stars": 3, "product": "Home Pro", "text": "Fine for the price."}},

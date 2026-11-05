@@ -65,6 +65,23 @@ def usage_clock_at(moment):
         U.datetime = saved
 
 
+@contextmanager
+def hubdb_clock_at(moment):
+    """The API reads the real wall clock when it decides whether a seeded task is stuck."""
+    saved = hubdb.datetime
+
+    class Pinned(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment
+
+    hubdb.datetime = Pinned
+    try:
+        yield
+    finally:
+        hubdb.datetime = saved
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     """Two builds of the same date, back to back, read before any app has opened either database."""
@@ -118,7 +135,8 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
 
 
 def test_no_task_is_left_stuck_for_days(ana):
-    assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
+    with hubdb_clock_at(NOW):
+        assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
