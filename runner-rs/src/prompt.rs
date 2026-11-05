@@ -200,6 +200,15 @@ fn assemble(attempt: &Value, lines: &[(Part, String)], run: &str, seen: &Seen, c
     Built { text, full, standing, task: task_digest, restore, rules }
 }
 
+/// One line per tool the turn calls through the Tico proxy (crate::env `ProxiedTool`): where to call and what to
+/// send as the key. Empty when none is granted, or the server is older than the proxy.
+pub fn proxied_tools(tools: &Value) -> String {
+    tools.as_array().map(|all| all.iter().filter_map(|t| {
+        let (name, env, url) = (s(&t["name"]), s(&t["env"]), s(&t["url_env"]));
+        (!url.is_empty() && !env.is_empty()).then(|| format!("{name}: call ${url}/<path> and put ${env} where the key goes (Tico adds the real key)."))
+    }).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+}
+
 /// Every line of the prompt in order, each marked with what it is, and the run id it names.
 fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, replay: &str) -> (Vec<(Part, String)>, String) {
     let message = &attempt["message"];
@@ -242,6 +251,10 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
         format!("Conversation: {conv_id}. {app} keeps all of it, even what a compaction, a model change or a new session took out of your context: `hub conversation show {conv_id}` reads the newest 200 messages, and `--before` with its `next_before` reads the page before. Your repository, its files and git log, is the record of your own past work."),
     ];
     let mut lines: Vec<(Part, String)> = opening.into_iter().map(|l| (Part::Standing, l)).collect();
+    let tools = proxied_tools(&attempt["_proxied_tools"]);
+    if !tools.is_empty() {
+        lines.push((Part::Standing, tools));
+    }
     crate::sessions::prompt_head(attempt, &mut lines);
     // The Assistant's room: every person's one chat, the owner's included. The Strategy Bot, the Librarian and BotOps
     // are helpers it hands work to (backend/assistant.py HELPERS); none of them has a person's chat.
@@ -468,6 +481,14 @@ mod tests {
         assert!(!block.contains("SECRET"));
         let built = prompt(&json!({"id": "a", "bot": "ops", "task_context": sources}), &Names::from_config(None), None, false);
         assert!(built.contains(&block) && !built.contains("SECRET"));
+    }
+
+    #[test]
+    fn a_proxied_tool_is_one_prompt_line_naming_its_variables() {
+        let tools = json!([{"name": "Close CRM", "env": "CLOSE_API_KEY", "url_env": "TICO_TOOL_CLOSE_CRM_URL"}]);
+        let built = prompt(&json!({"id": "a", "bot": "ops", "_proxied_tools": tools}), &Names::from_config(None), None, false);
+        assert!(built.contains("Close CRM: call $TICO_TOOL_CLOSE_CRM_URL/<path> and put $CLOSE_API_KEY where the key goes (Tico adds the real key)."), "{built}");
+        assert!(!prompt(&json!({"id": "a", "bot": "ops"}), &Names::from_config(None), None, false).contains("Tico adds the real key"));
     }
 
     /// What the Python runner's `Runner.prompt` wrote for each case below (names Acme/Tico), kept since that runner is gone.

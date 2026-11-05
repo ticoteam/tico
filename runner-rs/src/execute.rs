@@ -1849,6 +1849,8 @@ impl Runner {
             let names = self.names().await;
             let after = if resumed { self.state.cursor(&th, None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
+            // The tools this turn calls through the Tico proxy, for their prompt line (crate::prompt `proxied_tools`).
+            attempt["_proxied_tools"] = json!(vault.tools.iter().map(|t| json!({"name": t.name, "env": t.env, "url_env": t.url_env})).collect::<Vec<_>>());
             // A new session that replaces a saved one is given the room since the old one's last turn, its own replies
             // included; a resumed one that a side session ran after is given them too, and the task's checkpoint.
             let side_ran = resumed && self.state.repo_rules(&crate::continuity::side_key(&th), None)?.as_deref() == Some("1");

@@ -31,6 +31,20 @@ Credentials use AES-256-GCM with per-write random nonces and credential-bound au
 
 The Credential's variable-name field becomes an environment variable only for a granted bot, during its run (`GET /api/v2/credential-runtime`), on a Mac or Linux computer and in the Docker runner alike. File Credentials become mode-0600 temporary files during the run. A bot cannot be granted two Credentials that use one variable name (the second grant is refused until the first is taken away). Computer login entries describe existing CLI/browser sessions and must be connected separately on each computer. A bot's Tools list and Health count a granted Credential as present ("granted through the credential vault") even though its computer's secrets file does not hold it. Existing bots' own-file values migrate into grants on upgrade; an old file is never a run fallback. Storing a Credential does not erase that file or give its value to another bot.
 
+### Proxied tools
+
+An API tool's keys (Tools) are delivered one of two ways. **Proxy**, the default for a new tool with a known service:
+the key never leaves the server. In its place the run gets a proxy token in the key's variable and the proxy's address
+in `TICO_TOOL_<ID>_URL`; it calls `$TICO_TOOL_<ID>_URL/<path>` with the token where the key goes (or `hub tools call`),
+and `/api/v2/tool-proxy/<id>/<path>` checks the token, picks the key by the caller's level (a Read caller gets the read
+key; with no read key it may only make GET, HEAD and OPTIONS calls), sends the call on with the vendor's auth, scrubs
+the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A token
+is signed by the server, names one tool and one bot, and works only while the run it was made for is leased or running
+(a watcher's while its bot is assigned to that computer, for at most 12 hours); taking the level away stops the next
+call. **Computer** is the older way, and what every tool stored before Tools had: the value goes to the run's
+environment as above, so whoever controls that computer can read it. Tools lists those under Needs you with
+"Move to proxy".
+
 Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY` infer
 that variable when the optional variable field is blank. An explicit variable always wins. For a stored API key or token,
 **Manage access > Every computer** lets computers sign their models in. It gives no bot access: grant a bot separately.

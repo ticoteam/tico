@@ -829,8 +829,18 @@ def install_credentials(app,store,delegate=None,propose=None):
             validate_identity(c,who)
             values=[]
             held=granted(c,who.actor)
+            # A proxied tool's key stays here: the run gets a token for the proxy instead (backend/tool_proxy.py).
+            from . import tool_proxy
+            proxied=tool_proxy.proxied_tools(c)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['id'] in held:
+                    tool=proxied.get(row['tool_id'])
+                    if tool is not None:
+                        values.append(tool_proxy.runtime_item(c,vault,store.settings,row,tool,who.actor,
+                                                              attempt=who.attempt_id,agent=bool(who.agent)))
+                        record_use(c,who.actor,'credential.proxied',row['id'],{'attempt':who.attempt_id or None,'tool':tool['id']},
+                                   windowed=bool(who.attempt_id))
+                        continue
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
@@ -878,8 +888,15 @@ def install_credentials(app,store,delegate=None,propose=None):
             placed(c)
             values=[]
             held=granted(c,'bot:'+bot)
+            from . import tool_proxy
+            proxied=tool_proxy.proxied_tools(c)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
+                    tool=proxied.get(row['tool_id'])
+                    if tool is not None:
+                        values.append(tool_proxy.runtime_item(c,vault,store.settings,row,tool,'bot:'+bot,runner=who.runner_id))
+                        record_use(c,who.actor,'credential.proxied',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher','tool':tool['id']},windowed=True)
+                        continue
                     values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':vault.cipher.decrypt(c,row)})
                     record_use(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'},windowed=True)
             return {'credentials':values}
