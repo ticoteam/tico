@@ -80,7 +80,8 @@ hub automation stats [--range 24h]
 
 These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
 `GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result
-fold into one row (`count`).
+fold into one row (`count`). Maintenance runs are listed and counted too, under `automation_id` `maintenance` (trigger
+`system`, owner `tico`, run ids `mnt_<id>`); anyone signed in sees them.
 
   A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
   `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice

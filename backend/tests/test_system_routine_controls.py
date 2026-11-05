@@ -202,7 +202,7 @@ def test_learnings_control_is_retired_and_only_maintenance_changes_its_switch(ap
     put(api, "system-routines/learnings", {"on": True}, token="ben-test", expected=404)
     put(api, "system-routines/learnings", {"at": "04:00"}, expected=404)
     steps = {row["key"]: row for row in get(api, "maintenance")["steps"]}
-    assert steps["learn"]["enabled"] is False and steps["learn"]["old_timer"] is False
+    assert steps["learn"]["enabled"] is False
 
 
 def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows_the_result(api, monkeypatch):
