@@ -60408,6 +60408,16 @@
         "additionalProperties": true
       },
       "LetterOut": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LetterOutContents"
+          },
+          {
+            "$ref": "#/components/schemas/LetterOutMetadata"
+          }
+        ]
+      },
+      "LetterOutContents": {
         "type": "object",
         "properties": {
           "id": {
@@ -60539,14 +60549,48 @@
           },
           "cancel_possible": {
             "type": "boolean"
+          },
+          "letter_id": {
+            "type": "string"
+          },
+          "approval_reason": {
+            "type": "string"
+          },
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "billing": {
+            "type": "string"
+          },
+          "charged_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "redacted": {
+            "enum": [
+              false
+            ]
+          },
+          "can_cancel": {
+            "type": "boolean"
           }
         },
         "required": [
+          "accepted_at",
           "acting_bot_id",
           "approval_hash",
           "approval_id",
+          "approval_reason",
           "automation_id",
+          "billing",
+          "can_cancel",
           "cancel_possible",
+          "charged_micros",
           "color",
           "created_at",
           "currency",
@@ -60554,12 +60598,14 @@
           "error",
           "hq_letter_id",
           "id",
+          "letter_id",
           "mail_class",
           "page_count",
           "proof",
           "quote_expires_at",
           "quote_id",
           "recipient",
+          "redacted",
           "requested_by",
           "return_address",
           "status",
@@ -60570,6 +60616,77 @@
           "updated_at"
         ],
         "additionalProperties": true
+      },
+      "LetterOutMetadata": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mail_class": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "billing": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "acting_bot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total_micros": {
+            "type": "integer"
+          },
+          "charged_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "redacted": {
+            "enum": [
+              true
+            ]
+          },
+          "can_cancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acting_bot_id",
+          "billing",
+          "can_cancel",
+          "charged_micros",
+          "created_at",
+          "currency",
+          "id",
+          "mail_class",
+          "page_count",
+          "redacted",
+          "status",
+          "total_micros",
+          "updated_at"
+        ],
+        "additionalProperties": false
       },
       "LetterOutPage": {
         "type": "object",

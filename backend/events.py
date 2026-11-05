@@ -1823,7 +1823,7 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
         newest_letters = {r["subject_id"]: r for r in by_topic["letters"]}
         for ident, change in newest_letters.items():
             try:
-                letter = letters.get(c, auth, who, ident)
+                letter = letters.get(c, auth, who, ident, metadata=True)
             except Problem:
                 continue
             picked.append(("letters", change, {"id": ident, "letter": letters.public(letter)}))

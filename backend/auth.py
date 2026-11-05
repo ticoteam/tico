@@ -1071,10 +1071,11 @@ class Auth:
         if row["kind"] == "letter":
             from . import letters
             letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
-            if letter and who.role in ("owner", "human"):
-                allowed = letters.readable(c, self, who, letter) if not decide else (
-                    letters.admin(self, who) or (letter["acting_bot_id"] and
-                    self.bot_manager(c, who, letter["acting_bot_id"])))
+            allowed = False
+            if letter:
+                may_decide = who.role in ("owner", "human") and (letters.admin(self, who) or (
+                    letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"])))
+                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row

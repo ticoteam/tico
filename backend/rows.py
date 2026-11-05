@@ -567,6 +567,7 @@ class LetterRow(TypedDict):
     automation_id: str | None
     task_id: str | None
     thread_id: str | None
+    attempt_id: str | None
     recipient: str
     recipient_hash: str
     return_address: str
@@ -574,6 +575,8 @@ class LetterRow(TypedDict):
     color: int
     duplex: int
     source_blob_id: str
+    original_blob_id: str | None
+    source_provenance: str
     proof_blob_id: str | None
     page_count: int | None
     quote_id: str | None
@@ -589,11 +592,15 @@ class LetterRow(TypedDict):
     tracking: str
     cancel_possible: int
     always_ask: int
+    approval_reason: str
     error: str
     attempts: int
     next_sync_at: str | None
     submitted_at: str | None
     accepted_at: str | None
+    charged_micros: int | None
+    spend_released: int
+    billing: str
     created_at: str
     updated_at: str
 
