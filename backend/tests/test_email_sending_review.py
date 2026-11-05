@@ -294,9 +294,18 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                         event["conferenceData"]["notes"] = "User added dial-in instructions; preserve this meeting."
                     elif scenario == "legacy_link":
                         event["hangoutLink"] = "https://meet.google.com/user-link-url"
+                    if scenario != "legacy_no_snapshot":
+                        snapshots = []
+                        duplicate = calendar.create_scheduling_event(scheduling.datetime.fromisoformat(args.slot),
+                            scheduling.datetime.fromisoformat(args.slot)+scheduling.DURATION, CONTACT, "newer-hold", receipt["body"], on_insert=snapshots.append)
+                        newer = {**receipt, "event": duplicate["id"], "expected_event_id": duplicate["id"],
+                                 "hold": snapshots[0], "hold_version": 1, "state": "canceled"}
+                        connection.execute("INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)",
+                            ("retired:newer", BOX, "thread", "book", "2030-01-01", "canceled", json.dumps(newer)))
                     with pytest.raises(scheduling.Refused, match="Review the calendar hold"):
                         scheduling.run(ctx, args)
                     assert enqueue.call_count == 1 and not service.deleted and not service.patch.called
+                    assert len(service.created_events) == (1 if scenario == "legacy_no_snapshot" else 2)
                     return
                 if scenario in ("changed_hold", "moved_hold", "unrelated"):
                     event = service.created_events[first["event"]]
