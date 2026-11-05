@@ -158,7 +158,11 @@ def project(c, scoped, payload, *, auth=None):
                 content_denied.add(tid)
         for mid, row in messages.items():
             try:
-                auth.conversation(c, scoped.who, row['conversation_id'])
+                # The message read route admits a bot's addressed legacy messages outside its own room.
+                native = bool((H.conversation(c, row['conversation_id']) or {}).get('audience'))
+                party = scoped.who.actor in (row['sender_id'], row['recipient_id'])
+                if not (scoped.who.role == 'bot' and party and not native):
+                    auth.conversation(c, scoped.who, row['conversation_id'])
                 if not privacy.message_readable(c, privacy.actor(scoped.who), row, current=True):
                     content_denied.add(mid)
             except Problem as exc:

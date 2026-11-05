@@ -881,7 +881,9 @@ def publication_collision(api, kind):
     assert promoted.status_code == 200, promoted.text
     post(api, f'attempts/{publisher["id"]}/started', {'thread_id': 'publication-source'}, machine['token'])
     post(api, f'attempts/{publisher["id"]}/complete', {'outcome': 'completed', 'last_seq': 0}, machine['token'])
-    task, attempt = task_turn(api)
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare a public plan', 'body': 'Write the plan.', 'private': False})
+    attempt = claim(api, machine, 'ops', key='publication-task')
+    assert attempt['task']['id'] == task['id']
     no_sources(get(api, 'bots/ops/files', attempt['token']), (hidden['id'], hidden['title']))
     return body, hidden, task, attempt
 
