@@ -406,7 +406,7 @@ def engineering_pr_pair(api):
 
 @pytest.mark.parametrize("queued", [False, True], ids=["direct", "queued"])
 def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch, queued):
-    from backend import review_gate, step_flow
+    from backend import review_gate
     task, prs = engineering_pr_pair(api)
     snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
     monkeypatch.setattr(review_gate, "snapshot", lambda service, links: snapshots)
@@ -481,7 +481,7 @@ def test_legacy_number_only_review_is_bound_before_backfill_or_hand_filing(api):
 
 @pytest.mark.parametrize("private", [False, True], ids=["company-child", "private-child-with-more-readers"])
 def test_private_parent_pr_binding_never_widens_the_audience_or_files_a_duplicate(api, private):
-    from backend import review_gate
+    from backend import review_gate, step_flow
     from backend.auth import Identity
 
     setup(api)
