@@ -35,6 +35,27 @@ def github(api, monkeypatch, checks, head=HEAD):
     return reads
 
 
+def test_fresh_ci_reads_write_only_to_close_an_open_access_outage(api, monkeypatch):
+    from backend import review_gate, source_outages
+    task = ticket(api)
+    github(api, monkeypatch, GREEN)
+    store, service = api.app.state.store, api.app.state.github_app
+    with store.transaction() as c:
+        prs = review_gate.links(c, H.task(c, task['id']))
+        source_outages.observe(c, 'github:' + prs[0]['repo'].lower(), 'GitHub checks access', waiting=1)
+    review_gate.snapshot(service, prs)
+    with store.read_transaction() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='source_outage.restored'").fetchone()[0] == 1
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('an already restored source needs no writer')
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, 'transaction', unexpected)
+        for _ in range(2):
+            assert review_gate.snapshot(service, prs)[prs[0]['id']]['head_sha'] == HEAD
+
+
 def bot_token(api, slug='cpo'):
     """A leased bot identity: enroll a runner, assign the bot, send it a message, claim the turn."""
     code = post(api, 'enrollments', {'operator': 'ana'})['code']
