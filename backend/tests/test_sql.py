@@ -398,7 +398,7 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         assert checked in ([], ['message-public'])
 
 
-def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api, world, monkeypatch):
+def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api, world, monkeypatch, underlying_authority):
     from backend import sql as S
 
     store, room = api.app.state.store, world['coo_task']['conversation_id']

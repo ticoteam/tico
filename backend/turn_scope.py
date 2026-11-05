@@ -208,9 +208,10 @@ def private_context_allowed(c, who, *, message=None):
     aid = getattr(who, "attempt_id", "")
     if not aid:
         return True
-    scoped = scope(c, who)
-    if scoped is None or not scoped.make_page:
-        return True
+    if isinstance(who, Identity):
+        scoped = scope(c, who)
+        if scoped is None or not scoped.make_page:
+            return True
     row = read_cache.one(c, "SELECT m.id,m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
                            "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
     refs = H._json(row["refs"], {}) if row else {}
