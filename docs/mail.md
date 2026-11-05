@@ -4,20 +4,20 @@
 
 In the web app, each connected mailbox and Slack channel is listed in the Team sidebar under the bot that covers it:
 an Inbox Manager's under **Message bots**, a team bot's under that bot. Open one to see that bot's instructions and routines on the
-left and example messages on the right. Whole Workspace email threads are read live from Gmail; the mail tool still
+left and example messages on the right. Email threads read through **Whole company** are read live from Gmail. The mail tool still
 handles Gmail actions. A messaging icon beside a human in the team chart opens their message bot.
 The old `#/mail` route remains available for existing deep links.
 
 ## Reading mail
 
-`hub email mailboxes` lists the person's readable mailboxes, including shared ones. With Whole Workspace connected,
+`hub email mailboxes` lists the person's readable mailboxes, including shared ones. With Whole company connected,
 `hub email inbox <address>`, `hub email search <address> "<Gmail query>"`, `hub email thread <address> <thread-id>` and
 `hub email message <address> <message-id>` read live from Gmail without saving mail. The person's Assistant has the
 same mailbox access. Output is Markdown by default; add `--json` for the API response. Lists accept `--limit` (up to
 50) and `--cursor` with the previous `next_cursor`. Inbox accepts `--q` to search within INBOX. `hub mail` is postal mail.
 
 The mail API requires a mailbox for live lists; it does not combine Workspace inboxes. Personal Connect Google grants
-and legacy connections keep their existing stored reads; live reading needs Whole Workspace. Existing mail sync and
+and legacy connections keep their existing stored reads; live reading needs Whole company. Existing mail sync and
 stored copies are unchanged by live reads. Opening a message or thread checks access and records `mail.read`.
 
 Mail is one shared tool, `$HUB_DIR/scripts/mail.sh`. One Google service account acts as every
@@ -440,15 +440,14 @@ See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
 ### Set up Google in Settings
 
-Settings > Inboxes > Settings first asks an admin **How do you want to connect Google?**, until one way is set up:
+An admin sees two buttons on Settings > Inboxes > Settings > Email: **Whole company** and **Each person signs in**. Neither is picked until one way is set up:
 
-- **One account at a time**: each person signs in with Google, starting with you.
-- **Whole Workspace**: a Google admin connects every mailbox in the domain at once.
+- **Each person signs in**: each person signs in with Google, starting with you.
+- **Whole company**: a Google admin connects every mailbox in the domain at once.
 
-Only the way picked shows; **Use the other way** switches. Once a way is set up, Settings > Inboxes > Settings opens on it, and
-**Also set up …** adds the other. With both set up, Whole Workspace shows first, since it covers the mailboxes. Someone
-who isn't an admin never sees the question or the setup: only **Connect your account**, or, before an admin has set
-Google up, a line asking them to.
+The picked way shows below the buttons. Clicking the other button shows its setup, so both can be set up. Once a way is set up, Settings > Inboxes > Settings opens on it. With both set up, **Whole company** shows first, since it covers the mailboxes.
+
+Someone who isn't an admin never sees the buttons or the setup. They see **Connect Google** for their own mailbox. If **Whole company** already covers it, they see nothing. Before an admin sets Google up, they see the line "Ask an admin to connect Google in Settings > Inboxes."
 
 Each way's setup offers **Have my agent do it** (the default) and **Set it up myself**. The first shows a prompt to copy
 into your own coding agent (Claude Code, Codex, or any agent with a browser or `gcloud`); the second shows the steps
@@ -478,7 +477,7 @@ run without the runner's registration can't ask, so it only reads. Change calend
 
 Organize mail, Send mail and Change calendar turned off take effect on the next token: Connect Google asks Google only
 for what is ticked, each refresh leaves out a write turned off (the grant keeps it, so turning it back on needs no new
-sign-in), and Whole Workspace tokens are
+sign-in), and Whole company tokens are
 minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide delegation takes only scopes authorized by
 name, so step 2 below authorizes the read-only scopes too, and Check records which ones Google accepted. A Workspace
 authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
@@ -492,7 +491,7 @@ and the server refuses a calendar booking while Change calendar is off (one alre
 later). On a computer where bots run as the runner's own user (a Mac today), a bot that deliberately works around the
 tool is not stopped; each bot's **Mail sending** switch has the same limit.
 
-**Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
+**Whole company** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
 
 1. **Run one command in Cloud Shell.** Click **New command**, click **Open Cloud Shell**, and paste the command there (or click **Make prompt** to hand the same command to your agent, with what to do after it). If you belong to more than one organization, Cloud Shell asks which one to use. The command makes a service account in a Google Cloud project for Tico, turns on Gmail and Calendar for it, and sends its key to Tico. It never shows the key. If an organization policy blocks service account keys, the command turns that rule off for that project only. A setup command works once and expires after 30 minutes; each New command or Make prompt makes a new one, and an older one stops working. **Or upload a key file** takes a key you made yourself.
 2. **Authorize in Google Admin.** Back in Tico, click **Open Google Admin**. Add the client ID and scopes shown in Tico, then click **Authorize**. An admin clicks this themselves; an agent can't.
@@ -500,7 +499,7 @@ tool is not stopped; each bot's **Mail sending** switch has the same limit.
 
 To change the key later, click **Replace key**. **Disconnect** stops Tico reading every covered mailbox.
 
-**One account at a time** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)), in three steps:
+**Each person signs in** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)), in three steps:
 
 1. **Set up Google sign-in (once)**, for everyone on the server. The agent prompt names the redirect URI and this page, and has the agent ask you before it agrees to Google's API Services User Data Policy; Google has no `gcloud` command for these OAuth web clients, so the agent needs a browser. By hand:
    1. Enter the Google Cloud project ID (a project under your Google organization, for the Internal audience), then turn on the **Gmail API** and the **Google Calendar API** in it. Without them, Google's calls fail.
@@ -508,7 +507,7 @@ To change the key later, click **Replace key**. **Disconnect** stops Tico readin
    3. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
    4. Copy the client ID and client secret from the dialog Google shows after Create (it shows the secret only once), paste them, then click **Save**.
 2. **Connect your account**: **Connect Google** for your own mailbox.
-3. **Your team**: everyone else with a mailbox, as Connected, Not connected, Connecting, Failing or Covered by Workspace. **Copy link** copies the link to Settings > Inboxes > Settings to send them yourself; Tico sends nothing. Each person connects their own mailbox.
+3. **Your team**: each mailbox on Settings > Inboxes > Settings > Email shows one status. The statuses are Connected, Not connected, Sign-in expired, Sync failed, Awaiting person or Not in use. Each person connects their own mailbox.
 
 Choose the audience in step 1:
 - **Internal**: only accounts in your domain. Gmail needs no Google verification. It needs a project in your organization.
@@ -518,7 +517,7 @@ Choose the audience in step 1:
 
 ### Start the sync on the runner
 
-With Whole Workspace set, the `connectors` job on the runner reads the mailboxes below. It gets short-lived tokens from the Tico server, so no key file goes to the runner.
+With Whole company set, the `connectors` job on the runner reads the mailboxes below. It gets short-lived tokens from the Tico server, so no key file goes to the runner.
 
 1. Wait a minute. `docker logs '<container-name>'` says `Tico side jobs: started connectors (mail, calendar)`. The first start builds
    the Python environment into the runner's volume (`/home/runner/tools/mail-venv`, or `/var/lib/tico-runner/tools/mail-venv`),
@@ -529,7 +528,7 @@ With Whole Workspace set, the `connectors` job on the runner reads the mailboxes
 
 ### Which mailboxes the sync covers
 
-With **Whole Workspace**, the `connectors` job also syncs every known active personal mailbox linked to a person and
+With **Whole company**, the `connectors` job also syncs every known active personal mailbox linked to a person and
 every shared inbox on the key's domain, even without a message bot. Each has one sync computer: its message bot's
 non-revoked host, else the person's Assistant's online host, else an online isolated company server (owned by a
 company owner or admin), else the person's own online computer. Shared mailboxes
@@ -731,7 +730,7 @@ Use these instead of the Settings steps above when you make the Google key yours
 
 **Tico's Google app on a server you run**
 
-The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Inboxes > Settings can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
+The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Inboxes > Settings can set the same client under **Each person signs in**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
 
 ## Turning sending on
 
