@@ -1184,10 +1184,12 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
     # The legacy recovery is independently necessary; it cannot infer provenance from display text.
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE assistant_actions SET refs=NULL WHERE id=?', (aid,))
-    with monkeypatch.context() as patch:
-        patch.setattr(assistant, 'action_sources', lambda *a: [])
-        with pytest.raises(AssertionError):
-            check('assistant-review-without-sources')
+    if revocation == 'archive':
+        # Audience revocation also rejects the message identity in the request path, independently of text sources.
+        with monkeypatch.context() as patch:
+            patch.setattr(assistant, 'action_sources', lambda *a: [])
+            with pytest.raises(AssertionError):
+                check('assistant-review-without-sources')
     # Test each action-view guard directly, before middleware can repair an unprojected return.
     with api.app.state.store.read() as c:
         auth = api.app.state.auth
