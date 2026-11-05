@@ -145,16 +145,20 @@ def test_failed_machine_ids_upgrade_without_losing_or_double_counting_attempts(t
         c.execute("DELETE FROM schema_migrations WHERE version=?", (version,))
         c.executemany("INSERT INTO cloud_machines(bot,machine_id,state,enroll_fails) VALUES(?,?,?,?)",
                       [("counted", "m1", "deleted", 2), ("failed", "m2", "failed", 1),
-                       ("pending", "m3", "starting", 0), ("adopted", "m5", "starting", 0)])
+                       ("pending", "m3", "starting", 0), ("adopted", "m5", "starting", 0),
+                       ("kept", "m7", "starting", 2)])
         c.executemany("INSERT INTO cloud_machine_deletions(machine_id,bot,reason) VALUES(?,?,?)",
                       [("m1", "counted", "never_enrolled"), ("m3", "pending", "never_enrolled"),
-                       ("m4", "adopted", "never_enrolled"), ("manual", "adopted", "manual")])
+                       ("m4", "adopted", "never_enrolled"), ("manual", "adopted", "manual"),
+                       ("m6", "kept", "never_enrolled")])
+        for bot, mid in (("counted", "m1"), ("kept", "m6")):
+            H.event(c, H.KEEPER, "cloud_machine.deleted", bot, {"machine": mid, "reason": "never_enrolled", "tries": 2})
     boot(path)
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT bot,enroll_fails,create_asked_at FROM cloud_machines ORDER BY bot").fetchall() == [
-            ("adopted", 1, None), ("counted", 2, None), ("failed", 1, None), ("pending", 1, None)]
+            ("adopted", 1, None), ("counted", 2, None), ("failed", 1, None), ("kept", 2, None), ("pending", 1, None)]
         assert c.execute("SELECT machine_id FROM cloud_machine_enrollment_failures ORDER BY machine_id").fetchall() == [
-            ("m1",), ("m2",), ("m3",), ("m4",)]
+            ("m1",), ("m2",), ("m3",), ("m4",), ("m6",)]
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first

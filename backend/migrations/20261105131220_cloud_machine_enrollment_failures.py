@@ -10,9 +10,16 @@ def up(conn):
         return
     if "create_asked_at" not in {row[1] for row in conn.execute("PRAGMA table_info(cloud_machines)")}:
         conn.execute("ALTER TABLE cloud_machines ADD COLUMN create_asked_at REAL")
-    # Dead rows were already counted by the old manager; seed their ids without spending another try.
+    # HQ failures were already counted by the old manager; seed their ids without spending another try.
     conn.execute("INSERT OR IGNORE INTO cloud_machine_enrollment_failures(machine_id,bot) "
-                 "SELECT machine_id,bot FROM cloud_machines WHERE machine_id IS NOT NULL AND state IN ('failed','deleted')")
+                 "SELECT machine_id,bot FROM cloud_machines WHERE machine_id IS NOT NULL AND state='failed'")
+    if H._has_table(conn, "events"):
+        # An accepted DELETE spent a try and wrote this event, even if its intent outlived several replacements.
+        conn.execute("INSERT OR IGNORE INTO cloud_machine_enrollment_failures(machine_id,bot) "
+                     "SELECT json_extract(detail,'$.machine'),target FROM events "
+                     "WHERE action='cloud_machine.deleted' AND json_valid(detail) "
+                     "AND json_extract(detail,'$.reason')='never_enrolled' "
+                     "AND typeof(json_extract(detail,'$.machine'))='text'")
     if not H._has_table(conn, "cloud_machine_deletions"):
         return
     # A lost DELETE reply could leave an uncounted intent, even after its bot adopted another machine.
