@@ -3610,7 +3610,8 @@ def create_app(settings=None):
         # The warn line goes on after the update's own words pass the writing checks (updates.post's `warning`).
         return {"update": updates.post(c, author, body.body, kind=body.kind, day=body.day, slides=slides,
                                        replace_draft=body.replace_draft, reader=updates.meeting_reader(who),
-                                       warning=org_rule_check.warn_line(rule)),
+                                       warning=org_rule_check.warn_line(rule), learnings_saved=body.learnings_saved,
+                                       suggestions_seen=body.suggestions_seen, delivery_batch_id=body.delivery_batch_id),
                 **org_rule_check.answer(rule)}
 
     def update_fixed(body):
