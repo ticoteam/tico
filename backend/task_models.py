@@ -60,9 +60,13 @@ def _context(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
-def refuse_retired(choice):
-    """A retired model stays in the catalog for bots already on it; nothing new may pick it."""
+def refuse_retired(choice, kept=""):
+    """A retired model stays in the catalog for bots already on it; nothing new may pick it. `kept` is the bot's saved
+    task model: a held row that is that model stays editable (its effort, context length or the same model is saved
+    again, Dev 693); any other held row is refused as a pick."""
     if choice.get("held"):
+        if choice["id"] == kept:
+            return
         raise Problem("model", f"{choice['label']} is not offered yet", 422)
     if choice.get("deprecated"):
         raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)

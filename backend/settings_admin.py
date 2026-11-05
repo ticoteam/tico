@@ -1522,9 +1522,11 @@ class SettingsAdmin:
     def set_task_model(self, c, who, bot, body, undo_change_id=None):
         """What the bot's tasks run on (backend/task_models.py): a harness, model, effort and context length, each
         optional on its own. No model means the bot's own model, so an effort or context length can be set alone; the
-        effort is checked against the bot's own model then. Null clears all of it. Only this key changes: the bot's own
-        model, and so its sessions, stay as they are. A model the bot's computer cannot run is saved all the same, and
-        its tasks run on the bot's model until it can: the answer's `readiness` says so now."""
+        effort is checked against the bot's own model then. Null clears all of it. A saved held model (Dev 693) is the
+        exception: a save with no model, or the same one, keeps it, and a different held model is refused. Only this
+        key changes: the bot's own model, and so its sessions, stay as they are. A model the bot's computer cannot run
+        is saved all the same, and its tasks run on the bot's model until it can: the answer's `readiness` says so
+        now."""
         CA.gate(c, who.actor, "cost", f"change the model {(H.bot(c, bot) or {}).get('slug', bot)}'s tasks run on")
         self._manager(c, who, bot, report="task_model")
         shared_bots.refuse_copy(c, bot)
@@ -1532,23 +1534,39 @@ class SettingsAdmin:
         if config["revision"] != body.expected_revision:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         chosen = body.task_model
+        before = self.snapshot(c, bot, "task_model")
+        # The saved task model: a held row that is it stays editable (Dev 693). A save that sends no model, or the same
+        # one, keeps it; a save that picks another held model is still refused.
+        kept = (before or {}).get("model") or ""
+        saved = self.models.get(kept) if kept else None
+        held = bool(saved and saved.get("held"))
         if chosen is None or not (chosen.model or chosen.effort or chosen.compact_at):
             target = None
         elif chosen.model:
             choice = self.models.get(chosen.model)
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
-            self.refuse_retired(choice)
-            harness = self._harness(choice, chosen.harness)
-            target = {"harness": harness, "model": choice["id"], "reasoning_effort": self._effort(choice, chosen.effort),
+            self.refuse_retired(choice, kept)
+            same = before if held and choice["id"] == kept else {}
+            harness = self._harness(choice, chosen.harness, same.get("harness"))
+            target = {"harness": harness, "model": choice["id"],
+                      "reasoning_effort": self._effort(choice, chosen.effort, same.get("reasoning_effort")),
                       "runtime": runtime_of(harness) or choice["runtime"], "compact_at": chosen.compact_at}
+        elif held:
+            # An effort or context length alone: the saved held model stays, with the harness and effort it has unless
+            # the save names an effort.
+            if chosen.harness:
+                raise Problem("harness", "Choose a task model to pick a harness for it", 422)
+            harness = self._harness(saved, None, before.get("harness"))
+            target = {"harness": harness, "model": kept,
+                      "reasoning_effort": self._effort(saved, chosen.effort, before.get("reasoning_effort")),
+                      "runtime": runtime_of(harness) or saved["runtime"], "compact_at": chosen.compact_at}
         else:
             if chosen.harness:
                 raise Problem("harness", "Choose a task model to pick a harness for it", 422)
             own = self.models.get(self.snapshot(c, bot, "model")["model"]) or {}
             target = {"harness": "", "model": "", "reasoning_effort": self._effort(own, chosen.effort) if chosen.effort else "",
                       "runtime": "", "compact_at": chosen.compact_at}
-        before = self.snapshot(c, bot, "task_model")
         if before == target:
             raise Problem("unchanged", "That task model is already selected", 409)
         declared = _json(config["config"], {}) or {}
