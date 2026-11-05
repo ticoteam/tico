@@ -244,7 +244,10 @@ the install to `main` once before it can receive this fix.
 `HUB_DIR` names Tico's own install, where its helper scripts live. It must never be used for bot Git work.
 Bots use their own repositories and task checkouts, including when working on Tico itself. The repo guard
 also refuses outside paths whose resolved Git directory or common directory is shared with the install,
-including linked worktrees and `.git` pointers. This guard checks destinations Tico selects; it does not
+including linked worktrees and `.git` pointers. For paths inside a repo, it finds and trusts only that
+repo's root for the Git check. This lets the supervisor check bot-owned folders such as `playbooks/`
+and `.state/`. A failed check reports that the repo could not be checked; only matching Git metadata
+is reported as shared with the install. This guard checks destinations Tico selects; it does not
 isolate a bot's shell or user account.
 
 There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file

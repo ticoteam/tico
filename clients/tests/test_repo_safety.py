@@ -1,4 +1,7 @@
 """Repository identity checks use real Git metadata, including an installation that is itself a worktree."""
+import os
+import shlex
+import shutil
 import subprocess
 
 import pytest
@@ -29,14 +32,44 @@ def test_git_metadata_aliases_of_the_install_are_refused(tmp_path, monkeypatch, 
     common.mkdir()
     git(common, "init", "-q")
     (common / ".git/commondir").write_text(str(source / ".git") + "\n")
+    separate = tmp_path / "separate"
+    git(tmp_path, "clone", "-q", str(source), str(separate))
+    separate_link = tmp_path / "separate-link"
+    git(separate, "worktree", "add", "--detach", str(separate_link))
+    for repo in (install, sibling, alias, common, separate, separate_link):
+        (repo / "playbooks").mkdir()
+        (repo / ".state").mkdir()
+
+    # Inject the ownership mode at Git's entry point, after the probe clears inherited Git overrides.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "git"
+    wrapper.write_text(f'#!/bin/sh\nGIT_TEST_ASSUME_DIFFERENT_OWNER=1 exec {shlex.quote(shutil.which("git"))} "$@"\n')
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    refused = subprocess.run(["git", "-c", "safe.directory=", "-C", str(separate / "playbooks"),
+                              "rev-parse", "--git-dir"], capture_output=True, text=True)
+    assert refused.returncode != 0 and "dubious ownership" in refused.stderr
     monkeypatch.setattr(repo_safety, "ROOT", install)
     # A turn's overrides do not change which repository this destination actually uses.
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "fake"))
-    for path in (sibling, sibling / "new/deep", alias, common):
-        with pytest.raises(ValueError, match="shares Git metadata"):
-            repo_safety.outside_installation(path)
-    separate = tmp_path / "separate"
-    monkeypatch.delenv("GIT_DIR")
-    git(tmp_path, "clone", "-q", str(source), str(separate))
-    assert repo_safety.outside_installation(separate) == separate
+    for repo in (sibling, alias, common):
+        for path in (repo, repo / "playbooks", repo / ".state", repo / "new/deep"):
+            with pytest.raises(ValueError, match="^Repository shares Git metadata"):
+                repo_safety.outside_installation(path)
+    for repo in (separate, separate_link):
+        for path in (repo, repo / "playbooks", repo / ".state", repo / "new/deep"):
+            assert repo_safety.outside_installation(path) == path
     assert repo_safety.outside_installation(tmp_path / "new") == tmp_path / "new"
+
+
+def test_probe_failure_is_reported_without_claiming_install_metadata(tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    install.mkdir()
+    repo = tmp_path / "bot"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "playbooks").mkdir()
+    monkeypatch.setattr(repo_safety, "ROOT", install)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 128, "", "probe failed"))
+    with pytest.raises(ValueError, match="^Cannot check repository identity:"):
+        repo_safety.outside_installation(repo / "playbooks")

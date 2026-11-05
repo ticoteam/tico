@@ -13,22 +13,28 @@ def _git_identity(path):
         existing = existing.parent
     if not existing.is_dir():
         existing = existing.parent
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
     try:
+        # Ownership checks require the worktree root, even when the requested directory already exists.
+        for root in (existing, *existing.parents):
+            try:
+                (root / ".git").lstat()
+            except FileNotFoundError:
+                if not ((root / "HEAD").exists() and (root / "objects").is_dir()):
+                    continue
+            break
+        else:
+            return ()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
         done = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
-                               "-c", "safe.directory=" + str(existing), "-C", str(existing),
+                               "-c", "safe.directory=" + str(root), "-C", str(root),
                                "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
                               env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Cannot check repository identity: {path}") from exc
     if done.returncode:
-        # A future clone has no repository yet. Broken Git metadata must not look like a safe clone.
-        if any((parent / ".git").exists() or (parent / ".git").is_symlink()
-               or ((parent / "HEAD").exists() and (parent / "objects").is_dir())
-               for parent in (existing, *existing.parents)):
-            raise ValueError(f"Cannot check repository identity: {path}")
-        return ()
+        # Broken Git metadata must not look like a safe clone or a confirmed install match.
+        raise ValueError(f"Cannot check repository identity: {path}")
     names = done.stdout.splitlines()
     if len(names) != 2 or any(not Path(name).is_absolute() for name in names):
         raise ValueError(f"Cannot check repository identity: {path}")
