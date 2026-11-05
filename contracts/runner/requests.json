@@ -971,6 +971,19 @@
      "default": null,
      "title": "Commit"
     },
+    "device_id": {
+     "anyOf": [
+      {
+       "pattern": "^[0-9a-f]{64}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Device Id"
+    },
     "kind": {
      "anyOf": [
       {

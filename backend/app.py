@@ -7187,26 +7187,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/runners/{rid}/revoke")
     def revoke(request: Request, rid: str, body: M.Empty):
+        from . import computers
         who = request.state.identity
         def work(c):
             runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
-            c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
-            c.execute('DELETE FROM registry_metadata WHERE key IN (?,?)',
-                      ('computer-repositories:' + rid, 'computer-enrolled-as:' + rid))
-            app_delivery.runner_revoked(c, who.actor, rid)
-            H.event(c, who.actor, "runner.revoked", rid)
+            computers.revoke(c, who.actor, rid)
             return {"revoked": True}
         result = mutate(request, body, work)
-        screen_sessions.set_mode(rid, "off", "computer removed")
-        # A removed computer is no one's browser exit, and its bots' connections through others close.
-        screen_sessions.push_exit_policy(rid)
-        screen_sessions.exit_close(exit=rid, reason="computer removed")
-        with store.read() as c:
-            removed_bots = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (rid,))]
-        for bot in removed_bots:
-            screen_sessions.push_bot_generation(bot, "computer removed")
+        computers.disconnect(store, rid)
         return result
 
     def closed_computer(c, who, bot, runner_id):
@@ -8534,6 +8524,8 @@ def create_app(settings=None):
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace
     install_google_workspace(app, store)
+    from .mailboxes import install as install_mailboxes
+    install_mailboxes(app, store)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)
