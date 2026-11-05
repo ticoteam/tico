@@ -4008,6 +4008,9 @@ class Execution:
         acting = self.auth.assistant_principal(c, attempt_row) if attempt_row else None
         if making_page and acting is None:
             raise Problem("forbidden", "The person can no longer run this page request", 403)
+        if making_page:
+            # Receipts outlive the lease and must retain the person whose rights admitted this request.
+            c.execute("UPDATE attempts SET acting_person=? WHERE id=?", (acting.actor, aid))
         mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()

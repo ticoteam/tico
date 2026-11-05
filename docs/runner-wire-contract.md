@@ -34,6 +34,9 @@ Claim attempts may include `task_context`: up to ten pages and ten meetings as i
 It contains no source content. An older server omits it; the runner then renders no context block. The bot pulls
 content with its normal read commands and its own permissions, the same during task work as in any other turn.
 Claim retries rebuild the reference list using current access ([Pages](pages.md#publishing)).
+Every saved runner receipt for a Make-page attempt uses the person stored on that attempt, including after it
+finishes. Replays require that person's current task access and the same computer assignment and generation;
+they do not require a live execution lease.
 
 - **New answer field**: add it as optional. A new required field breaks the old server for a new runner.
 - **Removing or retyping an answer field**: not inside the window. Stop reading it first, and drop it two minors later.

@@ -431,6 +431,31 @@ class Auth:
             touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
+    def runner_receipt_principal(self, c, who, aid):
+        """Read a runner's saved receipt as its original principal, even after the lease ends."""
+        from . import task_privacy as privacy
+        if who.role != "runner" or not aid:
+            return who
+        attempt = c.execute(
+            "SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+            "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
+            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
+            (aid, who.runner_id, who.runner_id)).fetchone()
+        if not attempt:
+            raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
+        principal = Identity("bot:" + attempt["bot_id"], "bot", runner_id=who.runner_id, attempt_id=aid)
+        if attempt["acting_person"]:
+            person = self.chat_person(c, attempt["acting_person"], attempt["bot_id"], aid, who.runner_id)
+            if person is None:
+                raise Problem("privacy", "The person can no longer run this page request", 403)
+            principal = replace(person, task_actor="")
+        if not privacy.attempt_readable(c, privacy.actor(principal), aid):
+            raise Problem("privacy", "This execution is no longer available", 403)
+        if attempt["acting_person"]:
+            for task_id in privacy.attempt_tasks(c, aid):
+                self.task(c, principal, task_id)
+        return principal
+
     def assistant_principal(self, c, attempt):
         """The person an assistant chat turn acts for, as that person and nobody more, or None.
 
