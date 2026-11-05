@@ -193,7 +193,11 @@ pub fn transcribe_next_with(
     })();
     let (text, mut words, error) = match result {
         Ok((text, words)) => (text, words, String::new()),
-        Err(error) => (String::new(), vec![], error.to_string()),
+        Err(error) => (
+            String::new(),
+            vec![],
+            crate::retry::stored(&error, "Transcription is retrying"),
+        ),
     };
     for word in &mut words {
         word.start_ms += chunk.start_ms;
@@ -213,6 +217,15 @@ pub fn transcribe_next_with(
         &error,
         json!({"model":config.transcription_model,"outcome":outcome}),
     )?;
+    #[cfg(feature = "diarize")]
+    if chunk.channel == "them"
+        && error.is_empty()
+        && store.peek(&chunk.recording_id)?.state == "recording"
+    {
+        // Capture and transcription stay usable if the local model is unavailable. Stream labels
+        // remain provisional; the full voiceprint/diarization pass after Stop is still authoritative.
+        let _ = crate::diarize::label_provisional(store, &chunk.recording_id);
+    }
     Ok(true)
 }
 
