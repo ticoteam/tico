@@ -105,7 +105,7 @@ def test_duration_outside_the_limits_is_refused_before_hq_or_a_grant(environment
     api = environment()
     tid = ticket(api)
     sent = len(hq.seen)
-    response = start(api, ticket_id=tid, hours=hours)
+    response = api.post("/api/v2/support/access", json={"ticket_id": tid, "hours": hours}, headers=signed_in())
     assert response.status_code == 422, response.text
     assert len(hq.seen) == sent
     with api.app.state.store.read() as c:
