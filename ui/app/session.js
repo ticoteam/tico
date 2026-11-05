@@ -9,7 +9,7 @@
 // with `WWW-Authenticate: Cloudflare-Access`. So a request that fails as a network error asks GET /v2/me once without
 // following redirects (sessionProbe): a redirect there, or a 401, is signed out; no answer at all is offline, and the
 // page keeps reconnecting as before.
-const SESSION = {out: false, seen: false, probe: null, probedAt: 0, login: '', bar: null, reopen: null, restoring: null, identity: '', watch: null};
+const SESSION = {out: false, seen: false, probe: null, probedAt: 0, login: '', bar: null, reopen: null, restoring: null, identity: '', watch: null, discarded: false};
 // What the page had when it was signed out (where it was, the text in its boxes), kept for this tab while the
 // person signs in again on another site, and put back when they return (sessionReturn).
 const SESSION_RETURN = 'tico.signin.return';
@@ -157,6 +157,7 @@ function sessionAcknowledge(el, scope = sessionScope(el)) {
   } catch {}
 }
 function sessionKeep() {
+  if (SESSION.discarded) return;
   // A bot's chat box keeps its own draft per bot (pill.js chatDraftSave), across reloads too.
   for (const P of [typeof BOT_PILL !== 'undefined' && BOT_PILL, typeof ASSISTANT_PILL !== 'undefined' && ASSISTANT_PILL])
     if (P) try { chatDraftSave(P); } catch {}

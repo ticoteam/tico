@@ -91,21 +91,23 @@ window.addEventListener('beforeunload', event => {
 document.addEventListener('click', event => {
   const link = event.target.closest?.('a[href]');
   if (link && /\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) {
-    taskLiveClear(); SESSION.restoring = null; SESSION.reopen = null;
+    taskLiveClear(); SESSION.restoring = null; SESSION.reopen = null; SESSION.discarded = true;
+    SESSION.watch?.disconnect(); SESSION.watch = null;
     try { sessionStorage.removeItem(SESSION_RETURN); } catch {}
   }
 }, true);
 // Capture immediately before replacing HTML: async reads must not snapshot text before the person finishes typing.
 function taskFormKey(el, root) {
   const path = [], question = el.closest('[data-qc-key]');
-  const scoped = key => question && root.contains(question) ? `[data-qc-key="${CSS.escape(question.dataset.qcKey)}"] ${key}` : key;
-  for (let node = el; node && node !== root; node = node.parentElement) {
+  const scope = question && root.contains(question) ? question : root;
+  const scoped = key => scope !== root ? `[data-qc-key="${CSS.escape(question.dataset.qcKey)}"] ${key}` : key;
+  for (let node = el; node && node !== scope; node = node.parentElement) {
     const attr = ['id', 'data-task-field', 'name', 'aria-label', ...node.getAttributeNames().filter(k => k.startsWith('data-') && !['data-busy', 'data-loaded'].includes(k))]
       .find(key => node.hasAttribute(key));
     path.unshift(node.tagName.toLowerCase() + (attr ? `[${attr}="${CSS.escape(node.getAttribute(attr))}"]`
       : `:nth-of-type(${[...node.parentElement.children].filter(n => n.tagName === node.tagName).indexOf(node) + 1})`));
     // A unique semantic key survives inserted sections. Only repeated fields need their containing form's scope.
-    if (attr && root.querySelectorAll(path.join(' > ')).length === 1) return scoped(path.join(' > '));
+    if (attr && scope.querySelectorAll(path.join(' > ')).length === 1) return scoped(path.join(' > '));
   }
   return scoped(path.join(' > '));
 }
@@ -303,9 +305,9 @@ function taskLiveWireField(d, live, field) {
 }
 function taskLivePaint(d, live) {
   if (d.taskLive !== live) return;
-  const draft = live.draft, shown = {...draft.base, ...draft.inflightPatch, ...draft.patch};
+  const draft = live.draft, pending = {...draft.inflightPatch, ...draft.patch}, shown = {...draft.base, ...pending};
   for (const field of d.querySelectorAll('[data-task-field], .tmodal-title')) {
-    const key = field.dataset.taskField || 'title', value = taskLiveDisplay(key === 'due' && 'due' in shown ? shown.due : taskLiveValue(shown, key), key);
+    const key = field.dataset.taskField || 'title', value = taskLiveDisplay(key in pending ? pending[key] : taskLiveValue(draft.base, key), key);
     if ((field === document.activeElement || field === live.focus?.field) && !draft.current) continue;
     live.fields[key] = key in draft.dirty ? {...draft.bases[key]} : {value: taskLiveValue(draft.base, key), version: draft.base.version};
     if (field.matches('input, textarea')) {

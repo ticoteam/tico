@@ -112,7 +112,10 @@ const init = () => {
     task.version++; await update();
     await box.evaluate((el, value) => { el.focus(); el.value = value; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }, value);
     await error.waitFor(); await idle();
+    assert.deepEqual(errors, [], key + ' conflict redraw');
     assert.equal(writes.at(-1).version, base);
+    await box.evaluate(el => el.blur());
+    assert.equal(await error.count(), 1, key + ' blur keeps its failed save until Retry');
     await retry();
    }
    // Every Add box and the comment box keep all their texts while each one has focus during both redraw paths.
@@ -154,7 +157,8 @@ const init = () => {
     const second = await page.context().newPage(); await second.setViewportSize(options.viewport); return second;
    }}, {viewport: {width, height: 900}});
    await clean.page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
-   await clean.page.evaluate(() => { S.config.environment_id = 'acme-org'; });
+   await clean.page.evaluate(async task => { taskLiveStop(taskModal()); S.config.environment_id = 'acme-org'; sessionReturn(); await taskModalShow(task); }, task);
+   assert.equal(await clean.page.evaluate(() => taskModal().taskLive.identity), await page.evaluate(() => taskModal().taskLive.identity));
    offline = true;
    await fillTitle('New view failed draft'); await title.evaluate(el => el.blur());
    await error.waitFor(); await idle();
@@ -231,6 +235,17 @@ const init = () => {
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
+   // Explicit sign-out discards recovery even when an expired session's pagehide watcher runs afterward.
+   offline = true;
+   await fillTitle('Discard on logout'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
+   await page.evaluate(() => {
+    SESSION.seen = true; signedOut('/auth/login');
+    const link = document.createElement('a'); link.href = '/auth/logout';
+    link.addEventListener('click', event => event.preventDefault()); taskModal().append(link); link.click();
+    window.dispatchEvent(new Event('pagehide')); sessionKeep();
+   });
+   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.deepEqual(errors, []);
    await page.close();
   }
