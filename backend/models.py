@@ -2872,6 +2872,11 @@ class UpdatePost(Contract):
     slides: UpdateSlides | None = None                                 # a week in review
     day: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None   # only a day Tico asked to redo
     replace_draft: bool = False                                        # a person's own words over their Assistant draft
+    # What a bot's turn reports back (a learning or suggestion delivery): how many learnings it kept (at most 15),
+    # the suggestions it acted on, and the delivery this post answers.
+    learnings_saved: Annotated[int, Field(ge=0, le=15)] | None = None
+    suggestions_seen: list[Annotated[str, Field(max_length=300)]] | None = Field(default=None, max_length=10)
+    delivery_batch_id: Annotated[str, Field(max_length=80)] | None = None
 
 
 class UpdateRedo(Contract):

@@ -24,7 +24,8 @@ import logging
 import threading
 from datetime import datetime, time, timedelta, timezone
 
-from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck
+from . import updates
+from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, update
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
 
@@ -34,9 +35,9 @@ ORDER = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest"
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
 EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
-OLD_TIMER = ("learn", "suggest", "update")   # still on their own timers until their track lands
+OLD_TIMER = ("learn", "suggest")   # still on their own timers until their track lands
 LIVE = {"collect": collect.run, "clean_up": clean_up.run, "check_health": check_health.run, "find_stuck": find_stuck.run,
-        "dream": dream.run}
+        "update": update.run, "dream": dream.run}
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
 MAX_BOTS_STEPS = ("find_stuck", "dream")          # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
@@ -184,6 +185,7 @@ def tick(store, auth, at, failures=None):
     beside a live run. Returns the run id it started, else None. Errors go to `failures`; a tick never raises."""
     now = H.now()
     try:
+        _complete_updates(store)
         with store.read() as c:
             cfg = run_settings(c)
             # Most ticks stop here, without a write transaction. A stale run is not a stop: recover() ends it first.
@@ -274,6 +276,9 @@ def _steps(store, auth, run_id, only, tally):
             plan[key] = ("skipped", OLD_TIMER_REASON)
         elif only is None and not due(row, at):  # a step-only Run now runs that step whether or not it is due
             plan[key] = ("skipped", "not due")
+        elif key == "update" and at.astimezone(ZONE).hour < START_HOUR:
+            # An early skip must not start Update's cadence before the day's queue can be built.
+            plan[key] = ("skipped", f"before {START_HOUR:02d}:00 Pacific: today's cycle has not started")
         else:
             plan[key] = ("run", None)
     # Each step reads from its own cursor. Collect reads from the oldest cursor among the steps about to run.
@@ -408,10 +413,27 @@ def complete_pending(store, row_id, result):
     return True
 
 
+def _complete_updates(store):
+    """The queue keeps pumping after the run ends. Complete its pending Update row once that day's cycle drains,
+    even while Maintenance is paused or the step is not due. An idle pass takes no write lock."""
+    ready = []
+    with store.read() as c:
+        for row in c.execute("SELECT id, checked, found, woke, details FROM maintenance_run_steps "
+                              "WHERE step='update' AND status='pending'").fetchall():
+            details = _loads(row["details"])
+            day = details.get("day")
+            if day and updates.cycle_done(c, day):
+                ready.append((row["id"], {**dict(row), "status": "ran", "reason": f"Update cycle for {day} complete",
+                                          "cost_usd": 0.0, "details": {**details, "open": 0}}))
+    for row_id, result in ready:
+        complete_pending(store, row_id, result)
+
+
 def _finish(store, run_id, tally, error):
     now = H.now()
     text = f"Stopped: {error}" if error else (", ".join(f"{n} {k}" for k, n in sorted(tally.items())) or "Nothing ran")
     try:
+        _complete_updates(store)
         with store.transaction() as c:
             # ok reads the stored rows, not the tally: a pending step that failed later may already have been recorded.
             failed = c.execute("SELECT 1 FROM maintenance_run_steps WHERE maintenance_run_id=? AND status='failed' LIMIT 1",
