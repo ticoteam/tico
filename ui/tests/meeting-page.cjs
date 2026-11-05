@@ -101,6 +101,7 @@ async function shot(page, name) {
       // Faces: the people and the bot that sat in, each named on hover or tap.
       await page.locator('#meet-faces [data-face-bot="ops"]').waitFor();
       assert.deepEqual(await page.locator('#meet-faces .mp-face').evaluateAll(els => els.map(e => e.dataset.name)), ['Ana', 'Ben', 'Ops'], where);
+      await shot(page, `meeting-page-${where}`);
       // One list: the created item, the linked task and the bot's follow-up that are the same task show once.
       const rows = await detail.locator('#meet-sections li .t').allInnerTexts();
       assert.equal(rows.filter(t => t === 'Book the review').length, 1, `${where}: no duplicate task`);
@@ -137,8 +138,6 @@ async function shot(page, name) {
         const [main, side] = await Promise.all(['.mp-main', '#meet-side'].map(s => detail.locator(s).boundingBox()));
         assert.ok(side.y >= main.y + main.height - 1, `${where}: transcript is below`);
       }
-      await detail.getByRole('searchbox', {name: 'Find in transcript'}).fill('');
-      await shot(page, `meeting-page-${where}`);
       // A shared meeting offers only the bot it went to.
       await page.getByRole('button', {name: 'Share'}).click();
       assert.equal(await page.locator('[data-share-bot]').count(), 1, where);
