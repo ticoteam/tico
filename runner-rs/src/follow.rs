@@ -749,10 +749,10 @@ impl Follower {
         let pid = std::process::id().to_string();
         let dir = self.directory.to_string_lossy().to_string();
         let root = self.root.to_string_lossy().to_string();
-        let mut args: Vec<String> = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started].iter().map(|s| s.to_string()).collect();
-        for owned in crate::gitlocks::owned_roots() {
-            args.extend(["--owned-root".into(), owned.to_string_lossy().into_owned()]);
-        }
+        let args: Vec<String> = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started].iter().map(|s| s.to_string()).collect();
+        // Another environment can move the shared checkout back to an updater with the old CLI.
+        let roots: Vec<_> = crate::gitlocks::owned_roots().iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let owned = serde_json::to_string(&roots).map_err(|e| e.to_string())?;
         let log_path = self.directory.join("update.log");
         let unit = env.get("TICO_SYSTEMD_UNIT").cloned().unwrap_or_default();
         // SAFETY: geteuid reads this process's effective UID.
@@ -772,6 +772,7 @@ impl Follower {
                 cmd.arg(format!("--setenv={name}={value}"));
             }
             cmd.arg(format!("--setenv=TICO_SYSTEMD_UNIT={unit}"));
+            cmd.arg(format!("--setenv=TICO_GIT_OWNED_ROOTS={owned}"));
             let log = log_path.to_string_lossy();
             cmd.args(["-p", &format!("StandardOutput=append:{log}"), "-p", &format!("StandardError=append:{log}")]);
             cmd.arg(&python).args(&args).stdin(Stdio::null());
@@ -783,7 +784,7 @@ impl Follower {
         let out = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&python);
-        cmd.args(&args).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
+        cmd.args(&args).env("TICO_GIT_OWNED_ROOTS", &owned).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
         if unit.ends_with(".service") && !unit.contains('/') {
             cmd.envs(&bus);
         }
@@ -941,6 +942,51 @@ mod tests {
 
     fn systemd_env() -> crate::env::Env {
         [("TICO_SYSTEMD_UNIT".into(), "tico-bot.service".into())].into()
+    }
+
+    #[test]
+    fn updater_launch_arguments_work_with_the_origin_main_parser() {
+        let f = checkout_follower();
+        let projects = f.directory.join("projects with 'quotes' and : colons");
+        crate::gitlocks::own(std::slice::from_ref(&projects));
+        let check = |cmd: &Command, systemd: bool| {
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let owned = if systemd {
+                args.iter().find_map(|a| a.strip_prefix("--setenv=TICO_GIT_OWNED_ROOTS=")).unwrap().to_string()
+            } else {
+                cmd.get_envs().find(|(k, _)| *k == "TICO_GIT_OWNED_ROOTS").unwrap().1.unwrap().to_string_lossy().into_owned()
+            };
+            let roots: Vec<String> = serde_json::from_str(&owned).unwrap();
+            assert!(roots.contains(&projects.to_string_lossy().into_owned()));
+            let module = args.iter().position(|a| a == "-m").unwrap();
+            assert_eq!(args[module + 1], "runner_support.release_update");
+            // Execute only origin/main's real parser, without starting an update or touching its status.
+            let out = Command::new("python3").arg("-c").arg(r#"
+import argparse, ast, subprocess, sys
+from pathlib import Path
+source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
+main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+end = next(i for i, n in enumerate(main.body) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+           and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
+main.body = main.body[:end + 1]
+scope = {'argparse': argparse, 'ROOT': Path('.')}
+exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
+scope['main'](sys.argv[1:])
+"#).args(&args[module + 2..]).env("TICO_GIT_OWNED_ROOTS", owned).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        for mode in ["systemd", "detached", "fallback"] {
+            let mut launches = 0;
+            let env = if mode == "detached" { crate::env::Env::new() } else { systemd_env() };
+            f.spawn_with("0.3.45", &env, |cmd| {
+                if cmd.get_program() == "systemctl" { return command_output(0, "process", ""); }
+                check(cmd, true);
+                if mode == "fallback" { command_output(1, "", "Failed to connect to bus: No such file or directory") }
+                else { command_output(0, "", "") }
+            }, |cmd| { check(cmd, false); launches += 1; Ok(()) }).unwrap();
+            assert_eq!(launches, usize::from(mode != "systemd"));
+        }
+        std::fs::remove_dir_all(f.directory).unwrap();
     }
 
     #[test]

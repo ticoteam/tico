@@ -600,12 +600,14 @@ def main(argv=None):
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--version", required=True)
     parser.add_argument("--state-dir", required=True)
-    parser.add_argument("--owned-root", action="append", default=[])
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
     args = parser.parse_args(argv)
     from . import git_locks
-    git_locks.OWNED_ROOTS = (Path(args.root), Path(args.state_dir), *map(Path, args.owned_root))
+    # Older updaters ignore this environment setting when a shared checkout moves back.
+    roots = json.loads(os.environ.get("TICO_GIT_OWNED_ROOTS", "[]"))
+    git_locks.OWNED_ROOTS = (Path(args.root), Path(args.state_dir), *map(Path, roots))
+    git_locks.register_checkout(args.root)
     with updater_lock(args.state_dir) as acquired:
         if not acquired:
             print("Tico update: an updater is already running for this computer", flush=True)

@@ -35,6 +35,12 @@ pub fn recovery_lock(common: &Path) -> Option<std::fs::File> {
 
 pub fn owned_roots() -> Vec<PathBuf> { OWNED.lock().unwrap().clone() }
 
+/// The native install's linked checkout can store its metadata outside the runner folders.
+pub fn own_checkout(root: &Path) {
+    if !owned(root) { return; }
+    if let Some(roots) = checkout_metadata(root) { own(&roots); }
+}
+
 fn stale_note(path: &Path) -> Option<String> {
     let m = path.symlink_metadata().ok()?;
     if !m.is_file() { return None; }
@@ -44,11 +50,9 @@ fn stale_note(path: &Path) -> Option<String> {
     Some(format!("repository copy needs attention: Git lock is {} minutes old. Check no Git is running, then run: rm -- {quoted}", age.as_secs() / 60))
 }
 
-fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, PathBuf)> {
-    let at = argv.windows(2).rfind(|p| p[0] == "-C").map(|p| Path::new(&p[1])).or(cwd)?.canonicalize().ok()?;
-    if !owned(&at) { return None; }
+fn checkout_metadata(at: &Path) -> Option<Vec<PathBuf>> {
     let git = at.join(".git");
-    let roots = match git.symlink_metadata() {
+    Some(match git.symlink_metadata() {
         Ok(m) if m.is_dir() => vec![git.canonicalize().ok()?],
         Ok(m) if m.is_file() && m.len() < 4096 => {
             let text = crate::regular_file::text(&git, crate::regular_file::SMALL).ok()?;
@@ -60,9 +64,15 @@ fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, 
             if admin.parent()? != common.join("worktrees").as_path() { return None; }
             vec![admin, common]
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && at.join("HEAD").is_file() && at.join("objects").is_dir() => vec![at.clone()],
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && at.join("HEAD").is_file() && at.join("objects").is_dir() => vec![at.to_path_buf()],
         _ => return None,
-    };
+    })
+}
+
+fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, PathBuf)> {
+    let at = argv.windows(2).rfind(|p| p[0] == "-C").map(|p| Path::new(&p[1])).or(cwd)?.canonicalize().ok()?;
+    if !owned(&at) { return None; }
+    let roots = checkout_metadata(&at)?;
     if !roots.iter().all(|r| owned(r)) { return None; }
     Some((roots, at))
 }
@@ -216,13 +226,19 @@ mod tests {
         let base = root.join("base");
         let task = root.join("task");
         std::fs::create_dir_all(&base).unwrap();
-        own(std::slice::from_ref(&root));
+        own(std::slice::from_ref(&task));
         let env = crate::safegit::clean_environment(&crate::env::process_environment());
         assert!(crate::gitrun::git(&base, &env, &["init", "-q"], 10).await.unwrap().ok());
         std::fs::write(base.join("saved"), "base work\n").unwrap();
         assert!(crate::gitrun::git(&base, &env, &["add", "saved"], 10).await.unwrap().ok());
         assert!(crate::gitrun::git(&base, &env, &["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "-qm", "initial"], 10).await.unwrap().ok());
         assert!(crate::gitrun::git(&base, &env, &["worktree", "add", "--detach", task.to_str().unwrap()], 10).await.unwrap().ok());
+        assert!(!owned(&base.join(".git")));
+        assert!(metadata_roots(&[], Some(&task)).is_none());
+        own_checkout(&task);
+        let (roots, _) = metadata_roots(&[], Some(&task)).unwrap();
+        assert!(roots.iter().all(|r| owned(r)));
+        assert_eq!(roots.last().unwrap(), &base.join(".git").canonicalize().unwrap());
         let index = std::fs::read(base.join(".git/index")).unwrap();
         let found = crate::gitrun::git(&task, &env, &["rev-parse", "--git-path", "index.lock"], 10).await.unwrap();
         let lock = PathBuf::from(found.stdout.trim());

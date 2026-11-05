@@ -1,5 +1,6 @@
 """A checkout follows its server's release: the update process (python -m runner_support.release_update) against a temp repository."""
 import fcntl
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -98,7 +99,19 @@ assert backup.name in ru.instruction_backup_note(root, metadata)
 assert backup.read_text() == "rules"
 admin = metadata / "worktrees/task"
 admin.mkdir(parents=True)
-os.mkfifo(admin / "gitdir")
+task = root / "task"
+task.mkdir()
+pointers = [(task / ".git", f"gitdir: {admin}\n"),
+            (admin / "gitdir", f"{task / '.git'}\n"), (admin / "commondir", "../..\n")]
+for path, content in pointers:
+    path.write_text(content)
+assert git_locks.metadata_roots(task) == (admin, metadata)
+for path, content in pointers:
+    path.unlink()
+    os.mkfifo(path)
+    assert not git_locks.metadata_roots(task)
+    path.unlink()
+    path.write_text(content)
 git_locks.OWNED_ROOTS = (root,)
 assert not git_locks.report(root, f"fatal: Unable to create '{metadata}/index.lock': File exists", metadata)
 ''', str(tmp_path)], check=True, timeout=10)
@@ -736,14 +749,22 @@ def test_lock_outside_runner_root_is_never_touched(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow
-def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(repos, monkeypatch):
+@pytest.mark.parametrize("linked", [False, True])
+def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(repos, monkeypatch, linked):
     from runner_support import git_locks
     _, checkout, state = repos
-    projects = state.parent / "projects"
+    base = checkout
+    base_index = (base / ".git/index").read_bytes()
+    if linked:
+        checkout = state.parent / "native-linked"
+        sh(base, "git", "worktree", "add", "--detach", str(checkout), "v0.1.0")
+    metadata = Path(sh(checkout, "git", "rev-parse", "--absolute-git-dir"))
+    common = (base / ".git").resolve()
+    projects = state.parent / "projects with 'quotes' and : colons"
     projects.mkdir()
     monkeypatch.setattr(git_locks, "OWNED_ROOTS", (state, projects))
-    assert not git_locks.owned(checkout)
-    lock = checkout / ".git/index.lock"
+    assert not git_locks.owned(checkout) and not git_locks.owned(metadata) and not git_locks.owned(common)
+    lock = metadata / "index.lock"
     lock.write_text("still owned")
     old = time.time() - git_locks.OLD_S * 2
     os.utime(lock, (old, old))
@@ -758,12 +779,38 @@ def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(rep
         return 1
 
     monkeypatch.setattr(ru, "run_update", update)
+    monkeypatch.setenv("TICO_GIT_OWNED_ROOTS", json.dumps([str(projects)]))
     assert ru.main(["--root", str(checkout), "--version", "0.2.0", "--state-dir", str(state),
-                    "--owned-root", str(projects), "--pid", "42"]) == 1
+                    "--pid", "42"]) == 1
     assert git_locks.owned(checkout) and git_locks.owned(state) and git_locks.owned(projects)
+    assert git_locks.owned(metadata) and git_locks.owned(common)
+    with git_locks.command_lock(checkout) as gate:
+        assert gate == common
+        with (common / "tico-lock-recovery").open("w") as other:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
     assert str(lock) in ru.read_status(state)["error"]
     assert lock.stat().st_ino == inode and lock.read_text() == "still owned"
     assert sh(checkout, "git", "rev-parse", "HEAD") == head
+    assert (base / ".git/index").read_bytes() == base_index
+
+
+def test_native_checkout_registration_refuses_a_mismatched_backlink(tmp_path, monkeypatch):
+    from runner_support import git_locks
+    checkout = tmp_path / "native"
+    common = tmp_path / "outside/.git"
+    admin = common / "worktrees/native"
+    admin.mkdir(parents=True)
+    checkout.mkdir()
+    (checkout / ".git").write_text(f"gitdir: {admin}\n")
+    (admin / "gitdir").write_text(str(tmp_path / "other/.git"))
+    (admin / "commondir").write_text("../..\n")
+    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (checkout,))
+    git_locks.register_checkout(checkout)
+    assert not git_locks.owned(admin) and not git_locks.owned(common)
+    with git_locks.command_lock(checkout) as gate:
+        assert gate is None
+    assert not (common / "tico-lock-recovery").exists()
 
 
 def test_updater_git_holds_the_repository_gate_and_never_retries_a_locked_command(tmp_path, monkeypatch):

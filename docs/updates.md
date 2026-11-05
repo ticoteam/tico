@@ -213,6 +213,10 @@ remove the target without blocking updates. A late write to a backup still block
 names the saved file in Health. Instruction backups stay in place even when unchanged, so an open
 writer can finish safely. The runner and updater register the native install's own Tico checkout,
 even when it is outside the projects and state folders, so Git lock reports work during release updates.
+For a linked checkout (`.git` is a file), this includes its admin and common Git directories after
+checking that the worktree registration points back to the checkout. The runner passes its roots in
+`TICO_GIT_OWNED_ROOTS` as a JSON list on both launch paths. Older updaters ignore it, so updates still
+start if another environment moved the shared checkout to an older release.
 Git lock files also stay in place: once a lock is 30 minutes old, the updater
 reports its full path, age and one removal command. Check no Git is running for that repository
 before running that command on the Computer.

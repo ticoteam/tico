@@ -8,7 +8,7 @@ import shlex
 import stat
 import time
 
-from .regular_file import SMALL
+from .regular_file import SMALL, read as read_regular
 
 OLD_S = 30 * 60
 OWNED_ROOTS = ()
@@ -18,14 +18,46 @@ def owned(path):
     return any(Path(path).resolve().is_relative_to(Path(root).resolve()) for root in OWNED_ROOTS)
 
 
+def metadata_roots(root):
+    """Accept a linked checkout only when its admin directory points back to it."""
+    try:
+        root = Path(root).resolve(strict=True)
+        git_dir = root / ".git"
+        info = git_dir.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            return (git_dir.resolve(strict=True),)
+        if not stat.S_ISREG(info.st_mode):
+            return ()
+        pointer = read_regular(git_dir, SMALL).decode().strip()
+        if not pointer.startswith("gitdir: "):
+            return ()
+        admin = (root / pointer[len("gitdir: "):]).resolve(strict=True)
+        back = read_regular(admin / "gitdir", SMALL).decode().strip()
+        if Path(back).resolve(strict=True) != git_dir:
+            return ()
+        common = (admin / read_regular(admin / "commondir", SMALL).decode().strip()).resolve(strict=True)
+        if admin.parent != common / "worktrees" or not common.is_dir():
+            return ()
+        return admin, common
+    except (OSError, ValueError, RuntimeError):
+        return ()
+
+
+def register_checkout(root):
+    """A native install can keep its linked Git metadata outside projects and state."""
+    global OWNED_ROOTS
+    if owned(root):
+        OWNED_ROOTS = (*OWNED_ROOTS, *metadata_roots(root))
+
+
 @contextlib.contextmanager
 def command_lock(root, *, wait=10):
     """All updater Git launches use the same per-repository gate as the Rust runner."""
-    git_dir = Path(root) / ".git"
-    if not owned(root) or git_dir.is_symlink() or not git_dir.is_dir() or not owned(git_dir):
+    roots = metadata_roots(root) if owned(root) else ()
+    if not roots or not all(owned(path) for path in roots):
         yield None
         return
-    git_dir = git_dir.resolve()
+    git_dir = roots[-1]
     fd = os.open(git_dir / "tico-lock-recovery", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     with os.fdopen(fd, "w") as sidecar:
         info = os.fstat(sidecar.fileno())
