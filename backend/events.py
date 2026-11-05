@@ -1426,14 +1426,16 @@ def _messages(view, rows, shared=None):
                  "message_seq": message.get("seq"), "revision": message.get("revision") or 0}
         if threads.message_readable(c, view.reader, message, thread_checked=True):
             shown = view.known.message(message)
+            # Shared text only when this reader sees the message as all its readers do, `source` included.
+            whole = view.known.whole(message) if "sender_id" in message else message
             from .files import readable_page_refs
             original_refs = refs
             refs = readable_page_refs(c, view.auth, view.who, refs)
-            if shown is not message or refs != original_refs or (isinstance(refs, dict) and refs.get("attachments")):
+            if shown != whole or refs != original_refs or (isinstance(refs, dict) and refs.get("attachments")):
                 out.append((row, {"id": subject, "conversation_id": cid, **place,
                                   "message": {**shown, "refs": refs, "thread_id": cid, "root_id": place["root_id"]}}))
             else:
-                out.append((row, _SameForAll(cid, place, message, refs)))
+                out.append((row, _SameForAll(cid, place, whole, refs)))
         elif (message.get("deleted_at") and not threads.legacy_hidden(c, view.reader, message)
               and _readable_before_deletion(view, dict(message))):
             out.append((row, {"id": subject, "conversation_id": cid, **place, "deleted": True}))

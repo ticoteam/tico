@@ -594,3 +594,5 @@ details.more[open] summary svg { transform: rotate(90deg); }
 .task-row .num { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .task-row .faint { color: var(--text-3); font-weight: 400; }
 .side-head .icon-btn.done { color: var(--accent); }
+.inset .line.other-address .name { color: var(--text-2); }
+.otile.s18.add { font-size: 12px; border-width: 1px; }

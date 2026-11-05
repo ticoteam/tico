@@ -64605,6 +64605,9 @@
           "sent_as": {
             "$ref": "#/components/schemas/SentAs",
             "description": "On a send to a bot: the way it went (steer, queue or defer) and a defer's deadline (backend/delivery.py)"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -64811,6 +64814,38 @@
         },
         "required": [
           "message"
+        ],
+        "additionalProperties": true
+      },
+      "MessageSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "bot",
+              "assistant_for",
+              "task_update",
+              "builtin",
+              "automation",
+              "system"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "link",
+          "name"
         ],
         "additionalProperties": true
       },
@@ -74344,7 +74379,19 @@
             "$ref": "#/components/schemas/Task"
           },
           "events": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "additionalProperties": true
+            }
           },
           "children": {
             "type": "array"
@@ -76725,6 +76772,9 @@
               }
             ],
             "description": "Who routing asked to answer this message (`to` empty: nobody); null when routing never looked at it"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -77086,6 +77136,9 @@
                 },
                 "excerpt": {
                   "type": "string"
+                },
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
                 }
               },
               "required": [
