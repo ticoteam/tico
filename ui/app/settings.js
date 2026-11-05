@@ -524,17 +524,34 @@ async function renderSettingsBotReports() {
     catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
   };
 }
-// Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
+// Settings > General > Privacy: usage counting and explicit consent for Gateway suggestions (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
   if (!host) return;
-  let v;
-  try { v = await get('/v2/system/usage-count'); } catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  let v, suggestions;
+  try { [v, suggestions] = await Promise.all([get('/v2/system/usage-count'), get('/v2/system/suggestions')]); }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (!host.isConnected) return; // Settings redrew while this was loading; the new card draws itself
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
-    <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
+    <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>
+    <label class="privacy-row"><input type="checkbox" id="privacy-suggestions"${suggestions.share_stats_for_suggestions ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Share stats for suggestions</label>
+    <label class="privacy-row"><input type="checkbox" id="privacy-outcomes"${suggestions.report_suggestion_outcomes ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Report suggestion outcomes</label>`;
+  host.querySelector('#privacy-suggestions').onchange = async ev => {
+    const box = ev.target, enabled = box.checked;
+    if (enabled && !await settingsConfirm({title: 'Share stats for suggestions?', ok: 'Share stats',
+      text: 'Sends counts only, never message text, to Tico.'})) { box.checked = false; return; }
+    box.disabled = true;
+    try { await put('/v2/system/suggestions', {share_stats_for_suggestions: enabled}); toast('Saved'); void renderSettingsPrivacy(); }
+    catch (e) { box.disabled = false; box.checked = !enabled; settingsFieldError(box, e.message); }
+  };
+  host.querySelector('#privacy-outcomes').onchange = async ev => {
+    const box = ev.target, enabled = box.checked;
+    box.disabled = true;
+    try { await put('/v2/system/suggestions', {report_suggestion_outcomes: enabled}); toast('Saved'); void renderSettingsPrivacy(); }
+    catch (e) { box.disabled = false; box.checked = !enabled; settingsFieldError(box, e.message); }
+  };
   host.querySelector('#privacy-count').onchange = async ev => {
     try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast('Saved'); void renderSettingsPrivacy(); }
     catch (e) { ev.target.checked = !ev.target.checked; settingsFieldError(ev.target, e.message); }

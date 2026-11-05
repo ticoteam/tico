@@ -5,6 +5,10 @@ the real server, in-process, on a fake clock: real API calls with each bot's own
 for pull requests, and the real scheduler pass every five simulated minutes. Only the bots' replies and time are made
 up, so a run tells you what the queue, the wake rules and the board do with a whole team over a day, in seconds.
 
+Maintenance finishes within each simulated scheduler pass before runners claim work. Its production worker runs on a
+thread; letting that thread outlive a fake-clock pass can put new work in the queue after the last claim but before
+the round's readiness snapshot, falsely reporting starvation. The claim-round checks keep their full capacity rule.
+
 - `world.py`: the disposable hub, the Dev tickets type, one runner for every bot, and a fake GitHub.
 - `bots.py`: simulated bots by role (Builder, reviewer, QA, Head of Engineering). A bot's `style` sets how its model
   behaves: asks for changes, fails, garbles its reply, goes silent, crashes, can't test, goes off script. Turn
