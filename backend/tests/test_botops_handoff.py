@@ -30,7 +30,7 @@ def _hand_off(api, machine, cite, said="Give yourself read access to the acme si
     return task, claim(api, machine, "botops")
 
 
-def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api, botops, monkeypatch):
+def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api, botops, monkeypatch, underlying_authority):
     from backend import botops_act
     monkeypatch.setattr(botops_act, "CARRIED", botops_act.CARRIED + [("GET", re.compile("/api/v2/qa-handoff-identity"))])
     assign(api, botops, "ops")
@@ -61,7 +61,7 @@ def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api,
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
 
 
-def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, botops):
+def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, botops, underlying_authority):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task, attempt = _hand_off(api, botops, None)        # Ops did not cite her message
@@ -81,7 +81,7 @@ def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, bo
         assert said["recipient_id"] == "human:ana" and said["sender_id"] == "bot:botops"
 
 
-def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_persons_confirm_card(api, botops):
+def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_persons_confirm_card(api, botops, underlying_authority):
     """A `${VAR}` header names a credential without holding one, so the person gets the card; a literal still gets none."""
     from backend.tests.test_botops_parity import mcp_tool
     assign(api, botops, "ops")
@@ -94,7 +94,7 @@ def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_person
     assert literal.json()["error"]["code"] == "secret_in_request" and "abcdef" not in literal.text
 
 
-def test_a_cited_message_never_raises_access_with_the_persons_rights(api, botops):
+def test_a_cited_message_never_raises_access_with_the_persons_rights(api, botops, underlying_authority):
     """Ana only said thanks; Ops cites it anyway and asks for write access to every repository for itself. BotOps tries
     it with Ops' rights, and Ana gets a Confirm card: nothing changes until she taps it."""
     assign(api, botops, "ops")
@@ -111,7 +111,7 @@ def test_a_cited_message_never_raises_access_with_the_persons_rights(api, botops
                          (tried.json()["action"]["id"],)).fetchone()["owner"] == "human:ana"
 
 
-def test_a_carried_request_lends_only_for_work_items_never_settings_or_bots(api, botops):
+def test_a_carried_request_lends_only_for_work_items_never_settings_or_bots(api, botops, underlying_authority):
     """Undoing a settings change could give Ops back access Ana took away; copying, moving or switching a bot could
     reach other computers and credentials. A carried request makes none of them with her rights: only tasks, docs and
     goals (botops_act.CARRIED)."""

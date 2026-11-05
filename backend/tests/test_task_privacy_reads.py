@@ -797,6 +797,9 @@ def test_bot_inbox_reads_a_fixed_number_of_statements_and_hides_private_messages
     out of its inbox."""
     store = api.app.state.store
     r, work, attempt, cid = running_turn(api)
+    get(api, "inbox", attempt["token"], expected=403)
+    from backend.tests.test_org_rules import as_bot
+    as_bot(api, "ops", "ops-inbox")
     hidden = task(api, requester="human:cara", owner="human:ben")       # nothing to do with bot:ops
 
     def unread(size, start):
@@ -809,7 +812,7 @@ def test_bot_inbox_reads_a_fixed_number_of_statements_and_hides_private_messages
         unread(size, start)
         start = size
         busy(api)
-        inbox, statements = traced(api, lambda: get(api, "inbox", attempt["token"]))
+        inbox, statements = traced(api, lambda: get(api, "inbox", "ops-inbox"))
         counts[size] = len(statements)
         shown = {m["id"] for m in inbox["messages"]}
         assert {f"note-{n}" for n in range(0, size, 2)} <= shown and not {f"note-{n}" for n in range(1, size, 2)} & shown

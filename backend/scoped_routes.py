@@ -24,6 +24,20 @@ ALLOWLIST = (
     ("GET", r"/api/v2/(?:origins|messages)/[^/]+", False),
     # Task conversation tools use bounded message/snapshot APIs, never saved run history.
     ("GET", r"/api/v2/conversations/[^/]+/(?:messages|snapshot)", False),
+    # Task conversations use native thread reads and guarded message/reply writes, including legacy hub send.
+    ("GET", r"/api/v2/threads/[^/]+", False),
+    # Message writers enforce task provenance before posting, editing or removing a task turn's words.
+    ("POST", r"/api/v2/(?:threads(?:/[^/]+/messages)?|conversations/[^/]+/messages|messages(?:/[^/]+/answer)?)", False),
+    # A way to edit or remove one's own task message retains the same provenance checks.
+    ("PATCH DELETE", r"/api/v2/messages/[^/]+", False),
+    # The runner/task CLI reports progress through the bot's own status writer.
+    ("POST", r"/api/v2/bots/[^/]+/status", False),
+    # Background task turns may ask a person to confirm an action; this route never executes it.
+    ("POST", r"/api/v2/assistant/actions", False),
+    # Missing-secret task flows open a person's credential card without reading or saving its value.
+    ("POST", r"/api/v2/credential-requests", False),
+    # A research automation records its evidence and entities through the typed Market writers.
+    ("POST", r"/api/v2/market/(?:evidence|entities)", False),
     # Page tools return projected metadata and an individually authorized visual URL.
     ("GET", r"/api/v2/pages(?:/[^/]+)?", True),
     # File discovery and version metadata use the file visibility hook.

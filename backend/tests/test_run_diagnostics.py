@@ -47,7 +47,8 @@ def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause
     post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner': 'ops'})
     next_run = claim(api, machine, 'ops')
     assert next_run
-    assert next(r for r in get(api, 'bots/ops/turns', next_run['token']) if r['id'] == a['id'])['end_reason'] == expected
+    get(api, 'bots/ops/turns', next_run['token'], expected=403)
+    assert next(r for r in get(api, 'bots/ops/turns') if r['id'] == a['id'])['end_reason'] == expected
 
 
 def test_lost_heartbeat_records_end_reason_even_before_start(api):

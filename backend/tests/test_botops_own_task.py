@@ -92,7 +92,7 @@ def test_a_subtask_for_a_bot_or_with_no_parent_is_not_botops_own_ask(api, botops
         assert (tried.json()["actor"], tried.json()["role"]) == ("bot:ops", "bot"), body
 
 
-def test_what_needs_a_persons_rights_becomes_a_confirm_card_for_the_person_who_commented(api, botops):
+def test_what_needs_a_persons_rights_becomes_a_confirm_card_for_the_person_who_commented(api, botops, underlying_authority):
     """Ana's comment on Ops' task lends nothing. BotOps tries with Ops' rights, and what they refuse is Ana's Confirm
     card in her chat with BotOps, not a refusal that needs 'someone with task-moving rights'."""
     _ready(api, botops)
@@ -113,7 +113,7 @@ def test_what_needs_a_persons_rights_becomes_a_confirm_card_for_the_person_who_c
         assert said["recipient_id"] == "human:ana" and task["title"] in said["body"]
 
 
-def test_a_relayed_comment_still_lends_nothing_and_gets_no_card(api, botops):
+def test_a_relayed_comment_still_lends_nothing_and_gets_no_card(api, botops, underlying_authority):
     """Words that came through a channel others write in are no one's own: a plain refusal, not a card."""
     _ready(api, botops)
     task, attempt = _commented(api, botops)
@@ -139,7 +139,7 @@ def test_a_worktree_refusal_says_who_can_give_the_access(api, botops):
     assert error["link"].endswith("#/repositories")
 
 
-def test_another_persons_comment_on_a_carried_request_lends_only_the_bots_rights(api, botops, monkeypatch):
+def test_another_persons_comment_on_a_carried_request_lends_only_the_bots_rights(api, botops, monkeypatch, underlying_authority):
     """Ops hands BotOps Ana's own request, which lends her rights. Ben, who moves tasks, comments on it: his words never
     carry Ana's rights. His run keeps Ops' rights, and what they refuse is Ben's Confirm card, not Ana's."""
     import re

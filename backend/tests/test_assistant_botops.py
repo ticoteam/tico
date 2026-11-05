@@ -34,7 +34,7 @@ def _ask(api, machine, cite="turn", owner="botops", said="Add a bot for our supp
     return r.json().get("task", r.json()), coo
 
 
-def test_the_assistant_hands_botops_the_persons_words_and_botops_acts_as_them(api, botops):
+def test_the_assistant_hands_botops_the_persons_words_and_botops_acts_as_them(api, botops, underlying_authority):
     _identity_route(api)
     task, _ = _ask(api, botops)
     attempt = claim(api, botops, "botops")

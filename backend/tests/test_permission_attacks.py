@@ -100,7 +100,7 @@ def weekly(api, bot):
             "steps": [{"id": "report", "type": "bot_turn", "bot": bot, "prompt": "Weekly"}]}
 
 
-def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages_the_bot(api, botops):
+def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages_the_bot(api, botops, underlying_authority):
     attempt = turn(api, botops)                                         # Cara asked; ops is not hers
     assert call(api, "post", "automations", attempt["token"], weekly(api, "ops")).status_code == 403
     assert call(api, "post", "bots/ops/updates", attempt["token"], {"daily": False, "weekly": False}).status_code == 403

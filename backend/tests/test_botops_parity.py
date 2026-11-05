@@ -80,7 +80,7 @@ def test_an_owner_requester_may_and_a_member_requester_may_not(api, botops):
     assert act(api, cara, "POST", "bots/jira-manager/model", {"model": "gpt-6.1-sol", "expected_revision": revision}).status_code == 200
 
 
-def test_secrets_are_refused_and_other_routes_use_the_humans_permissions(api, botops):
+def test_secrets_are_refused_and_other_routes_use_the_humans_permissions(api, botops, underlying_authority):
     attempt = turn(api, botops, person="ana-test")
     revision = act(api, attempt, "GET", "bots/ops/access").json()["revision"]
     leaked = act(api, attempt, "POST", "bots/ops/definition", {"description": "x", "expected_revision": revision,
@@ -353,7 +353,7 @@ def test_a_secret_is_never_a_command_line_argument():
 
 
 @pytest.mark.parametrize("person", ["cara-test"])
-def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api, botops, tmp_path, person):
+def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api, botops, tmp_path, person, underlying_authority):
     from backend.tests.test_mcp import call as mcp
     template = tmp_path / "catalog" / "qa-custom"
     template.mkdir(parents=True)
@@ -391,7 +391,7 @@ def test_a_humans_task_uses_the_task_requester_instead_of_its_text(api, botops):
 
 
 @pytest.mark.parametrize("requester", ["human", "bot task", "none"])
-def test_every_botops_tool_uses_requester_rights_by_default(api, botops, monkeypatch, requester):
+def test_every_botops_tool_uses_requester_rights_by_default(api, botops, monkeypatch, requester, underlying_authority):
     from fastapi import Request
     from backend.store import H
     from clients import hubtools
@@ -461,7 +461,7 @@ def test_every_botops_tool_uses_requester_rights_by_default(api, botops, monkeyp
             assert {k: got.get(k) for k in ("actor", "role")} == expected, (entry["name"], method, reply)
 
 
-def test_bot_request_cannot_borrow_a_previous_human_request_through_any_route(api, botops):
+def test_bot_request_cannot_borrow_a_previous_human_request_through_any_route(api, botops, underlying_authority):
     from backend.store import H
     owner = turn(api, botops, person="ana-test")
     origin = owner["message"]["id"]
@@ -573,7 +573,7 @@ def test_botops_closing_its_own_task_for_the_person_keeps_their_close_and_its_ow
 
 
 @pytest.mark.parametrize('legacy_anchor', [True])
-def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, legacy_anchor):
+def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, legacy_anchor, underlying_authority):
     from backend.store import H
     from fastapi import Request
     owner = turn(api, botops, person='ana-test')
@@ -607,7 +607,7 @@ def _wake(api, machine):
     return claim(api, machine, "botops")
 
 
-def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_may_not(api, botops):
+def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_may_not(api, botops, underlying_authority):
     ana = turn(api, botops, person="ana-test", text="Put ops on GPT-6.1 Sol")
     task = act(api, ana, "POST", "tasks", {"owner": "botops", "title": "Put ops on GPT-6.1 Sol", "body": "Change the model.",
                                           "request_id": ana["message"]["id"]})
@@ -731,7 +731,7 @@ def _age(api, message_id, days):
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-days), message_id))
 
 
-def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_comment_counts(api, botops):
+def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_comment_counts(api, botops, underlying_authority):
     ana = turn(api, botops, person="ana-test", text="Put ops on GPT-6.1 Sol")
     task = act(api, ana, "POST", "tasks", {"owner": "botops", "title": "Put ops on GPT-6.1 Sol", "body": "Change the model.",
                                           "request_id": ana["message"]["id"]})
@@ -795,7 +795,7 @@ def _fire(api, aid):
     api.app.state.store.automations.drain()
 
 
-def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, botops):
+def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, botops, underlying_authority):
     # An automation BotOps made itself in a run a bot asked for: when it fires, the run keeps no one's rights.
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:finance", "Open up ops", "Give every bot ops' repository.", "bot:botops", lint=False)
@@ -856,7 +856,7 @@ def test_an_own_run_changes_contact_and_never_people_repository_or_status(api, b
                                                          "expected_revision": revision}).status_code == 200
 
 
-def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
+def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops, underlying_authority):
     from backend.botops_act import LEND_MAX_DAYS
     ana = turn(api, botops, person="ana-test", text="Put ops on GPT-6.1 Sol")
     task = act(api, ana, "POST", "tasks", {"owner": "botops", "title": "Put ops on GPT-6.1 Sol", "body": "Change the model.",

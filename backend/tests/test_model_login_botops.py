@@ -117,7 +117,7 @@ def test_botops_never_switches_or_signs_out_for_the_person_it_works_for(api, bot
     finish(api, botops, later)
 
 
-def test_a_request_another_bot_carried_never_switches_or_signs_out(api, botops, monkeypatch):
+def test_a_request_another_bot_carried_never_switches_or_signs_out(api, botops, monkeypatch, underlying_authority):
     from backend import botops_act
     # Even were sign-ins added to what a carried request does with the person's rights.
     monkeypatch.setattr(botops_act, "CARRIED", botops_act.CARRIED + botops_act._routes(
