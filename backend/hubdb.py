@@ -1111,6 +1111,43 @@ def _dump(value):
 
 SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "preview",
                        "note", "old", "new", "recommend", "question")
+SOURCED_TEXT_SOURCES = ("body_sources", "sources")
+
+
+def clear_sourced_text(value, shown, rejected, *, hidden=False, replacement=""):
+    """Clear copied prose while its provenance is still available to either source guard.
+
+    SOURCED_TEXT_SOURCES covers sibling and refs provenance; an answer's target and changed picks cover its
+    copied wording too. A guard replacing a source must clear the same fields before losing that identity.
+    """
+    def refs(row):
+        found = _json(row.get("refs"), {}) if isinstance(row.get("refs"), str) else row.get("refs")
+        return found if isinstance(found, dict) else {}
+
+    def removed(source):
+        if isinstance(source, dict):
+            return source.get("removed") is True or any(removed(child) for child in source.values())
+        return isinstance(source, list) and any(removed(child) for child in source)
+
+    before_refs, shown_refs = refs(value), refs(shown)
+    answer = before_refs.get("answer") if isinstance(before_refs.get("answer"), dict) else {}
+    shown_answer = shown_refs.get("answer") if isinstance(shown_refs.get("answer"), dict) else {}
+    hidden = (hidden or any(rejected(before.get(key)) or removed(after.get(key))
+                           for before, after in ((value, shown), (before_refs, shown_refs))
+                           for key in SOURCED_TEXT_SOURCES) or rejected(answer.get("target")) or
+              removed(shown_answer.get("target")) or answer.get("answers") != shown_answer.get("answers") or
+              answer.get("not") != shown_answer.get("not"))
+    if hidden:
+        for container in (shown, shown.get("answer"), shown_answer):
+            if isinstance(container, dict):
+                for key in SOURCED_TEXT_FIELDS:
+                    if key in container:
+                        container[key] = replacement
+        # Generated asks carry their wording in both the body and the structured question.
+        for container in (shown_refs, shown.get("ask")):
+            if isinstance(container, dict) and isinstance(container.get("questions"), list):
+                container["questions"] = [{**q, "question": replacement} for q in container["questions"]]
+    return shown
 
 
 def sourced_text(text, sources=(), refs=None):

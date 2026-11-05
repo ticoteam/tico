@@ -699,6 +699,82 @@ def test_approval_notice_keeps_payload_provenance_and_projects_before_serializin
             no_sources(get(api, 'messages/' + unguarded['message_id']), secrets(data))
 
 
+@pytest.mark.parametrize('guard_order', ['page-first', 'scope-first'])
+def test_approval_replay_clears_copied_text_in_both_guard_orders_on_real_paths(api, monkeypatch, guard_order):
+    from backend import files
+    from backend.tests.test_page_audience import edit
+    t, attempt = task_turn(api)
+    _, publisher = turn(api, 'finance')
+    text = 'Confidential draft'
+    fid = published(api, publisher, task=t['id'], title=text)
+    source = {'file': fid}
+    copied = {key: text for key in H.SOURCED_TEXT_FIELDS}
+    shapes = []
+    for key in H.SOURCED_TEXT_SOURCES:
+        shapes.extend([{**copied, key: [source]},
+                       {**copied, 'refs': {key: [source], 'answer': copied}},
+                       {'answer': copied, key: [source]}])
+    payload = {'url': 'https://acme.example/release', 'content_sha256': 'a' * 64,
+               'other': text, 'sources': [source], 'copies': shapes}
+    request = {'kind': 'publish', 'payload': payload, 'task_id': t['id']}
+    token, key = attempt['token'], 'approval-source-replay'
+    made = post(api, 'approvals', request, token, key=key)
+    assert made['payload'] == payload
+    edit(api, fid, {'bots': ['ops']})
+    get(api, 'files/' + fid, token, expected=403)
+    get(api, 'pages/' + fid, token, expected=404)
+    scrub = files.readable_page_refs
+    with api.app.state.store.read() as c:
+        auth = api.app.state.auth
+        who = auth.authenticate({'authorization': 'Bearer ' + token})
+        cached = H._json(c.execute("SELECT response FROM idempotency WHERE operation='/api/v2/approvals' AND key=?",
+                                   (key,)).fetchone()[0], {})
+        assert cached['payload'] == payload
+        guards = (lambda value: scrub(c, auth, who, value),
+                  lambda value: turn_scope.project(c, turn_scope.scope(c, who), value, auth=auth))
+        shown = cached
+        for guard in guards if guard_order == 'page-first' else reversed(guards):
+            shown = guard(shown)
+            # Each guard clears the text in the same step that removes its source identity.
+            no_sources(shown, (text,))
+    if guard_order == 'scope-first':
+        monkeypatch.setattr(files, 'readable_page_refs', lambda c, auth, who, value, **kw:
+                            scrub(c, auth, who, turn_scope.project(c, turn_scope.scope(c, who), value, auth=auth), **kw))
+
+    def check():
+        replay = post(api, 'approvals', request, token, key=key)
+        assert replay['id'] == made['id']
+        no_sources(replay, (text,))
+    check()
+    with monkeypatch.context() as patch:
+        patch.setattr(H, 'SOURCED_TEXT_FIELDS', tuple(field for field in H.SOURCED_TEXT_FIELDS if field != 'other'))
+        with pytest.raises(AssertionError):
+            check()
+
+
+def test_dashboard_page_public_pin_only_widens_scoped_turns_on_real_paths(api, monkeypatch):
+    _, publisher = turn(api, 'cpo')
+    fid = published(api, publisher, name='dashboard.html', botwide=True)
+    post(api, 'pins', {'place': 'dashboard', 'item': 'page:' + fid})
+    machine, unscoped = turn(api, 'ops')
+    get(api, 'pages/' + fid, unscoped['token'], expected=404)
+    get(api, 'files/' + fid, unscoped['token'], expected=404)
+    post(api, f'attempts/{unscoped["id"]}/started', {'thread_id': 'unscoped-page-reader'}, machine['token'])
+    post(api, f'attempts/{unscoped["id"]}/complete', {'outcome': 'completed', 'last_seq': 0}, machine['token'])
+    t, attempt = task_turn(api)
+    post(api, 'pins', {'place': 'task:' + t['id'], 'item': 'page:' + fid})
+
+    def check():
+        assert get(api, 'pages/' + fid, attempt['token'])['page']['file_id'] == fid
+        assert api.get('/api/v2/files/' + fid, headers=headers(attempt['token'])).status_code == 200
+        assert fid in json.dumps(get(api, 'tasks/' + t['id'] + '/context', attempt['token']))
+    check()
+    with monkeypatch.context() as patch:
+        patch.setattr(turn_scope, 'public_pin', lambda *a: False)
+        with pytest.raises(AssertionError):
+            check()
+
+
 def test_embedded_members_filter_before_paging_and_cursor(api, monkeypatch):
     from backend import teammate_access
     from backend.tests.test_bot_access import bot

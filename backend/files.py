@@ -259,8 +259,8 @@ def _file_visible(c, auth, who, row, cache):
                                                                   memo=cache):
             return False
     if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
-        from .turn_scope import public_pin
-        return public_pin(c, row["id"])
+        from .turn_scope import public_pin, scope
+        return scope(c, who) is not None and public_pin(c, row["id"])
     # A bot-wide file is its bot's: one cache serves files of many bots (a card's latest pages).
     key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]
     if key not in cache:
@@ -517,16 +517,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
                             rejected(sources.get(qid, {}).get(label)) or
                             label not in sources.get(qid, {}) and label in hidden_titles(tid))]
                                       for qid, picks in value[key].items()}
-            answer = carried.get("answer", {})
-            shown_refs = H._json(shown.get("refs"), {}) or {}
-            shown_answer = shown_refs.get("answer", {}) if isinstance(shown_refs, dict) else {}
-            if (rejected(value.get("body_sources")) or rejected(carried.get("body_sources")) or
-                    answer.get("answers") != shown_answer.get("answers") or
-                    answer.get("not") != shown_answer.get("not")):
-                for key in H.SOURCED_TEXT_FIELDS:
-                    if key in shown:
-                        shown[key] = "A page you can't open"
-            return shown
+            return H.clear_sourced_text(value, shown, rejected, replacement="A page you can't open")
         if isinstance(value, list):
             return [clean(v, parent, tid, context) for v in value]
         if isinstance(value, str) and value.startswith(("{", "[")):

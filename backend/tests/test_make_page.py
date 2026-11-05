@@ -150,6 +150,43 @@ def test_an_unlinked_logged_file_blocks_publish(api):
         assert c.execute("SELECT count(*) FROM pages").fetchone()[0] == 1
 
 
+def test_logged_page_audience_must_still_cover_the_task_at_publication(api):
+    from backend.tests.test_page_audience import edit
+    t = task(api, private=False)
+    _, publisher = turn(api, "cpo")
+    source = page(api, publisher, task=t["id"])
+    assert source.status_code == 200, source.text
+    fid = source.json()["page"]["file_id"]
+    _, attempt, _ = start(api, t["id"])
+    get(api, "files/" + fid, attempt["token"])
+    edit(api, fid, {"people": ["ben"]}, token="ana-test")
+    # The requester can still read it; the shared task's other readers cannot.
+    get(api, "pages/" + fid, "ben-test")
+    refused = page(api, attempt, task=t["id"], name="made.html")
+    assert refused.status_code == 403, refused.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM pages").fetchone()[0] == 1
+
+
+def test_make_page_output_uses_page_audience_and_restores_after_clearing_it(api):
+    from backend.tests.test_page_audience import edit
+    t = task(api, private=False)
+    _, attempt, _ = start(api, t["id"])
+    made = page(api, attempt, task=t["id"], title="Generated audience plan")
+    assert made.status_code == 200, made.text
+    fid = made.json()["page"]["file_id"]
+    get(api, "pages/" + fid, "cara-test")
+    edit(api, fid, {"people": ["ben"]}, token="ana-test")
+    for path in ("pages/" + fid, "files/" + fid, "files/" + fid + "/versions/1"):
+        get(api, path, "cara-test", expected=404)
+    for path in ("pages?task=" + t["id"], "tasks/" + t["id"] + "/context"):
+        assert "Generated audience plan" not in json.dumps(get(api, path, "cara-test"))
+    assert status(api, t["id"])["state"] == "made"
+    edit(api, fid, None, token="ana-test")
+    get(api, "pages/" + fid, "cara-test")
+    get(api, "files/" + fid, "cara-test")
+
+
 def test_forged_make_page_refs_are_forbidden_on_generic_message_and_chat_routes(api):
     t = task(api, private=False)
     room = say(api, "Hello", "ben-test")["message"]["conversation_id"]
