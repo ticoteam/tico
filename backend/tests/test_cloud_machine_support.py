@@ -2,7 +2,8 @@
 
 import json
 from contextlib import contextmanager
-from threading import local
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, local
 
 import httpx
 import pytest
@@ -135,7 +136,7 @@ def test_an_uncertain_enable_is_never_sent_again_after_a_disable(api, hq):
     assert len(audit(api)) == 1
 
 
-def test_hq_is_called_without_an_open_write_transaction_and_overlap_is_not_resent(api, hq, monkeypatch):
+def test_hq_is_called_without_an_open_write_transaction(api, hq, monkeypatch):
     store = api.app.state.store
     transaction = store.transaction
     active = local()
@@ -149,18 +150,66 @@ def test_hq_is_called_without_an_open_write_transaction_and_overlap_is_not_resen
             finally:
                 active.open = False
 
-    sent = headers(key="overlapping-enable")
-
     def receive(request):
         assert not getattr(active, "open", False), "HQ must not hold the database writer"
-        overlapping = api.put(PATH, json={"on": True}, headers=sent)
-        assert overlapping.status_code == 409 and overlapping.json()["error"]["code"] == "hq_unconfirmed"
         return hq(request)
 
     monkeypatch.setattr(store, "transaction", tracked)
     monkeypatch.setattr(CM, "TRANSPORT", httpx.MockTransport(receive))
-    assert api.put(PATH, json={"on": True}, headers=sent).status_code == 200
+    assert api.put(PATH, json={"on": True}, headers=headers()).status_code == 200
     assert hq.calls == [("PUT", {"on": True})]
+
+
+@pytest.mark.parametrize("second_on", [False, True])
+def test_overlapping_writes_are_ordered_and_retries_are_not_resent(api, hq, monkeypatch, second_on):
+    service = api.app.state.cloud_machines
+    lock = service.support_lock
+    entered, release, waiting = Event(), Event(), Event()
+    support = CM.HQ.support
+    hq.on = False
+
+    class ObservedLock:
+        def __enter__(self):
+            if lock.locked():
+                waiting.set()
+            return lock.__enter__()
+
+        def __exit__(self, *exc):
+            return lock.__exit__(*exc)
+
+    def delayed(self, on=None):
+        if on is True:
+            entered.set()          # The older enable has not reached HQ yet.
+            assert release.wait(10)
+        return support(self, on)
+
+    monkeypatch.setattr(service, "support_lock", ObservedLock())
+    monkeypatch.setattr(CM.HQ, "support", delayed)
+    first_key = headers(key="overlapping-enable")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        first = pool.submit(api.put, PATH, json={"on": True}, headers=first_key)
+        try:
+            assert entered.wait(5)
+            second = pool.submit(api.put, PATH, json={"on": second_on},
+                                 headers=first_key if second_on else headers(key="newer-disable"))
+            assert waiting.wait(5), "the newer write must wait for the older write"
+            assert not second.done()
+            read = pool.submit(api.get, PATH, headers=headers()).result(timeout=5)
+            assert read.status_code == 200 and read.json()["on"] is False
+            # Unrelated writes also keep working while HQ is delayed.
+            rule = pool.submit(api.put, "/api/v2/access/rules", json={"admin_sql": False},
+                               headers=headers()).result(timeout=5)
+            assert rule.status_code == 200, rule.text
+        finally:
+            release.set()
+        enabled, changed = first.result(timeout=5), second.result(timeout=5)
+    assert enabled.status_code == changed.status_code == 200
+    if second_on:
+        assert changed.json() == enabled.json()
+        assert hq.calls == [("GET", None), ("PUT", {"on": True})]
+    else:
+        assert changed.json()["on"] is False and hq.on is False
+        assert hq.calls == [("GET", None), ("PUT", {"on": True}), ("PUT", {"on": False})]
 
 
 def test_unsigned_admin_member_bot_and_runner_cannot_change_access(api, hq):

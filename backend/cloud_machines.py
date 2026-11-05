@@ -880,6 +880,7 @@ class Manager:
         self.store, self.settings, self.execution, self.vault = store, settings, execution, vault
         self.client = client
         self.lock = threading.Lock()
+        self.support_lock = threading.Lock()
         self.synced = None
         self.relist = False             # a create was refused: no other create until HQ's list has been read
         self.list_refused = None        # the code of HQ's last refused list, None once one is read: a waiting create says it
@@ -1518,6 +1519,12 @@ def install(app, settings, store, auth, execution, mutate):
         auth.domain(who)
         if who.role != "owner" or who.support:
             raise Problem("forbidden", "Only the owner changes Tico support on cloud machines", 403)
+        # One manager belongs to one company. Order its writes through HQ and their receipts, so a delayed enable
+        # cannot overtake a disable. Reads and the database writer remain free while HQ answers.
+        with service.support_lock:
+            return change_support(request, body, who)
+
+    def change_support(request, body, who):
         claimed = False
 
         def claim(c):
