@@ -8892,7 +8892,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         owner = actor
     owner = to or owner or human_actor(default_human(conn))     # `to`: a redesign proposal's decider
     ts = now()
-    shown = turn_scope.project(conn, scoped, payload)
+    shown = turn_scope.project(conn, scoped, payload) or {}
     ask = ("Send this to Tico support? " + _clip(shown.get("message", ""), 200) if kind == "support"
            else f"Approve this {kind}: " + _clip(json.dumps(shown, sort_keys=True, default=str), 200))
     from .scope_projection import body_sources

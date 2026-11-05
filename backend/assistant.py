@@ -883,7 +883,7 @@ def describe(c, method, path, body):
             return f"{verb} approval {aid}"
         # What the person says yes to: the amount and target first, each field cleaned, capped and quoted on its own,
         # so a long or crafted field (padding, "card; amount: 9") can't push a later one out or pose as it.
-        payload = turn_scope.project(c, scoped, row.get("payload") or {})
+        payload = turn_scope.project(c, scoped, row.get("payload") or {}) or {}
         detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
         return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by_id'])}"
                 + (f" ({detail})" if detail else "") + f", {age(row['created_at'])}"

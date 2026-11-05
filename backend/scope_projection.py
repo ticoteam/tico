@@ -11,7 +11,7 @@ from .store import H, Problem
 
 # These fields belong to source/reference schemas, never prose or arbitrary JSON strings.
 REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meeting", "meeting_id",
-                        "digest", "source_digest", "content_sha256", "body_sha256",
+                        "digest", "source_digest", "sha256", "content_sha256", "body_sha256",
                         "ref", "item", "url", "file_url", "href", "src", "path"})
 SOURCE_LISTS = frozenset({"files", "attachments", "pages", "meetings", "reviewed", "citations", "body_sources"})
 

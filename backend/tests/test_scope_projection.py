@@ -644,8 +644,15 @@ def test_origins_counts_only_readable_siblings(api, monkeypatch):
     from backend import why_here
     t, attempt = task_turn(api)
     private = post(api, 'tasks', {'owner': 'human:ben', 'title': t['title'], 'body': 'Private sibling', 'private': True})
+    # Legacy task notices carry no delivery-rule ref: exercise the requester's same-title sibling query.
+    with api.app.state.store.transaction() as c:
+        for row in c.execute('SELECT id,refs FROM messages WHERE conversation_id=?', (t['conversation_id'],)).fetchall():
+            refs = H._json(row['refs'], {})
+            refs.pop('rule', None)
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), row['id']))
     get(api, 'origins/' + private['id'], attempt['token'], expected=404)
     path = 'origins/' + t['id']
+    assert get(api, path, attempt['token'])['cause']['type'] == 'person'
     baseline = get(api, path, attempt['token'])['siblings']
     assert baseline['made'] == baseline['open'] == 1
     post(api, 'tasks/' + private['id'], {'version': private['version'], 'close': True})
@@ -728,7 +735,7 @@ def test_folded_questions_do_not_copy_scrubbed_message_text(api, monkeypatch):
     data = sources(api)
     _, attempt = scoped(api, data, False)
     token, tid = attempt['token'], data['task']['id']
-    question = 'Review ' + data['source_label'] + '?'
+    question = 'Review the source?'
     request = {'on': 'ana', 'question': question, 'parent': tid, 'topic': 'source-followup',
                'options': [{'label': 'Continue', 'then': 'Continue'}, {'label': 'Wait', 'then': 'Wait'}]}
     made = post(api, 'task-questions', request, token)
@@ -736,7 +743,9 @@ def test_folded_questions_do_not_copy_scrubbed_message_text(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         refs = H.message(c, made['question']['id'])['refs']
         refs['body_sources'] = [{'file': data['hidden']}]
-        c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), made['question']['id']))
+        wording = 'Review ' + data['source_label'] + '?'
+        refs['questions'][0]['question'] = wording
+        c.execute('UPDATE messages SET body=?,refs=? WHERE id=?', (wording, H._dump(refs), made['question']['id']))
     narrow(api, data)
     request['question'] = 'Continue with the remaining source?'
     folded = post(api, 'task-questions', request, token)
