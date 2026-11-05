@@ -27,8 +27,9 @@ that nothing is set to move, the tasks Task Manager lists as stalled. Settings >
 
 A cloud machine asleep while its tasks wait shows the claim's task wait as queue information, without a stuck-bot
 alert. Its last boot's load raises no reporting warning while it rests, even if it just contacted Tico. The queue
-cutoff uses the next runnable job's age, including when readiness still needs a fresh report. Work that can run but
-stays asleep past that cutoff still raises a problem; **Starting** means the machine is starting.
+cutoff uses the next runnable job's age, including when readiness still needs a fresh report. Spending limits and
+other holds still apply while that report is missing. Work that can run but stays asleep past that cutoff still
+raises a problem; **Starting** means the machine is starting.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose

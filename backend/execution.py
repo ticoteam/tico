@@ -1855,13 +1855,14 @@ def finance_run_ended(c, job_id, turn_id):
 
 
 def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
-                  default=None, *, caps=None, loads=None):
+                  default=None, *, caps=None, loads=None, ignore_refusals=()):
     """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
     jobs. A bot at its own "Turns at once" holds its work on every computer ("bot_limit") once nothing else holds it.
     `caps`: the runner's capability set (capability_set), and `loads`: the rows the checks read for the runner's bots
-    (claim_loads.read), when the caller has them; without them each check reads its own rows as before."""
+    (claim_loads.read), when the caller has them; without them each check reads its own rows as before.
+    `ignore_refusals`: diagnostics skip last-boot predicates but still check later holds; admission never uses it."""
     why, config = _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots,
-                                 subscription_context, default, caps=caps, loads=loads)
+                                 subscription_context, default, caps=caps, loads=loads, ignore_refusals=ignore_refusals)
     if why is None and (limit := start_places.bot_limit(config)) is not None and (
             loads.held_of(c, bot) if loads is not None else start_places.bot_held(c, bot)) >= limit:
         return "bot_limit", None
@@ -1869,7 +1870,7 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
 
 
 def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
-                   default=None, *, caps=None, loads=None):
+                   default=None, *, caps=None, loads=None, ignore_refusals=()):
     """Why `runner`'s claim passes over all of `bot`'s queued work before it looks at any one job: (reason, None), or
     (None, config) when it may look at the bot's jobs. The claim (Execution.candidate) and Health (bot_refusal) use
     this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
@@ -1882,7 +1883,9 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None         # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
-        return ("maintaining" if lanes_on(runner) else "lane_held"), None
+        why = "maintaining" if lanes_on(runner) else "lane_held"
+        if why not in ignore_refusals:
+            return why, None
     state = loads.backoff_of(c, bot) if loads is not None else None
     if (why := run_backoff.refusal(c, bot, state)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
         return why, None            # waiting out failed runs, or held until a person releases it (backend/run_backoff.py)
@@ -1912,15 +1915,18 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     if gateway_connection.is_tico(filled.get("model")) and not models_preset.runs_gateway(ready):
         # A Tico model runs only where bots run as their own user, or on a cloud machine (runner-rs/src/gateway_relay.rs
         # Separation): elsewhere the runner would refuse the turn, so the work waits here instead of failing there.
-        return ("not_isolated" if ready.get("isolated") is False else "isolation_unknown"), None
+        why = "not_isolated" if ready.get("isolated") is False else "isolation_unknown"
+        if why not in ignore_refusals:
+            return why, None
     check = bot_readiness(ready, bot)
     if models_preset.waiting(record, ready, filled):
         # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
         # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
         # its settings and the Gateway's own runtime still have to be ready.
-        if bot not in (ready.get("bots") or {}):
+        if bot not in (ready.get("bots") or {}) and "readiness_unknown" not in ignore_refusals:
             return "readiness_unknown", None
-        if (check.get("repository_present") is not True or check.get("configuration_valid") is not True
+        if "not_ready" not in ignore_refusals and (
+                check.get("repository_present") is not True or check.get("configuration_valid") is not True
                 or ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed") is not True):
             return "not_ready", None
         mine = loads.limit_of(c, bot) if loads is not None else None
@@ -1930,7 +1936,9 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
                 else (None, config))
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
-        return ("not_ready" if reported else "readiness_unknown"), None
+        why = "not_ready" if reported else "readiness_unknown"
+        if why not in ignore_refusals:
+            return why, None
     if signed_in_by_lapsed_plan(ready, check, covers):
         return "sign_in_missing", None
     if ((ready.get("runtimes", {}).get(check.get("runtime")) or {}).get("authenticated") == "rejected"
@@ -2453,9 +2461,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     held_bots, held_lanes = claimed_busy(runner_id)
     ready = readiness_document(runner["readiness"])
     why, config = claim_refusal(c, settings, runner, bot, row["config"], row["draining"], ready, held_bots,
-                                default=default, loads=loads)
-    if why in ignore_refusals:
-        why, config = None, H._json(row["config"], {})
+                                default=default, loads=loads, ignore_refusals=ignore_refusals)
     if why:
         if oldest:
             first = min(rows(c, queued_jobs_sql(), (bot,)), key=lambda j: (j["created_at"], j["id"]), default=None)
@@ -2513,9 +2519,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
     held_bots, held_lanes = claimed_busy(runner_id)
     ready = readiness_document(runner["readiness"])
     why, config = (claim_refusal(c, settings, runner, bot, row["config"], row["draining"], ready, held_bots,
-                                 default=default, loads=loads) if row else ("config", {}))
-    if why in ignore_refusals:
-        why, config = None, H._json(row["config"], {})
+                                 default=default, loads=loads, ignore_refusals=ignore_refusals) if row else ("config", {}))
     queue = rows(c, queued_jobs_sql(), (bot,))
     if oldest:
         queue = sorted(queue, key=lambda j: (j["created_at"], j["id"]))

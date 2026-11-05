@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from backend import cloud_machines as CM, execution, health, start_places, thread_bot_status, views
+from backend import cloud_machines as CM, execution, health, start_places, thread_bot_status, usage_limits, views
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
 from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
@@ -80,6 +80,28 @@ def test_claimable_work_left_asleep_past_the_cutoff_is_still_a_problem(cloud, sp
     assert queue['status'] == 'bad' and queue['items'][0]['reason'] == 'cloud_machine'
     assert 'Not started after 15 min' in queue['summary']
     assert body['stuck'][0]['reason'] == 'cloud_machine'
+
+
+def test_ignoring_last_boot_readiness_keeps_a_sleeping_bots_spending_hold(cloud):
+    computer = asleep_bot(cloud)
+    work(cloud)
+    with cloud.store.transaction() as c:
+        c.execute("INSERT INTO attempts(id,bot_id,state,created_at,settled_at,exit,est_cost_usd) "
+                  "VALUES('spent-run','ops','completed',?,?,'completed',5)", (H.now(), H.now()))
+        usage_limits.save_own(c, 'ops', {'daily_usd': 1}, None)
+        c.execute("UPDATE runner_states SET readiness='{}' WHERE runner_id=?", (computer['runner_id'],))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
+                  (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1),))
+    with cloud.store.read() as c:
+        args = (c, cloud.store.settings, computer['runner_id'], 'ops')
+        assert execution.bot_claimable(*args)[0] == 'readiness_unknown'
+        assert execution.bot_claimable(*args, ignore_refusals=CM.STALE)[0] == 'limit'
+        assert {why for _, why in execution.queued_reasons(*args, ignore_refusals=CM.STALE)} == {'limit'}
+    body = get(cloud.api, 'health')
+    queue = next(row for row in body['checks'] if row['id'] == 'queue')
+    assert queue['items'][0]['reason'] == 'limit'
+    assert 'Over its spending limit' in queue['summary']
+    assert body['stuck'][0]['reason'] == 'limit'
 
 
 @pytest.mark.parametrize('readiness', [None, 'readiness_unknown', 'not_ready'])
