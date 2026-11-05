@@ -83,7 +83,7 @@ def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
         before = c.execute('SELECT * FROM schema_migrations ORDER BY version').fetchall()
     boot(path)
     with sqlite3.connect(path) as c:
-        assert '0095_meeting_task_links' in _versions(c)
+        assert '20261105003629_meeting_task_links' in _versions(c)
         assert 'meeting_task_links' in _tables(c)
         assert c.execute('PRAGMA foreign_key_check').fetchall() == []
         after = c.execute('SELECT * FROM schema_migrations').fetchall()
