@@ -720,7 +720,7 @@ def test_external_sender_losing_an_inferred_source_thread_gets_only_metadata(api
     if audience == "company":
         from backend import bot_settings
         with api.app.state.store.transaction() as c:
-            bot_settings.patch(c, ident, {"harness": "codex", "runtime": "codex"})
+            bot_settings.update(c, ident, {"harness": "codex", "runtime": "codex"})
         # A profile edit does not turn the still-active standing credential into a runner lease.
         assert api.app.state.auth.authenticate(headers(token), "/api/v2/letters", "GET").agent == "hermes"
     removed = api.delete("/api/v2/threads/" + thread["id"] + "/members/bot:" + ident, headers=headers())
