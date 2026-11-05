@@ -245,6 +245,40 @@ def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, 
     write(task)
 
 
+@pytest.mark.parametrize("mutation", ["upload", "failed_sync", "link"])
+def test_file_publishing_checks_the_stored_task_when_the_request_omits_it(api, mutation):
+    from backend import task_quarantine as Q
+    from backend.tests.test_agents import credential, hermes_bot
+
+    hermes_bot(api)
+    token = credential(api)["token"]
+    task = new_task(api, "Check the export", owner="scout")
+    bot = H.actor_id(task["owner_id"])
+    if mutation == "link":
+        path, body = "files/links", {"scope": "bot", "url": "https://acme.example/report"}
+        other = {**body, "url": "https://acme.example/archive"}
+    else:
+        path, body = "files/uploads", {"scope": "bot", "name": "report.txt", "text": "Checked the report."}
+        other = {**body, "name": "archive.txt"}
+    made = post(api, path, {**body, "task": task["id"]}, token)["file"]
+    body["title"] = "Rechecked report"
+    if mutation == "failed_sync":
+        body["sync"] = "failed"
+    elif mutation == "upload":
+        body["text"] = "Rechecked the report."
+    with api.app.state.store.transaction() as c:
+        Q.hold(c, bot, "task:" + task["id"], "Repeated refusals", {"rule": "identity"})
+        before = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (made["id"],)).fetchone())
+        versions = c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0]
+    assert post(api, path, body, token, expected=403)["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert dict(c.execute("SELECT * FROM bot_files WHERE id=?", (made["id"],)).fetchone()) == before
+        assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == versions
+    post(api, path, other, token)
+    post(api, "bots/scout/quarantine/clear", {})
+    post(api, path, body, token)
+
+
 @pytest.mark.parametrize("scope", ["task", "chat"])
 def test_runner_file_publishing_checks_the_supplied_attempt_hold(api, scope):
     from backend import task_quarantine as Q

@@ -485,7 +485,10 @@ class Files:
 
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
-            with H.refusal_task(task):
+            existing = self.find(c, bot, scope, identity)
+            stored_task = existing["task_id"] if existing else None
+            H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
+            with H.refusal_task(task or stored_task):
                 return write_file(c, scope, task, conversation, attempt)
 
         def write_file(c, scope, task, conversation, attempt):
@@ -608,6 +611,7 @@ class Files:
             row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                          title=body.title or url, kind=kind, mime="", locator="remote_link", url=url,
                                          provider=provider, task=task, conversation=conversation, now=now)
+            H._writer(c, actor, task_id=row["task_id"], attempt_id=attempt)
             fields = {"last_activity_at": now, "url": url, "state": "ready"}
             if body.title:
                 fields["title"] = body.title[:300]

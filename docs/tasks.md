@@ -25,7 +25,8 @@ The held task does not consume the bot's optional limit on tasks in progress.
 Every task change by that bot, including an external agent's snoozes, relations and waits, respects the hold.
 Its task-scoped validation refusals count against that task throughout the write, including after rollback.
 Posts in the task's native thread and file uploads, imports and links also respect the task hold; publishing
-files from a held attempt stays refused even when the bot is active.
+files from a held attempt stays refused even when the bot is active. Updating an existing file checks its stored
+task too, even if the request omits the task.
 Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
 stay pending and unread until release; their task references use the same whitespace and list normalization
 as claims. Other tasks' runs carry only notes from sources that are free.
