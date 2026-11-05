@@ -496,6 +496,16 @@ updater manifest last. A failed desktop build leaves the server release publishe
 workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
 
+The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
+`app/src/testdata/` and Markdown docs anywhere under `app/`. Recorder follows the same carry-forward rule with
+`recorder/`, `scripts/app_release.py` and `.github/workflows/recorder.yml` as its inputs and
+`recorder-latest.json` as its manifest. Recorder tests (`recorder/tests/` and the `cfg(test)`-only
+`src/network_tests.rs`, `src/stream_tests.rs` and `src/app/tests.rs`), `recorder/bench/`, `recorder/ui/preview/`
+and Markdown docs anywhere under `recorder/` do not trigger an update. `recorder/CHANGES.md` still counts because
+it supplies updater notes. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
+or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
+override also forces a build.
+
 Because the files arrive a few minutes after the release, a hub that looks for them in that window finds none and asks
 again a minute later. A hub accepts an app version older than its own release when the files are that release's assets.
 
