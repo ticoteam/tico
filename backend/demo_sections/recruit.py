@@ -24,13 +24,13 @@ CONTENT = {
         {"name": "Maya Osei", "applied": 5.6, "changed": 0.9, "status": "review",
          "note": "Ran install crews for a solar installer for eight years, up to thirty jobs a week. Strong on safety "
                  "sign-off and on keeping customers told. Asked about winter pay. Recommend an interview with Ben."},
-        {"name": "Jordan Park", "applied": 5.2, "changed": 1.4, "status": "doing",
+        {"name": "Jordan Park", "applied": 5.2, "changed": 0.4, "status": "doing",
          "note": "Dispatches field crews for a regional HVAC firm and builds each day's routes from parts and skills. No "
                  "install time, but the scheduling is the job. Interview Thursday with Ben, then a ride-along on a "
                  "Storefront install."},
         {"name": "Luis Ortega", "applied": 4.0, "changed": 1.8, "status": "waiting",
          "note": "Reference call requested from a former employer. Waiting on their reply before the next step."},
-        {"name": "Priya Nair", "applied": 1.1, "changed": None, "status": "open", "note": ""},
+        {"name": "Priya Nair", "applied": 0.1, "changed": None, "status": "open", "note": ""},
     ],
     # The cloud agent request in flight: a seat for the agent under Engineering, and the first task Ana gave it.
     "request": {"agent": "devin", "title": "Devin", "reports_to": "product-manager", "days": 1.9,
