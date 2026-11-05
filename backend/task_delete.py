@@ -28,7 +28,7 @@ from .migrations import renames
 
 
 # The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
-READABLE = "(SELECT *, owner AS owner_id, requester AS requester_id FROM task_trash)"
+READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash) tasks"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
@@ -38,12 +38,16 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
  task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
 
 # Rows that only describe the task: kept with it in the trash.
-TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
+TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models", "task_run_models")
+             "task_check_models", "task_run_models", "task_holds", "meeting_task_links",
+             "maintenance_listings", "maintenance_handoffs", "quarantine_holds")
+# A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
+# history is the shared history table's task rows (backend/migrations/0064_history_events.py).
+TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
 # Rows that are work done on the task: any one of them refuses the run.
-TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
+TASK_WORK = ("attempts", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
 # A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
@@ -56,7 +60,7 @@ FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({})
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "
                                    "AND EXISTS (SELECT 1 FROM bot_file_versions v WHERE v.file_id=f.id "
                                    "AND (v.attempt_id IS NOT NULL OR v.actor LIKE 'bot:%'))"))
-MESSAGE_WORK = ("turns", "jobs", "attempt_inputs", "approvals", "credential_requests",
+MESSAGE_WORK = ("attempts", "jobs", "attempt_inputs", "approvals", "credential_requests",
                 "bot_transition_checkpoints", "batches")
 CONVERSATION_WORK = ("attempt_conversations", "session_epochs", "assistant_actions", "chat_goals",
                      "credential_requests", "bot_transition_checkpoints")
@@ -65,7 +69,7 @@ MESSAGE_ROWS = (("message_assets", "message_id"), ("slack_posts", "message_id"),
                 ("task_file_reviews", "comment_id"), ("task_file_reviews", "ask_message_id"))
 CONVERSATION_ROWS = (("slack_digests", "conversation_id"), ("slack_threads", "conversation_id"))
 # Rows that point at the task but belong to something else, by their key: restored only if still unset.
-POINTERS = (("market_insights", "id", "filed_task"),)
+POINTERS = (("market_insights", "id", "filed_task"), ("meeting_items", "id", "proposed_task_id"))
 LINKS = ("conversation_id",)
 # Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
 LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}
@@ -73,7 +77,15 @@ CORE = ("tasks", "conversations", "messages")
 # Keys a trashed row holds that are not columns: the rowid the snapshot read it with, and the task links kept on the
 # task row before task_relations (LEGACY_LINKS, restored as relations).
 NOT_COLUMNS = {"_rowid"}
-HANDLED = {"tasks": set(LEGACY_LINKS)}
+# A task trashed before its holds were rows (migration 0075) kept them as columns of its own row: a restore opens them
+# as task_holds rows (`_legacy_holds`). {kind: {old column: task_holds column}}, with the one that marks it open first.
+LEGACY_HOLDS = {
+    "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
+    "blocked": {"blocked_since": "created_at", "blocked_reason": "reason", "blocked_kind": "cause",
+                "blocked_from_step": "from_step_id", "blocked_from_status": "from_status", "blocked_gate": "gate",
+                "holds_cleared_at": "cleared_at"},
+}
+HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for k in cols}}
 
 
 def ensure(c):
@@ -112,27 +124,36 @@ def _parts(values):
         yield values[i:i + 500]
 
 
-def _count(c, table, column, values):
+def _task_key(table):
+    """(column, extra condition) that picks one of TASK_ROWS' tables' rows by task id."""
+    return TASK_KEYS.get(table, ("task_id", None))
+
+
+def _where(column, where, p):
+    return (f"{where} AND " if where else "") + f"{column} IN ({_marks(p)})"
+
+
+def _count(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"SELECT count(*) FROM {table} WHERE {column} IN ({_marks(p)})", p).fetchone()[0]
+    return sum(c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", p).fetchone()[0]
                for p in _parts(values))
 
 
-def _rows(c, table, column, values):
+def _rows(c, table, column, values, where=None):
     """Each row of `table` whose `column` is in `values`, with its rowid, as dicts."""
     if not values or not _has(c, table, column):
         return []
     out = []
     for p in _parts(values):
-        out += [dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {column} IN ({_marks(p)})", p)]
+        out += [dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", p)]
     return out
 
 
-def _delete(c, table, column, values):
+def _delete(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"DELETE FROM {table} WHERE {column} IN ({_marks(p)})", p).rowcount for p in _parts(values))
+    return sum(c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", p).rowcount for p in _parts(values))
 
 
 def _column(c, sql, values):
@@ -167,7 +188,8 @@ def _snapshot(c, tid, relations=None):
                 seen.add((table, row["_rowid"]))
                 rows.setdefault(table, []).append(row)
     for table in TASK_ROWS:
-        add(table, _rows(c, table, "task_id", [tid]))
+        column, where = _task_key(table)
+        add(table, _rows(c, table, column, [tid], where))
     # Taken for the whole list before any is deleted, so each entry keeps every relation it had.
     rows["task_relations"] = TR.snapshot_rows(c, tid) if relations is None else relations
     for table, column in MESSAGE_ROWS:
@@ -237,7 +259,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     refusals = _refusals(c, ids, conversations, messages)
     report = {"tasks": len(found), "missing": missing, "refused": refusals,
               "conversations": len(conversations), "messages": len(messages),
-              "rows": {t: _count(c, t, "task_id", ids) for t in TASK_ROWS},
+              "rows": {t: _count(c, t, _task_key(t)[0], ids, _task_key(t)[1]) for t in TASK_ROWS},
               "applied": False}
     if missing or (refusals and not keep_work) or not apply:
         return report
@@ -274,7 +296,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
                       "SELECT task_id, blob_id FROM task_assets WHERE task_id=?", (tid,))
         for table in TASK_ROWS:
-            _delete(c, table, "task_id", [tid])
+            column, where = _task_key(table)
+            _delete(c, table, column, [tid], where)
         c.execute("DELETE FROM task_relations WHERE from_task=? OR to_task=?", (tid, tid))
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
@@ -369,7 +392,20 @@ def _current(snap):
         table, key, column = spec.split(".")
         table = renames.current_table(table)
         pointers[f"{table}.{renames.current_column(table, key)}.{renames.current_column(table, column)}"] = keys
-    return {**snap, "rows": renames.current_rows(snap.get("rows") or {}), "pointers": pointers}
+    return {**snap, "rows": _history_rows(renames.current_rows(snap.get("rows") or {})), "pointers": pointers}
+
+
+def _history_rows(rows):
+    """A snapshot saved before the task's history moved to history_events (its `task_events` rows) under the new table,
+    so a restore puts that history back rather than skipping a dropped table."""
+    old = rows.pop("task_events", None)
+    if not old:
+        return rows
+    moved = [{"_rowid": row.get("_rowid"), "id": row.get("id"), "subject_type": "task", "subject_id": row.get("task_id"),
+              "actor_id": row.get("actor_id", row.get("actor")), "kind": row.get("kind", row.get("field")) or "",
+              "old": row.get("old"), "new": row.get("new"), "note": row.get("note"), "action_id": row.get("action_id"),
+              "via": row.get("via"), "created_at": row.get("created_at") or ""} for row in old if isinstance(row, dict)]
+    return {**rows, "history_events": [*rows.get("history_events", []), *moved]}
 
 
 def _unplaced(c, snap):
@@ -388,6 +424,20 @@ def _unplaced(c, snap):
         if keys:
             out[table] = sorted(keys)
     return out
+
+
+def _legacy_holds(c, task):
+    """The holds a task trashed before migration 0075 kept on its row, back as its open task_holds rows."""
+    if "snoozed_until" not in task and "blocked_since" not in task:
+        return
+    for kind, columns in LEGACY_HOLDS.items():
+        first = next(iter(columns))
+        if not task.get(first):
+            continue
+        values = {new: task.get(old) for old, new in columns.items()}
+        values.setdefault("created_at", task.get("updated_at") or H.now())
+        c.execute(f"INSERT INTO task_holds(task_id, kind, {', '.join(values)}) VALUES (?, ?, {_marks(list(values))})",
+                  (task["id"], kind, *values.values()))
 
 
 def restore_tasks(c, ids, actor=None):
@@ -429,6 +479,7 @@ def restore_tasks(c, ids, actor=None):
                 task["step_id"] = None
                 task["step_rank"] = None
             _insert(c, "tasks", task, skip=LINKS)
+            _legacy_holds(c, task)
         messages = []
         for e, snap in snapshots:
             for conv in snap["rows"].get("conversations", []):
@@ -490,6 +541,8 @@ def restore_tasks(c, ids, actor=None):
     for e in entries:
         changed(c, e["task_id"])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
+    # A task restorer may not read its meetings, so skipped links must not reveal their count.
+    skipped.pop("meeting_task_links", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
 
 

@@ -7,7 +7,8 @@ list price. It is not an invoice.
 
 The runner adds up the `tokens` events a run's runtime reports (`runner-rs/src/execute.rs`) and sends them with the run's result as
 `usage`: uncached input, cached input and output tokens, the model that ran, and how the run was billed. The server keeps them on the run
-(`turns.input_tokens`, `cached_tokens`, `output_tokens`, `model`, `provider`, `est_cost_usd`, `billing`; migration 12) and prices them
+(`attempts.input_tokens`, `cached_tokens`, `output_tokens`, `usage_model`, `provider`, `est_cost_usd`, `billing`; migration 12, moved
+from the old `turns` table by migration 0072) and prices them
 from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
 regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
 
@@ -47,7 +48,9 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
   reads "Paused: over its 30-minute limit" (its own) or "Paused: the team is over its 30-minute limit" on its page and in Tasks ("hourly" for an hourly limit), and a run
   already going finishes. A group's or the team's total is shown only to the owner and administrators.
 - What counts is the estimate of the runs the bots finished that started in the UTC half hour, the UTC day, the week from Monday 00:00 UTC, or the UTC month. An hourly limit is saved as the half hour
-  at the same rate: half of it, rounded up to $0.10. Subscription runs count their API-equivalent unless the team turns off "Count subscription runs" (in
+  at the same rate: half of it, rounded up to $0.10. Runs still going are counted when they end, so a period's total can pass
+  its limit by what was running when the hold began. The server logs each hold once per limit and period in each process,
+  with how many runs were going across the team. Subscription runs count their API-equivalent unless the team turns off "Count subscription runs" (in
   the default limit), for every level.
 - A Finance budget that refuses spend at its limit on AI services is one more limit: at its cutoff every
   bot it covers takes no new job and reads "Paused: AI services budget reached" (no amounts) until the budget is raised or its
@@ -55,6 +58,7 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
   Gateway counts against a budget: runs on the company's own keys, sign-ins or subscriptions do not. The Video production budget
   pauses no bot (a run need not make images); at its limit new images are refused for whoever it covers. A new team's budgets start with no amount,
   so nothing is cut off until a person sets one; the team's monthly limit here is separate and does not set a budget.
+  Its hold log identifies the budget and its period end (or that it must be raised), without amounts.
 - Separate from these cost limits, each bot has a run budget (runs per hour and per day, default 300 and 2500) that stops a runaway loop; see [Run budgets](how-it-works.md).
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
 
@@ -64,6 +68,8 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
 Each amount is stored as a budget node (`budget_nodes`): an amount in nanodollars, a period, and a scope (`bot`, `team` for a
 group, or `company`; a `company` node with `per_bot` set is the default for each bot). Hand-off caps, run budgets and loop
 guards are separate safety controls and stay where they are.
+
+**Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group and its subgroups. Tasks stay on their current step. Messages from people stay queued, including keeper notices carrying their messages or reporting their own acts. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
 
 ### Strategy > Budget
 

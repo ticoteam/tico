@@ -15,7 +15,7 @@ What it makes:
 - the incoming trigger the webhook routine listens for; its secret is kept to post to the old address after the cutover
 - custom wake rules: two on Builder (Claude) (wake, note), one on Builder (OpenAI) (batch)
 - each bot's profile, as the release before's start set it (the Librarian's Custom rows join the wake rules)
-- a task rule; the system jobs' controls (Stale ticket review off and hourly; Still wanted? daily at 10:00)
+- a task rule; the system jobs' controls (Stale ticket review off and hourly)
 - two inboxes, Dana's and Priya's, each read by its own Inbox Manager bot (the roster's inbox_bot and mailbox)
 - listening destinations: market (the Librarian) and leads (the Engineering Lead)
 - hourly spend limits 3.00, 5.00 and 0.25; team turn budgets below the guard (120 an hour, 1,000 a day) and one bot
@@ -57,8 +57,7 @@ WAKE_RULES = {
 }
 TASK_RULE = {"name": "Close 48h after done", "department": "engineering",
              "triggers": [{"key": "done_untouched", "hours": 48}], "actions": ["close"], "preset": "hourly"}
-SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"},           # PLAN §8: keeps Off + hourly
-               "still_wanted": {"on": True, "preset": "daily", "migrated_at": "10:00"}}   # a control a built-in keeps
+SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"}}           # PLAN §8: keeps Off + hourly
 BUILTIN_JOBS = ("assigned_tasks", "assignment_recovery")   # "Start assigned tasks", "Recover unstarted assignments"
 # person -> (their Inbox Manager bot, the mailbox it reads)
 INBOXES = {DANA_ID: (INBOX_DANA, "dana@acme.example"), PRIYA_ID: (INBOX_PRIYA, "priya@acme.example")}
@@ -102,7 +101,7 @@ def rule_id(name):
 def old_rows(org):
     """What only the old system wrote, as its tables held it: no cutover record, routines (with the next_due the old
     scheduler set), wake rules, hourly limits, team and bot turn budgets, the CEO Bot's name."""
-    from backend import profiles, redesign_migration as M, turn_budgets as TB
+    from backend import bot_settings, profiles, redesign_migration as M, turn_budgets as TB
     from backend.scheduler import next_due, stamp
     from backend.store import H
     now, made = org.now(), {}
@@ -129,8 +128,7 @@ def old_rows(org):
             usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (TB.TEAM_KEY, json.dumps(TEAM_BUDGET)))
         bot, own = BOT_BUDGET
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, **own}), bot))
+        bot_settings.update(c, bot, own)
         c.execute("UPDATE bots SET display_name=? WHERE slug=?", (OLD_NAME, STRATEGY))
         rule_bots = sorted({r[0] for r in c.execute("SELECT scope_id FROM rules WHERE scope_kind='bot'")})
     return {"due": made, "rule_bots": rule_bots}

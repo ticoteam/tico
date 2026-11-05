@@ -5,6 +5,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, claim, post, ready  # noqa: F401
 from backend.tests.test_run_backoff import hold_bot, setup
 from backend import usage_limits
+from backend import bot_settings as BS
 
 
 def lines(api, slugs, primed):
@@ -104,8 +105,8 @@ def busy(api, machine, first, count, live=1):
         H.sync_registry(c, {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
+            c.execute('INSERT INTO bot_config(bot,owner_id) VALUES(?,?)', (slug, 'ana'))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     for slug in slugs:
         assign(api, machine, slug)
     with store.transaction() as c:
@@ -121,7 +122,7 @@ def busy(api, machine, first, count, live=1):
                          task_id=first_task)
     ready(api, machine, ["ops", "doc-updater", *slugs])
     with store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=100")
+        c.execute("UPDATE runner_states SET capacity=100")
     for slug in slugs[:live]:
         attempt = claim(api, machine, slug)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + slug}, machine["token"])
@@ -306,6 +307,29 @@ def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read
             batched = privacy.status(c, who, row, **privacy.status_inputs(c, ["busy-1"])["busy-1"])
             alone = privacy.status(c, who, row)
         assert batched["focus"] == alone["focus"] == focus
+
+
+def test_a_message_checked_twice_in_one_snapshot_is_read_once_and_a_write_checks_it_again(api, monkeypatch):
+    # The status page checks its open jobs' messages for the job list and again for the queue counts. The second
+    # check reuses the first in the same snapshot; a task turning private in that snapshot is seen at once.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 2)
+    store = api.app.state.store
+    ben = privacy.actor(store.settings.test_identities["ben-test"])
+    with store.read_transaction() as c:
+        task, = c.execute("SELECT id FROM tasks WHERE owner_id='bot:busy-0' AND private=0 AND title LIKE 'Work busy-0 1'")
+        asks = [{"id": row[0]} for row in c.execute(
+            "SELECT id FROM messages WHERE json_extract(refs,'$.task_id')=? OR conversation_id IN "
+            "(SELECT id FROM conversations WHERE task_id=?)", (task[0], task[0]))]
+        assert asks
+        first = privacy.readable_messages(c, ben, asks)
+        assert first == asks
+        # Counted by the checks it runs: a trace hook would itself discard the snapshot's cache.
+        checks, check = [], privacy.message_readable
+        monkeypatch.setattr(privacy, "message_readable", lambda *args, **kw: checks.append(1) or check(*args, **kw))
+        assert privacy.readable_messages(c, ben, asks) == first and checks == []
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (task[0],))
+        assert privacy.readable_messages(c, ben, asks) == [] and len(checks) == len(asks)
 
 
 def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(api, monkeypatch):

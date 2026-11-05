@@ -13,6 +13,7 @@ import sqlite3
 from . import model_login, providers
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
+from . import bot_settings as BS
 
 PREFERENCE = "onboarding.progress"
 BOTOPS = "botops"
@@ -69,7 +70,7 @@ def change_state(c, who, body):
 # ------------------------------------------------------------------ live checks
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL "
+    return c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
                      "AND last_seen_at>? ORDER BY last_seen_at DESC", (since,)).fetchall()
 
 
@@ -119,7 +120,7 @@ def own_bots(c, settings):
 def _next_bot(c, settings):
     """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
     puts the team's first bot first. Returns (id, name, why), or None when nothing is waiting."""
-    rows = c.execute("SELECT bc.bot,b.display_name,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    rows = c.execute(f"SELECT bc.bot,b.display_name,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
     if not rows:
         return None

@@ -41,8 +41,10 @@ from urllib.parse import quote
 from fastapi import Request, Response
 
 from . import hubdb as H
+from . import step_flow
 from .batch_work import isolated
 from .store import Problem
+from . import bot_settings as BS
 
 PATH = "/api/v2/github/webhook"   # under /api/v2: the runner hostname routes only that prefix
 PR_LINK = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$", re.IGNORECASE)
@@ -125,7 +127,7 @@ def _preset_owner(c, task):
     owner = str(task.get("owner_id") or "")
     if not owner.startswith("bot:"):
         return False
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
+    row = c.execute(BS.ONE_SQL, (owner[4:],)).fetchone()
     return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
 
 
@@ -246,22 +248,26 @@ def register_worktree_pr(c, pr):
     return made
 
 
-def health_wait_reason(link, detail):
-    """The PR condition whose age Health measures, from the already synced link only."""
+def health_wait_reason(link, detail, *, check_flow=False):
+    """The PR condition whose age Health measures, from the already synced link only.
+
+    A ticket with step flow still needs its next move after a review; Health reads its Tico verdicts to name it.
+    """
     if link.get("state") not in ("open", "draft"):
         return ""
     if link.get("mergeable") == "conflict":
         return "conflict"
     reviewed = (detail.get("health_reviewed_head") == detail.get("head_sha")
                 if "health_reviewed_head" in detail else bool(link.get("review_state")))
-    if link.get("state") == "open" and link.get("mergeable") == "clean" and link.get("checks") == "passing" and not reviewed:
+    if (link.get("state") == "open" and link.get("mergeable") == "clean"
+            and link.get("checks") == "passing" and (check_flow or not reviewed)):
         return "review"
     return ""
 
 
-def record_health_wait(link, detail):
+def record_health_wait(link, detail, *, check_flow=False):
     """Keep the first observation through refreshes; a resolved condition clears its clock."""
-    reason = health_wait_reason(link, detail)
+    reason = health_wait_reason(link, detail, check_flow=check_flow)
     old = detail.get("health_wait") or {}
     head = detail.get("head_sha") or ""
     if not reason:
@@ -342,7 +348,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         elif mergeable == "clean":
             detail.pop("conflict_head", None)
         record_health_wait({**link, "state": state, "mergeable": mergeable,
-                            **({"checks": "pending"} if new_head else {})}, detail)
+                            **({"checks": "pending"} if new_head else {})}, detail,
+                           check_flow=step_flow.has_flow(c, task.get("type_id")))
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
             # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
@@ -409,7 +416,7 @@ def _own_comment(c, task, payload, key, detail):
     author = author or str(detail.get("author_login") or "").lower()
     head_login = str(detail.get("head_login") or "").lower()
     app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone()
+    config = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()
     bot_login = (H._json(config[0], {}) or {}).get("github_login", "") if config else ""
     via_app = (payload.get(key) or {}).get("performed_via_github_app") or {}
     return (app and str(via_app.get("slug") or "").lower() == str(app[0]).lower()
@@ -424,7 +431,7 @@ def by_person(c, payload, key):
     login = str((obj.get("user") or {}).get("login") or "").lower()
     if not login or login.endswith("[bot]") or obj.get("performed_via_github_app"):
         return False
-    return not c.execute("SELECT 1 FROM bot_config WHERE lower(json_extract(config,'$.github_login'))=? LIMIT 1",
+    return not c.execute(f"SELECT 1 FROM bot_config bc {BS.JOIN} WHERE lower(s.github_login)=? LIMIT 1",
                          (login,)).fetchone()
 
 
@@ -631,7 +638,8 @@ def apply_checks(c, link_id, head, checks, since=None):
     _set_dropped(detail, dropped)
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
-    record_health_wait({**link, "checks": state}, detail)
+    record_health_wait({**link, "checks": state}, detail,
+                       check_flow=step_flow.has_flow(c, task.get("type_id")))
     c.execute("UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?",
               (state, json.dumps(detail), H.now(), link_id))
     if state != link.get("checks"):
@@ -752,7 +760,7 @@ def pr_signal(c, event, payload):
         if event in ("pull_request_review", "pull_request_review_comment"):
             fields["activity_at"] = H.now()      # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
-        record_health_wait({**link, **fields}, detail)
+        record_health_wait({**link, **fields}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
         fields.update(detail=json.dumps(detail), updated_at=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))

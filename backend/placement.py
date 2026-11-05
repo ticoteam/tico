@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from .getting_started import _online_runners
 from .store import H, Problem
+from . import bot_settings as BS
 
 SWEEP_LIMIT = 20
 
@@ -29,10 +30,10 @@ def candidates(c, auth, bot):
         return (r["owner_id"] == operator or bool(r["accepts_member_bots"])) if member else r["owner_id"] in (operator, owner)
     from .cloud_machines import cloud_runners
     others = cloud_runners(c, but=bot)          # a cloud machine (another bot's own, or the shared one) never is
-    rows = [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL") if takes(r) and r["id"] not in others]
+    rows = [r for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL") if takes(r) and r["id"] not in others]
     # A bot BotOps builds has its repository on BotOps's computer, so it goes there when that computer takes it; a starter
     # the runner sets up itself goes anywhere.
-    declared = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone() or {"config": "{}"})["config"], {}) or {}
+    declared = H._json((c.execute(BS.ONE_SQL, (bot,)).fetchone() or {"config": "{}"})["config"], {}) or {}
     home = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
     home = home["runner_id"] if home and not declared.get("materialize") and bot != "botops" else None
     return sorted(rows, key=lambda r: (r["id"] not in online, r["id"] != home, load.get(r["id"], 0), r["created_at"], r["id"]))

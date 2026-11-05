@@ -262,6 +262,12 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-plan'};
     const said = [{id: 'p1', conversation_id: 'r-plan', sender_id: 'bot:lead', kind: 'say', body: 'What should launch first?', created_at: at(20)}];
     const sent = [], posted = [], prefs = {}, prefPosts = [];
+    // The send way is saved when the page's timer fires, and that POST reaches this stub a moment later: wait for it
+    // (up to 5 s) before the assertion that reads it.
+    const saved = async check => {
+      await page.waitForFunction(() => !SEND_WAY_TIMER);
+      for (const end = Date.now() + 5000; !check() && Date.now() < end;) await new Promise(r => setTimeout(r, 25));
+    };
     let to = {bot: 'lead', wakes: true, mention: []};
     let choices = {default: 'defer', default_for: '24h', steer: true, queue: true, steers: true, goal: true};
     page.on('pageerror', e => errors.push(e.message));
@@ -349,7 +355,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
     if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await saved(() => prefPosts.at(-1)?.[1] === 'queue');
     assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
 
     // Defer 4h: a clock with a 4h badge, and it stays after the send.
@@ -368,7 +374,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await looks(), {shows: 'goal:', label: 'Set as goal', badge: ''});
     assert.equal((await send('Finish the billing migration.')).delivery, 'goal');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'}, 'back to the kept way');
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await saved(() => prefPosts.length >= 2);
     assert.deepEqual(prefPosts.map(([, v]) => v), ['queue', 'defer:4h'], 'goal is never written');
 
     // Send itself opens the ways: a right-click on a computer, a long press on a phone; neither sends.
@@ -414,7 +420,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await ways(), ['defer:never'], 'no deadlines to pick');
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('No deadline'), {text: 'No deadline', public: false, delivery: 'defer', defer_for: 'never'});
-    await page.waitForFunction(() => !SEND_WAY_TIMER);
+    await saved(() => prefs['compose.send_way'] === 'defer:4h');
     assert.equal(prefs['compose.send_way'], 'defer:4h', 'the kept way stays what the person picked');
 
     // A task with no bot keeps the plain arrow and no caret, and its comment carries no delivery.

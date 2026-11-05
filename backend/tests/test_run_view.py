@@ -154,7 +154,7 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
     events(api, machine, direct["id"], [("tool", {"tool": "Bash", "status": "started", "item_id": "p1",
                                                   "summary": "payroll-export.sh", "parent_id": None, "background": True})])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (tid, direct["id"]))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, direct["id"]))
     assert {r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]} == {shared["id"], direct["id"]}
     monkeypatch.setattr("backend.run_view.ATTEMPT_LIMIT", 1)
     seen = get(api, f"tasks/{tid}/run-view", token="cara-test")
@@ -183,7 +183,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
                                ("tool", {"tool": "mcp__hub__task_create", "status": "completed", "item_id": "c1"})])
     live = get(api, f"tasks/{tid}")["execution"]
     assert (live["state"], live["run_id"], live["bot_id"]) == ("running", aid, "ops")
-    assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Ran hub task create"}
+    assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Filing a task"}
     events(api, machine, aid, [("message", {"text": "Counted: 42 words.", "final": True})], first=3)
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},
          machine["token"])
@@ -262,6 +262,82 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
+
+
+def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
+    """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
+    line reads it as the person's: CPU overload does not stand for it, but a memory hold still does."""
+    from backend import views
+    from backend.tests.test_scheduler import _wake_by_hand
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    assign(api, machine, "coo")
+    ready(api, machine, ["ops", "coo"])
+    tid, attempt = task_attempt(api, machine)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Counted.", "last_seq": 0},
+         machine["token"])
+    assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"]
+    humans = []
+    queued_label = views.queued_label
+    monkeypatch.setattr(views, "queued_label",
+                        lambda *a, **kw: humans.append(kw.get("human")) or queued_label(*a, **kw))
+    with api.app.state.store.transaction() as c:
+        cid = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+                  "VALUES('msg-ana',?,'human:ana','bot:coo','chat','Check the April numbers','{}',?)", (cid, H.now()))
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+                  "VALUES('msg-carry',?,'keeper','bot:coo','notice','coo: Check the April numbers',?,?)",
+                  (cid, json.dumps({"carries": "msg-ana", "from": "human:ana", "wake": "thread", "reason": "mention"}),
+                   H.now()))
+        _wake_by_hand(c, "msg-carry", "coo")
+    shown = get(api, f"tasks/{tid}")["execution"]
+    assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == ("msg-carry", "coo", "queued", True)
+    assert humans and all(h is True for h in humans), "the carried message keeps its person's priority"
+    from backend.tests.test_start_places import memory, overload
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (machine['runner_id'],))
+    overload(api, machine)
+    assert 'computer busy' not in get(api, f"tasks/{tid}")["execution"]["label"]
+    memory(api, machine, .86)
+    assert 'computer busy: memory' in get(api, f"tasks/{tid}")["execution"]["label"]
+    memory(api, machine, .79)
+    assert 'computer busy: memory' not in get(api, f"tasks/{tid}")["execution"]["label"]
+
+
+def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(api):
+    from backend.tests.test_api import headers
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Wait before preparing', 'body': 'Start when memory is available.'})['id']
+    attempt = claim(api, machine)
+    aid, rid = attempt['id'], machine['runner_id']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET performance='off',platform='linux' WHERE id=?", (rid,))
+    reason = 'computer busy: memory 98%'
+    assert not post(api, f'attempts/{aid}/start-place', {'waiting': reason}, machine['token'])['reserved']
+    shown = get(api, f'tasks/{tid}')['execution']
+    assert shown['state'] == 'leased' and shown['waiting'] == shown['label'] == 'Waiting: ' + reason
+    with api.app.state.store.read() as c:
+        cid = H.task(c, tid)['conversation_id']
+    assert get(api, f'conversations/{cid}/snapshot')['execution']['waiting'] == 'Waiting: ' + reason
+    assert get(api, f'tasks/{tid}/run-view')['runs'][0]['waiting'] == 'Waiting: ' + reason
+    for path, key in [('operations', 'machines'), ('computers', 'computers'), ('health', 'computers')]:
+        computer = next(m for m in get(api, path)[key] if m['id'] == rid)
+        assert computer['turn_counts']['waiting'] == 1 and computer['turn_counts']['starting'] == 0
+        assert reason in computer['turn_summary']
+    check = next(c for c in get(api, 'health')['checks'] if c['id'] == 'runner_load:' + rid)
+    assert check['status'] == 'warn' and reason in check['summary']
+    assert 'below 80%' in check['summary']
+    invalid = api.post(f'/api/v2/attempts/{aid}/start-place', json={'waiting': 'computer busy: memory 101%'},
+                       headers=headers(machine['token']))
+    assert invalid.status_code == 422
+    assert post(api, f'attempts/{aid}/start-place', {}, machine['token'])['reserved']
+    assert get(api, f'tasks/{tid}')['execution']['label'] == 'Starting'
+    post(api, f'attempts/{aid}/started', {'thread_id': 'memory-recovered'}, machine['token'])
+    assert 'waiting' not in get(api, f'tasks/{tid}')['execution']
+    assert get(api, f'tasks/{tid}/run-view')['runs'][0]['waiting'] is None
+    assert not any(c['id'] == 'runner_load:' + rid for c in get(api, 'health')['checks'])
 
 
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):

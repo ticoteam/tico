@@ -27,7 +27,7 @@ function askPage() {
   return {path: path.slice(0, 300), title: heading.slice(0, 200)};
 }
 // The Assistant page is this chat already, and setup has no room for it.
-const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.contains('in-setup');
+const askAway = () => !S.me || S.route === ASSISTANT || document.documentElement.classList.contains('in-setup');
 // Open or closed is a class, never `hidden`: the app's `:has(… :not([hidden]))` rules make any change of a `hidden`
 // attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
 // (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
@@ -36,11 +36,16 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
+// The row is there from the first paint (index.html); a click before /me answers opens Ask once the first page is
+// drawn (router.js calls askSync), and boot that never gets a person hides the row (boot.js).
+let ASK_EARLY = false;
 function askSync() {
   const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');
   if (!row || !panel) return;
+  if (ASK_EARLY && S.me) { ASK_EARLY = false; if (!askAway()) { askToggle(true); return; } }
   const name = askName(), away = askAway(), open = !!ASK?.open && !away;
   askSet(row, 'hidden', away);
+  document.documentElement.classList.toggle('ask-away', away);   // ui/theme.js set it for the first paint
   if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
   askSet(row, 'title', name + ' (⌘J)');
@@ -204,12 +209,28 @@ let ASK_PEEK_TIMER = 0;
 // On a computer the peek sits just past the rail, level with the Ask row (ask.css --ask-row-y). Measured only while a
 // peek shows, never on the way in or out of the panel.
 function askPeekPlace(el) {
+  if (el.classList.contains('ask-peek-row')) return;
   const r = !askPhone() && $('#ask-row')?.getBoundingClientRect();
   if (r?.height) el.style.setProperty('--ask-row-y', `${Math.round(innerHeight - r.bottom + r.height / 2)}px`);
 }
+// The peek's element, held here: docked above a thread's composer it sits inside the thread view, which a new page
+// replaces, so a lookup by id would lose it.
+let ASK_PEEK_EL = null;
+const askPeekEl = () => ASK_PEEK_EL ||= $('#ask-peek');
+// With a thread's composer on screen the peek is its own row above it, never over the words; elsewhere it floats by the dot.
+function askPeekDock() {
+  const el = askPeekEl(); if (!el) return;
+  const slot = [...document.querySelectorAll('#main .thv-peek-slot')].find(s => s.parentElement?.getClientRects().length);
+  const home = slot || document.body;
+  if (el.parentElement !== home) home.append(el);
+  el.classList.toggle('ask-peek-row', !!slot);
+}
+window.askPeekDock = askPeekDock;
+addEventListener('hashchange', () => setTimeout(askPeekDock, 0));
 function askPeek() {
-  const el = $('#ask-peek');
+  const el = askPeekEl();
   if (!el) return;
+  askPeekDock();
   clearTimeout(ASK_PEEK_TIMER);
   const now = Date.now(), open = !!ASK?.open, away = askAway() || !S.me;
   const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
@@ -234,12 +255,12 @@ function askPeek() {
 }
 // Dismissed or tapped, the line is done with every item it spoke for.
 function askPeekDone() {
-  const el = $('#ask-peek'), store = askPeekStore();
+  const el = askPeekEl(), store = askPeekStore();
   askPeekSave({...store, dismissed: [...store.dismissed, ...(el.dataset.items || '').split(' ').filter(Boolean)]});
   askOn(el, false); delete el.dataset.item;
 }
-$('#ask-peek')?.addEventListener('click', ev => {
-  const el = $('#ask-peek'), id = el.dataset.item;
+askPeekEl()?.addEventListener('click', ev => {
+  const el = askPeekEl(), id = el.dataset.item;
   if (!id) return;
   if (ev.target.closest('[data-peek-x]')) { askPeekDone(); return; }
   if (!ev.target.closest('[data-peek-go]')) return;
@@ -254,14 +275,14 @@ async function askLoad(chat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
   const fail = text => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
-  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
+  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null, tick = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  chat.stop = stopStream;
+  chat.stop = () => { stopStream(); clearInterval(tick); tick = null; };
   const isReply = m => m.sender_id === 'bot:' + info?.bot;
   let pending = [];
   const seenRows = new Set();
   const draw = () => {
-    if (!current() || !info?.available) return;
+    if (!current() || !info?.available) { clearInterval(tick); tick = null; return; }
     const at = x => Date.parse(x || '') || 0;
     // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not.
     const streaming = !!(execution && execution.state !== 'completed' && execution.text);
@@ -281,19 +302,30 @@ async function askLoad(chat) {
       .concat(cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
     const live = execution && execution.state !== 'completed' ? execution.text : '';
+    // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
+    const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Thinking…')}</p>`);
+    // The thread holds only the line's label (its time and step are set after the draw), so a redraw of the same chat leaves the thread (and typed replies) be.
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-ask-working>${esc(execution?.label || (working ? 'Working' : 'Thinking…'))}</p>`);
+    // The tick moves only the line's time, never the thread (its cards would load again).
+    if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-ask-working]'), t = askWorkingLine(execution);
+      if (el && t) el.textContent = t; }, ASK_TICK_MS);
+    else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
       `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
-    if (html !== rendered) {
+    // Compared without the messages' "2m ago" (format.js agoStill): those move in place.
+    if (agoStill(html) === rendered) agoTick(thread);
+    else {
       stickScroll(thread).update(() => {
         thread.innerHTML = html;
         if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
       }, {fresh: !!rendered});
       askRowsIn(thread, seenRows, !!rendered);
-      rendered = html;
+      rendered = agoStill(html);
       fbSync();                         // the Assistant's replies' 👍 / 👎, read for this panel too (ui/app/feedback.js)
     }
+    const wl = working && thread.querySelector('[data-ask-working]');
+    if (wl) wl.textContent = working;
     chat.drawn = true;
     // Opened from a peek: the card it spoke of, in view.
     const fq = chat.focusQ || '', q = fq && thread.querySelector(fq.startsWith('confirm:')
@@ -378,8 +410,8 @@ function askRowsIn(thread, seen, animate) {
       {duration: 260, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards'});
   }
 }
-$('#ask-row')?.addEventListener('click', () => askToggle());
-$('#mobile-ask')?.addEventListener('click', () => askToggle());
+$('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
+$('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('change', ev => {
   const choose = ev.target.closest('[data-ask-choose]');
@@ -421,4 +453,6 @@ document.addEventListener('click', ev => {
   if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
-setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);
+// Its first check, a few seconds after load, is announced: a support reply waiting at load opens its chat only after it
+// (ui/support.js), so the chat never opens over a peek that is due.
+setTimeout(() => { askPeek(); document.dispatchEvent(new CustomEvent('tico:ask-peek-checked')); }, ASK_PEEK_WAIT_MS + 100);

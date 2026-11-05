@@ -7,9 +7,10 @@ The grant lives next to the service-account key (`google-oauth.json` beside `goo
 bot's turn still gets only a short-lived access token for one of the mailboxes the hub named for it
 (runner_support/credential_socket.py).
 
-A person connects from Settings > Inbox > Connect Google (backend/google_connect.py): the sign-in uses Tico's own
-OAuth client, Google returns the browser to the server, and this computer's connectors job finishes it here with
-`finish` (scripts/mail.sh google finish, the request on stdin). Nobody makes a Google Cloud project. That client's
+A person connects from Settings > Inboxes > Connect Google (backend/google_connect.py): the sign-in uses the server's
+OAuth client (Tico's shared app, or the company's own app from Settings > Inboxes, which also asks for the write
+scopes in CAPABILITIES), Google returns the browser to the server, and this computer's connectors job finishes it here
+with `finish` (scripts/mail.sh google finish, the request on stdin). Nobody makes a Google Cloud project. That client's
 secret stays on the server: the server trades the code for the grant and refreshes it (`server_exchange`,
 `server_token`), so such a grant is stored with `"broker": "server"` and no secret. The runner gives the mail CLI
 the server's address and its own registration for that (BROKER_URL_ENV, BROKER_AUTH_ENV). A self-hosted team may
@@ -22,7 +23,10 @@ served from it: a revoked or expired grant is an error that says how to reconnec
 to the service account.
 
 Reading starts with read-only access. Each write capability adds only its own Google scope, chosen at
-connect time. Nothing here prints or returns a refresh token, an access token or the client secret.
+connect time. A grant made through the server asks for the write scopes only when the company's own Google
+app signs the person in (backend/google_connect.py); it keeps the scopes Google reports, and a refresh asks
+the server for no scope the grant lacks. Nothing here prints or returns a refresh token, an access token or
+the client secret.
 Only the standard library is used, so the CLI can connect before the Google client libraries exist.
 """
 
@@ -60,9 +64,10 @@ SERVICE_SCOPES = {
                  G + "calendar.calendarlist.readonly"],
 }
 WRITE_SCOPES = {"gmail": {G + "gmail.modify", G + "gmail.compose"}, "calendar": {G + "calendar.events"}}
-# The granted scopes that let each capability's operations through (gmail.modify also covers drafts).
+# The granted scopes that let each capability's operations through (gmail.modify also covers drafts). The full calendar
+# scope, which the Google Workspace connection's token carries, covers event writes as calendar.events does.
 NEEDS = {"labels": {G + "gmail.modify"}, "drafts": {G + "gmail.modify", G + "gmail.compose"},
-         "calendar-write": {G + "calendar.events"}}
+         "calendar-write": {G + "calendar.events", G + "calendar"}}
 
 
 def grants_path(key_path=None):
@@ -77,7 +82,8 @@ def grants_path(key_path=None):
 
 
 def connect_command(mailbox):
-    return f"{mailbox} signs in to Tico and uses Settings > Inbox > Connect Google (docs/mail.md, Connect your Google account)"
+    return (f"{mailbox} signs in to Tico and uses Settings > Inboxes > Connect Google "
+            "(docs/mail.md, Connect your Google account)")
 
 
 class SignInFailed(Failure):
@@ -127,6 +133,30 @@ def refused(kind, mailbox, error=""):
                             refresh_failed_hint(mailbox))
     return SignInFailed(kind, f"Google refused the sign-in for {mailbox}: {error or 'unknown error'}",
                         "Start the sign-in again.")
+
+
+# The Google Workspace connection on the Tico server (POST connectors/mail/workspace/token) refuses a mailbox with a 403
+# whose code is one of these kinds. Each says what happened and the one fix, in plain words.
+WORKSPACE_REFUSALS = {
+    "not_this_mailbox": ("The Google Workspace connection does not serve {m} to this computer.",
+                         "Mail for a bot's inbox runs on the computer that runs that bot. Check which computer runs it."),
+    "personal_grant": ("{m} is connected with its own Google account, and that account takes precedence over the "
+                       "Google Workspace connection.",
+                       "Its owner can disconnect that account in Settings > Inboxes, and then the Google Workspace "
+                       "connection serves {m}."),
+    "workspace_owned": ("The Google Workspace connection serves {m} from the computer that runs its inbox bot, not from "
+                        "this one.",
+                        "Run mail for {m} on the computer that runs its bot."),
+    "not_connected": ("The Google Workspace connection cannot get access for {m} right now.",
+                      "Open Settings > Inboxes and click Check. If Google still refuses, an admin in Google Admin "
+                      "needs to click Authorize for Tico."),
+}
+
+
+def workspace_refused(kind, mailbox):
+    """The SignInFailed for a refusal from the Google Workspace connection: its kind (mint-token prints it) and the reason."""
+    what, fix = WORKSPACE_REFUSALS[kind]
+    return SignInFailed(kind, what.format(m=mailbox), fix.format(m=mailbox))
 
 
 def load(path=None):
@@ -276,6 +306,11 @@ def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None, mai
                            "Check this computer's network, then start the sign-in again.")
 
 
+def broker_configured():
+    """True when this process has the runner's way to the Tico server (the URL and its registration)."""
+    return bool(os.environ.get(BROKER_URL_ENV) and os.environ.get(BROKER_AUTH_ENV))
+
+
 def broker(retries=1):
     """A client for the Tico server that refreshes Connect Google grants, from the runner's environment."""
     url, auth = os.environ.get(BROKER_URL_ENV), os.environ.get(BROKER_AUTH_ENV)
@@ -293,6 +328,9 @@ def _broker_call(path, body, mailbox, retries=1):
         return broker(retries).post(path, body)
     except APIError as e:
         kind = str((e.extra or {}).get("kind") or "")
+        refusal = e.code if e.code in WORKSPACE_REFUSALS else kind
+        if e.status == 403 and refusal in WORKSPACE_REFUSALS:   # the Google Workspace connection refused this mailbox
+            raise workspace_refused(refusal, mailbox)
         if e.code == "google_refused" and kind == "network":
             raise SignInFailed("network", f"Tico's server could not reach Google for {mailbox}",
                                "Try again in a few minutes.")
@@ -301,6 +339,9 @@ def _broker_call(path, body, mailbox, retries=1):
                           mailbox, e.detail)
         if e.code == "not_this_grant":                  # the server does not know this grant: connect again
             raise refused("signin", mailbox, "not known to Tico's server")
+        if e.code == "scope":                           # the token route (422): the grant does not hold these scopes
+            raise SignInFailed("scope", f"{mailbox}'s Connect Google grant does not hold that access",
+                               "Connect Google again in Settings > Inboxes to give Tico this access.")
         raise Failure(f"Tico's server would not give access to {mailbox}: {e.code}",
                       "Check this computer's runner is registered and online, then try again.")
 
@@ -321,6 +362,18 @@ def server_token(found, service, scopes, mailbox):
     if not isinstance(answer, dict) or not answer.get("access_token"):
         raise Failure(f"Tico's server returned no access for {mailbox}", "Try again in a few minutes.")
     return answer["access_token"], str(answer.get("expiry") or ""), [str(s) for s in answer.get("scopes") or scopes]
+
+
+def server_workspace_token(mailbox, service):
+    """(access token, expiry ISO, granted scopes or None) from the Tico server's Google Workspace connection, for a computer
+    with no key of its own: the server mints only for a mailbox it covers and names this computer for. None means the
+    server named no scopes, which reads the same as the key path (no narrowing)."""
+    answer = _broker_call("connectors/mail/workspace/token", {"mailbox": mailbox, "service": service}, mailbox)
+    if not isinstance(answer, dict) or not answer.get("access_token"):
+        raise Failure(f"Tico's server returned no access for {mailbox}", "Try again in a few minutes.")
+    granted = answer.get("scopes")
+    return (answer["access_token"], str(answer.get("expiry") or ""),
+            [str(s) for s in granted] if isinstance(granted, list) else None)
 
 
 def confirmed_identity(access_token, opener=None):
@@ -472,8 +525,39 @@ def require(granted, capability, mailbox, what):
         return
     raise Refused(f"{mailbox} is connected to Tico read-only at Google, so Tico will not {what}; nothing was sent "
                   "to Google",
-                  "Reading still works. Connect Google grants read-only access; Tico does not ask Google for more "
-                  f"on its own (an operator can add one scope with `google connect --allow {capability}`).")
+                  "Reading still works. Connecting with the company's own Google app (Settings > Inboxes) can add this "
+                  "access; Tico's shared app is read only. Tico does not ask Google for more on its own (an operator "
+                  f"can add one scope with `google connect --allow {capability}`).")
+
+
+# The company's What Tico may do (Settings > Inboxes, backend/google_workspace.py PERMISSIONS) for each write. A draft
+# is the first step of every send, so Send mail on allows one with Organize mail off.
+COMPANY_NEEDS = {"labels": ("organize_mail",), "drafts": ("organize_mail", "send_mail"), "send": ("send_mail",),
+                 "calendar-write": ("change_calendar",)}
+COMPANY_NAMES = {"organize_mail": "Organize mail", "send_mail": "Send mail",
+                 "change_calendar": "Create and change calendar events"}
+
+
+def company_allows(company, capability, mailbox, what):
+    """Refuse a write the company turned off in Tico, whatever credential the run holds (a local service-account key,
+    a standalone grant or a server token): Google's scopes alone cannot tell Organize mail from Send mail.
+
+    `company` is the run's {permission: bool} (policy.company), a callable returning it, None when Tico said nothing
+    of it (an older server), or "unread" when Tico could not be asked: no write goes to Google then, since a lookup
+    that failed must not hand back what the company turned off."""
+    company = company() if callable(company) else company
+    if company == "unread":
+        raise Failure("Tico couldn't check the company's mail settings; try again",
+                      f"Nothing was sent to Google for {mailbox}. Reading mail still works.")
+    if not isinstance(company, dict):
+        return
+    needs = COMPANY_NEEDS[capability]
+    if any(company.get(name) is not False for name in needs):
+        return
+    names = " or ".join(COMPANY_NAMES[n] for n in needs)
+    raise Refused(f"the company turned {names} off in Tico (Settings > Inboxes > Settings > What Tico may do), "
+                  f"so Tico will not {what} in {mailbox}; nothing was sent to Google",
+                  "An admin turns it back on there.")
 
 
 def refresh_failed_hint(mailbox):

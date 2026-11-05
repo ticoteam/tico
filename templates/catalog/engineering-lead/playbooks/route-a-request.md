@@ -18,7 +18,7 @@ the request and the Tools allow.
 2. **Find the owner.**
    1. `knowledge/routing.md`: has a request like this been routed before? Follow that.
    2. `knowledge/areas.md`: which repository or area does it touch, and who owns it?
-   3. The team's lines: a pull request needing a look is `pr-reviewer` (Senior Software Engineer); a release, its
+   3. The team's lines: a Dev ticket to build is `builder` (Builder), or a numbered copy such as `builder-2`; a pull request needing a look is `pr-reviewer` (Senior Software Engineer); a release, its
       checklist or its notes is `release-notes` (Release Manager); an outage or an on-call handoff is
       `incident-scribe` (Site Reliability Engineer); an outdated README or API page is `docs-writer` (Technical
       Writer); an incoming bug or a test plan is `issue-triage` (QA Engineer); a vulnerable dependency or a leaked

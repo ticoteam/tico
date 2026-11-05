@@ -45,6 +45,7 @@ import re
 from clients import harness_manifests as manifests
 
 from .store import H, Problem
+from . import bot_settings as BS
 
 # The runtimes whose manifest has a [login] the runner can relay, and those whose CLI asks for a code to be pasted
 # back. A runner too old for one of them answers that browser sign-in is not available.
@@ -191,7 +192,7 @@ def _person_only(who, what):
 
 
 def _runner(c, rid):
-    row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not row:
         raise Problem("not_found", "That computer is not registered", 404)
     return row
@@ -396,7 +397,7 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
     from .computer_keys import SHARED_WITH, names
     rows = []
     for rid in dict.fromkeys([here, *runner_ids]):
-        row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
         if not row:
             raise Problem("computers", "Share it only with computers that are connected", 422)
         rows.append(row)
@@ -523,7 +524,7 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers
     from .shared_bots import follow
     from .subscriptions import computer_logins
-    runner = c.execute('SELECT readiness,capabilities FROM runners WHERE id=?', (rid,)).fetchone()
+    runner = c.execute('SELECT readiness,capabilities FROM runners_with_state WHERE id=?', (rid,)).fetchone()
     ready = H._json(runner['readiness'], {}) or {}
     current = computer_logins(runner, ready)
     if profile and current:
@@ -533,8 +534,8 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
-    for row in c.execute("SELECT a.bot, b.display_name, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
+    for row in c.execute(f"SELECT a.bot, b.display_name, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
             config = providers.fill(record, follow(c, row["bot"], json.loads(row["config"] or "{}")))

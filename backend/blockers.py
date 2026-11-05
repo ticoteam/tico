@@ -7,6 +7,7 @@ DevOps bot. One open task per kind and place: the same blocker again reuses it."
 import hashlib
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 # The DevOps bot template (templates/); a team that renamed the bot still built it from that template.
 TEMPLATE = "devops"
@@ -16,7 +17,7 @@ GONE = ("paused", "planned", "archived", "quarantined")
 
 def devops(c):
     """The id of the active DevOps bot, or None."""
-    built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config,'$.template')=? "
+    built = [r[0] for r in c.execute(f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template=? "
                                      "ORDER BY bot", (TEMPLATE,))] if H._has_table(c, "bot_config") else []
     for ident in (*built, *SLUGS):
         row = H.resolve_bot(c, ident)

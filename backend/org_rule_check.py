@@ -69,6 +69,7 @@ import weakref
 from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
+from . import bot_settings as BS
 from . import judge as B
 from . import org_rules as R
 from . import groups as G
@@ -93,6 +94,7 @@ HOLD_LIST_MAX = 50
 # One hold's text as its readers get it: past this many characters it is cut (`text_cut`); Send anyway sends it whole.
 HOLD_TEXT_CHARS = 20_000
 HOLD_LIST_BYTES = 100_000     # one page of hold summaries stops here too (a page always holds at least one)
+BOTS_BELOW = 500             # bots read as the authors whose holds one person may be shown (`held_for`)
 TEAM_RULE = "org_rule_checks"
 UNCHECKED_SHARE, UNCHECKED_MIN = 0.2, 10    # a day's unchecked share at or over this, of at least this many checks
 ACTIONS = ("rules.blocked", "rules.escalated", "rules.warned", "rules.unchecked")
@@ -736,8 +738,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
-    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
-    for the audience the check named, so a different one comes back as {"moved": True} as well. A refused verdict
+    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
+    belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
+    so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
@@ -748,9 +751,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"] and not holds(verdict):
         return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
+    if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
+        return {"moved": True}
     if verdict["outcome"] in ("broken", "too_large"):
-        if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
-            return {"moved": True}
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
         now = {(r["id"], r["version"])
@@ -1061,13 +1064,34 @@ def _reader_sql(who):
     return None, (), False
 
 
-def held_for(c, who, operations):
+def _bots_below(c, person):
+    """The bots that may report up to `person` first (report_managers.person_above), as actors, at most BOTS_BELOW: the
+    authors whose holds can be held for them. More than that is fine; `represented` settles each hold."""
+    found, frontier, seen = [], [person], {person}
+    while frontier and len(found) < BOTS_BELOW:
+        rows = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} WHERE bc.reports_to IN (SELECT value FROM json_each(?)) OR "
+                         "(COALESCE(bc.reports_to,'')='' AND "
+                         "json_extract(s.extra,'$.reports_to') IN (SELECT value FROM json_each(?)))",
+                         (json.dumps(frontier), json.dumps(frontier))).fetchall()
+        frontier = [r[0] for r in rows if r[0] not in seen]
+        seen.update(frontier)
+        found += frontier
+    return [f"bot:{b}" for b in found[:BOTS_BELOW]]
+
+
+def held_for(c, who, operations, limit=None):
     """The held writes of these operations that this person reads as their reviewer, as their author, or as the person
-    it is held for, oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
-    their review page, not a person's list."""
+    it is held for, oldest first, each with its `role`, at most `limit`. The owner's and Admins' fallback is not listed:
+    a hold with no reviewer is for their review page, not a person's list. Only their own candidates are read: their
+    own holds and their bots' (the author index) and the ones they review (org_rule_holds_reviewer)."""
     marks = ",".join("?" * len(operations))
-    rows = c.execute(f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN "
-                     f"({marks}) ORDER BY created_at, id", tuple(operations)).fetchall()
+    authors = [who.actor, *(_bots_below(c, who.actor) if H.is_human(who.actor) else [])]
+    most = -1 if limit is None else max(0, int(limit))
+    pick = f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN ({marks}) "
+    rows = c.execute(f"SELECT * FROM ({pick}AND author IN (SELECT value FROM json_each(?)) ORDER BY created_at, id "
+                     f"LIMIT ?) UNION SELECT * FROM ({pick}AND reviewer=? ORDER BY created_at, id LIMIT ?) "
+                     "ORDER BY created_at, id LIMIT ?",
+                     (*operations, json.dumps(authors), most, *operations, who.actor, most, most)).fetchall()
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
@@ -1143,10 +1167,11 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] not in ("done", "closed"):
-        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True)
+        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True, strict=False)
 
 
 def _decide(c, who, hold, state, event=""):
+    H._writer(c, who.actor, task_id=hold["task_id"])
     c.execute("UPDATE org_rule_holds SET state=?, decided_at=?, decided_by=?, nonce=? WHERE id=? AND state='held'",
               (state, H.now(), who.actor, "used:" + secrets.token_hex(8), hold["id"]))
     from . import audit_log
@@ -1370,6 +1395,7 @@ def appeal(c, who, hold_id, why):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
+    H._writer(c, who.actor, task_id=hold["task_id"])
     why = str(why or "").strip()[:2000]
     task_id = hold["task_id"]
     if not hold["reviewer"]:
@@ -1578,7 +1604,7 @@ def stats(c, settings):
 
 
 def health_findings(c, settings):
-    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/health_monitor.py)."""
+    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/maintenance_health.py)."""
     try:
         if not on(c):
             return []

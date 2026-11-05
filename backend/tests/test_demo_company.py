@@ -7,9 +7,10 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, hubdb
+from backend import demo, demo_seed, hubdb
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -45,6 +46,13 @@ def stored(path):
             out[name] = [tuple(_mark(name, column, value) for column, value in zip(columns, row))
                          for row in cursor.fetchall()]
         return out
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +108,16 @@ def test_tasks_cover_every_status_and_some_have_chains(ana):
 
 def test_no_task_is_left_stuck_for_days(ana):
     assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
+
+
+@pytest.mark.parametrize("hour", [0, 12])
+def test_no_task_is_left_stuck_at_other_build_hours(tmp_path, hour):
+    moment = NOW.replace(hour=hour)
+    with time_machine.travel(moment, tick=False):
+        settings = demo.build(tmp_path, now=moment)
+        with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
+            api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
+            assert api.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
@@ -236,6 +254,17 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
         done = datetime.strptime(day, "%Y-%m-%d").date()
         weeks[7 - (monday - (done - timedelta(days=done.weekday()))).days // 7] += 1
     assert all(n >= 20 for n in weeks[:-1]) and weeks[0] < weeks[-2], weeks
+
+
+def test_the_demo_clock_also_reads_the_spend_windows(built):
+    """The spend windows (30 minutes, hour, day...) are read at the build's own moment, not the real clock: a build that
+    straddles a window boundary would otherwise store different spend from its twin (the same-date test's failure)."""
+    saved = U.clock
+    moment = NOW - timedelta(hours=2)
+    clock = demo_seed.Clock(moment)
+    with demo_seed.fixed(clock):
+        assert U.clock() == moment
+    assert U.clock is saved and U.clock() == NOW
 
 
 def test_the_same_date_builds_the_same_company(built):

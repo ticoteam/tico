@@ -115,7 +115,7 @@ While a goal is overridden the Strategy Bot may *suggest* a different colour. Th
 applied. Done and dropped are always set by a human.
 
 Every colour is stored with who set it: `status_by`, and `status_source` (`auto` or `person`), in the goal and in every
-`goal_events` row.
+`status` row of its history (`history_events.data`).
 
 ## The Strategy Bot
 

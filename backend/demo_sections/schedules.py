@@ -15,9 +15,10 @@ import json
 from datetime import timedelta, timezone
 
 from .. import automations, cloud_access, demo_content as D, judge, routines, strategy_bot
+from .. import runner_states
 from ..scheduler import next_due
 from ..store import H
-from .automations_learnings import _keep_focus
+from .automations_learnings import _hold_queued, _keep_focus, _release_held
 
 WINDOW = timedelta(days=7)
 START_LAG = timedelta(seconds=12)  # a run's start after its time: the pass fires it and the run's step starts its turn
@@ -80,7 +81,7 @@ def seed(b):
             b.store.automations.drain()
     finally:
         b.store.settings.decisions_daily_calls_bot = cap
-    b.write(lambda c: _release(c, queued))
+    b.write(lambda c: _release_held(c, queued))
     b.write(lambda c: _contact_after(c, contact["saved"]))
     # The occurrences before now are played; each schedule's next time is its first one after now.
     b.write(lambda c: _set_next_due(c, box["rows"], b.now))
@@ -123,17 +124,6 @@ def _occurrences(trigger, start, end):
         due = next_due(trigger["cron"], due, zone)
 
 
-def _hold_queued(c):
-    """Holds the jobs queued now (raw SQL: `held` is the flag the claim's candidates skip). Returns their ids."""
-    ids = [row[0] for row in c.execute("SELECT id FROM jobs WHERE state='queued' AND held=0").fetchall()]
-    c.executemany("UPDATE jobs SET held=1 WHERE id=?", [(job,) for job in ids])
-    return ids
-
-
-def _release(c, ids):
-    c.executemany("UPDATE jobs SET held=0 WHERE id=?", [(job,) for job in ids])
-
-
 def _contact_before(c, start):
     """Each computer's contact stamps as the build left them, and each stamp later than the window's start is set to a
     day before it (raw SQL: the runner's own contact columns). The build's history stamps the computers at its end,
@@ -141,19 +131,19 @@ def _contact_before(c, start):
     a claim in the window would never be handed a job; the first claim then starts the stretch, as after a silence.
     Returns the saved stamps for _contact_after."""
     saved, before = {}, _stamp(start - timedelta(days=1))
-    for row in c.execute("SELECT id, last_seen_at, awake_since FROM runners").fetchall():
+    for row in c.execute("SELECT id, last_seen_at, awake_since FROM runners_with_state").fetchall():
         saved[row["id"]] = (row["last_seen_at"], row["awake_since"])
         if any(stamp and stamp > _stamp(start) for stamp in saved[row["id"]]):
-            c.execute("UPDATE runners SET last_seen_at=?, awake_since=? WHERE id=?", (before, before, row["id"]))
+            runner_states.save(c, row["id"], last_seen_at=before, awake_since=before)
     return saved
 
 
 def _contact_after(c, saved):
     """Each computer's stamps after the window: the window's last claim, unless the build's own stamp is later."""
     for rid, (seen, awake) in saved.items():
-        now = c.execute("SELECT last_seen_at FROM runners WHERE id=?", (rid,)).fetchone()["last_seen_at"]
+        now = c.execute("SELECT last_seen_at FROM runners_with_state WHERE id=?", (rid,)).fetchone()["last_seen_at"]
         if seen and (now is None or now < seen):
-            c.execute("UPDATE runners SET last_seen_at=?, awake_since=? WHERE id=?", (seen, awake, rid))
+            runner_states.save(c, rid, last_seen_at=seen, awake_since=awake)
 
 
 def _set_next_due(c, rows, after):

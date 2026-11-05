@@ -80,6 +80,21 @@ def test_a_subtask_names_its_parent_and_the_stop_that_closes_the_parent(api):
     assert origin["siblings"]["made"] == 1
 
 
+def test_a_list_task_ref_on_another_run_message_does_not_break_an_automation_origin(api):
+    made = make(api)
+    aid = made["automation"]["id"] if "automation" in made else made["id"]
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "bot:finance", "Morning check for Ana", "x", "human:ana")
+        c.execute("UPDATE tasks SET occurrence=? WHERE id=?", (aid + ":2026-11-03", task["id"]))
+        other = H.task_create(c, "bot:finance", "Morning check, last week", "x", "human:ana")
+        # A saved run message whose task ref is a list (what a bot sends): its first task is the one it made.
+        H.say(c, "bot:finance", "human:ana", "Morning check ran.", refs={"automation": aid, "task": [other["id"]]})
+    origin = get(api, "origins/" + task["id"])
+
+    assert origin["cause"]["type"] == "automation" and origin["cause"]["id"] == aid
+    assert origin["siblings"]["made"] == 1
+
+
 def test_a_parent_the_person_cannot_read_is_not_named(api):
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "human:ana", "Ana private parent", "x", "human:ana", private=True)

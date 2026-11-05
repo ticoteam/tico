@@ -13,7 +13,7 @@ from backend.tests.test_runner_load import point
 def waiters(api, n=37, running=3):
     computer = fleet(api, attempts=n + running, trees=0)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=? WHERE id=?", (n + running, computer['runner_id']))
+        c.execute("UPDATE runner_states SET capacity=? WHERE runner_id=?", (n + running, computer['runner_id']))
         for i in range(n):
             c.execute("UPDATE attempts SET state='leased' WHERE id=?", (f'attempt-{i}',))
             c.execute("UPDATE jobs SET state='leased' WHERE attempt_id=?", (f'attempt-{i}',))
@@ -84,27 +84,31 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     assert line['turn_counts']['waiting'] + line['turn_counts']['queued'] == 2
 
 
-def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
-    """Spec 2: a different login starts immediately on an otherwise idle computer."""
+def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go_on(api):
+    """37 logins parked on a shared login and 3 running on a 40-turn computer: the parked ones take no start place, so
+    another login starts at once (free_turn stays ''), and its claim goes through below twice the limit (80)."""
+    from backend import start_places
+    from backend.views import free_turn
     computer = waiters(api)
     rid = computer['runner_id']
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=40 WHERE id=?', (rid,))
+        c.execute('UPDATE runner_states SET capacity=40 WHERE runner_id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
+    with api.app.state.store.read() as c:
+        assert sum(start_places.live(c, rid).values()) == 40
+        assert sum(start_places.held(c, rid).values()) == 3
+        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
     attempt = claim(api, computer, 'finance')
     assert attempt is not None and attempt['bot'] == 'finance'
-    with api.app.state.store.read() as c:
-        from backend.views import free_turn
-        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
 
 
 def test_two_ready_waiters_claim_last_start_place_atomically(api):
     """Spec 3: renewable delivery leases give neither waiter a start place."""
     computer = waiters(api, n=2, running=0)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
 
     def reserve(i):
         return post(api, f'attempts/attempt-{i}/start-place', {}, computer['token'])
@@ -256,26 +260,25 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
         assert start_places.managed(c, fresh['id'])
 
 
-def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
-    """A worker without start-place support cannot release capacity then start over the limit."""
+def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unchecked_start_finishes(api):
+    """A worker without start-place support keeps its claim while it waits. Claims go on to twice the limit (2 here),
+    so the wait leaves one claim for another bot and the start it has not confirmed releases nothing early."""
     from backend.tests.test_api import runner
     computer = runner(api)
     assign(api, computer, 'ops')
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
     post(api, 'chat/ops', {'text': 'Legacy work'})
     old = post(api, 'jobs/claim', {'bot': 'ops'}, computer['token'])['attempt']
     post(api, f"attempts/{old['id']}/events", {'events': [
         {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'shared login', 'login': 'ChatGPT'}}
     ]}, computer['token'])
     post(api, 'chat/finance', {'text': 'New protocol contender'})
-    assert claim(api, computer, 'finance') is None
-    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
-    assert claim(api, computer, 'finance') is None
-    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
     assert claim(api, computer, 'finance') is not None
+    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
+    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
 
 
 def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
@@ -408,7 +411,7 @@ def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else
 def test_a_persons_message_on_an_overloaded_computer_still_needs_a_free_turn(api):
     computer = waiters(api, n=1, running=1)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
     overload(api, computer)
     assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
         'reserved': False, 'waiting': 'computer busy'}
@@ -422,7 +425,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
         assign(api, computer, bot)
     ready(api, computer, ['ops', 'finance', 'cpo'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=5 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=5 WHERE runner_id=?', (computer['runner_id'],))
     sent_by(api, post(api, 'chat/cpo', {'text': 'Review the contract'})['id'], 'bot:ops')
     post(api, 'chat/finance', {'text': 'Close the books'})
     overload(api, computer)
@@ -490,8 +493,8 @@ def test_operations_and_computers_share_one_company_default_across_runners(api, 
     assert computer_calls == 1, computer_calls
 
 
-def test_held_totals_match_each_computers_held_counts(api):
-    """Health's capacity fence used one held() query per computer; the fleet pass must agree."""
+def test_live_totals_match_each_computers_live_counts(api):
+    """Health's capacity fence used one live() query per computer; the fleet pass must agree."""
     from backend import start_places
     from backend.tests.test_api import runner
 
@@ -500,9 +503,9 @@ def test_held_totals_match_each_computers_held_counts(api):
     assign(api, second, 'finance')
     ready(api, second, ['finance'])
     with api.app.state.store.read() as c:
-        totals = start_places.held_totals(c)
+        totals = start_places.live_totals(c)
         for rid in (first['runner_id'], second['runner_id']):
-            assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
+            assert totals.get(rid, 0) == sum(start_places.live(c, rid).values())
 
 
 def memory(api, computer, mem, at=None):
@@ -535,6 +538,100 @@ def test_memory_at_85_holds_new_starts_and_they_start_again_below_80(api):
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .79)
     assert claim(api, computer, 'finance') is not None
+
+
+def test_memory_pressure_holds_a_persons_message_even_when_the_computer_is_overloaded(api):
+    """Human priority must not start another process on a memory-starved computer."""
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    overload(api, computer, mem=.96)
+    assert claim(api, computer, 'finance') is None
+    from backend.start_places import computer_hold
+    with api.app.state.store.read() as c:
+        assert computer_hold(c, computer['runner_id'], person=True)[0] == 'computer busy: memory'
+    memory(api, computer, .82)
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .79)
+    assert claim(api, computer, 'finance') is not None
+
+
+@pytest.mark.parametrize('allocated', [False, True])
+def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, allocated):
+    """Memory holds an unused grant, while a real allocated process keeps its grant and starts."""
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    ready(api, computer, ['ops', 'finance'], capabilities=['harness_allocation_v1'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    attempt = claim(api, computer, 'finance')
+    aid = attempt['id']
+    memory(api, computer, .86)
+    allocation = {'harness_allocated': True} if allocated else {}
+    if allocated:
+        # The Codex app-server now exists; the next sample includes that allocation's memory.
+        assert post(api, f'attempts/{aid}/start-place', allocation, computer['token'])['reserved']
+    response = api.post(f'/api/v2/attempts/{aid}/started', json={'thread_id': 'synthetic-thread', **allocation},
+                        headers=headers(computer['token']))
+    if allocated:
+        assert response.status_code == 200 and response.json()['started']
+        with api.app.state.store.read() as c:
+            assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
+            assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
+        return
+    assert response.status_code == 409 and response.json()['error']['code'] == 'start_wait'
+    place = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
+    assert not place['reserved'] and place['waiting'].startswith('computer busy: memory')
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'leased'
+        assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
+    memory(api, computer, .79)
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved']
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'synthetic-thread'}, computer['token'])['started']
+
+
+@pytest.mark.parametrize('sender,capabilities', [('human:ana', []), ('bot:ops', ['turns_at_once_v1'])])
+def test_memory_cannot_revoke_a_grant_without_negotiated_allocation_reporting(api, sender, capabilities):
+    """After a hub upgrade an older runner may already have a process but cannot report its allocation."""
+    computer = bot_waiting_for_finance(api, sender=sender)
+    ready(api, computer, ['ops', 'finance'], capabilities=capabilities)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (computer['runner_id'],))
+    attempt = claim(api, computer, 'finance')
+    aid = attempt['id']
+    grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
+    assert grant['reserved']
+    overload(api, computer, cpu=20, mem=.96)
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == grant
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'older-runner-thread'}, computer['token'])['started']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'running'
+        assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] == grant['start_until']
+
+
+@pytest.mark.parametrize('cpu,held', [(0, False), (95, True)])
+def test_an_allocated_bot_bypasses_sustained_memory_but_retains_the_cpu_brake(api, cpu, held):
+    computer = bot_waiting_for_finance(api, sender='bot:ops')
+    attempt = claim(api, computer, 'finance')
+    overload(api, computer, cpu=cpu, mem=.96)
+    place = post(api, f"attempts/{attempt['id']}/start-place", {'harness_allocated': True}, computer['token'])
+    assert place['reserved'] is not held
+    if held:
+        assert place['waiting'] == 'computer busy'
+
+
+@pytest.mark.parametrize('platform,held', [('darwin', False), ('linux', True), (None, False)])
+def test_a_person_at_90_percent_memory_waits_only_on_linux(api, platform, held):
+    computer = bot_waiting_for_finance(api, sender='human:ana')
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET platform=? WHERE id=?', (platform, computer['runner_id']))
+    memory(api, computer, .90)
+    attempt = claim(api, computer, 'finance')
+    if held:
+        assert attempt is None
+        assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
+    else:
+        assert attempt is not None
+        assert post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'human-answer'}, computer['token'])['started']
 
 
 def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):
@@ -624,11 +721,11 @@ def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporti
     computer = bot_waiting_for_finance(api)
     memory(api, computer, .3)
     with api.app.state.store.read() as c:
-        marked = c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (computer['runner_id'],)).fetchone()[0]
+        marked = c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (computer['runner_id'],)).fetchone()[0]
     assert marked == int(time.time()) // 60 * 60
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
-        c.execute('UPDATE runners SET last_sampled_at=last_sampled_at-200000 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET last_sampled_at=last_sampled_at-200000 WHERE runner_id=?', (computer['runner_id'],))
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None
@@ -646,16 +743,17 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     memory(api, computer, .3)
     now = int(time.time()) // 60 * 60
     with store.transaction() as c:
-        c.execute('ALTER TABLE runners DROP COLUMN last_sampled_at')
+        # Migration 0062 gives such a computer a state row with no mark.
+        c.execute('UPDATE runner_states SET last_sampled_at=NULL WHERE runner_id=?', (rid,))
     store.initialize()
     with store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+        assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
     P.sweep(store, now=int(time.time()) + 49 * 3600)
     with store.read() as c:
         assert c.execute('SELECT count(*) FROM runner_load_samples WHERE runner_id=?', (rid,)).fetchone()[0] == 0
     store.initialize()
     with store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+        assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None

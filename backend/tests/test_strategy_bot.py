@@ -12,6 +12,7 @@ from backend.store import H
 from backend.tests.test_goal_manager import BASE, with_goal_manager
 from backend.tests.test_onboarding import (SUPPORT_AGENT, SUPPORT_CARD, as_person, build_team, draft,  # noqa: F401
                                            environment, machine, signed_in)
+from backend import bot_settings as BS
 
 LEAD_CARD = {"template": "sales-lead", "slug": "sales-lead", "name": "Head of Sales", "required": False,
              "bootstrap": False, "lead": True, "summary": "Runs sales.", "owns": ["the pipeline"], "never": ["sends"],
@@ -286,7 +287,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     bot_before = chart(api, bot)
     stored_before = stored(api)
     with api.app.state.store.read() as c:
-        config_before = tuple(c.execute("SELECT * FROM bot_config WHERE bot='goal-manager'").fetchone())
+        config_before = tuple(c.execute(BS.ROW_SQL + " WHERE bc.bot='goal-manager'").fetchone())
     strategy_before = api.get("/api/v2/strategy-bot", headers=signed_in()).json()
     row_before = rows(api)["goal-manager"]
     assert before["morgan"]["org"]["eng-lead"][0] == "b:goal-manager"      # today's chart: the Strategy Bot heads it
@@ -328,7 +329,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     # The bot itself: nothing changed but where this person's chart draws it.
     assert stored(api) == stored_before
     with api.app.state.store.read() as c:
-        assert tuple(c.execute("SELECT * FROM bot_config WHERE bot='goal-manager'").fetchone()) == config_before
+        assert tuple(c.execute(BS.ROW_SQL + " WHERE bc.bot='goal-manager'").fetchone()) == config_before
         assert [tuple(r) for r in c.execute("SELECT actor,value FROM preferences WHERE key=?",
                                             (strategy_bot.HIDE_PREF,))] == [("human:morgan", "true")]
     assert api.get("/api/v2/strategy-bot", headers=signed_in()).json() == strategy_before

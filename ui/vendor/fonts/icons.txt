@@ -1,6 +1,7 @@
 account_balance
 account_balance_wallet
 account_tree
+add
 ads_click
 alt_route
 analytics
@@ -15,6 +16,7 @@ assignment_turned_in
 assistant
 auto_awesome
 balance
+block
 bolt
 bug_report
 calendar_month
@@ -25,6 +27,7 @@ cast_for_education
 category
 celebration
 chair
+chat
 chat_bubble
 check
 check_circle
@@ -79,6 +82,7 @@ inbox
 integration_instructions
 inventory_2
 key_vertical
+label
 leaderboard
 lightbulb
 link
@@ -99,7 +103,6 @@ mic_off
 monitor_heart
 monitoring
 more_horiz
-more_vert
 new_releases
 newspaper
 open_in_new
@@ -120,6 +123,7 @@ radio_button_unchecked
 receipt
 receipt_long
 record_voice_over
+reply
 request_quote
 reviews
 rocket_launch
@@ -136,12 +140,15 @@ settings_suggest
 shield_person
 shopping_cart
 smart_toy
+south
 star
+sticky_note_2
 stop_screen_share
 store
 strategy
 supervisor_account
 support_agent
+swap_horiz
 tag
 target
 task_alt
@@ -153,8 +160,10 @@ tour
 travel_explore
 troubleshoot
 unarchive
+unsubscribe
 verified_user
 view_agenda
 view_timeline
 warning
 waving_hand
+webhook

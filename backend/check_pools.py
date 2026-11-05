@@ -16,13 +16,16 @@ builder's own request gets.
 
 With no pool member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the first
 pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed,
-or the ticket leaves the step or finishes. A pool member only ever takes checks this way, never other work.
+or the ticket leaves the step or finishes. The scheduler also retries waits every minute, so a reviewer coming
+online or gaining room can take one without another check finishing. A pool member only ever takes checks this way,
+never other work.
 """
 import json
 import logging
 import re
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.check_pools")
 
@@ -75,7 +78,7 @@ def ensure(c):
 
 def capture_attempt(c, turn_id):
     """Freeze the actual check attempt and its ticket-head provenance after this run's usage is recorded."""
-    turn = c.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
+    turn = c.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
     check = H.task(c, turn["task_id"]) if turn and turn["task_id"] else None
     from . import step_flow
     from . import task_relations as TR
@@ -86,17 +89,17 @@ def capture_attempt(c, turn_id):
     finished_owner = check.get("owner_id")
     head = str(check.get("verdict_head") or "").lower()
     if not head:
-        event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        event = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                           "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
         head = str(event[0] if event else "").split(",")[0].lower()
     from . import check_independence
     result = check_independence.capture_attempt(c, ticket_id, check["id"], head, turn_id)
     verdict = str(check.get("verdict") or "").lower()
-    decided = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='verdict' "
+    decided = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict' "
                         "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
-    started = c.execute("SELECT started_at FROM turns WHERE id=?", (turn_id,)).fetchone()
+    started = c.execute("SELECT created_at FROM attempts WHERE id=? AND (job_id IS NULL OR trigger IS NOT NULL)", (turn_id,)).fetchone()
     from . import verdict_moves
-    if verdict and decided and started and decided["created_at"] >= started["started_at"]:
+    if verdict and decided and started and decided["created_at"] >= started["created_at"]:
         verdict_moves.after_capture(c, check["id"], head, turn_id)
     elif not verdict and check.get("status") == "done" and step_flow.check_step(c, check):
         # Finished with no verdict: its comments are the feedback, and the ticket goes to the step's on_fail.
@@ -105,7 +108,8 @@ def capture_attempt(c, turn_id):
     current = H.task(c, check["id"])
     if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner_id") == finished_owner:
         return result
-    done = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_pool_freed' AND new=? LIMIT 1",
+    done = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_pool_freed' "
+                     "AND new=? LIMIT 1",
                      (check["id"], turn_id)).fetchone()
     if not done:
         H._task_event(c, check["id"], H.KEEPER, "check_pool_freed", None, turn_id, "")
@@ -216,7 +220,7 @@ def online(c, slug):
                     "WHERE b.id=?", (slug,)).fetchone()
     if not row or row["state"] != "active" or row["status"] in HELD:
         return False
-    seen = c.execute("SELECT r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    seen = c.execute("SELECT r.last_seen_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()
     return bool(seen and seen[0] and seen[0] >= H.shift(H.now(), minutes=-ONLINE_MINUTES))
 
@@ -229,7 +233,7 @@ def _task_model(c, slug):
     from clients import sessions
     from . import task_models
     from .shared_bots import follow
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
     config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
     task = task_models.of(config) if sessions.session_key(config, slug, "check", None).startswith("task:") else None
     if not task:
@@ -269,8 +273,8 @@ def _recent_turns(c, slug, task, runs):
     cannot run now, all of them (`makers` sets aside what ran on that task model)."""
     from . import task_run_models
     where = " AND task_id IS NOT NULL" if task and runs else ""
-    rows = c.execute("SELECT id,task_id FROM turns WHERE bot=? AND finished_at IS NOT NULL" + where
-                     + " ORDER BY finished_at DESC LIMIT ?", (slug, TURNS_READ)).fetchall()
+    rows = c.execute("SELECT id,task_id FROM attempts WHERE bot_id=? AND settled_at IS NOT NULL" + where
+                     + " ORDER BY settled_at DESC LIMIT ?", (slug, TURNS_READ)).fetchall()
     return [r[0] for r in rows
             if not (r[1] and (task_run_models.of(c, r[1]) or H.check_model(c, r[1])))][:RECENT_TURNS]
 
@@ -305,7 +309,7 @@ def builder_makers(c, ticket, whole=False):
     With `whole`, a run on the ticket with a part of unknown company makes the answer empty: that part may be any."""
     from .check_independence import _executed
     built, known = _executed(c, ticket["id"])
-    if whole and not known and c.execute("SELECT 1 FROM turns WHERE task_id=?", (ticket["id"],)).fetchone():
+    if whole and not known and c.execute("SELECT 1 FROM attempts WHERE task_id=?", (ticket["id"],)).fetchone():
         return set()
     if built:
         return set(built)
@@ -323,12 +327,12 @@ def candidate_details(c, slugs):
         bot = c.execute("SELECT slug,display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
         if not bot:
             continue
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
         runtime, model = providers.bot_choice(c, None, config)
         configured = providers.MODEL_BY_ID.get(model or "") or {}
         configured_provider = configured.get("provider") or providers.author_provider(runtime)
-        turn = c.execute("SELECT id FROM turns WHERE bot=? AND finished_at IS NOT NULL ORDER BY finished_at DESC,id DESC LIMIT 1",
+        turn = c.execute("SELECT id FROM attempts WHERE bot_id=? AND settled_at IS NOT NULL ORDER BY settled_at DESC,id DESC LIMIT 1",
                          (slug,)).fetchone()
         actual = None
         if turn:
@@ -470,7 +474,7 @@ def has_open_check(c, ticket, step, heads):
         found = step_flow.child_check(c, child, ticket)
         if not found or found["id"] != step["id"]:
             continue
-        seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if heads and judged and not set(heads) & judged:
@@ -526,6 +530,12 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
         H._task_event(c, ticket["id"], H.KEEPER, "check_not_filed", None, slug, f"{title}: {exc.detail}"[:500])
         return None
     c.execute("RELEASE check_pool_file")
+    if heads:
+        recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
+                             "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
+        if not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
+            # Add merged PRs for checks after release; never replace the head child admission recorded.
+            H._task_event(c, child["id"], ticket["owner_id"], "review_head", None, ",".join(heads), "")
     label = (H.bot(c, slug) or {}).get("slug", slug)
     H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {label} ({why})")
     return child
@@ -601,25 +611,28 @@ def TR_parent(c, task_id):
     return TR.parent_of(c, task_id)
 
 
-def _take(c, wait, only=None):
-    """Give one waiting check to `only` (a bot that just finished one) or to the best free member. The child, else
-    None. A wait whose ticket left the step, finished or was checked meanwhile ends here."""
+def _take_plan(c, wait, only=None, snapshots=None):
+    """Read what taking a wait would do, so idle retries need no writer transaction."""
     ticket = H.task(c, wait["ticket_id"])
     if not ticket or ticket.get("step_id") != wait["step_id"] or ticket["status"] not in H.ACTIVE_STATUSES:
-        c.execute("UPDATE check_waits SET state='dropped',reason='the ticket moved on',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "the ticket moved on"}
     found = pool(c, wait["step_id"])
     if not found:
-        c.execute("UPDATE check_waits SET state='dropped',reason='the step has no pool',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "the step has no pool"}
     step, slugs, limit = found
-    heads = [h for h in wait["heads"].split(",") if h]
-    if has_open_check(c, ticket, step, heads):
-        c.execute("UPDATE check_waits SET state='dropped',reason='a check was filed',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+    # Admission and filing use the same saved links, read again under the writer. A wait can precede a refresh,
+    # or already know a head whose webhook is late; an older saved link cannot consume that newer wait.
+    prs = _prs(c, ticket, step)
+    heads = _heads(prs, None)
+    waited = set(filter(None, wait["heads"].split(",")))
+    head_problem = bool(waited and waited != set(heads) and
+                        any((pr.get("updated_at") or "") <= wait["created_at"] for pr in prs))
+    if snapshots is not None:
+        head_problem = any((snapshots.get(pr["id"]) or {}).get("error") or
+                           _heads([pr], snapshots) != _heads([pr], None) or
+                           not (snapshots.get(pr["id"]) or {}).get("head_sha") for pr in prs)
+    if not head_problem and has_open_check(c, ticket, step, heads):
+        return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
     if only is not None:
         builder = builder_makers(c, ticket)
@@ -628,6 +641,31 @@ def _take(c, wait, only=None):
         # The bot that just finished takes the wait, unless a free bot ranks ahead of it by model company: then the
         # best free one does, as `ranked` orders them.
         free = [] if only not in free else [only] if rank(only) <= rank(free[0]) else free
+    return {"ticket": ticket, "step": step, "heads": heads, "free": free, "reason": reason,
+            "head_problem": head_problem}
+
+
+def _admission_problem(c, wait, plan, snapshots):
+    """Read the same gate as child creation, without recording a refusal for an idle wait."""
+    from . import review_gate
+    if "drop" in plan or not plan["free"]:
+        return None
+    if plan["head_problem"]:
+        return "the current PR head needs fresh evidence"
+    if review_gate.is_review(c, plan["ticket"], wait["title"]):
+        return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
+
+
+def _take(c, wait, only=None, snapshots=None):
+    """Give a wait to `only` or its best free member; drop it if its ticket moved on or already has a check."""
+    plan = _take_plan(c, wait, only, snapshots)
+    if "drop" in plan:
+        c.execute("UPDATE check_waits SET state='dropped',reason=?,updated_at=? WHERE id=?",
+                  (plan["drop"], H.now(), wait["id"]))
+        return None
+    ticket, step, heads, free, reason = (plan[k] for k in ("ticket", "step", "heads", "free", "reason"))
+    if _admission_problem(c, wait, plan, snapshots):
+        return None
     for slug in free:
         # Taken before the request is filed, so the one-check-per-head rule does not see its own wait.
         c.execute("UPDATE check_waits SET state='filed',updated_at=? WHERE id=?", (H.now(), wait["id"]))
@@ -636,10 +674,10 @@ def _take(c, wait, only=None):
             child = H.task_update(c, ticket["owner_id"], child["id"], owner="bot:" + slug, status="open",
                                   note="Tico routed this waiting check to the first available reviewer.")
         else:
-            child = _file(c, ticket, step, slug, wait["title"], heads, None,
+            child = _file(c, ticket, step, slug, wait["title"], heads, snapshots,
                           "it finished a check and took the next waiting one" if slug == only else _why(c, slug))
         if child:
-            c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (child["id"], wait["id"]))
+            c.execute("UPDATE check_waits SET child_id=?,heads=? WHERE id=?", (child["id"], ",".join(heads), wait["id"]))
             return child
         c.execute("UPDATE check_waits SET state='waiting' WHERE id=?", (wait["id"],))
     if reason and reason != wait["reason"]:
@@ -659,7 +697,8 @@ def freed(c, row):
     parent = H.TR.parent_of(c, row["id"]) if H.is_bot(row.get("owner_id")) else None
     if not parent or not is_check_title(c, H.task(c, parent), row.get("title")):
         return None
-    if c.execute("SELECT 1 FROM turns WHERE task_id=? AND finished_at IS NULL LIMIT 1", (row["id"],)).fetchone():
+    if c.execute("SELECT 1 FROM attempts WHERE task_id=? AND settled_at IS NULL AND (job_id IS NULL OR trigger IS NOT NULL) LIMIT 1",
+                 (row["id"],)).fetchone():
         return None
     slug = H.actor_id(row["owner_id"])
     for wait in _all_waiting(c):
@@ -679,4 +718,84 @@ def drain(c):
         child = _take(c, wait)
         if child:
             out.append(child)
+    return out
+
+
+RETRY_LIMIT = 20
+
+
+RETRY_WAITS_SQL = ("SELECT id,step_id,created_at FROM check_waits WHERE step_id=? AND state='waiting' "
+                   "AND (created_at,id)>(?,?) "
+                   "ORDER BY created_at,id LIMIT ?")
+
+
+def _retry_waits(c, limit, after, after_step=None):
+    """Seek bounded queues for steps with room, taking turns across pools and oldest first within each queue."""
+    capacity, queues = {}, {}
+    for raw in c.execute("SELECT id,check_pool,check_limit FROM task_steps WHERE check_pool IS NOT NULL"):
+        slugs = members(raw["check_pool"]) or []
+        if not slugs:
+            continue
+        # Capacity depends on the bot, not on how many tickets are waiting for its pool.
+        for slug in slugs:
+            if slug not in capacity:
+                capacity[slug] = open_checks(c, slug) if online(c, slug) else None
+        if not any(capacity[s] is not None and capacity[s] < int(raw["check_limit"] or DEFAULT_LIMIT) for s in slugs):
+            continue
+        cursor = after.get(raw["id"], ("", ""))
+        rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], *cursor, limit))]
+        if not rows and cursor != ("", ""):
+            rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], "", "", limit))]
+        if rows:
+            queues[raw["id"]] = rows
+    # Keep the next pool's turn across passes, even when one pool has a whole batch of unplaceable waits.
+    order = sorted(queues, key=lambda sid: (sid <= (after_step or ""), sid))
+    waits = []
+    for n in range(limit):
+        for sid in order:
+            if n < len(queues[sid]):
+                waits.append(queues[sid][n])
+                if len(waits) == limit:
+                    return waits
+    return waits
+
+
+def retry(store, limit=RETRY_LIMIT, *, service=None):
+    """Read fresh admission evidence outside the writer; a gate that still refuses a wait needs no writes."""
+    from . import review_gate
+    limit = max(0, min(limit, RETRY_LIMIT))
+    if not limit:
+        return []
+    # Advance past ineligible tickets without rewriting idle waits. A restart starts again at the oldest wait.
+    after = getattr(store, "_check_retry_after", {})
+    store._check_retry_after = after
+    with store.read_transaction() as c:
+        if not _ready(c):
+            return []
+        waits = _retry_waits(c, limit, after, getattr(store, "_check_retry_step", None))
+    out = []
+    for wait in waits:
+        wid = wait["id"]
+        after[wait["step_id"]] = (wait["created_at"], wid)
+        store._check_retry_step = wait["step_id"]
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if not row:
+                continue
+            plan = _take_plan(c, dict(row))
+            if "drop" not in plan and not plan["free"] and (not plan["reason"] or plan["reason"] == row["reason"]):
+                continue
+            prs = _prs(c, plan["ticket"], plan["step"]) if "drop" not in plan and plan["free"] else []
+        snapshots = review_gate.snapshot(service, prs) if prs and service else None
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if not row or _admission_problem(c, dict(row), _take_plan(c, dict(row), snapshots=snapshots), snapshots):
+                continue
+        with store.transaction() as c:
+            # A completion, pool edit or another pass may have taken it since the read above.
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if row:
+                child = safely(c, _take, dict(row), None, snapshots)
+                if child:
+                    out.append(child["id"])
     return out

@@ -17,6 +17,7 @@ from backend.onboarding import helper_templates
 from backend.store import H
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend import bot_settings as BS
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "task-manager"
 SECRET = "Acme payroll for March"
@@ -128,7 +129,7 @@ def test_it_reassigns_only_within_the_owners_department(environment):
     api = built(environment)
     task = quiet_task(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','sales') WHERE bot='botops'")
+        BS.update(c, 'botops', {'team': 'sales'})
         groups = {"sales": {"name": "Sales", "parent": ""}, "support": {"name": "Support", "parent": ""}}
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people', ?)",
                   (json.dumps({"people": [], "org_groups": groups}),))

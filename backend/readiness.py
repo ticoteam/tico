@@ -25,17 +25,18 @@ Callers refuse only on can_run False; None never blocks.
 from . import models_preset, read_cache
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
+from . import bot_settings as BS
 
 ONLINE_SECONDS = 60
 SIGNED_OUT = ("missing", "failed", "rejected")
 
 
-CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
+CONFIG_SQL = BS.ONE_SQL
 # One computer's row, and the row of the computer a bot is on: read through read_cache, so a page that judges the same
 # bot for many harnesses and moves (backend/health.py runtime_choice) reads each once per snapshot, not once per check.
-RUNNER_SQL = "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners WHERE id=?"
+RUNNER_SQL = "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners_with_state WHERE id=?"
 PLACED_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-              "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+              "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?")
 HELD_SQL = "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''"
 
 
@@ -48,7 +49,7 @@ def prime_runners(c, ids):
     ids = sorted(set(ids))
     for part in H.chunks(ids):
         found = {r["id"]: r for r in c.execute(
-            "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners "
+            "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners_with_state "
             f"WHERE id IN ({','.join('?' * len(part))})", part)}
         prime(c, RUNNER_SQL, {(rid,): found.get(rid) for rid in part})
 
@@ -61,7 +62,7 @@ def prime_placed(c, bots):
     for part in H.chunks(sorted(set(bots))):
         found = {r["bot"]: r for r in c.execute(
             "SELECT a.bot,r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-            f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({','.join('?' * len(part))})", part)}
+            f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({','.join('?' * len(part))})", part)}
         prime(c, PLACED_SQL, {(bot,): found.get(bot) for bot in part})
 
 

@@ -1771,7 +1771,7 @@
      "released": "2026-10-25"
     }
    ]
-  } ,
+  },
   {
    "id": "tico-meeting",
    "department": null,
@@ -1784,9 +1784,15 @@
      "version": "1.0",
      "id": "tico-meeting-1.0",
      "model": "Inception Mercury 3",
-     "price": {"input": 0.3, "output": 1.05, "cached_input": 0.03},
+     "price": {
+      "input": 0.3,
+      "output": 1.05,
+      "cached_input": 0.03
+     },
      "long_prompt": null,
-     "inputs": ["text"],
+     "inputs": [
+      "text"
+     ],
      "context": 1000000,
      "max_output": 128000,
      "released": "2026-10-29"
@@ -1893,7 +1899,25 @@
    "for": "Answer yes/no, choice and score questions about a state",
    "price": "From $0.06 per 1M input tokens",
    "status": "live",
-   "tools": []
+   "tools": [
+    "hub_decision_ask",
+    "hub_decision_readout",
+    "hub_decision_outcome"
+   ],
+   "details": [
+    {
+     "label": "Low",
+     "value": "Jev 1.13 · $0.06 per 1M input"
+    },
+    {
+     "label": "Medium",
+     "value": "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M"
+    },
+    {
+     "label": "High",
+     "value": "Claude Opus 5.5 · $5 / $25 per 1M"
+    }
+   ]
   },
   {
    "id": "classify",
@@ -1901,7 +1925,15 @@
    "for": "Pick one of your options for a state",
    "price": "From $0.06 per 1M input tokens",
    "status": "live",
-   "tools": []
+   "tools": [
+    "hub_classify"
+   ],
+   "details": [
+    {
+     "label": "Low",
+     "value": "Jev 1.13 · $0.06 per 1M input"
+    }
+   ]
   },
   {
    "id": "inbox.email",
@@ -1912,23 +1944,81 @@
    "tools": [
     "hub_inbound_create_email",
     "hub_inbound_wait"
+   ],
+   "details": [
+    {
+     "label": "Addresses",
+     "value": "Free"
+    },
+    {
+     "label": "Received",
+     "value": "$0.14 per 1,000"
+    }
    ]
   },
   {
    "id": "inbox.numbers",
-   "name": "Inbox · Numbers",
-   "for": "Receive texts and codes on a phone number",
+   "name": "Inbox · Texts",
+   "for": "A US number that receives texts, like sign-in codes",
    "price": "From $14 per 30 days",
    "status": "approval",
-   "tools": []
+   "tools": [],
+   "details": [
+    {
+     "label": "Number",
+     "value": "From $14 per 30 days"
+    },
+    {
+     "label": "Sending",
+     "value": "Receive only"
+    }
+   ]
+  },
+  {
+   "id": "alerts",
+   "name": "Alerts",
+   "for": "Urgent texts and calls to your own phone",
+   "price": "$1 per alert",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Alert",
+     "value": "$1, texts and calls included"
+    },
+    {
+     "label": "Phone check",
+     "value": "Free code to confirm your number"
+    },
+    {
+     "label": "Sent from",
+     "value": "One Tico number"
+    }
+   ]
   },
   {
    "id": "search",
    "name": "Search",
    "for": "Search the web and read what it finds",
-   "price": null,
-   "status": "next",
-   "tools": []
+   "price": "$0.00875 per search, plus tokens at $0.15 / $0.75 per 1M",
+   "status": "live",
+   "tools": [
+    "hub_gateway_search"
+   ],
+   "details": [
+    {
+     "label": "Search",
+     "value": "$0.00875 each"
+    },
+    {
+     "label": "Tokens",
+     "value": "$0.15 / $0.75 per 1M, like Low"
+    },
+    {
+     "label": "Engines",
+     "value": "Exa, then Parallel"
+    }
+   ]
   },
   {
    "id": "fetch",
@@ -1936,15 +2026,115 @@
    "for": "Read a web page or PDF",
    "price": "$1.25 per 1,000 pages + tokens",
    "status": "live",
-   "tools": ["hub_gateway_fetch"]
+   "tools": [
+    "hub_gateway_fetch"
+   ],
+   "details": [
+    {
+     "label": "Pages",
+     "value": "$1.25 per 1,000"
+    },
+    {
+     "label": "Reads",
+     "value": "Web pages and PDFs"
+    }
+   ]
+  },
+  {
+   "id": "images",
+   "name": "Images",
+   "for": "Make an image from a prompt and reference images",
+   "price": "Per image, at cost + 25%",
+   "status": "live",
+   "tools": [
+    "hub_gateway_image"
+   ],
+   "details": [
+    {
+     "label": "Storyboard",
+     "value": "Gemini 3.1 Flash Image"
+    },
+    {
+     "label": "Photo",
+     "value": "GPT-5.4 Image 2"
+    },
+    {
+     "label": "Graphic",
+     "value": "GPT-5.4 Image 2"
+    },
+    {
+     "label": "Character",
+     "value": "Gemini 3 Pro Image"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
   },
   {
    "id": "transcribe",
    "name": "Transcribe",
-   "for": "Turn a recording into text",
-   "price": null,
+   "for": "Turn a recording into text, and live speech into text",
+   "price": "$0.33 per audio hour · live text $0.30 per audio hour",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Recordings",
+     "value": "ElevenLabs Scribe v2 · $0.33 per hour"
+    },
+    {
+     "label": "Live",
+     "value": "xAI · $0.30 per hour"
+    }
+   ]
+  },
+  {
+   "id": "mail.physical",
+   "name": "Physical mail and registered agent",
+   "for": "A street address for letters, scanned and read, with a registered agent",
+   "price": "$10 a month per state, shared · private at cost + 25%",
+   "status": "live",
+   "tools": [
+    "hub_mail_list",
+    "hub_mail_read"
+   ],
+   "details": [
+    {
+     "label": "States",
+     "value": "DE, CA · others on request"
+    },
+    {
+     "label": "Shared address",
+     "value": "$10 a month per state"
+    },
+    {
+     "label": "Private box",
+     "value": "Box cost + 25%"
+    },
+    {
+     "label": "Scans",
+     "value": "$1 a letter up to 10 pages, then $0.25 a page"
+    },
+    {
+     "label": "Forwarding",
+     "value": "Postage + 25%"
+    },
+    {
+     "label": "Registered agent",
+     "value": "On request"
+    }
+   ]
+  },
+  {
+   "id": "mail.send",
+   "name": "Send letters",
+   "for": "Print and mail letters, First-Class or Certified",
+   "price": "Print and postage at cost + 25%",
    "status": "next",
-   "tools": []
+   "tools": [],
+   "details": []
   },
   {
    "id": "email.send",
@@ -1952,7 +2142,8 @@
    "for": "Send a message from a Tico address",
    "price": null,
    "status": "later",
-   "tools": []
+   "tools": [],
+   "details": []
   },
   {
    "id": "enrich",
@@ -1960,7 +2151,8 @@
    "for": "Look up a company or a person",
    "price": null,
    "status": "later",
-   "tools": []
+   "tools": [],
+   "details": []
   },
   {
    "id": "voice",
@@ -1968,15 +2160,62 @@
    "for": "Speak and listen on a call",
    "price": null,
    "status": "later",
-   "tools": []
+   "tools": [],
+   "details": []
   },
   {
-   "id": "mail.physical",
-   "name": "Physical mail and registered agent",
-   "for": "A street address and a registered agent for your company",
+   "id": "storage.s3",
+   "name": "Object Storage",
+   "for": "S3-compatible storage for files and backups",
    "price": null,
-   "status": "planned",
-   "tools": []
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "finance.accounting",
+   "name": "Accounting",
+   "for": "On-demand accounting for invoices, bills, payments, and financial reports",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "legal.software",
+   "name": "Legal",
+   "for": "On-demand software for legal matters, documents, and deadlines",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "crm.software",
+   "name": "CRM",
+   "for": "A workspace for customer accounts, contacts, opportunities, and sales follow-up",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "support.software",
+   "name": "Customer Support",
+   "for": "A support desk for customer requests, shared inboxes, and ticket follow-up",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "marketing.software",
+   "name": "Marketing",
+   "for": "Marketing tools and bots for campaigns and market intelligence",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
   }
  ]
 }

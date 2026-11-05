@@ -5,6 +5,8 @@ refused and says which rules."""
 import copy
 import json
 
+import pytest
+
 from backend import redesign_migration as M
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_redesign_migration import db, first_start
@@ -122,6 +124,30 @@ def test_a_new_rule_naming_a_missing_step_is_refused(api):
     flow["steps"][0]["rules"].append(added)
     r = patch(api, aid, {"steps": flow["steps"]}, expected=422)
     assert "In Review" in r.text and "Ready" in r.text
+
+
+@pytest.mark.parametrize("edit", ["to", "next", "destinations"])
+def test_a_wake_rule_takes_no_destination_to_or_next_so_an_edit_adding_one_is_refused(api, edit):
+    """The wake executor runs one action per rule and no destination: an edit that adds one is refused (422, as every
+    refused wake edit is), and nothing changes."""
+    typ = build_type(api)
+    convert(api, typ, [("rule_ok", "Ready")])
+    aid = wake_id(api, typ)
+    before = detail(api, aid)
+    steps = copy.deepcopy(before["steps"])
+    rule = steps[0]["rules"][0]
+    dests = [{"id": "legal", "name": "Legal", "color": "red", "then": [{"do": "note", "args": {"bot": "coo", "text": "Hi"}}]}]
+    body = {"steps": steps}
+    if edit == "to":
+        rule["to"], body["destinations"] = "legal", dests
+    elif edit == "next":
+        rule["next"] = "end"
+    else:
+        body["destinations"] = dests
+    r = patch(api, aid, body, expected=422)
+    assert "wake rule" in r.text, r.text
+    after = detail(api, aid)
+    assert after["steps"] == before["steps"] and not after.get("destinations"), "a refused edit saves nothing"
 
 
 def test_renaming_a_step_moves_the_rules_that_name_it(api):

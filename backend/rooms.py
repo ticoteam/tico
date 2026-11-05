@@ -5,6 +5,7 @@ import json
 from . import bot_access as A
 from . import read_cache
 from .store import H, P, Problem, encode
+from . import bot_settings as BS
 
 
 PERSONAL = "personal"
@@ -68,7 +69,7 @@ def thread_mode(c, bot, row=None):
     `row` is the bot's bot_config row when the caller has read it already."""
     if bot == "coo":
         return PERSONAL
-    row = row or c.execute("SELECT thread_mode,config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = row or c.execute(f"SELECT bc.thread_mode,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (bot,)).fetchone()
     config = json.loads(row["config"] or "{}") if row else {}
     value = str((row["thread_mode"] if row else None) or config.get("thread_mode") or "").strip().lower()
     if value in (PERSONAL, SHARED):
@@ -143,6 +144,12 @@ def room_bot(conversation):
 
 
 def personal_room(c, human_actor, bot="coo", subject="Private control room"):
+    # Once a bot's chats have moved, a person's chat with it is the bot's Home (backend/bot_home_merge.py). The Assistant's
+    # rooms stay as they are: home_for_chat names no Home for them.
+    from . import bot_home_merge
+    home = bot_home_merge.home_for_chat(c, human_actor, bot)
+    if home:
+        return H.conversation(c, home)
     row = c.execute(
         "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
         "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
@@ -254,7 +261,10 @@ def task_conversation_id(c, auth, owner, requester):
         room = work_room(c, auth, H.actor_id(owner), requester)
     except H.Refused:
         return None
-    return room["id"] if room else None
+    # A Home is never a task's conversation (backend/bot_home_merge.py): the task opens its own thread there.
+    if not room or room.get("audience") == "home":
+        return None
+    return room["id"]
 
 
 def archive_personal_room(c, actor, bot="coo"):

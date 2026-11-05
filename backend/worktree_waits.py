@@ -50,7 +50,7 @@ def _exists(c):
 
 
 def _computer(c, bot):
-    return c.execute("SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    return c.execute("SELECT r.id,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
 
 
@@ -200,6 +200,12 @@ def _serve_one(c, wait, full, default_org):
             from .worktrees import cancel_pending
             cancel_pending(c, dict(link), json.loads(link['detail'] or '{}'), ended)
         return False
+    if wait['state'] == 'reserved':
+        link = c.execute('SELECT computer_id FROM task_links WHERE id=?', (wait['link_id'],)).fetchone()
+        if link and W.retired(c, link['computer_id']):
+            c.execute("UPDATE worktree_waits SET state='waiting',link_id=NULL,updated_at=? WHERE id=?",
+                      (H.now(), wait['id']))
+            wait.update(state='waiting', link_id=None)
     if wait['state'] == 'waiting':
         # The oldest wait that does not fit holds the bot's younger ones back: a freed place goes to it first.
         if wait['owner'] in full:

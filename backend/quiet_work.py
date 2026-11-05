@@ -31,7 +31,7 @@ CARRIED = "task.next-run.carried"
 SETTLED = "task.next-run.settled"
 STALE_HOURS = 2
 MAX_DAYS = 730
-# The task_events field each outcome is written under, so a task's own history says what became of each carriage.
+# The task history kind each outcome is written under, so a task's own history says what became of each carriage.
 FIELD = "quiet"
 WORKED, RETURNED, DEFERRED, HANDLED = "worked", "returned", "deferred", "handled"
 # What a carried task tells the run, beside its id and title (execution.claim): how to say "not now".
@@ -89,7 +89,7 @@ def _eligibility(claimable):
     from .execution import scoped_sql, unfenced_sql
     from .statuses import PARKED_SQL
     # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
-    return ("AND (j.state!='queued' OR m.sender_id LIKE 'human:%' OR NOT EXISTS "
+    return ("AND (j.state!='queued' OR " + _H().person_sent_sql() + " OR NOT EXISTS "
             "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot_id "
             f"AND pc.onboarding_state IN {PARKED_SQL} "
             "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "
@@ -119,7 +119,7 @@ def _own_jobs_sql(claimable, bots, tasks):
 
 
 def _last_sql(outcomes):
-    return ("SELECT created_at, old, new FROM task_events WHERE task_id=? AND field=? "
+    return ("SELECT created_at, old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
             f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY created_at DESC LIMIT 1")
 
 
@@ -211,7 +211,8 @@ def prime(conn, rows):
         ids = [row["id"] for row in rows]
         outcomes = {(RETURNED,): {}, (WORKED, HANDLED): {}}
         for part in H.chunks(ids):
-            for event in conn.execute("SELECT task_id, created_at, old, new FROM task_events WHERE task_id IN (%s) AND field=? "
+            for event in conn.execute("SELECT subject_id AS task_id, created_at, old, new FROM history_events "
+                                      "WHERE subject_type='task' AND subject_id IN (%s) AND kind=? "
                                       "ORDER BY created_at DESC" % ",".join("?" * len(part)), (*part, FIELD)):
                 for wanted, last in outcomes.items():
                     if event["new"] in wanted:
@@ -238,7 +239,8 @@ def prime(conn, rows):
 
 def was_quiet(conn, task_id):
     """Whether this task ever was a quiet one: a Run now or a resume moved it to a run of its own."""
-    return conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='next_run' AND old='1' LIMIT 1",
+    return conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='next_run' "
+                        "AND old='1' LIMIT 1",
                         (task_id,)).fetchone() is not None
 
 
@@ -291,7 +293,8 @@ def worked(conn, row, bot, since, until=None):
     to. A link refreshed from GitHub (checks, mergeable, review) is not work."""
     actor = "bot:" + bot
     until = until or "9999"
-    if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND created_at>=? AND created_at<=? AND field<>? LIMIT 1",
+    if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+                    "AND created_at>=? AND created_at<=? AND kind<>? LIMIT 1",
                     (row["id"], actor, since, until, FIELD)).fetchone():
         return True
     if row.get("conversation_id") and conn.execute(
@@ -314,7 +317,7 @@ def settle(conn, aid, bot, started):
     keeps its condition. Anything else: back to eligible, said in its history. Returns {task id: outcome}."""
     H = _H()
     out = {}
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE carried_by=? AND next_run=1 AND status='open'", (aid,))):
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE carried_by=? AND next_run=1 AND status='open'", (aid,))):
         if condition(row):
             outcome = DEFERRED
         elif _last_since(conn, row["id"], HANDLED, started) or worked(conn, row, bot, started):
@@ -332,7 +335,8 @@ def settle(conn, aid, bot, started):
 
 
 def _last_since(conn, task_id, outcome, since):
-    return conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field=? AND new=? AND created_at>=? LIMIT 1",
+    return conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? "
+                        "AND created_at>=? LIMIT 1",
                         (task_id, FIELD, outcome, since)).fetchone() is not None
 
 
@@ -343,7 +347,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     The owner bot or a person. Returns the task."""
     H = _H()
     from . import task_snooze
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
     row = H.task(conn, task_id)
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -389,12 +393,6 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
         if stamp > H.shift(H.now(), days=MAX_DAYS):
             H.refuse(conn, actor, "date", f"defer for at most {MAX_DAYS} days; close it if nobody will")
         cond.update(kind="time", until=stamp)
-        from . import task_check_backs
-        if task_check_backs.involved(row):
-            planned = min(stamp, row["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(row) else stamp
-            if H.is_bot(actor):
-                planned = min(planned, H.shift(H.now(), days=14))
-            task_check_backs.set_time(conn, row, planned, "Inspect the scheduled work and its resume condition.", system=True)
     conn.execute("UPDATE tasks SET resume=?, updated_at=? WHERE id=?", (json.dumps(cond), H.now(), task_id))
     H._task_event(conn, task_id, actor, FIELD, aid, DEFERRED, describe(conn, cond))
     H.event(conn, actor, "task.next-run.deferred", task_id,
@@ -419,7 +417,7 @@ def finished(conn, done_task):
     """`done_task` is done or closed: each open quiet task deferred until it resumes. Returns their ids."""
     H = _H()
     out = []
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE resume IS NOT NULL AND next_run=1 "
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE resume IS NOT NULL AND next_run=1 "
                                     "AND status='open' AND json_extract(resume,'$.task')=?", (done_task["id"],))):
         name = _task_name(done_task) if H.task_private(conn, done_task) and not H.task_private(conn, row) \
             else done_task["title"]
@@ -455,17 +453,18 @@ def stale(conn, at=None, hours=STALE_HOURS):
     out = []
     try:
         rows = H._rows(conn.execute(
-            "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
+            f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
             "AND t.status='open' AND t.resume IS NULL AND t.snoozed_until IS NULL "
-            "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
-            "AND e.field=? AND e.new=?))", (FIELD, RETURNED)))
+            "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM history_events e "
+            "WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind=? AND e.new=?))", (FIELD, RETURNED)))
     except Exception:  # noqa: BLE001 - a local hub without these tables has no runs
         return []
     for row in rows:
         bot = H.actor_id(row["owner_id"])
         last_work = _last(conn, row["id"], (WORKED, HANDLED, DEFERRED))
         floor = last_work["created_at"] if last_work else ""
-        first = conn.execute("SELECT old FROM task_events WHERE task_id=? AND field=? AND new=? AND created_at>? "
+        first = conn.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? "
+                             "AND created_at>? "
                              "ORDER BY created_at LIMIT 1", (row["id"], FIELD, RETURNED, floor)).fetchone()
         aid = first["old"] if first else row.get("carried_by")
         since = carried_at(conn, aid, row["id"]) if aid else None

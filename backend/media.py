@@ -220,6 +220,8 @@ def save(c, meta, *, transcript=None, notes=None, readable=None):
     MS.snapshot(meta, transcript if transcript is not None else (old or {}).get("transcript_original", ""),
                 notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
     control(c, meta["id"])
+    from . import meeting_audience
+    meeting_audience.revoke_saved(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
     c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
               "transcript_original,transcript_readable,notes,created_at) "
@@ -231,8 +233,17 @@ def may_write(who, record):
     """Only the company owner and the person the source belongs to may change or send it."""
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
-    return who.role == "owner" or (who.role == "human" and bool(who.email)
-                                   and record["owner"].lower() == who.email.lower())
+    # A meeting saved for its participants only is the recorder's, not the company owner's too.
+    owner = who.role == "owner" and effective_audience(record["metadata"]) != "participants"
+    return owner or (who.role in ("human", "owner") and bool(who.email)
+                     and record["owner"].lower() == who.email.lower())
+
+
+def effective_audience(meta):
+    """The explicit participant restriction wins over a historical private:false flag."""
+    if meta.get("audience") == "participants":
+        return "participants"
+    return "private" if meta.get("private") else "team"
 
 
 def shared_meeting(record, who):
@@ -247,9 +258,12 @@ def shared_meeting(record, who):
         return False
     if meta.get("kind") != "meeting":
         return False
-    if not meta.get("private"):
-        return True
     email = (who.email or "").lower()
+    audience = effective_audience(meta)
+    if audience == "participants":
+        return bool(email) and email in {str(a).strip().lower() for a in meta.get("audience_emails") or []}
+    if audience == "team":
+        return True
     attendees = [*((meta.get("calendar") or {}).get("attendees") or []),
                  *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict))]
     return bool(email) and any(str(a).strip().lower() == email for a in attendees)
@@ -271,7 +285,7 @@ def authorized(c, who, rid, *, include_deleted=False, write=False):
     raise Problem("forbidden", "This source belongs to another person", 403)
 
 
-def view(c, who, rid, *, include_transcripts=False):
+def view(c, who, rid, *, auth, include_transcripts=False):
     record = authorized(c, who, rid)
     meta = record["metadata"]
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
@@ -283,7 +297,7 @@ def view(c, who, rid, *, include_transcripts=False):
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
               "can_edit": may_write(who, record)}
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
-    result["outbox"] = outbox(c, rid)
+    result["outbox"] = outbox(c, rid, who, auth)
     if include_transcripts:
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
@@ -299,19 +313,21 @@ def view(c, who, rid, *, include_transcripts=False):
     return result
 
 
-def outbox(c, rid):
+def outbox(c, rid, who, auth):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:
-        rows = c.execute("SELECT id,section,text,status,result_ref FROM meeting_items WHERE meeting_id=? "
+        rows = c.execute("SELECT * FROM meeting_items WHERE meeting_id=? "
                          "AND status!='dismissed' AND section IN ('doc','task','feature') "
                          "ORDER BY created_at", (rid,)).fetchall()
     except Exception:
         return groups
     for row in rows:
         groups[row["section"]].append({"id": row["id"], "text": row["text"], "status": row["status"],
-                                       "result_ref": row["result_ref"]})
-    return groups
+                                       "result_ref": row["result_ref"],
+                                       **({"proposed_task_id": row["proposed_task_id"]} if "proposed_task_id" in row.keys() else {})})
+    from .meeting_items import redact
+    return redact(c, who, auth, groups)
 
 
 def attachments(c, who, rid, uploads):
@@ -421,7 +437,7 @@ def blob_for(c, auth, who, bid):
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
         raise Problem("not_found", "File not found", 404)
-    # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
+    # Scan grants are checked for the represented person and the actual bot independently.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)
     if scan is not None:
@@ -984,6 +1000,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             digest = await asyncio.to_thread(blobs.put, data, content_type)
         def work(c):
             task = comment_rights(c, auth, who, tid)
+            H._writer(c, who.actor, task_id=tid)
             item = register(c, who, digest, size, body.name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             fid, number = files.attach_task(c, who, tid, item, digest,
@@ -1064,7 +1081,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             rows = []
             for r in c.execute("SELECT id FROM meetings ORDER BY created_at DESC"):
                 try:
-                    item = view(c, who, r[0])
+                    item = view(c, who, r[0], auth=auth)
                 except Problem:
                     continue
                 if item["review_state"] != review:
@@ -1077,7 +1094,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     @app.get("/api/meetings/{rid}")
     def read(request: Request, rid: str):
         with store.read() as c:
-            return view(c, request.state.identity, rid, include_transcripts=True)
+            return view(c, request.state.identity, rid, include_transcripts=True, auth=auth)
 
     @app.get("/api/meetings/{rid}/versions")
     def versions(request: Request, rid: str):
@@ -1095,7 +1112,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
                 return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
-            return view(c, request.state.identity, meta["id"])
+            return view(c, request.state.identity, meta["id"], auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     def writable(who, rid):
@@ -1114,7 +1131,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta["attachments"] = meta.get("attachments", []) + attachments(
                 c, request.state.identity, rid, uploads)
             save(c, meta)
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/meetings/{rid}/edit")
@@ -1133,9 +1150,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 meta["preview"] = body.note[:160]
             if body.private is not None:
                 meta["private"] = bool(body.private)
+                if not body.private:
+                    meta.pop("audience", None)
+                    meta.pop("audience_emails", None)
             save(c, meta)
             c.execute("UPDATE media_control SET version=version+1 WHERE meeting_id=?", (rid,))
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return mutate(request, body, work)
 
     @app.post("/api/meetings/{rid}/send")
@@ -1153,6 +1173,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             authorized(c, request.state.identity, rid, include_deleted=True, write=True)
             control(c, rid)
             c.execute("UPDATE media_control SET deleted_at=coalesce(deleted_at,?),version=version+1 WHERE meeting_id=?", (H.now(), rid))
+            from . import meeting_audience
+            meeting_audience.revoke_saved(c, rid)
+            c.execute("DELETE FROM presences WHERE place=?", ("meeting:" + rid,))
             H.event(c, request.state.identity.actor, "note.deleted", rid, {"recoverable": True})
             return {"ok": True, "recoverable": True}
         return mutate(request, body, work)

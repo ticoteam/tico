@@ -71,7 +71,8 @@ def _asked_again(c, link, row):
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
         (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
     return bool(said) or bool(c.execute(
-        "SELECT 1 FROM task_events WHERE task_id=? AND field='waiting_on' AND new=? AND created_at>? LIMIT 1",
+        "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='waiting_on' AND new=? "
+        "AND created_at>? LIMIT 1",
         (row["id"], link["person"], link["settled_at"])).fetchone())
 
 
@@ -219,5 +220,5 @@ def on_reply(c, actor, row, text):
             _settle(c, row["id"], link["original"], "answered", "")
             passed += 1
     note = f"Answered; passed to {passed} bot(s)." + (f" {len(back)} could not be: {'; '.join(back)}." if back else "")
-    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True)
+    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True, strict=False)
     H.recount(c, [link["asker"] for link in links])

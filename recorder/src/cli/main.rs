@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod acceptance;
 mod privacy_replay;
+mod task_rows;
 
 #[derive(Parser)]
 #[command(
@@ -16,6 +17,11 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    TaskRowsTest {
+        #[arg(long)]
+        tico_url: String,
+    },
     #[command(hide = true)]
     PrivacyReplayTest {
         #[arg(long)]
@@ -302,6 +308,7 @@ fn main() -> Result<()> {
                         )
                     );
                 }
+                Command::TaskRowsTest { tico_url } => task_rows::run(&store, &tico_url)?,
                 Command::PrivacyReplayTest { tico_url, scenario } => {
                     privacy_replay::run(&store, &tico_url, &scenario)?
                 }
