@@ -31,6 +31,9 @@ Undo applies the inverse to those ids, including mail already in that state. Onl
 label. These commands never delete, trash, or change Spam, Sent or Draft labels.
 API: `POST /api/v2/mail/messages/organize`.
 
+Automation archive, label and leave actions run on the server for Whole Workspace mailboxes, without waiting for a
+computer. Other mail actions and personal connections still use the mailbox's computer; owner access is checked again before acting.
+
 Mail is one shared tool, `$HUB_DIR/scripts/mail.sh`. One Google service account acts as every
 mailbox; who may act as which one comes from the `tools:` block in your `bot.yaml`
 (`policies/access.md`), never from a prompt. Every read of a body and every label, archive or
