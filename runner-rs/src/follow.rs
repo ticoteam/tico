@@ -818,7 +818,7 @@ impl Follower {
         mut run: impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
         mut detach: impl FnMut(&mut Command) -> std::io::Result<()>,
     ) -> Result<(), String> {
-        if updater_running(&self.directory)? {
+        if updater_running(&self.directory).map_err(|e| format!("cannot check the updater: {e}"))? {
             return Ok(());
         }
         let python = crate::env::python();
@@ -1195,14 +1195,14 @@ scope['main'](sys.argv[1:])
     async fn every_native_prelaunch_failure_defers_and_releases_claims() {
         if !crate::regular_file::in_child("follow::tests::every_native_prelaunch_failure_defers_and_releases_claims").await { return; }
         std::env::set_var("TICO_SUPERVISED", "1");
-        for step in ["process_open", "process_size", "process_symlink", "process_fifo", "status_read", "status_shape", "status_symlink", "status_fifo",
+        for step in ["process_open", "process_race", "process_size", "process_symlink", "process_fifo", "status_read", "status_shape", "status_symlink", "status_fifo",
             "log_open", "log_symlink", "log_fifo", "systemd_start", "systemd_missing", "systemd_bus", "detach"] {
             let f = checkout_follower();
             let target = f.directory.join("keep");
             std::fs::write(&target, "keep this inode and content").unwrap();
             let path = f.directory.join(if step.starts_with("process_") { PROCESS_LOCK } else if step.starts_with("status_") { STATUS_FILE } else { "update.log" });
             match step {
-                "process_open" | "log_open" => std::fs::create_dir(&path).unwrap(),
+                "process_open" | "process_race" | "log_open" => std::fs::create_dir(&path).unwrap(),
                 "process_size" => std::fs::File::create(&path).unwrap().set_len(crate::regular_file::SMALL + 1).unwrap(),
                 "process_symlink" | "status_symlink" | "log_symlink" => std::os::unix::fs::symlink(&target, &path).unwrap(),
                 "process_fifo" | "status_fifo" | "log_fifo" => crate::regular_file::fifo(&path),
@@ -1218,7 +1218,7 @@ scope['main'](sys.argv[1:])
                     s.pending_since = Some(Instant::now());
                     s.features = json!({"runner_drain": true});
                 }
-                if step.starts_with("status_") {
+                if step.starts_with("status_") || (step.starts_with("process_") && step != "process_race") {
                     f.decide().await;
                 } else {
                     let env = if step.starts_with("systemd_") { systemd_env() } else { crate::env::Env::new() };
