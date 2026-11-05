@@ -31,7 +31,7 @@ def audience(c, auth, *, record=None, live=None):
     if record is not None:
         allowed.update('bot:' + row[0] for row in c.execute(
             "SELECT b.bot FROM live_meeting_bots b JOIN live_meetings m ON m.id=b.meeting_id "
-            "WHERE m.imported_meeting_id=? AND b.joined_by=m.owner_actor", (record['id'],)))
+            "WHERE m.imported_meeting_id=? AND m.discarded_at IS NULL", (record['id'],)))
     return allowed
 
 

@@ -33,21 +33,17 @@ def readable(c, who, rid, *, auth=None):
         return row
     row = meetings.get(rid, c)
     deleted = c.execute("SELECT deleted_at FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
-    granting = c.execute("SELECT l.owner_actor FROM live_meetings l JOIN live_meeting_bots b ON b.meeting_id=l.id "
-                         "WHERE l.imported_meeting_id=? AND b.bot=? AND b.joined_by=l.owner_actor LIMIT 1",
-                         (rid, who.actor.removeprefix("bot:"))).fetchone()
-    attached = False
-    if granting and auth:
-        try:
-            # Attachment delegates only the granting person's current source access.
-            media.authorized(c, auth.identity_for_actor(c, granting[0]), rid)
-            attached = True
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
-    if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0]) or row["metadata"].get("kind") != "meeting"
-            or (media.effective_audience(row["metadata"]) != "team"
-                or row["metadata"].get("private") is not False) and not attached):
+    if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0])
+            or row["metadata"].get("kind") != "meeting"):
+        raise Problem("not_found", "Meeting not found or unavailable", 404)
+    team = media.effective_audience(row["metadata"]) == "team" and row["metadata"].get("private") is False
+    if team:
+        return row
+    attached = c.execute(
+        "SELECT 1 FROM live_meetings m JOIN live_meeting_bots b ON b.meeting_id=m.id "
+        "WHERE m.imported_meeting_id=? AND m.discarded_at IS NULL AND b.bot=?",
+        (rid, who.actor.removeprefix("bot:"))).fetchone()
+    if not attached:
         raise Problem("not_found", "Meeting not found or unavailable", 404)
     return row
 
