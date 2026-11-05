@@ -187,8 +187,10 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await from.fill('Scans@VPM.example, @vpm.example');
       await from.dispatchEvent('change');
       assert.equal(puts(), 0, 'no inbox, nothing saved');
-      await intake.selectOption('ib_mail');
-      await page.locator('.toast', {hasText: 'Saved'}).waitFor();
+      await Promise.all([
+        page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/postal/intake' && r.request().method() === 'PUT'),
+        intake.selectOption('ib_mail'),
+      ]);
       assert.equal(puts(), 1, 'one save, though picking the inbox also blurred the senders field');
       assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body,
         {inbox_id: 'ib_mail', senders: ['scans@vpm.example', '@vpm.example']});
