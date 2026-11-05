@@ -1116,9 +1116,9 @@ import argparse, ast, subprocess, sys
 from pathlib import Path
 source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
 main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
-end = next(i for i, n in enumerate(main.body) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
-           and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
-main.body = main.body[:end + 1]
+parse = next(n for n in ast.walk(main) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+             and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
+main.body = [n for n in main.body if n.end_lineno < parse.lineno] + [parse]
 scope = {'argparse': argparse, 'ROOT': Path('.')}
 exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
 scope['main'](sys.argv[1:])
