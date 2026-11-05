@@ -282,8 +282,9 @@ def test_passed_labels_also_remove_the_generated_answer_body(api, legacy):
     question = post(api, "tasks/" + data["task"]["id"] + "/comments", {
         "text": "Which source should we use?", "ask": {"who": "ana", "questions": [{
             "id": "decision", "header": "Sources", "question": "Which source should we use?", "multi": True,
-            "options": [{"label": data["source_label"], "file": data["hidden"] + "@1"},
-                        {"label": "Allowed source", "file": data["allowed"] + "@1"}]}]}},
+            "options": [{"label": data["source_label"], "file": data["hidden"] + "@1", "then": "Use this source"},
+                        {"label": "Allowed source", "file": data["allowed"] + "@1",
+                         "then": "Use this source", "recommended": True}]}]}},
         data["publisher"]["token"])["comment"]
     answered = answer(api, {"task": data["task"], "question": question}, ["Allowed source"])
     assert data["source_label"] in answered["comment"]["body"]
