@@ -45,8 +45,9 @@ tasks start with that type. Clearing filters keeps the selected type. Older comb
 deleted types fall back to General.
 
 **Needs you** counts everything waiting on you across every board: tasks, questions, waits,
-approvals, asks, stale checks and nightly memory tidy. The tab, **Needs you** list
-header and Tasks navigation badges show the same count on desktop and phone; the badges hide at zero.
+approvals, asks, stale checks and nightly memory tidy. The tab and Tasks navigation badges show the
+same count on desktop and phone; the badges hide at zero. Under **Asked by**, approvals, questions
+outside tasks, stale checks and memory tidies lead under **Approvals and questions**, with their own count.
 **Catch up** opens the answerable cards one at a time. It has no number and appears only when a card is
 available. Other rows open the full task. Board, search and task filters stay with Open and Board and
 never narrow this queue. Folded or merged tasks count only through their card. The count includes unread

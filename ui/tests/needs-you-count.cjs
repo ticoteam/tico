@@ -1,4 +1,4 @@
-// The whole personal plate across boards: tab, list header and both navigation badges agree before paging.
+// The whole personal plate across boards: tab and both navigation badges agree before paging.
 // Full-task rows count too; Catch up walks only answerable cards. Threads and updates have their own pages.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -16,7 +16,9 @@ const tasks = [
 const foldedWait = task('t-folded', {kind: 'waiting', owner_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana'});
 const mergedWait = task('t-merged', {kind: 'waiting', owner_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana'});
 const unreadCard = task('t-unread-card', {folded: [foldedWait], merged: [mergedWait.id]});
-const wholeTask = task('t-whole', {person_ask: '', body: 'Review the attachments and write a report.'});
+const wholeTask = task('t-whole', {person_ask: '', body: 'Review the attachments and write a report.',
+  title: 'Assigned, not started: Review the attachments', owner_id: 'bot:writer', requester_id: 'human:ana',
+  assigned_not_started: true, note: 'Assigned to Writer, but no run has started.'});
 const extras = [
   {id: 'a-send', kind: 'approval', what: 'send', title: 'Send the launch email', requester_id: 'bot:writer',
     created_at: now, payload: {to: ['team@acme.example'], subject: 'Launch'}},
@@ -42,6 +44,25 @@ const plateCount = rows => {
     .map(it => (['task', 'question', 'waiting'].includes(it.kind) ? 'task' : it.kind) + ':' + it.id);
   return new Set(keys).size;
 };
+const snapshot = (rows, version, limit = 50) => ({items: rows.slice(0, limit), version, count: rows.length,
+  plate_count: plateCount(rows), by_kind: kinds(rows), folded_task_ids: foldedIds(rows),
+  next: rows.length > limit ? version + '.' + limit : null});
+
+// Hold one response after its request arrives, so each race has an explicit completion order.
+async function holdNeedsRead(page, snapshot) {
+  let arrived, release;
+  const started = new Promise(done => { arrived = done; });
+  const gate = new Promise(done => { release = done; });
+  const body = JSON.stringify(snapshot);
+  await page.route('**/api/v2/needs-you?*', async route => {
+    arrived();
+    await gate;
+    await route.fulfill({contentType: 'application/json', body});
+  }, {times: 1});
+  const read = page.evaluate(() => v2NeedsRead());
+  await started;
+  return async () => { release(); return read; };
+}
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -116,9 +137,11 @@ const plateCount = rows => {
 
       // A changed row is mended by id. The ids response carries the whole-list plate count too.
       const changedBase = version;
+      const beforeMend = await holdNeedsRead(page, snapshot(rows, version));
       rows = rows.map(it => it.id === 't-1' ? {...it, title: 'Latest launch plan'} : it); version = 'count-v3';
       await page.evaluate(d => v2NeedsChanged(d),
         {base: changedBase, version, count: rows.length, plate_count: 13, by_kind: kinds(rows), changed: ['t-1'], removed: []});
+      assert.equal(await beforeMend(), null, 'a read started before a live mend cannot replace it');
       assert.equal(idsReads, 1);
       assert.equal(wholeReads, before);
       assert.equal(await page.evaluate(() => needsItem('t-1').title), 'Latest launch plan');
@@ -126,18 +149,34 @@ const plateCount = rows => {
 
       // Load later pages explicitly, keeping the same number throughout.
       for (let n = 0; n < 10 && !await page.evaluate(() => needsAll()); n++) {
+        const beforePage = n === 0 ? await holdNeedsRead(page, snapshot(rows, version)) : null;
         assert.equal(await page.evaluate(() => v2NeedsMore()), true);
+        if (beforePage) {
+          assert.equal(await beforePage(), null, 'a read started before paging cannot discard the added page');
+          assert.equal(await page.evaluate(() => S.v2.needs.length), 100);
+        }
         assert.equal(await count(page), '13');
       }
       assert.equal(await page.evaluate(() => needsAll()), true);
       await page.locator('#task-tab-foryou').click();
-      assert.equal(await page.locator('[data-needs-count]').innerText(), '13');
-      assert.equal(await page.locator('[data-needs-queue] > header .tl-gname').textContent(), 'Needs you');
+      assert.equal(await page.locator('#task-group .v').innerText(), 'Asked by');
+      const asks = page.locator('#task-body [data-group="asks"]');
+      assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and questions');
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '3', 'only the loose question, stale check and memory tidy');
+      assert.equal(await asks.locator('.tl-row').count(), 3);
       assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'one row per plate item');
       assert.equal(await page.locator('#task-body [data-task-key="tt-0"]').count(), 1, 'duplicate task only once');
       const whole = page.locator('#task-body [data-task-key="tt-whole"]');
-      assert.equal(await whole.count(), 1, 'work that opens the full task stays on the plate');
+      assert.equal(await page.evaluate(() => taskNeedsViewer(needsItem('t-whole'))), false,
+        'the escalation has no question, ownership or wait on the manager');
+      assert.equal(await whole.count(), 1, 'Asked by includes the counted bot-owned escalation that opens the full task');
       assert.equal(await whole.getAttribute('data-need-card'), null);
+      await page.locator('#task-group').click();
+      await page.locator('[data-pick-group="need"]').click();
+      assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'What it takes shows the same counted items');
+      assert.equal(await whole.count(), 1);
+      await page.locator('#task-group').click();
+      await page.locator('[data-pick-group="requester"]').click();
       assert.equal(await page.locator('.tl-type-search').isHidden(), true);
       assert.equal(await page.locator('.tl-filters').isHidden(), true);
       assert.equal(await page.evaluate(() => TASKS_ST.type), 'roadmap');
@@ -153,7 +192,7 @@ const plateCount = rows => {
       // Non-card items use the same immediate answer/Undo count adjustment.
       await page.evaluate(() => { DEC_HANDLED.add('task:t-whole'); needsListsRedraw(); });
       assert.equal(await count(page), '12');
-      assert.equal(await page.locator('[data-needs-count]').innerText(), '12');
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '3', 'a full-task change leaves the extras count alone');
       assert.equal(await page.locator('#task-body .tl-row').count(), 12);
       assert.deepEqual(await badges(page), [{text: '12', hidden: false}, {text: '12', hidden: false}]);
       await page.evaluate(() => { DEC_HANDLED.delete('task:t-whole'); needsListsRedraw(); });
@@ -162,11 +201,38 @@ const plateCount = rows => {
       for (const theme of ['light', 'dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, theme + ': no sideways page scroll');
-        if (process.env.TICO_UI_SHOTS) await page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS,
-          `needs-you-${width === 390 ? 'phone' : 'desktop'}-${theme}.png`)});
+        if (process.env.TICO_UI_SHOTS) {
+          await page.waitForFunction(() => {
+            const count = document.querySelector('#task-tab-foryou .cnt');
+            return count && !count.classList.contains('m-ticking') && !count.getAnimations({subtree: true}).length;
+          });
+          await page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS,
+            `needs-you-${width === 390 ? 'phone' : 'desktop'}-${theme}.png`)});
+        }
       }
       await page.setViewportSize({width: width === 390 ? 1440 : 390, height: 844});
       assert.equal(await count(page), '13');
+
+      // With no live event, the newest overlapping read drops completed full-task work in either response order.
+      for (const newerFirst of [false, true]) {
+        rows = [wholeTask]; version = 'count-overlap-base-' + newerFirst;
+        await page.evaluate(() => v2Refresh());
+        assert.equal(await count(page), '1');
+        const older = await holdNeedsRead(page, snapshot(rows, 'count-overlap-older-' + newerFirst));
+        rows = []; version = 'count-overlap-newer-' + newerFirst;
+        const newer = await holdNeedsRead(page, snapshot(rows, version));
+        if (newerFirst) {
+          assert.ok(await newer());
+          assert.equal(await older(), null, 'an older response cannot overwrite a newer successful read');
+        } else {
+          assert.ok(await older());
+          assert.ok(await newer(), 'an older successful read cannot invalidate the newer read');
+        }
+        assert.equal(await page.evaluate(() => S.v2.needsVersion), version);
+        assert.equal(await count(page), '0');
+        assert.equal(await page.locator('#task-body .tl-row').count(), 0, 'the completed full-task row leaves with its count');
+        assert.deepEqual(await badges(page), [{text: '0', hidden: true}, {text: '0', hidden: true}]);
+      }
 
       // A list holding only full-task work has a row and count, but no Catch up button.
       rows = [wholeTask]; version = 'count-whole-task';
@@ -183,13 +249,14 @@ const plateCount = rows => {
       await page.evaluate(() => v2Refresh());
       assert.deepEqual(await badges(page), [{text: '0', hidden: true}, {text: '0', hidden: true}]);
       await page.evaluate(() => { location.hash = '#/tasks?view=foryou'; });
-      await page.waitForFunction(() => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading && document.querySelector('[data-needs-count]')?.textContent === '0');
+      await page.waitForFunction(() => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading
+        && document.querySelector('#task-tab-foryou .cnt')?.textContent === '0');
       assert.equal(await count(page), '0');
       assert.equal(await page.locator('#task-body .tl-row').count(), 0);
       assert.equal(await page.locator('#tasks-pane [data-go-through]:visible').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Needs you: whole plate count before paging, full-task rows, live mending, Undo, desktop and phone badges, zero');
+    console.log('Needs you: whole plate count before paging, requester escalations, full-task rows, ordered reads, live mending, Undo, desktop and phone badges, zero');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

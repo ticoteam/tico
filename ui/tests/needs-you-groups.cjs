@@ -84,7 +84,7 @@ async function shot(target, name) {
     assert.deepEqual(groups.map(g => [g.key, g.count]),
       [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1'], ['older', '1']], JSON.stringify(groups));
     assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Sign in or connect', 'Review and send', 'Do', 'Older questions']);
-    assert.equal(await page.locator('[data-needs-count]').innerText(), '8');
+    assert.equal(await page.locator('#task-tab-foryou .cnt').innerText(), '8');
     const review = page.locator('#task-body [data-group="need:review"]');
     assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
     assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent()).includes('Pay $1,200: LinkedIn ads for October'));

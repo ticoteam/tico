@@ -1030,7 +1030,7 @@ async function views(browser) {
   assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
   await page.locator('#task-group').click();
   await page.locator('[data-pick-group="requester"]').click();
-  assert.deepEqual(await groupNames(page), ['NEEDS YOU', 'WRITER', 'ENGINEER', 'SUPPORT', 'SAM', 'BOTOPS'], 'the queue header and whoever asked most recently first');
+  assert.deepEqual(await groupNames(page), ['WRITER', 'ENGINEER', 'SUPPORT', 'SAM', 'BOTOPS'], 'whoever asked most recently first');
   assert.equal(await page.locator('#task-body .tl-row').count(), NEEDS_YOU);
   const chat = page.locator('.tl-group[data-group="a:bot:writer"] a.tl-gchat');
   assert.equal(await chat.getAttribute('href'), '#/bot/writer');

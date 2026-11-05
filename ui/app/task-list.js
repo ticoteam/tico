@@ -579,6 +579,7 @@ function tasksListHTML(items, state) {
   const byNeed = by === 'need' && queue;
   const lead = cards ? needsExtras() : [];
   const asks = lead.length && !byNeed ? `<section class="tl-group" data-group="asks">
+    <header class="tl-ghead"><span class="tl-gname">Approvals and questions</span><span class="tl-gcount tnum">${lead.length}</span></header>
     <div class="tl-rows" role="list" aria-label="Approvals and questions">${lead.map(it => needRowHTML(it, {by, select: tasksCanSelect()})).join('')}</div></section>` : '';
   const extra = new Map();
   if (byNeed) for (const it of lead) {

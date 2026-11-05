@@ -142,7 +142,6 @@ let needsFirstDone = null;
 const NEEDS_FIRST = new Promise(done => { needsFirstDone = done; });
 const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs) {
-  NEEDS_REVISION++;
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   for (let at = 0; at < S.v2.needs.length; at += 200) needsSeen(S.v2.needs.slice(at, at + 200));
@@ -153,6 +152,7 @@ function needsTake(needs) {
   needsListsRedraw();
   if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
+// Reads are ordered by their request sequence; only paging and live mends invalidate reads already on their way.
 let NEEDS_READ = 0, NEEDS_KEPT = 0, NEEDS_REVISION = 0;
 async function v2NeedsRead() {
   const held = S.v2.needsVersion, seq = ++NEEDS_READ, revision = NEEDS_REVISION;
@@ -197,7 +197,11 @@ let NEEDS_MEND = Promise.resolve(false);
 const v2NeedsChanged = d => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d)));
 async function v2NeedsMend(d) {
   if (d.went_away) S.v2.wentAway = d.went_away;
-  if (Array.isArray(d.items)) { needsTake({...d, version: null, next: null}); return true; }   // a server without changes
+  if (Array.isArray(d.items)) {       // a server without changes
+    NEEDS_REVISION++;
+    needsTake({...d, version: null, next: null});
+    return true;
+  }
   const held = S.v2.needsVersion;
   if (!d.version || d.version === held) return false;
   const whole = async () => { await v2NeedsRead(); return true; };

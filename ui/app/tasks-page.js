@@ -550,7 +550,8 @@ function companyNeedGroups(items) {
   const needById = new Map((S.v2.needs || []).map(item => [String(item.id), item]));
   const groups = new Map();
   for (const it of items) {
-    if (!it.task || it.col === 'done' || !taskNeedsViewer(it.task)) continue;
+    // The server's queue already includes every counted task, including bot-owned escalations to their manager.
+    if (!it.task) continue;
     const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
     if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
     const group = groups.get(actor);
@@ -632,8 +633,6 @@ function tasksRender(state) {
     : tasksFinishedView(state.view) ? tasksDoneHTML(items, state)
     : state.view === 'board' ? tasksBoardHTML(items, state)
     : tasksListHTML(items, state);
-  if (tasksNeedsQueue(state) && !state.loading) html = `<section class="tl-group" data-needs-queue>
-    <header class="tl-ghead"><span class="tl-gname">Needs you</span><span class="tl-gcount tnum" data-needs-count>${decideCount()}</span></header>${html}</section>`;
   // The whole-list count includes unread pages, which load as the list scrolls or through Show more.
   const paged = tasksNeedsQueue(state) && !state.loading;
   if (paged) html += needsMoreButton();
