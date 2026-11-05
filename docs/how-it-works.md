@@ -707,8 +707,10 @@ do not share them with another container or the host. Filesystem checks cannot c
 no owner exists outside the namespace. User checkouts outside these roots are never recovered.
 
 The runner waits at least 30 minutes, checks open descriptors and live Git processes' working
-directories, arguments and environment against the worktree, Git admin and common directories,
-and refuses recovery when it cannot inspect a possible owner. On macOS it uses `lsof` and `ps`,
+directories, arguments and environment against the verified main checkout, registered worktrees,
+Git admin and common directories. A prepared ref transaction remains an owner even after closing
+its lock descriptor. Recovery is refused when the main checkout or a possible owner cannot be
+verified. On macOS it uses `lsof` and `ps`,
 refusing ambiguous output. Rust and Python serialize recovery with `flock` on the common Git
 directory's `tico-lock-recovery` sidecar. After rechecking the inode, they rename the abandoned lock
 into the common Git directory's `tico-lock-backups/` as `<name>.stale-<timestamp>-*` and verify the
@@ -727,8 +729,12 @@ index, branches, stash and task worktree registrations stay in place, including 
 
 Flattened instruction links are repaired only after checking the index and committed content.
 The regular file is first renamed into the Git admin directory's `tico-instruction-backups/`, with
-its relative path and a `.tico-backup-<timestamp>-*` suffix, before creating the symlink. An open
-writer continues writing to this named backup. Identical backups are removed only when no process
+its relative path and a `.tico-backup-<timestamp>-*-sha256-<accepted-content-hash>` suffix, before
+creating the symlink. The hash records the accepted target contents at repair time, so a later
+release changing or removing that target does not turn an unchanged backup into a bot edit.
+Legacy backups gain a baseline only while they still match the checkout; differing or unknown
+copies remain for review. An open writer continues writing to this named backup. Identical backups
+are removed only when no process
 has them open (macOS retains them because `lsof` can omit other users' descriptors); differing or
 unreadable backups stay, block updates, and are named as a bot edit to
 review in Health and the update log. Each update rechecks retained backups to catch late writes.

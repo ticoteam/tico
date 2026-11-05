@@ -3,7 +3,7 @@
 //! marked `.git/tico-managed`, their state in `<state>/repositories.json` (the file the Python runner kept,
 //! read and written the same way), and the heartbeat's `repositories` rows. Task worktrees are made from the base clones.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,7 @@ pub const CLONE_TIMEOUT: u64 = 120;
 pub const REMOVE_AFTER: f64 = 30.0 * 86400.0;
 pub const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 const ELSEWHERE: &str = "already exists and is not an empty directory.";
+const SYNC_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub fn valid_name(name: &str) -> bool {
     static NAME: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
@@ -399,7 +400,7 @@ pub struct Repositories {
     rows: Mutex<Map<String, Value>>,
     visible: AtomicBool,
     pending: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    sync_lock: tokio::sync::Mutex<()>,
+    sync_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Repositories {
@@ -430,8 +431,14 @@ impl Repositories {
             rows: Mutex::new(rows),
             visible: AtomicBool::new(false),
             pending: Mutex::new(None),
-            sync_lock: tokio::sync::Mutex::new(()),
+            sync_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn sync_guard(&self, name: &str) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
+        let lock = self.sync_locks.lock().unwrap().entry(base_folder(name)).or_default().clone();
+        tokio::time::timeout(SYNC_LOCK_WAIT, lock.lock_owned()).await
+            .map_err(|_| "Repository sync is busy; retry shortly or use the cached copy".into())
     }
 
     fn path(&self, name: &str) -> Result<PathBuf, Fail> {
@@ -449,9 +456,13 @@ impl Repositories {
             std::fs::create_dir_all(parent)?;
         }
         let temp = self.state_file.with_extension("tmp");
-        let text = crate::util::py_dumps(&Value::Object(self.rows.lock().unwrap().clone()));
+        // Different repositories can finish together; serialize snapshots and the shared temporary file.
+        let rows = self.rows.lock().unwrap();
+        let text = crate::util::py_dumps(&Value::Object(rows.clone()));
         std::fs::write(&temp, text)?;
-        std::fs::rename(&temp, &self.state_file)
+        let result = std::fs::rename(&temp, &self.state_file);
+        drop(rows);
+        result
     }
 
     fn report_row(row: &Value) -> Value {
@@ -609,7 +620,7 @@ impl Repositories {
             .map(|(n, _)| n.clone())
             .collect();
         for name in stale {
-            let _sync = self.sync_lock.lock().await;
+            let Ok(_sync) = self.sync_guard(&name).await else { continue };
             let result: Result<(), Fail> = async {
                 let path = self.path(&name)?;
                 let row = self.row(&name);
@@ -763,7 +774,7 @@ impl Repositories {
     }
 
     async fn update(&self, name: &str, repo: &Value, now: f64) {
-        let _sync = self.sync_lock.lock().await;
+        let Ok(_sync) = self.sync_guard(name).await else { return };
         let mut token = String::new();
         let mut created = false;
         let result = self.update_inner(name, repo, now, &mut token, &mut created).await;
@@ -1042,10 +1053,10 @@ impl Repositories {
 
     /// A bounded refresh a turn asked for through the credential socket; the token never enters the base.
     pub async fn refresh_mirror(&self, name: &str, token: &str) -> Result<Value, String> {
-        let _sync = self.sync_lock.lock().await;
         if !valid_name(name) {
             return Err("Invalid mirror repository".into());
         }
+        let _sync = self.sync_guard(name).await?;
         let fail = |f: Fail| match f {
             Fail::Msg(m) => m,
             Fail::Timeout(_) => "Mirror fetch timed out".into(),
@@ -1502,16 +1513,17 @@ pub async fn repair_instruction_links(root: &Path, env: &Env) -> Option<String> 
         let Ok(target) = path.parent().unwrap().join(&link.stdout).canonicalize() else { continue };
         let Ok(relative) = target.strip_prefix(&root) else { continue };
         let Ok(content) = std::fs::read(&path) else { continue };
+        let Ok(accepted) = std::fs::read(&target) else { continue };
         if content != link.raw {
             let spec = format!("HEAD:{}", relative.display());
             let original = gitrun::git_as_bot(&root, env, &["cat-file", "blob", &spec], 15).await;
             if !original.is_ok_and(|o| o.ok() && o.raw == content)
-                || std::fs::read(&target).ok().as_ref() != Some(&content)
+                || accepted != content
                 || !gitrun::git_as_bot(&root, env, &["diff", "--quiet", "HEAD", "--", &relative.to_string_lossy()], 15).await.is_ok_and(|o| o.ok()) { continue; }
         }
         // A writer that already opened the regular file keeps writing to this named backup.
         let backup = git_dir.join("tico-instruction-backups").join(Path::new(name).parent().unwrap())
-            .join(format!("{}.tico-backup-{}-{}", path.file_name().unwrap().to_string_lossy(), epoch_s() as u64, uuid::Uuid::new_v4().simple()));
+            .join(format!("{}.tico-backup-{}-{}-sha256-{}", path.file_name().unwrap().to_string_lossy(), epoch_s() as u64, uuid::Uuid::new_v4().simple(), gitrun::sha256_hex(&accepted)));
         if std::fs::create_dir_all(backup.parent().unwrap()).is_err()
             || backup.parent().and_then(|p| p.canonicalize().ok()).as_deref() != backup.parent() { continue; }
         if !path.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino() && m.mtime() == before.mtime() && m.mtime_nsec() == before.mtime_nsec())
@@ -1546,17 +1558,30 @@ async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> 
             let Ok(entry) = entry else { names.push(dir.display().to_string()); continue };
             let path = entry.path();
             if real_dir(&path) { pending.push(path); continue; }
-            let Some(name) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.rsplit_once(".tico-backup-").map(|(name, _)| name)) else { continue };
+            let Some(filename) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some((name, _)) = filename.rsplit_once(".tico-backup-") else { continue };
             let relative = path.strip_prefix(&saved).unwrap().with_file_name(name);
-            if is_symlink(&path) || std::fs::read(&path).ok().zip(std::fs::read(root.join(&relative)).ok()).is_none_or(|(a, b)| a != b) {
+            let digest = filename.rsplit_once("-sha256-").map(|(_, hash)| hash.to_string());
+            let marked = digest.is_some();
+            let digest = if let Some(hash) = digest {
+                (hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))).then_some(hash)
+            } else { std::fs::read(root.join(&relative)).ok().map(|b| gitrun::sha256_hex(&b)) };
+            let metadata = path.symlink_metadata().ok().filter(|m| m.is_file() && m.nlink() == 1);
+            if metadata.is_none() || digest.is_none() || std::fs::read(&path).ok().map(|b| gitrun::sha256_hex(&b)) != digest {
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
-            } else if let Ok(m) = path.symlink_metadata() {
-                if m.is_file() && m.nlink() == 1 && crate::gitlocks::no_open_file(&path, &m).await {
-                    // A writer may have written and closed between our first read and the fd scan.
-                    if std::fs::read(&path).ok().zip(std::fs::read(root.join(&relative)).ok()).is_none_or(|(a, b)| a != b) {
+            } else if let Some(m) = metadata {
+                let unused = crate::gitlocks::no_open_file(&path, &m).await;
+                // A writer may have written and closed between our first read and the fd scan.
+                if !path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec())
+                    || std::fs::read(&path).ok().map(|b| gitrun::sha256_hex(&b)) != digest {
+                    names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                } else if unused {
+                    let _ = std::fs::remove_file(&path);
+                } else if !marked {
+                    // Give a retained legacy backup a baseline only while it still equals the checkout.
+                    let baseline = path.with_file_name(format!("{filename}-sha256-{}", digest.unwrap()));
+                    if baseline.symlink_metadata().is_ok() || std::fs::rename(&path, &baseline).is_err() {
                         names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
-                    } else if path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec()) {
-                        let _ = std::fs::remove_file(&path);
                     }
                 }
             }
@@ -1668,6 +1693,25 @@ mod tests {
     }
     impl Drop for RepoFixture {
         fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); }
+    }
+
+    #[tokio::test]
+    async fn repository_syncs_do_not_block_other_refreshes_and_same_repository_wait_is_bounded() {
+        let f = RepoFixture::new();
+        let manager = f.manager();
+        manager.rows.lock().unwrap().insert("acme/web".into(), json!({"full_name": "Acme/Web", "state": "cloned"}));
+        let guard = manager.sync_guard("acme/web").await.unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        std::os::unix::fs::symlink(&f.remote, manager.mirrors.join("acme__other.git")).unwrap();
+        // Reach a deterministic mirror validation error without any network access while A is syncing.
+        let other = tokio::time::timeout(SYNC_LOCK_WAIT * 3, manager.refresh_mirror("acme/other", "unused")).await.unwrap().unwrap_err();
+        assert!(other.contains("symlink"), "{other}");
+        let busy = tokio::time::timeout(SYNC_LOCK_WAIT * 3, manager.refresh_mirror("Acme/Web", "unused")).await.unwrap().unwrap_err();
+        assert!(busy.contains("sync is busy"), "{busy}");
+        tokio::time::timeout(SYNC_LOCK_WAIT * 3, manager.update("acme/web", &json!({"full_name": "Acme/Web"}), epoch_s())).await.unwrap();
+        assert_eq!(manager.row("acme/web")["state"], "cloned");
+        drop(guard);
+        assert!(manager.sync_guard("ACME/WEB").await.is_ok());
     }
 
     #[tokio::test]
@@ -1870,6 +1914,55 @@ mod tests {
         assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/main is unpublished or differs")));
         assert_eq!(mirror_refs(&mirror).ok().unwrap()["refs/heads/main"], original);
         assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
+    }
+
+    #[tokio::test]
+    async fn legacy_instruction_backups_gain_a_baseline_without_losing_open_writers() {
+        use std::io::Write;
+        let f = RepoFixture::new();
+        let saved = f.base.join(".git/tico-instruction-backups");
+        std::fs::create_dir_all(&saved).unwrap();
+        let legacy = saved.join("AGENTS.md.tico-backup-1");
+        std::fs::write(&legacy, "Repository rules\n").unwrap();
+        let mut writer = std::fs::OpenOptions::new().write(true).open(&legacy).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        let baseline = std::fs::read_dir(&saved).unwrap().next().unwrap().unwrap().path();
+        assert!(!legacy.exists() && baseline.file_name().unwrap().to_str().unwrap().contains("-sha256-"));
+        std::fs::remove_file(f.base.join("CLAUDE.md")).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        writer.write_all(b"late edit").unwrap();
+        drop(writer);
+        assert!(repair_instruction_links(&f.base, &f.env).await.unwrap().contains(baseline.file_name().unwrap().to_str().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn accepted_instruction_backups_survive_changed_or_removed_targets_but_late_edits_are_reported() {
+        use std::io::{Seek, SeekFrom, Write};
+        let f = RepoFixture::new();
+        let path = f.base.join("AGENTS.md");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "Repository rules\n").unwrap();
+        // An open descriptor retains the inode on Linux as macOS always does.
+        let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        let saved = f.base.join(".git/tico-instruction-backups");
+        let backup = std::fs::read_dir(&saved).unwrap().next().unwrap().unwrap().path();
+        assert!(backup.file_name().unwrap().to_str().unwrap().ends_with(&format!("-sha256-{}", gitrun::sha256_hex(b"Repository rules\n"))));
+        std::fs::write(f.base.join("CLAUDE.md"), "Updated release rules\n").unwrap();
+        sh(&f.base, &["add", "CLAUDE.md"]);
+        sh(&f.base, &["commit", "-qm", "updated release"]);
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        sh(&f.base, &["rm", "-q", "AGENTS.md", "CLAUDE.md"]);
+        sh(&f.base, &["commit", "-qm", "removed instructions"]);
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert!(backup.exists());
+        writer.seek(SeekFrom::Start(0)).unwrap();
+        writer.write_all(b"Late bot edit\n").unwrap();
+        writer.set_len(b"Late bot edit\n".len() as u64).unwrap();
+        drop(writer);
+        let note = repair_instruction_links(&f.base, &f.env).await.unwrap();
+        assert!(note.contains(backup.file_name().unwrap().to_str().unwrap()));
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "Late bot edit\n");
     }
 
     #[tokio::test]

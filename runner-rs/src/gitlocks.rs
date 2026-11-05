@@ -204,7 +204,18 @@ fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, 
 fn process_roots(metadata: &[PathBuf], at: &Path) -> Option<Vec<PathBuf>> {
     let mut roots = metadata.to_vec();
     roots.push(at.to_path_buf());
-    let worktrees = metadata.last()?.join("worktrees");
+    let common = metadata.last()?;
+    if common.file_name().is_some_and(|n| n == ".git") {
+        let main = common.parent()?;
+        let (verified, _) = metadata_roots(&[], Some(main))?;
+        if verified.as_slice() != std::slice::from_ref(common) { return None; }
+        // Prepared ref transactions close their lock descriptors but still belong to this checkout.
+        roots.push(main.to_path_buf());
+    } else if at != common {
+        // A nonstandard common directory does not establish where its main checkout lives.
+        return None;
+    }
+    let worktrees = common.join("worktrees");
     match std::fs::read_dir(worktrees) {
         Ok(entries) => for entry in entries {
             let entry = entry.ok()?;
@@ -338,6 +349,49 @@ mod tests {
         assert!(!lock.exists());
         assert_eq!(std::fs::read(base.join(".git/index")).unwrap(), index);
         assert_eq!(std::fs::read_to_string(task.join("draft")).unwrap(), "task work\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn linked_recovery_keeps_a_prepared_main_checkout_transaction() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use std::process::Stdio;
+        let root = std::env::temp_dir().join(format!("tico-prepared-ref-{}", uuid::Uuid::new_v4().simple()));
+        let base = root.join("base");
+        let task = root.join("task");
+        std::fs::create_dir_all(&base).unwrap();
+        own(std::slice::from_ref(&root));
+        let env = crate::safegit::clean_environment(&crate::env::process_environment());
+        assert!(crate::gitrun::git(&base, &env, &["init", "-q"], 10).await.unwrap().ok());
+        assert!(crate::gitrun::git(&base, &env, &["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "initial"], 10).await.unwrap().ok());
+        assert!(crate::gitrun::git(&base, &env, &["worktree", "add", "--detach", task.to_str().unwrap()], 10).await.unwrap().ok());
+        let head = crate::gitrun::git(&base, &env, &["rev-parse", "HEAD"], 10).await.unwrap().stdout;
+        let mut owner = tokio::process::Command::new("git").args(["update-ref", "--stdin"]).current_dir(&base)
+            .env_clear().envs(&env).stdin(Stdio::piped()).stdout(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+        let mut input = owner.stdin.take().unwrap();
+        let mut lines = BufReader::new(owner.stdout.take().unwrap()).lines();
+        input.write_all(format!("start\nupdate refs/heads/prepared {}\nprepare\n", head.trim()).as_bytes()).await.unwrap();
+        for expected in ["start: ok", "prepare: ok"] {
+            assert_eq!(tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await.unwrap().unwrap().as_deref(), Some(expected));
+        }
+        let lock = base.join(".git/refs/heads/prepared.lock");
+        age(&lock);
+        let before = lock.metadata().unwrap();
+        #[cfg(target_os = "linux")]
+        for fd in std::fs::read_dir(format!("/proc/{}/fd", owner.id().unwrap())).unwrap() {
+            let metadata = std::fs::metadata(fd.unwrap().path());
+            assert!(!metadata.is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino()), "prepare must close the ref lock descriptor");
+        }
+        let argv = vec!["git".into(), "-C".into(), task.display().to_string(), "update-ref".into()];
+        assert!(!recover(&argv, None, &format!("Unable to create '{}': File exists", lock.display())).await.unwrap());
+        assert_eq!(lock.metadata().unwrap().ino(), before.ino());
+        assert!(!base.join(".git/tico-lock-backups").exists());
+        input.write_all(b"abort\n").await.unwrap();
+        drop(input);
+        assert!(tokio::time::timeout(Duration::from_secs(5), owner.wait()).await.unwrap().unwrap().success());
+        assert!(!lock.exists());
+        // Unverified common directories cannot rule out a main-checkout owner.
+        assert!(process_roots(&[root.join("nonstandard")], &task).is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 

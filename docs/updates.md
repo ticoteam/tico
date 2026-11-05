@@ -196,6 +196,9 @@ A checkout with uncommitted changes, or on a branch other than `main`, is refuse
 stashed, reset or discarded. Before checking changes, the updater repairs tracked `AGENTS.md` and
 `CLAUDE.md` symlinks flattened by copy tools, but only if they still contain exactly the committed
 link or its unchanged target's contents. Staged changes and different instruction edits stay intact.
+Retained backups are compared with their accepted content hash, so later releases can change or
+remove the target without blocking updates. A late write to a backup still blocks the update and
+names the saved file in Health.
 Settings > Health and Computers name the changed files until someone commits or stashes them.
 The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
 to it. `scripts/tico update` still works by hand and still follows `main`.

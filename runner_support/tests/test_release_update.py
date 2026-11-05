@@ -533,6 +533,51 @@ def test_instruction_backup_keeps_different_link_text_and_names_it_in_health(rep
 
 
 @pytest.mark.slow
+def test_retained_instruction_baseline_survives_release_target_changes_and_removal(repos, monkeypatch):
+    from runner_support import git_locks
+    _, checkout, _ = repos
+    instruction_links(checkout)
+    # Simulate macOS retaining a backup because complete descriptor visibility is unavailable.
+    monkeypatch.setattr(git_locks, "unused", lambda *args, **kwargs: False)
+    path = checkout / "AGENTS.md"
+    path.unlink()
+    path.write_text("Repository rules\n")
+    g = lambda *args: ru.git(checkout, *args)
+    assert not ru.repair_instruction_links(checkout, g)
+    backup, = (checkout / ".git/tico-instruction-backups").glob("AGENTS.md.tico-backup-*")
+    assert "-sha256-" in backup.name
+    commit(checkout, "CLAUDE.md", "Updated release rules\n")
+    assert not ru.repair_instruction_links(checkout, g)
+    sh(checkout, "git", "rm", "-q", "AGENTS.md", "CLAUDE.md")
+    sh(checkout, "git", "-c", "user.name=t", "-c", "user.email=t@acme.example", "commit", "-qm", "removed instructions")
+    assert not ru.repair_instruction_links(checkout, g)
+    assert backup.read_text() == "Repository rules\n"
+    backup.write_text("Late bot edit\n")
+    assert backup.name in ru.repair_instruction_links(checkout, g)
+    assert backup.read_text() == "Late bot edit\n"
+
+
+def test_legacy_instruction_backup_gets_a_baseline_only_while_unchanged(tmp_path, monkeypatch):
+    from runner_support import git_locks
+    metadata = tmp_path / ".git"
+    saved = metadata / "tico-instruction-backups"
+    saved.mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("accepted rules\n")
+    backup = saved / "AGENTS.md.tico-backup-1"
+    backup.write_text("accepted rules\n")
+    monkeypatch.setattr(git_locks, "unused", lambda *args, **kwargs: False)
+    assert not ru.instruction_backup_note(tmp_path, metadata)
+    retained, = saved.iterdir()
+    assert "-sha256-" in retained.name and not backup.exists()
+    (tmp_path / "AGENTS.md").unlink()
+    assert not ru.instruction_backup_note(tmp_path, metadata)
+    unknown = saved / "AGENTS.md.tico-backup-2"
+    unknown.write_text("unverified old contents")
+    assert unknown.name in ru.instruction_backup_note(tmp_path, metadata)
+    assert unknown.read_text() == "unverified old contents"
+
+
+@pytest.mark.slow
 def test_open_instruction_writer_lands_in_backup_and_is_reported_on_next_update(repos):
     _, checkout, state = repos
     instruction_links(checkout)

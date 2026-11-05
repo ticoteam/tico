@@ -8,6 +8,7 @@ a checkout with changes is left alone and the reason goes to Health.
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -98,14 +99,16 @@ def repair_instruction_links(root, g):
                 continue
             relative = target.relative_to(root).as_posix()
             content = path.read_bytes()
+            accepted = target.read_bytes()
             if content != link.stdout.encode():
                 original = g("show", "HEAD:" + relative)
                 if original.returncode or g("diff", "--quiet", "HEAD", "--", relative).returncode:
                     continue
-                if content != original.stdout.encode() or content != target.read_bytes():
+                if content != original.stdout.encode() or content != accepted:
                     continue
             # Keep open writers attached to a named inode in metadata, even after the link is restored.
-            backup = git_dir / "tico-instruction-backups" / Path(name).parent / (Path(name).name + f".tico-backup-{int(time.time())}-{uuid.uuid4().hex}")
+            digest = hashlib.sha256(accepted).hexdigest()
+            backup = git_dir / "tico-instruction-backups" / Path(name).parent / (Path(name).name + f".tico-backup-{int(time.time())}-{uuid.uuid4().hex}-sha256-{digest}")
             backup.parent.mkdir(parents=True, exist_ok=True)
             if backup.parent.resolve() != backup.parent:
                 continue
@@ -143,22 +146,36 @@ def instruction_backup_note(root, git_dir):
             relative = backup.relative_to(saved)
             name = relative.with_name(relative.name.rsplit(".tico-backup-", 1)[0])
             try:
-                different = backup.is_symlink() or not backup.is_file() or backup.read_bytes() != (root / name).read_bytes()
-            except OSError:
-                different = True
-            if different:
-                names.append(os.path.relpath(backup, root))
-            else:
-                from . import git_locks
                 before = backup.lstat()
-                if stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and git_locks.unused(backup, before, strict=True):
-                    # A writer may have written and closed while the fd scan was in progress.
-                    if backup.read_bytes() != (root / name).read_bytes():
+                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or backup.parent.resolve() != backup.parent:
+                    names.append(os.path.relpath(backup, root))
+                    continue
+                _, marked, digest = backup.name.rpartition("-sha256-")
+                if marked and not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    names.append(os.path.relpath(backup, root))
+                    continue
+                if not marked:
+                    digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
+                if hashlib.sha256(backup.read_bytes()).hexdigest() != digest:
+                    names.append(os.path.relpath(backup, root))
+                    continue
+                from . import git_locks
+                unused = git_locks.unused(backup, before, strict=True)
+                # A writer may have written and closed while the fd scan was in progress.
+                after = backup.lstat()
+                if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or hashlib.sha256(backup.read_bytes()).hexdigest() != digest:
+                    names.append(os.path.relpath(backup, root))
+                elif unused:
+                    backup.unlink()
+                elif not marked:
+                    # Accept a legacy backup only while it still equals the checkout; preserve its inode.
+                    baseline = backup.with_name(backup.name + "-sha256-" + digest)
+                    if baseline.exists() or baseline.is_symlink():
                         names.append(os.path.relpath(backup, root))
                     else:
-                        after = backup.lstat()
-                        if (before.st_dev, before.st_ino, before.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_mtime_ns):
-                            backup.unlink()
+                        backup.rename(baseline)
+            except OSError:
+                names.append(os.path.relpath(backup, root))
     except OSError:
         names.append(os.path.relpath(saved, root))
     if names:
