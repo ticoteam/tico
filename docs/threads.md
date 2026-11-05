@@ -94,6 +94,15 @@ themselves, as many as the thread's hour has room for. Unread threads come next,
 row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
+## Update requests
+
+A bot's daily update request is a notice from the keeper. In a thread, the request and the bot's replies to it read
+as one line, **› Update generated**. Tapping the line shows or hides them. The group holds the request, the bot's first reply to
+it, and the bot's other messages from that same run. It ends at the first message that is not one of those: a person's,
+another bot's, the keeper's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
+quote or a search hit opens the group it sits in. The posted update keeps its own row and is never in the group. If the
+request is deleted, its messages read as ordinary messages again.
+
 ## Bots in threads
 
 - A bot keeps **one progress message per task**. It posts it once and edits it as the work moves
