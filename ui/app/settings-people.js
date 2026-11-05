@@ -229,11 +229,17 @@ async function renderSettingsPeople() {
         supportSwitch.checked = answer?.on === true;
         toast('Saved');
       } catch (error) {
-        const current = await cloudSupportRead({fresh: true});
+        const stale = error.body?.error?.code === 'stale_revision' && typeof error.body.error.on === 'boolean';
+        let current = await cloudSupportRead({fresh: true});
+        if (!current && stale) {
+          current = {available: true, on: error.body.error.on, machines: []};
+          cloudSupportSet(current);
+        }
         if (error.signature) pendingWrites.delete(error.signature);
         supportSwitch.checked = current?.on === true;
         supportSwitch.indeterminate = !current;
-        settingsFieldError(supportSwitch, current ? error.message : `${error.message} Could not read the switch. Open Settings again to retry.`);
+        const message = stale ? 'A newer change already reached Tico HQ.' : error.message;
+        settingsFieldError(supportSwitch, current ? message : `${message} Could not read the switch. Open Settings again to retry.`);
       } finally { supportSwitch.disabled = !CLOUD_SUPPORT.view; }
     };
     el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {

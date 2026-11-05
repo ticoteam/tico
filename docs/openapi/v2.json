@@ -7755,7 +7755,7 @@
         "tags": [
           "Computers"
         ],
-        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. After a failed PUT, read HQ again before showing a saved state."
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
       },
       "put": {
         "summary": "Let Tico support reach the company's cloud machines, or stop it; owner only",
@@ -7835,7 +7835,7 @@
         "tags": [
           "Computers"
         ],
-        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. After a failed PUT, read HQ again before showing a saved state."
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
       }
     },
     "/api/v2/company": {

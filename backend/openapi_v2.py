@@ -2905,7 +2905,9 @@ def spec(app):
                                  "GET returns available false, on null and an empty machines list off Tico Cloud "
                                  "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
                                  "PUT accepts a boolean on, needs the owner and refuses support sessions. "
-                                 "After a failed PUT, read HQ again before showing a saved state.")
+                                 "Core assigns an increasing revision and keeps it for retries of the same "
+                                 "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+                                 "on in the error. After an uncertain PUT, read HQ again before showing a saved state.")
             responses["403"] = {"description": "People only; changing the switch needs the owner", **ERROR}
             responses["502"] = {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR}
             if method == "put":

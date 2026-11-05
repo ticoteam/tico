@@ -49,6 +49,8 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
         }
         receipts.set(key, null);
         if (failPut === true) return json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502);
+        if (failPut === 'stale') return json({error: {code: 'stale_revision', on: support.on,
+          detail: 'A newer change already reached Tico HQ.', retryable: false}}, 409);
         changes.push(body.on);
         support = {...support, on: body.on, machines: machines.map(m => ({...m, helper: m.helper === 'none' ? 'none' : body.on ? 'on' : 'off'}))};
         // HQ saved it, but core never received its answer.
@@ -149,6 +151,20 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(new Set(writeKeys.slice(firstKey)).size, 3, 'each explicit toggle gets a fresh key');
     assert.equal(support.on, false);
     assert.equal(await toggle.isChecked(), false);
+    // A newer choice at HQ wins a stale write, with no automatic write retry.
+    for (const unreadable of [false, true]) {
+      failPut = 'stale'; failGet = unreadable;
+      const beforeStale = writeKeys.length;
+      await toggle.click();
+      await page.locator('#set-people [data-field-err]').waitFor();
+      assert.equal(await toggle.isChecked(), false, 'the stale answer keeps HQ\'s off state');
+      assert.equal(await toggle.isDisabled(), false, 'HQ\'s stale answer gives a known state even if GET fails');
+      assert.equal(await toggle.evaluate(box => box.indeterminate), false);
+      assert.equal(writeKeys.length, beforeStale + 1, 'stale revisions are final');
+      assert.equal(await page.evaluate(() => pendingWrites.size), 0);
+      assert.match(await page.locator('#set-people [data-field-err]').innerText(), /A newer change already reached Tico HQ\./);
+    }
+    failPut = false; failGet = false;
     // Leave the owner enabled for the entry-refresh checks below.
     await toggle.click();
     await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);

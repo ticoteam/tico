@@ -13,7 +13,7 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
     POST   machines/<id>/heartbeat   -> {ttl_s}              every minute while this server wants it on
     DELETE machines/<id>             -> {ok}                 deletes the disk
     GET    machines/support          -> {on, machines: [{id, key, helper, seen}]}
-    PUT    machines/support          {on} -> same             owner's support-helper switch, kept only by HQ
+    PUT    machines/support          {on, revision} -> same   owner's support-helper switch, kept only by HQ
 
     Machine {id, key, size, state: starting|running|stopping|stopped|deleted|failed, started_at, stopped_at,
              cost_month_usd, starts_month, last_error}
@@ -132,6 +132,7 @@ SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has 
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
 ON = ("starting", "running")
 SIZES_KEY = "cloud-machine-sizes"
+SUPPORT_REVISION_KEY = "cloud-machine-support-revision"
 NAME_KEY = "cloud-machine-name:"  # + machine key: the name a person gave its computer, kept when the machine is made again
 TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
@@ -157,14 +158,16 @@ WAIT = 15
 ANSWER_CAP = 256 * 1024
 TRANSPORT = None                # tests' fake HQ (httpx transport), never the live one
 now = time.time                 # tests' clock
+now_ns = time.time_ns            # support writes' ordering clock
 
 
 class Refused(Exception):
     """HQ refused or did not answer. `status` 0 is no answer; `code` is stable and holds no HQ text."""
 
-    def __init__(self, code, status=0):
+    def __init__(self, code, status=0, on=None):
         super().__init__(code)
         self.code, self.status = code, status
+        self.on = on
 
 
 # ----------------------------------------------------------------------------- HQ
@@ -210,8 +213,10 @@ class HQ:
     def __init__(self, key, base):
         self.key, self.base = key, base
 
-    def call(self, method, path="", body=None):
+    def call(self, method, path="", body=None, idempotency_key=None):
         headers = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
         try:
             with httpx.Client(transport=TRANSPORT, timeout=WAIT, trust_env=False, follow_redirects=False,
                               verify=outbound_tls.context(trust_env=False)) as client:
@@ -234,6 +239,10 @@ class HQ:
         if status >= 400:
             error = answer.get("error", answer.get("code"))
             error = error.get("code") if isinstance(error, dict) else error
+            if status == 409 and error == "stale_revision":
+                if type(answer.get("on")) is not bool:
+                    raise Refused("bad_answer")
+                raise Refused("stale_revision", 409, on=answer["on"])
             ok = isinstance(error, str) and 0 < len(error) <= 40 and error.replace("_", "").isalnum()
             raise Refused(error.lower() if ok else f"http_{status}", status)
         return answer
@@ -278,8 +287,9 @@ class HQ:
     def delete(self, machine_id):
         self.call("DELETE", f"/{machine_id}")
 
-    def support(self, on=None):
-        answer = self.call("GET" if on is None else "PUT", "/support", None if on is None else {"on": on})
+    def support(self, on=None, revision=None, idempotency_key=None):
+        answer = self.call("GET" if on is None else "PUT", "/support",
+                           None if on is None else {"on": on, "revision": revision}, idempotency_key=idempotency_key)
         try:
             return CloudSupportState.model_validate(answer).model_dump()
         except ValueError:
@@ -1484,7 +1494,7 @@ def install(app, settings, store, auth, execution, mutate):
     service.on_offered = onboarding.on_cloud_offered if onboarding is not None else None
     app.state.cloud_machines = service
 
-    def support_state(on=None):
+    def support_state(on=None, revision=None, idempotency_key=None):
         # Read the current gateway key, and release the database before waiting for HQ. No local switch is kept.
         with store.read() as c:
             cloud = cloud_company(c, settings)
@@ -1493,8 +1503,11 @@ def install(app, settings, store, auth, execution, mutate):
             if hq is None:
                 raise Problem("hq_unreachable", "Didn't reach Tico HQ. Try again.", 502)
             try:
-                return {"available": True, **hq.support(on)}
+                return {"available": True, **hq.support(on, revision=revision, idempotency_key=idempotency_key)}
             except Refused as exc:
+                if exc.status == 409 and exc.code == "stale_revision":
+                    raise Problem("stale_revision", "A newer change already reached Tico HQ.", 409,
+                                  extra={"on": exc.on}) from None
                 if exc.status != 404 or exc.code != "not_cloud":
                     raise Problem("hq_unreachable", "Didn't reach Tico HQ. Try again.", 502) from None
         if on is not None:
@@ -1514,7 +1527,7 @@ def install(app, settings, store, auth, execution, mutate):
     @app.put("/api/v2/cloud-machines/support", response_model=CloudSupportView)
     def cloud_machine_support_set(request: Request, body: CloudSupportChange):
         """Let Tico support reach this company's cloud machines, or stop it, at HQ. Owner only; support sessions
-        cannot change their own access. A failed call saves nothing locally; read HQ again to check the state."""
+        cannot change their own access. Retries keep the same revision; HQ refuses a change older than its latest."""
         who = request.state.identity
         auth.domain(who)
         if who.role != "owner" or who.support:
@@ -1531,24 +1544,46 @@ def install(app, settings, store, auth, execution, mutate):
             nonlocal claimed
             if body.on:
                 cloud_access.require_unlocked(store)
+            previous = c.execute("SELECT value FROM registry_metadata WHERE key=?", (SUPPORT_REVISION_KEY,)).fetchone()
+            # Keep ordering across restarts and a clock moving back, including writes whose HQ answer was lost.
+            revision = max(now_ns(), int(previous[0]) + 1 if previous else 1)
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                      (SUPPORT_REVISION_KEY, str(revision)))
             claimed = True
-            return {"pending": True}
+            return {"pending": True, "revision": revision}
+
+        def result(answer):
+            if answer.get("error") == "stale_revision":
+                raise Problem("stale_revision", "A newer change already reached Tico HQ.", 409,
+                              extra={"on": answer["on"]})
+            return answer
 
         # Reserve through the same receipt helper as other v2 writes, then release its transaction before HQ.
-        # A lost HQ answer leaves a pending receipt: a retry must never repeat an enable after a later disable.
+        # A lost HQ answer leaves its revision in the receipt: HQ can refuse a retry older than a later disable.
         receipt = mutate(request, body, claim)
         if not claimed:
-            if receipt.get("pending"):
-                raise Problem("hq_unconfirmed", "Could not confirm the change at Tico HQ. Read the switch again.", 409)
-            return receipt
-        answer = support_state(body.on)
+            if not receipt.get("pending"):
+                return result(receipt)
+            if body.on:
+                cloud_access.require_unlocked(store)
+        revision = receipt.get("revision")
+        if type(revision) is not int or not 0 < revision < 2**63:
+            # Receipts from before revisions cannot be retried safely after a newer choice.
+            raise Problem("hq_unconfirmed", "Could not confirm the change at Tico HQ. Read the switch again.", 409)
+        try:
+            answer = support_state(body.on, revision=revision, idempotency_key=request.headers["idempotency-key"])
+        except Problem as exc:
+            if exc.code != "stale_revision":
+                raise
+            answer = {"error": "stale_revision", "on": exc.extra["on"]}
 
         def finish(c):
             c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                       (encode(answer), who.actor, request.url.path, request.headers["idempotency-key"]))
-            H.event(c, who.actor, "access.rules_updated", "", {"after": {"cloud_machine_support": answer["on"]}})
+            if answer.get("error") != "stale_revision":
+                H.event(c, who.actor, "access.rules_updated", "", {"after": {"cloud_machine_support": answer["on"]}})
         store.write(who, finish)
-        return answer
+        return result(answer)
 
     @app.get("/api/v2/cloud-machines")
     def cloud_machine_sizes(request: Request):

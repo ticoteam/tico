@@ -28,6 +28,10 @@ class SupportHQ:
     def __init__(self):
         self.on = True
         self.calls = []
+        self.keys = []
+        self.revision = 0
+        self.receipts = {}
+        self.delayed = []
         self.error = None
         self.machines = [
             {"id": "cm-shared", "key": "_shared", "helper": "on", "seen": "2026-11-05T12:00:00Z"},
@@ -41,18 +45,32 @@ class SupportHQ:
         assert request.headers["user-agent"].startswith("Tico-Client/")
         body = json.loads(request.content) if request.method == "PUT" else None
         self.calls.append((request.method, body))
+        if body is not None:
+            assert type(body["on"]) is bool and set(body) == {"on", "revision"}
+            assert type(body["revision"]) is int and 0 < body["revision"] < 2**63
+            self.keys.append(request.headers["idempotency-key"])
         if isinstance(self.error, Exception):
+            self.delayed.append(request)
             raise self.error
         if self.error is not None:
             return self.error
         if body is not None:
-            assert type(body["on"]) is bool and set(body) == {"on"}
+            key = request.headers["idempotency-key"]
+            # HQ replays a completed request before checking the latest company revision.
+            if key in self.receipts:
+                return httpx.Response(200, json=self.receipts[key])
+            if body["revision"] <= self.revision:
+                return httpx.Response(409, json={"error": "stale_revision", "on": self.on})
+            self.revision = body["revision"]
             self.on = body["on"]
             self.machines[0]["helper"] = "on" if self.on else "off"
         # Unknown HQ fields must never cross the core API, even if a future HQ includes a credential.
-        return httpx.Response(200, json={"on": self.on, "machines": [
+        answer = {"on": self.on, "machines": [
             {**machine, "token": "synthetic-private-helper-token"} for machine in self.machines],
-            "token": "synthetic-private-helper-token"})
+            "token": "synthetic-private-helper-token"}
+        if body is not None:
+            self.receipts[key] = answer
+        return httpx.Response(200, json=answer)
 
 
 @pytest.fixture
@@ -62,6 +80,8 @@ def hq(api, monkeypatch):
     monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
     monkeypatch.setenv("TICO_GATEWAY_URL", URL)
     monkeypatch.setattr(CM, "TRANSPORT", httpx.MockTransport(fake))
+    revisions = iter(range(1, 100))
+    monkeypatch.setattr(CM, "now_ns", lambda: next(revisions))
     return fake
 
 
@@ -91,7 +111,7 @@ def test_owner_turns_it_off_and_back_on_at_hq_and_records_who(api, hq):
         assert response.status_code == 200, response.text
         assert response.json() == {"available": True, "on": on, "machines": hq.machines}
         assert hq.on is on
-    assert hq.calls == [("PUT", {"on": False}), ("PUT", {"on": True})]
+    assert hq.calls == [("PUT", {"on": False, "revision": 1}), ("PUT", {"on": True, "revision": 2})]
     assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}}),
                           ("human:ana", {"after": {"cloud_machine_support": True}})]
     with api.app.state.store.read() as c:
@@ -112,7 +132,7 @@ def test_replaying_enable_after_disable_does_not_enable_again(api, hq):
     assert api.get(PATH, headers=headers()).json()["on"] is False
     conflict = api.put(PATH, json={"on": False}, headers=enable)
     assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "idempotency_conflict"
-    assert hq.calls == [("PUT", {"on": True}), ("PUT", {"on": False}), ("GET", None)]
+    assert hq.calls == [("PUT", {"on": True, "revision": 1}), ("PUT", {"on": False, "revision": 2}), ("GET", None)]
     assert len(audit(api)) == 2
 
 
@@ -126,17 +146,99 @@ def test_key_is_required_before_contacting_hq(api, hq):
     assert hq.calls == [] and audit(api) == []
 
 
-def test_an_uncertain_enable_is_never_sent_again_after_a_disable(api, hq):
+def test_a_delayed_enable_cannot_overtake_a_confirmed_disable(api, hq):
     enable = headers(key="lost-enable")
     hq.error = httpx.ReadTimeout("synthetic-private-HQ-details")
     assert api.put(PATH, json={"on": True}, headers=enable).status_code == 502
     hq.error = None
     assert api.put(PATH, json={"on": False}, headers=headers()).status_code == 200
+    late = hq(hq.delayed[0])
+    assert late.status_code == 409 and late.json() == {"error": "stale_revision", "on": False}
     replay = api.put(PATH, json={"on": True}, headers=enable)
-    assert replay.status_code == 409 and replay.json()["error"]["code"] == "hq_unconfirmed"
+    assert replay.status_code == 409 and replay.json()["error"]["code"] == "stale_revision"
+    assert replay.json()["error"]["on"] is False and replay.json()["error"]["retryable"] is False
+    calls = len(hq.calls)
+    assert api.put(PATH, json={"on": True}, headers=enable).json() == replay.json()
+    assert len(hq.calls) == calls, "a stale refusal is final, not a pending write"
     assert hq.on is False
-    assert hq.calls == [("PUT", {"on": True}), ("PUT", {"on": False})]
+    assert hq.calls == [("PUT", {"on": True, "revision": 1}), ("PUT", {"on": False, "revision": 2}),
+                        ("PUT", {"on": True, "revision": 1}), ("PUT", {"on": True, "revision": 1})]
     assert len(audit(api)) == 1
+
+
+def test_an_uncertain_write_reuses_its_saved_revision(api, hq):
+    enable = headers(key="retry-enable")
+    hq.error = httpx.ReadTimeout("synthetic-private-HQ-details")
+    assert api.put(PATH, json={"on": True}, headers=enable).status_code == 502
+    with api.app.state.store.read() as c:
+        receipt = c.execute("SELECT response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                            ("human:ana", PATH, "retry-enable")).fetchone()
+        assert json.loads(receipt[0]) == {"pending": True, "revision": 1}
+    hq.error = None
+    retried = api.put(PATH, json={"on": True}, headers=enable)
+    assert retried.status_code == 200 and retried.json()["on"] is True
+    assert hq.calls == [("PUT", {"on": True, "revision": 1}), ("PUT", {"on": True, "revision": 1})]
+    assert hq.keys == ["retry-enable", "retry-enable"]
+    assert len(audit(api)) == 1
+
+
+def test_hq_replays_an_applied_write_with_a_lost_answer_before_checking_its_revision(api, hq):
+    enable = headers(key="applied-enable")
+    hq.error = httpx.ReadTimeout("synthetic-private-HQ-details")
+    assert api.put(PATH, json={"on": True}, headers=enable).status_code == 502
+    hq.error = None
+    applied = hq(hq.delayed[0])
+    assert applied.status_code == 200 and applied.json()["on"] is True
+    assert api.put(PATH, json={"on": False}, headers=headers()).status_code == 200
+    replay = api.put(PATH, json={"on": True}, headers=enable)
+    assert replay.status_code == 200 and replay.json()["on"] is True
+    assert hq.on is False and hq.revision == 2
+    assert hq.calls[-1] == ("PUT", {"on": True, "revision": 1})
+
+
+def test_new_choices_keep_growing_revisions_when_the_clock_moves_back(api, hq, monkeypatch):
+    revisions = iter([10, 9, 10])
+    monkeypatch.setattr(CM, "now_ns", lambda: next(revisions))
+    for on in (False, True, False):
+        response = api.put(PATH, json={"on": on}, headers=headers())
+        assert response.status_code == 200, response.text
+    assert [body["revision"] for _, body in hq.calls] == [10, 11, 12]
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_stale_revision_returns_only_hqs_current_boolean_and_is_final(api, hq, on):
+    hq.error = httpx.Response(409, json={"error": "stale_revision", "on": on,
+                                        "token": "synthetic-private-helper-token"})
+    sent = headers(key="stale-choice")
+    response = api.put(PATH, json={"on": not on}, headers=sent)
+    assert response.status_code == 409
+    assert response.json()["error"] == {"code": "stale_revision", "on": on, "retryable": False,
+                                         "detail": "A newer change already reached Tico HQ."}
+    hq.error = None
+    assert api.put(PATH, json={"on": not on}, headers=sent).json() == response.json()
+    conflict = api.put(PATH, json={"on": on}, headers=sent)
+    assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "idempotency_conflict"
+    assert len(hq.calls) == 1 and audit(api) == []
+
+
+def test_a_legacy_pending_receipt_cannot_be_retried_without_a_revision(api, hq):
+    sent = headers(key="legacy-choice")
+    api.app.state.store.mutate(Identity("human:ana", "owner"), PATH, "legacy-choice", {"on": True},
+                               lambda c: {"pending": True})
+    response = api.put(PATH, json={"on": True}, headers=sent)
+    assert response.status_code == 409 and response.json()["error"]["code"] == "hq_unconfirmed"
+    assert hq.calls == [] and audit(api) == []
+
+
+def test_a_pending_enable_cannot_bypass_a_new_cloud_lock(api, hq):
+    sent = headers(key="pending-enable")
+    hq.error = httpx.ReadTimeout("synthetic-private-HQ-details")
+    assert api.put(PATH, json={"on": True}, headers=sent).status_code == 502
+    cloud_access.apply(api.app.state.store, cloud_access.parse({"access": "locked", "reason": "unpaid"}))
+    hq.error = None
+    response = api.put(PATH, json={"on": True}, headers=sent)
+    assert response.status_code == 402 and response.json()["error"]["code"] == "locked"
+    assert len(hq.calls) == 1 and audit(api) == []
 
 
 def test_hq_is_called_without_an_open_write_transaction(api, hq, monkeypatch):
@@ -160,7 +262,7 @@ def test_hq_is_called_without_an_open_write_transaction(api, hq, monkeypatch):
     monkeypatch.setattr(store, "transaction", tracked)
     monkeypatch.setattr(CM, "TRANSPORT", httpx.MockTransport(receive))
     assert api.put(PATH, json={"on": True}, headers=headers()).status_code == 200
-    assert hq.calls == [("PUT", {"on": True})]
+    assert hq.calls == [("PUT", {"on": True, "revision": 1})]
 
 
 @pytest.mark.parametrize("second_on", [False, True])
@@ -180,11 +282,11 @@ def test_overlapping_writes_are_ordered_and_retries_are_not_resent(api, hq, monk
         def __exit__(self, *exc):
             return lock.__exit__(*exc)
 
-    def delayed(self, on=None):
+    def delayed(self, on=None, revision=None, idempotency_key=None):
         if on is True:
             entered.set()          # The older enable has not reached HQ yet.
             assert release.wait(10)
-        return support(self, on)
+        return support(self, on, revision=revision, idempotency_key=idempotency_key)
 
     monkeypatch.setattr(service, "support_lock", ObservedLock())
     monkeypatch.setattr(CM.HQ, "support", delayed)
@@ -209,10 +311,10 @@ def test_overlapping_writes_are_ordered_and_retries_are_not_resent(api, hq, monk
     assert enabled.status_code == changed.status_code == 200
     if second_on:
         assert changed.json() == enabled.json()
-        assert hq.calls == [("GET", None), ("PUT", {"on": True})]
+        assert hq.calls == [("GET", None), ("PUT", {"on": True, "revision": 1})]
     else:
         assert changed.json()["on"] is False and hq.on is False
-        assert hq.calls == [("GET", None), ("PUT", {"on": True}), ("PUT", {"on": False})]
+        assert hq.calls == [("GET", None), ("PUT", {"on": True, "revision": 1}), ("PUT", {"on": False, "revision": 2})]
 
 
 def test_unsigned_admin_member_bot_and_runner_cannot_change_access(api, hq):
@@ -255,7 +357,7 @@ def test_locked_owner_can_read_and_revoke_but_cannot_enable(api, hq, reason):
     assert refused.status_code == 402 and refused.json()["error"]["code"] == "locked"
     assert api.get("/api/v2/cloud-machines", headers=headers()).status_code == 402
     assert hq.on is False
-    assert hq.calls == [("GET", None), ("PUT", {"on": False}), ("GET", None)]
+    assert hq.calls == [("GET", None), ("PUT", {"on": False, "revision": 1}), ("GET", None)]
     assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}})]
 
 
@@ -316,12 +418,13 @@ def test_cloud_support_catalogue_waits_for_the_owners_confirmation(api, hq, boto
         finish(api, botops, attempt)
     response = api.post(confirm, json={}, headers=headers())
     assert response.status_code == 200 and response.json()["action"]["status"] == "done", response.text
-    assert hq.on is False and hq.calls == [("PUT", {"on": False})]
+    assert hq.on is False and hq.calls == [("PUT", {"on": False, "revision": 1})]
     assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}, "via": via})]
 
 
 def test_only_a_boolean_is_accepted_and_no_extra_fields_are_sent(api, hq):
-    for body in ({}, {"on": "false"}, {"on": 0}, {"on": None}, {"on": False, "token": "synthetic-private"}):
+    for body in ({}, {"on": "false"}, {"on": 0}, {"on": None}, {"on": False, "revision": 1},
+                 {"on": False, "token": "synthetic-private"}):
         assert api.put(PATH, json=body, headers=headers()).status_code == 422
     assert hq.calls == [] and audit(api) == []
 
@@ -352,7 +455,7 @@ def test_hqs_not_cloud_hides_the_rule_even_with_old_cloud_metadata(api, hq):
     assert audit(api) == []
 
 
-@pytest.mark.parametrize("failure", ["timeout", "server_error", "refused", "missing_route", "bad_answer", "bad_machine", "oversized"])
+@pytest.mark.parametrize("failure", ["timeout", "server_error", "refused", "missing_route", "bad_answer", "bad_machine", "bad_stale", "oversized"])
 def test_hq_failure_is_clear_sends_no_private_text_and_never_saves_a_choice(api, hq, failure):
     if failure == "timeout":
         hq.error = httpx.ConnectTimeout("synthetic-private-HQ-details")
@@ -367,6 +470,8 @@ def test_hq_failure_is_clear_sends_no_private_text_and_never_saves_a_choice(api,
     elif failure == "bad_machine":
         hq.error = httpx.Response(200, json={"on": False, "machines": [{
             **hq.machines[0], "helper": "synthetic-private-HQ-details"}]})
+    elif failure == "bad_stale":
+        hq.error = httpx.Response(409, json={"error": "stale_revision", "on": "synthetic-private-HQ-details"})
     else:
         hq.error = httpx.Response(200, content=b"x" * (CM.ANSWER_CAP + 1))
     for method, kwargs in (("GET", {}), ("PUT", {"json": {"on": False}})):
