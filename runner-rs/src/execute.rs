@@ -190,6 +190,10 @@ fn thread_runtime(runtime: &str, harness: &str) -> String {
 
 /// The provider thread this turn continues (clients/sessions.py session_key).
 pub fn session_key(attempt: &Value) -> String {
+    // A shared page starts without any earlier private Assistant session's content.
+    if attempt["make_page"]["task"].is_object() {
+        return format!("make-page:{}", text_of(&attempt["id"]));
+    }
     let config = &attempt["config"];
     let bot = text_of(&attempt["bot"]);
     let mode = match text_of(&config["session"]) {
@@ -2814,6 +2818,18 @@ mod tests {
             HOST_CODEX.with(|env| env.borrow_mut().take());
             hosts::TEST_STARTS.with(|starts| starts.set(0));
         }
+    }
+
+    #[test]
+    fn make_page_uses_its_own_provider_session() {
+        let mut turn = json!({"id": "a1", "bot": "coo", "config": {"session": "bot"},
+            "conversation": {"id": "personal", "root_id": "personal", "audience_class": "private"},
+            "make_page": {"task": {"id": "t1"}}});
+        assert_eq!(session_key(&turn), "make-page:a1");
+        turn["id"] = json!("a2");
+        assert_eq!(session_key(&turn), "make-page:a2");
+        turn.as_object_mut().unwrap().remove("make_page");
+        assert_eq!(session_key(&turn), "root:personal:private");
     }
 
     #[test]

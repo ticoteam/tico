@@ -307,7 +307,7 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
     if conversation["scope"] == "shared" {
         put(&mut lines, Part::Standing, "This is a shared bot room. Preserve each message's human author and assume every room member can read the reply.".into());
     }
-    if !setup && !truthy(&attempt["task"]) && from_human(message) {
+    if !setup && !truthy(&attempt["task"]) && !attempt["make_page"]["task"].is_object() && from_human(message) {
         put(&mut lines, Part::Standing, "If this asks for work, first file each distinct ask as a hub task you own (hub task create --owner <you>), or update the task that already covers it, then work them, up to three at a time, and finish each with hub task update --status done. A question you answer at once needs no task.".into());
     }
     if truthy(&message["refs"]["update"]) {

@@ -25,6 +25,7 @@ journey('make-page', async ({hub, browser, phone}) => {
   await section.getByRole('button', {name: 'Make page', exact: true}).click();
   const card = section.locator('.tp-making');
   await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
+  assert.equal(await field.evaluate(el => el.matches(':user-invalid')), false, 'a sent request leaves no validation error');
   assert.equal(await section.getByRole('button', {name: 'Make page', exact: true}).isDisabled(), true);
   await shot(page, 'make-page-' + (phone ? 'phone' : 'desktop'));
   // Reopening the task must restore the placeholder rather than losing the in-flight request.

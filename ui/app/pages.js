@@ -219,7 +219,7 @@ function taskPagesAdopt(d, task) {
       const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
       if (d.tpEl !== slot) return;
       if (r.held) throw new Error('Not sent');
-      prompt.value = '';
+      make.reset();
       taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
       await taskPageMakeLoad(d);
     } catch (e) { if (d.tpEl === slot) { error.textContent = e.message; error.hidden = false; } }

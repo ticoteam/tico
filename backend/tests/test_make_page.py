@@ -22,7 +22,7 @@ def start(api, tid, person="ben-test", key=None):
     assign(api, machine, "coo")
     ready(api, machine, ["coo"])
     sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
-    attempt = post(api, "jobs/claim", {}, machine["token"])["attempt"]
+    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"]
     assert attempt["message"]["id"] == sent["message"]["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "make-page-test"}, machine["token"])
     return machine, attempt, sent["message"]
@@ -282,3 +282,24 @@ def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attem
     with api.app.state.store.read() as c:
         assert c.execute("SELECT attempt_id FROM bot_file_versions WHERE file_id=?",
                          (result["page"]["file_id"],)).fetchone()[0] == attempt["id"]
+
+
+def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_turn(api):
+    from runner_support.state import session_key
+    t = task(api, private=False)
+    earlier = say(api, "Private chat content unrelated to this task", "ben-test")["message"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (earlier["id"],))
+        other = H.task_create(c, "human:ana", "Private follow-up", "Private details", "bot:coo",
+                              next_run=True, private=True, lint=False)
+    machine, attempt, message = start(api, t["id"])
+    assert [m["id"] for m in attempt["history"]] == [message["id"]]
+    assert attempt["next_run"] == [] and attempt["notes"] == []
+    key = session_key({"session": "bot"}, attempt)
+    assert key == "make-page:" + attempt["id"]
+    ordinary = {k: v for k, v in attempt.items() if k != "make_page"}
+    assert session_key({"session": "bot"}, ordinary) != key
+    say(api, "An unrelated private follow-up", "ben-test")
+    assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None

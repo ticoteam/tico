@@ -3920,8 +3920,11 @@ class Execution:
         # A bot limited to one task (scoped_sql) carries only that task's work: its other next-run tasks and waiting
         # notes stay where they are for a run after the scope is released.
         scope = claim_scope(c, row["bot_id"])
+        from . import turn_scope
+        scoped = turn_scope.scope(c, bot_who)
+        making_page = bool(scoped and scoped.make_page)
         # A check runs on another model for one subtask: the bot's other work waits for its own turns.
-        if getattr(body, "next_run", False) and not check:
+        if getattr(body, "next_run", False) and not check and not making_page:
             if row["bot_id"] == "librarian":
                 from .docs import refresh_generated_docs
                 refresh_generated_docs(c)  # Also covers a Librarian enabled after the upgrade.
@@ -3947,7 +3950,7 @@ class Execution:
         # Quiet notes ride the same way: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check and not scope:
+        if getattr(body, "next_run", False) and not check and not scope and not making_page:
             from . import bot_to_bot
             from . import threads
             # A deferred thread note goes only while the bot still reads its source (a lost one is canceled here), and
@@ -3987,6 +3990,8 @@ class Execution:
         scoped = turn_scope.scope(c, acting or bot_who)
         make_page = ({"task": runner_wire.task(self.auth.task(c, acting or bot_who, scoped.task))}
                      if scoped and scoped.make_page and scoped.task else None)
+        if making_page:
+            history = [msg]
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
         if chat_goal and chat_goal["bot"] != row["bot_id"]:
@@ -4606,6 +4611,10 @@ class Execution:
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
         origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
                            include_deleted=True)
+        from . import turn_scope
+        scoped = turn_scope.scope(c, Identity("bot:" + attempt["bot_id"], "bot", attempt_id=aid))
+        if scoped and scoped.make_page:
+            return {"messages": []}
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
         origin_notice = wake_rule_engine.notice_only(origin)
         capabilities = c.execute("SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)).fetchone()
