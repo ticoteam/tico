@@ -58,6 +58,9 @@
 .ib-field{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:8px 16px;align-items:start;padding:10px 0;border-top:1px solid var(--line);min-width:0}
 .ib-field:first-of-type{border-top:0}
 .ib-field>.ib-field-label{font-weight:600;font-size:var(--t-sm)}
+[data-ib-setting]:empty,[data-ib-panel]:empty{display:none}
+.ib-settings [data-ib-setting]+[data-ib-setting]{margin-top:12px}
+.ib-detail .card+.card,.ib-detail [data-ib-panels]>div{margin-top:12px}
 @media (max-width:760px){
   .ib-filters{grid-template-columns:1fr 1fr}
   .ib-filters input{grid-column:1/-1}
@@ -76,10 +79,22 @@
 }
 
 /* Email: Google mailboxes (ui/app/inboxes-email.js) */
+.mb-line{margin:-6px 0 12px;font-size:var(--t-sm);overflow-wrap:anywhere}
+.mb-dialog .task-rule-form>label:not(.mb-check){display:grid;gap:4px}
 
 /* Tico addresses and Texts in (ui/app/inboxes-texts.js) */
+#inbox-recent .inbound-filters{margin-bottom:8px}
+.wh-dialog .task-rule-form>label{display:grid;gap:4px}
 
 /* Letters in (ui/app/inboxes-letters.js) */
+.pm-steps{list-style:none;margin:0 0 8px;padding:0;display:flex;flex-wrap:wrap;gap:6px 18px;font-size:var(--t-sm);color:var(--muted)}
+.pm-steps li{display:flex;align-items:center;gap:6px}
+.pm-steps li::before{content:'';width:10px;height:10px;border-radius:50%;border:2px solid var(--line)}
+.pm-steps li.done::before{background:var(--ok);border-color:var(--ok)}
+.pm-steps li.cur{color:var(--ink);font-weight:600}
+.pm-steps li.cur::before{border-color:var(--wait, var(--accent))}
+.pm-scan-cell{white-space:nowrap}
+@media (max-width:640px){.pm-letters .pm-scan-cell{grid-column:3;grid-row:2;text-align:right}}
 
 /* Sending (ui/app/inboxes-sending.js) */
 

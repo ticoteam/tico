@@ -1,7 +1,8 @@
-"""Settings > Mailboxes: which inboxes Tico uses and who may use each (ui/app/mailboxes.js, ui/app/mailbox.js).
+"""Settings > Inboxes, Google mailboxes: which mailboxes Tico uses and who may use each (ui/app/inboxes-email.js).
 
 GET /api/v2/mailboxes is the page: for an admin every mailbox with its person, status and routines; for everyone their
-own mailbox and the ones shared with them. One mailbox's page lists who can use it (Read / Read and write) and its
+own mailbox and the ones shared with them. Each row also says who uses it (`used_by`: people, bots, the first names)
+and how its last sync went (`synced_at`, `sync`: '' or why it is failing, `sync_error`). One mailbox's page lists who can use it (Read / Read and write) and its
 routines (message automations whose trigger inbox is this address; they are switched on and off with the automation
 routes). Who holds what, and who may grant, revoke, share and stop, is backend/mailbox_access.py's rule, which also
 writes those changes' events; this module reads it and calls it. Every write is a person acting as themselves: never a
@@ -246,7 +247,7 @@ def install(app, store):
 
     @app.get(PATH)
     def list_mailboxes(request: Request):
-        """Settings > Mailboxes for whoever is signed in: the admin's table, or your own mailbox and what is shared
+        """Settings > Inboxes for whoever is signed in: the admin's table, or your own mailbox and what is shared
         with you."""
         with store.read() as c:
             return listing(c, request.state.identity)

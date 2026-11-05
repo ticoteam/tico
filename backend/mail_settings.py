@@ -176,7 +176,7 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
-            # What Tico may do in Settings > Google is the company's own switch over every bot's: with Send mail off
+            # What Tico may do in Settings > Inboxes is the company's own switch over every bot's: with Send mail off
             # the bot's connector refuses each send before any approval (connectors/mail/policy.py), and the bot reads
             # sending as off. Organize mail and Change calendar gate the connector's other writes the same way,
             # whichever credential it holds (connectors/mail/oauth.py company_allows).
