@@ -217,7 +217,7 @@ def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
     assert get(api, "ask-ingest/settings", token="ben-test")["settings"]["mode"] == "on"
     model.kind = "own_work"
     before = write_state(api)
-    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Verify the preview cleanup and charges"},
+    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Verify the preview cleanup and charges", "body": "Nov 3 or Nov 10?"},
                  headers=headers(token))
     assert "work you can do yourself" in assert_refused(api, r, before)
     [item] = items(api)
@@ -371,7 +371,7 @@ def test_a_settings_change_applies_to_the_next_item_only(gate):
                 json={"mode": "on", "budget": 5, "criteria": ["Pricing"]})
     assert r.status_code == 200, r.text
     before = write_state(api)
-    refused = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch venue"}, headers=headers(token))
+    refused = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch venue", "body": "Nov 3 or Nov 10?"}, headers=headers(token))
     assert_refused(api, refused, before)
     with api.app.state.store.read() as c:
         assert H.task(c, first["id"])["owner_id"] == "human:ben"
@@ -505,7 +505,7 @@ def test_a_persons_question_is_not_gated(gate):
 def test_the_decisions_readout_counts_refusals_and_reconciles_their_calls(gate):
     api, model, token = gate
     plate(api, 15)
-    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date"},
+    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?"},
                                  headers=headers(token)))
     model.meets = "$200 a month"
     file(api, token, "Raise the Gateway cap to $400 a month")
@@ -670,7 +670,7 @@ def test_a_chore_lands_as_an_ordinary_need_and_counts_under_the_main_budget(gate
     with api.app.state.store.read() as c:
         assert A.load(c, "human:ben") == 10
     before = write_state(api)
-    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Grant docs access"},
+    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Grant docs access", "body": "Nov 3 or Nov 10?"},
                                  headers=headers(token)), before)
 
 
@@ -681,7 +681,7 @@ def test_a_person_goes_back_to_the_team_default(gate):
     assert r.status_code == 200, r.text
     assert r.json()["settings"] == {**get(api, "ask-ingest/settings", token="ben-test")["team"], "own": False}
     plate(api, 15)
-    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date"},
+    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?"},
                                  headers=headers(token)))
     assert api.delete("/api/v2/ask-ingest/settings", headers=headers(token)).status_code == 403
 
@@ -1348,7 +1348,7 @@ def test_a_privacy_refused_create_writes_no_row_and_its_call_is_labelled_refused
 def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
     api, model, token = gate
     plate(api, 15)
-    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date"},
+    assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?"},
                                  headers=headers(token)))
     model.meets = "Strategy"
     api.post("/api/v2/tasks", json={"owner": "ben", "title": "Goal gone", "body": "x", "goal_id": "no-such-goal"},
@@ -1582,16 +1582,14 @@ def test_refusals_preserve_all_domain_rows_across_write_paths(gate, kind, path):
     elif path == "task_ask":
         task = for_ben(api)
     if path == "create":
-        endpoint, body = "tasks", {"owner": "ben", "title": "Pick the launch date"}
+        endpoint, body = "tasks", {"owner": "ben", "title": "Pick the launch date", "body": "Nov 3 or Nov 10?"}
     elif path == "handoff":
         endpoint, body = f"tasks/{task['id']}", {"version": task["version"], "owner": "ben"}
     elif path == "wait":
         endpoint, body = f"tasks/{task['id']}", {"version": task["version"], "status": "waiting", "waiting_on": "ben",
                                                   "note": "Which launch date do you want?"}
     elif path == "comment":
-        endpoint, body = f"tasks/{task['id']}/comments", {"text": "Which launch date?", "ask": {"who": "ben",
-            "questions": [{"id": "date", "question": "Which launch date?", "options": [
-                {"label": "Nov 3", "then": "Launch on Nov 3"}, {"label": "Nov 10", "then": "Launch on Nov 10"}]}]}}
+        endpoint, body = f"tasks/{task['id']}/comments", {"text": "Which launch date?", "ask": {"who": "ben", "questions": DATES}}
     elif path == "question":
         endpoint, body = "task-questions", {"on": "ben", "question": "Which launch date?"}
     elif path == "task_ask":
@@ -1626,7 +1624,7 @@ def test_repeated_ask_refusals_never_quarantine_or_hold_the_bot(gate):
     model.kind = "own_work"
     before = write_state(api)
     for _ in range(6):
-        assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Verify the deployment"},
+        assert_refused(api, api.post("/api/v2/tasks", json={"owner": "ben", "title": "Verify the deployment", "body": "Nov 3 or Nov 10?"},
                                      headers=headers(token)), before)
     with api.app.state.store.read() as c:
         assert H.bot(c, "ops")["state"] == "active"
