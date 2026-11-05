@@ -23,7 +23,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from clients import hubtools
-from clients.tico import STREAM_WAIT, MultipartBody, inbound_wait_timeout
+from clients.tico import STREAM_WAIT, MultipartBody, gmail_read_timeout, inbound_wait_timeout
 from .store import Problem
 
 PATH = "/api/v2/mcp"
@@ -99,6 +99,7 @@ class InProcessApi:
             raise ValueError("Send either a JSON body or opaque bytes, not both")
         path = "/api/v2/" + path.replace("#", "%23")
         timeout = inbound_wait_timeout(method, path, body, INTERNAL_TIMEOUT_S, query=query)
+        timeout = gmail_read_timeout(method, path, timeout)
         content, raw_headers = raw_body(raw) if raw is not None else (None, {})
         if raw is not None and hasattr(raw, "read"):
             timeout = max(timeout, STREAM_WAIT)      # a file streamed from disk: stored after its last block
@@ -275,6 +276,16 @@ def task_dry_run(c, auth, who, body):
     if not target or target == H.KEEPER:
         problems.append(f"{body.owner} is not a bot or a person on the roster")
     else:
+        from . import reach
+        parents = [r.task for r in body.relations if r.kind == "parent"]
+        try:
+            parent = auth.resolve_task(c, who, parents[0]) if parents else None
+        except Problem:        # an unknown parent is the create's own refusal, not reach's
+            parent = None
+        try:
+            reach.check(c, who, target, "task", task_id=parent)
+        except reach.Refused as exc:
+            problems.append(exc.detail)
         if H.is_bot(target):
             state = (H.bot(c, H.actor_id(target)) or {}).get("state")
             if state in H.INACTIVE_STATES:
@@ -307,7 +318,6 @@ def task_dry_run(c, auth, who, body):
         # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
         # someone who cannot read it, or a private task's guest refused.
         from . import task_privacy as privacy
-        from .store import Problem
         try:
             parents = [r.task for r in body.relations if r.kind == "parent"]
             parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parents[0]))["id"]) if parents else None

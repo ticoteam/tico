@@ -50,7 +50,7 @@ def test_product_operation_survives_app_restart_cache_cleanup_and_disconnect(api
     first = product_repo_request(api, body, key='durable-restart')
     assert first.status_code == (409 if lost_response else 200)
     with api.app_state.store.transaction() as c:
-        c.execute('DELETE FROM idempotency')
+        c.execute('DELETE FROM idempotency WHERE binding IS NULL')   # the answers; the bindings stay
         c.execute('DELETE FROM github_app')
 
     # A new application and service lock reopen only the disposable fixture database.

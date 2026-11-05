@@ -174,7 +174,7 @@ class Caller:
         return bool(row) and reads(self.c, self.visible)(row)
 
     def would_read(self, owner, requester, private=0, guest=None):
-        return bool(self.c.execute(f"SELECT 1 FROM (SELECT ? AS owner_id, ? AS requester_id, ? AS private, ? AS guest) "
+        return bool(self.c.execute(f"SELECT 1 FROM (SELECT NULL AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS guest) tasks "
                                    f"WHERE ({self.visible})", (owner, requester, private, guest)).fetchone())
 
     def give(self, owner, task_id=None):
@@ -340,7 +340,7 @@ def _apply(c, change, goal_id, reason):
     elif do == "reassign":
         H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner"], mover=True)
     else:
-        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}")
+        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}", strict=False)
         c.execute("UPDATE tasks SET closed_by_id=? WHERE id=?", (STRATEGY_BOT, row["id"]))
     _bump(c, row["id"])
     return {"task_id": row["id"], "made": False, "before": before, "after": _snapshot(H.task(c, row["id"]))}
@@ -620,7 +620,8 @@ def _per_task(done):
 def _later(c, task_id, fields, since, action_id):
     """Who last changed any of these task event fields after the decision, or None."""
     marks = ",".join("?" * len(fields))
-    found = c.execute(f"SELECT actor FROM task_events WHERE task_id=? AND field IN ({marks}) AND created_at>? "
+    found = c.execute(f"SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ({marks}) "
+                      "AND created_at>? "
                       "AND coalesce(action_id,'')!=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
                       (task_id, *fields, since, action_id)).fetchone()
     return found[0] if found else None

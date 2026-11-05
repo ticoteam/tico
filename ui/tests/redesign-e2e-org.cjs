@@ -42,6 +42,7 @@ run('redesign-e2e-org', ['org', 'toured', 'groups'], async ({hub, browser, phone
   await omar.locator(card('bot:builder-openai')).click();
   const mine = omar.locator('dialog.rd-sheet[open]');
   await mine.waitFor();
+  await mine.locator('select[name="to"]').waitFor();
   const options = (await mine.locator('select[name="to"] option').allInnerTexts()).map(o => o.trim());
   assert.ok(options.includes('Engineering') && !options.includes('Release') && !options.includes('No group'),
     `${tag}: a lead moves inside its groups only: ${options}`);

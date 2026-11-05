@@ -84,6 +84,11 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // The snapshot as the server sends it: each read signs every visual's address afresh (gen), as on a live update.
     const messages = [...MESSAGES];
     let hold = null, gen = 1;
+    const refreshId = 'file-' + 'a'.repeat(24), expires = Math.floor(Date.now() / 1000) + 3600;
+    const token = fields => Buffer.from(JSON.stringify(fields)).toString('base64url') + '.fixture';
+    const legacySrc = VIS + token(['human:ana', refreshId, 1, '', expires]);
+    const freshSrc = VIS + token(['human:ana', refreshId, 1, '', expires, '']);
+    let pageReads = 0;
     const signed = () => gen === 1 ? messages : messages.map(m => ({...m, refs: {...m.refs, attachments: m.refs.attachments.map(a => a.src ? {...a, src: `${a.src}.${gen}`} : a)}}));
     page.on('pageerror', e => { if (!/sandboxed/i.test(e.message)) errors.push(e.message); });
     const threads = threadsFake({bot: 'designer', messages: () => signed()});
@@ -94,6 +99,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (url.hostname === 'outside.test') return route.fulfill({contentType: 'text/html', body: '<p>Outside</p>'});
       if (url.hostname === 'visuals.test') {
         visualReqs.push({path: p, cookie: req.headers().cookie || ''});
+        if (url.href === legacySrc) return route.fulfill({status: 404, body: ''});
+        if (url.href === freshSrc) return route.fulfill({contentType: 'text/html', body: server.pages.short});
         const id = p.replace('/visuals/tok-', '').replace(/\.\d+$/, '');
         if (hold && id === 'f-chart') await hold;
         const headers = {'Cross-Origin-Resource-Policy': 'cross-origin', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff'};
@@ -117,6 +124,9 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.js), held open
+      if (p === '/api/v2/pages/' + refreshId) return json({page: {file_id: refreshId, title: 'Refreshed page',
+        version: 1, updated_at: now, bot_id: 'designer', src: ++pageReads === 1 ? legacySrc : freshSrc}, pinned: []});
+      if (p === '/api/v2/files/' + refreshId + '/versions') return json({versions: []});
       const answer = threads(p, url, req.method());
       if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
@@ -476,6 +486,18 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     await c1.locator('figure.vcard[data-kind="image"] [data-vcard-act="open"]').click();
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-chart', 1]);
     await noSideways('task');
+
+    // A page left open with an obsolete five-field address gets a fresh six-field address on reload.
+    const rejected = page.waitForResponse(r => r.url() === legacySrc);
+    await page.goto('https://tico-ui.test/#/page/' + refreshId);
+    assert.equal((await rejected).status(), 404);
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), legacySrc);
+    const reminted = page.waitForResponse(r => r.url() === freshSrc);
+    await page.reload();
+    assert.equal((await reminted).status(), 200);
+    assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), freshSrc);
+    assert.equal(pageReads, 2, `${label}: reload requests a fresh page address`);
+    assert.equal(JSON.parse(Buffer.from(freshSrc.slice(VIS.length).split('.')[0], 'base64url')).length, 6);
 
     // ---- nothing reached outside; visuals never carried the app's cookie
     await page.waitForTimeout(300);

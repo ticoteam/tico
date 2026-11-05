@@ -1,4 +1,4 @@
-# Thread helper: Needs attention, follow-ups, catch up, update cards
+# Thread helper: Needs attention, earlier messages, catch up, update cards
 
 The thread helper is the person's Assistant, acting with that person's rights. It does three things with threads,
 and each one shows up where the person already looks.
@@ -38,20 +38,11 @@ digest an hour. An install that does not sign in with a Tico account sends none.
 browser's prompt. While Tico is in the background, a new thread item sends one browser notification, once. The memory is
 kept per person (their id). A live change and a refresh both check it, one after another, so an item notifies once.
 
-## Follow-ups
+## Unanswered questions and earlier messages
 
-A question to a teammate, from a person or a bot, that stays unanswered for a day gets one nudge in its thread: a short
-line from Tico, addressed to whoever was asked, quoting the question. A bot reads its nudge on its next run; the nudge
-starts none. The nudge is written once and recorded, so it is never sent twice. A question older than a week when the
-watcher first sees it stays as it is.
+Tico posts no nudge in a thread for an unanswered question. A question a bot is waiting on is listed on the bot's task roundup, and a question to a person that stays unanswered for two business days goes back to its bot ([Tasks](tasks.md)).
 
-A nudge takes the question's restriction and migrated audience, so no one who cannot read the question reads the nudge.
-A restricted or migrated question is nudged without its quote. A question whose recipient can no longer read it gets no
-nudge and is retired. Each follow-up runs in its own savepoint: one that fails is retired without a nudge, and the
-others still run.
-
-The follow-up is plain code on a 15-minute schedule (the **Follow-ups** row in
-[System routines](system-routines.md)). It never calls or wakes a model. A run with nothing to nudge writes nothing.
+Each manager of a bot whose Home still holds closed history gets one direct message about it, once (the **Earlier messages** row in [System routines](system-routines.md)). The job is plain code on a 15-minute schedule. It never calls or wakes a model, and a run with nothing to tell writes nothing.
 
 ## Catch up
 
@@ -65,7 +56,7 @@ Catch up summarizes what is new for the person in a thread, or in the thread and
 - It starts at the person's read point. Nothing from before they joined the thread is new, in any sub-thread, nor is
   what the threads migration carried over or history written back (imports, replays).
 - A person they may not see is named only to someone in the same thread. The model reads "Someone" for anyone else.
-- It skips the person's own posts and system notices (update cards, follow-up nudges).
+- It skips the person's own posts and system notices (update cards, earlier-messages notices).
 - The summary is written by the company's model when one is available. Without one, the reply is the last few lines.
 - The reply is posted in the person's **Assistant** DM, and only that person reads it. It names its source messages in
   `refs.catch_up.sources`. Nothing new means nothing is posted. Messages too long for the budget are reported as
@@ -92,7 +83,6 @@ The card is posted as the author, so a bot's card in its own Home does not wake 
 ## Who can do what
 
 - Needs attention: the person sees their own items only.
-- Follow-ups: the watcher posts as Tico; the nudge goes to the teammate who was asked.
 - Catch up: a person, for their own threads. Bots and other callers get a 403.
 - Held writes: the reviewer and the person their bot reports to see the held item and its card. Only the reviewer
   sends one; the person may withdraw it.

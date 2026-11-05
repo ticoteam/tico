@@ -35,6 +35,9 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
+      - name: Configure private company app
+        shell: bash
+        run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
       - name: Artifact encryption dependency
         shell: bash
         run: python -m pip install "$(grep '^cryptography==' backend/requirements.txt)"
@@ -56,9 +59,6 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
       - name: Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
-      - name: Configure private company app
-        shell: bash
-        run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
       - name: Apple signing identity
         if: runner.os == 'macOS'
         env:
@@ -66,14 +66,21 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           # Keychain output can contain certificate subject names.
+          exec 3>&2
+          trap 'echo "::error::Company app Apple signing failed during $signing_step; verify APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD" >&3' ERR
           exec >/dev/null 2>&1
           [ -n "$APPLE_CERTIFICATE" ] || exit 0
+          signing_step='decoding APPLE_CERTIFICATE'
           echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          signing_step='keychain setup'
           security create-keychain -p ci build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p ci build.keychain
+          signing_step='importing APPLE_CERTIFICATE'
           security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          signing_step='keychain signing access'
           security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          signing_step='certificate file cleanup'
           rm certificate.p12
       - name: Apple signing and notarization, only when the secrets exist
         if: runner.os == 'macOS'
@@ -105,6 +112,7 @@ jobs:
 
   publish:
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}

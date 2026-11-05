@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
+from backend.tests.test_hubdb import with_legacy_run_tables
 from backend.config import Settings
 from backend.store import Store
 
@@ -62,6 +63,7 @@ def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tm
     try:
         # A file may have the column before recording the version bump.
         conn.execute(f"PRAGMA user_version={version}")
+        with_legacy_run_tables(conn)
         conn.executemany("INSERT INTO turns(id,bot,started_at,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
                          [("builder", "pr-reviewer", "pr_checks", None),
                           ("reviewer", "pr-reviewer-sol", "status_or_relation", None),
@@ -70,10 +72,10 @@ def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tm
         H.migrate(conn)
         expected = {"builder": "handle PR checks", "reviewer": "review PR", "unknown": "unknown",
                     "named": "prepare release"}
-        assert dict(conn.execute("SELECT id,purpose FROM turns")) == expected
+        assert dict(conn.execute("SELECT id,purpose FROM attempts")) == expected
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
         H.migrate(conn)
-        assert dict(conn.execute("SELECT id,purpose FROM turns")) == expected
+        assert dict(conn.execute("SELECT id,purpose FROM attempts")) == expected
     finally:
         conn.close()
 
@@ -127,8 +129,8 @@ def test_the_journey_seeds_an_install_whose_starter_bot_has_its_own_id(tmp_path)
     boot(path)
     with sqlite3.connect(path) as c:
         if not c.execute("SELECT 1 FROM bots WHERE slug='coo'").fetchone():
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,state,created_at) "
-                      "VALUES('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b','coo','COO','codex','active','2026-01-01T00:00:00Z')")
+            c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) "
+                      "VALUES('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b','coo','COO','active','2026-01-01T00:00:00Z')")
         own = c.execute("SELECT id FROM bots WHERE slug='coo'").fetchone()[0]
     assert own != "coo"
     fixture.seed_into(str(path))

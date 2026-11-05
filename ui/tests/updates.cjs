@@ -161,21 +161,22 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // No Unread filter. Unread first, then newest; marking one unread (or read)
     // never moves anything while the page is open.
     assert.equal(await page.locator('#upd-unread').count(), 0);
-    // The actions are icons, each named for a screen reader and a tooltip; no words on the card. Reply is in the bottom
-    // row; Mark unread and Archive sit at the top right, on the line with the name and the time.
+    // The actions are icons, each named for a screen reader and a tooltip; no words on the card. Reply, Mark unread and
+    // Archive sit at the top right, on the line with the name and the time; no row is left under the update.
     const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act'), corner = page.locator('[data-upd="u-cmo"] .upd-corner .upd-act');
     const named = locator => locator.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('.nav-icon')?.textContent]));
     const words = locator => locator.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
-    assert.deepEqual(await named(acts), [['Reply', 'Reply', 'chat_bubble']], 'the bottom row keeps Reply');
-    assert.deepEqual(await named(corner), [['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']], 'read and archive at the top right');
+    assert.equal(await acts.count(), 0, 'no bottom row');
+    assert.equal(await page.locator('[data-upd="u-cmo"] .upd-actions').evaluate(r => getComputedStyle(r).display), 'none');
+    assert.deepEqual(await named(corner), [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']],
+      'reply, read and archive at the top right');
     assert.deepEqual(await page.locator('[data-upd="u-cmo"] .upd-corner').evaluate(c => {
       const m = c.closest('.upd-meta').getBoundingClientRect(), r = c.getBoundingClientRect(), body = c.closest('.upd-main').querySelector('.upd-body').getBoundingClientRect();
       // The icons' centre is on the name line; the button's box may reach a little past it (its negative margins).
       const mid = (r.top + r.bottom) / 2;
       return {onNameLine: mid >= m.top && mid <= m.bottom, atRight: Math.abs(m.right - r.right) <= 10, aboveBody: mid < body.top};
     }), {onNameLine: true, atRight: true, aboveBody: true}, 'the corner is on the name line, at its right end, above the body');
-    assert.deepEqual(await words(acts), [''], 'no visible words');
-    assert.deepEqual(await words(corner), ['', ''], 'no visible words');
+    assert.deepEqual(await words(corner), ['', '', ''], 'no visible words');
     assert.equal(await page.locator('#upd-feed [data-upd-kids]').count(), 0, 'the List has no reports toggle');
     await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').click();
     assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').getAttribute('aria-label'), 'Mark read', 'Mark unread marked it unread');

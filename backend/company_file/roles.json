@@ -271,6 +271,37 @@
    "default": false
   },
   {
+   "slug": "builder",
+   "template": "builder",
+   "name": "Builder",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
+   "tags": [
+    "saas",
+    "github",
+    "code",
+    "developer-tools"
+   ],
+   "pains": [
+    "bugs and small changes wait in a queue before anyone starts on them",
+    "a fix goes back and forth between the author and the reviewers for days",
+    "a change is merged without a test that would have caught the bug",
+    "nobody can say which ticket a pull request came from or what it was meant to do"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_slack"
+   ],
+   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
+   "tools": [
+    "github"
+   ],
+   "default": false
+  },
+  {
    "slug": "chief-of-staff",
    "template": "chief-of-staff",
    "name": "Chief of Staff",
@@ -491,7 +522,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Every human's private Assistant: finds meetings, docs, files and tasks, makes tasks, hands work to the right bot and asks BotOps for new ones, always as that human and never more. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
+   "summary": "Every human's private Assistant: does what that human asks, as them and never more, and reports what it did with the way to undo it. Finds meetings, docs, files and tasks, makes tasks, hands work to the right bot, and clears pile-ups at their source. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
    "when": "Built in: every human gets a private Assistant that finds things and does them for them, and it routes work nobody was named for (Slack, meetings).",
    "tags": [],
    "pains": [],

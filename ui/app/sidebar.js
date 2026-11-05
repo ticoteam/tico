@@ -5,6 +5,7 @@
 // ----------------------------------------------------------------- sidebar + heartbeat
 const NAV_COLLAPSED_KEY = 'hub.nav.collapsed';
 let navCollapsed = new Set(); try { navCollapsed = new Set(JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]')); } catch {}
+// The Team fold shows from the first paint as ui/theme.js read it from the same key (html.nav-team-shut, sidebar.css).
 function renderNavSections() {
   document.querySelectorAll('[data-section-toggle]').forEach(button => {
     const key = button.dataset.sectionToggle, isCollapsed = navCollapsed.has(key);
@@ -12,6 +13,7 @@ function renderNavSections() {
     const body = document.querySelector(`[data-section-body="${key}"]`);
     if (body) body.hidden = isCollapsed;
   });
+  document.documentElement.classList.toggle('nav-team-shut', navCollapsed.has('organisation'));
 }
 document.querySelectorAll('[data-section-toggle]').forEach(button => button.onclick = () => {
   const key = button.dataset.sectionToggle;
@@ -139,7 +141,7 @@ function orgTreeByParent() {
   const people = (S.people || []).filter(p => !p.hidden);
   // "Only bots I can read or write": a bot the caller may merely see leaves the chart, and the
   // bots under it hang from the next thing that is left.
-  // Built-in and message bots sit apart, as on Goals; a bot that reports to one hangs where it would have.
+  // Built-in and explicitly marked helpers sit apart, as on Goals; their reports hang where the helper would have.
   const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e));
   const empIds = new Set(bots.map(e => e.id));
   const seats = S.seats || [];
@@ -190,6 +192,7 @@ function inboxNavPeople() {
 let INBOX_NAV = null;
 const SLACK_ICON = `<svg class="inbox-slack" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>`;
 function inboxNavRows() {
+  const messageBots = new Set((S.people || []).map(p => p.inbox_bot));
   const mail = inboxNavPeople().map(p => ({
     kind: 'email', label: p.email, title: p.name ? `${p.name} · ${p.email}` : p.email,
     bot: p.inbox_bot, source: 'email:' + p.email,
@@ -198,9 +201,10 @@ function inboxNavRows() {
   for (const bot of INBOX_NAV?.bots || []) {
     for (const source of bot.sources || []) {
       if (source.kind !== 'slack') continue;
-      // A chart bot's channels are one of its Tools (its page lists them); only a message bot's channels are its inboxes.
+      // Mailbox assignment makes these channels inboxes too, without making the bot a helper off the chart.
+      // Other chart bots keep their channels in Tools on their bot page.
       const shown = botRow(bot.bot);
-      if (shown && !(isHelperBot(shown) && !isBuiltInBot(shown.id))) continue;
+      if (shown && (isBuiltInBot(shown.id) || (!shown.helper && !messageBots.has(shown.id)))) continue;
       slack.push({kind: 'slack', label: source.name, title: `${bot.name} · ${source.name}`,
                   bot: bot.bot, source: source.id});
     }
@@ -208,9 +212,9 @@ function inboxNavRows() {
   slack.sort((a, b) => a.label.localeCompare(b.label));
   return [...mail, ...slack];
 }
-// The mailboxes and Slack channels a message bot works hang under that bot in the team list (renderTree), in the
-// Message bots group; a chart bot's Slack channels are listed under Slack in its Tools instead. The section below the team list holds only the ones
-// whose bot is not shown there (the recently-viewed list, or "Only bots I can read or write").
+// A message bot's mailboxes and Slack channels hang under its row in the team list (renderTree). The separate
+// Message bots section holds sources whose bot is off the chart, or not nested in the current view
+// (the recently-viewed list, or "Only bots I can read or write").
 let INBOX_PLACED = new Set();
 function inboxNavLink(row) {
   const href = `${MESSAGING}?bot=${encodeURIComponent(row.bot)}&source=${encodeURIComponent(row.source)}`;
@@ -641,11 +645,12 @@ function treeLimitMark(slug) {
   const word = esc(overLimitWord(limit));
   return `<span class="tree-limit" role="img" aria-label="${word}" title="${word}">!</span>`;
 }
-// The unread in the viewer's DM with this bot (threads.js THREADS.botDms): that DM is on the bot's page, not in Inbox.
-function treeDmBadge(slug) {
-  const n = Number((typeof THREADS !== 'undefined' && THREADS.botDms?.['bot:' + slug]) || 0);
+// The unread in the viewer's 1:1 DM with this teammate (threads.js THREADS.dms): that DM is on their page, not on the
+// Threads rail.
+function treeDmBadge(actor, name) {
+  const n = typeof threadsDmUnread === 'function' ? threadsDmUnread(actor) : 0;
   if (!n) return '';
-  const words = `${n} unread from ${esc(empName(slug))}`;
+  const words = `${n} unread from ${esc(name)}`;
   return `<span class="cnt tree-dm" role="img" aria-label="${words}" title="${words}">${n > 99 ? '99+' : n}</span>`;
 }
 function treeBadge(n, st, slug) {
@@ -730,11 +735,10 @@ $('#org-history').onclick = () => {
   }
   renderTree();
 };
-// Helpers (built-ins and message bots) are off the Team list; they have their own entry points. `reports_to` is untouched,
-// and a bot that reports to one hangs where it would have. The Strategy Bot is one too: the Assistant asks it.
-const isHelperBot = e => isBuiltInBot(e.id) || !!e.helper
-  || (S.people || []).some(p => p.inbox_bot === e.id);
-// The order here and on Goals: the Assistant, then the other built-ins, then message bots.
+// Built-ins and explicitly marked helpers are off the Team list; mailbox assignment does not make a bot a helper.
+// `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Bot is an Assistant helper.
+const isHelperBot = e => isBuiltInBot(e.id) || !!e.helper;
+// The order here and on Goals: the Assistant, then the other built-ins, then other helpers.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'inbox'];
 const helperRank = e => e.id === assistantBot() ? -1 : HELPER_ORDER.includes(e.id) ? HELPER_ORDER.indexOf(e.id) : 99;
 function orgTreeWithHelpers(byParent) {
@@ -854,7 +858,7 @@ function renderTree() {
       return `<li class="${kids ? 'dept' : isTop ? 'org-top' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(p.name || p.id)}">›</button>` : ''}
         <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-          ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
+          ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>${p.id === S.me?.id ? '' : treeDmBadge('human:' + p.id, p.name || p.id)}
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
         ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
@@ -869,7 +873,7 @@ function renderTree() {
         ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge(e.id)}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
+        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge('bot:' + e.id, empName(e.id))}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.slug)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };

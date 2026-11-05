@@ -110,7 +110,19 @@ If Tico retries the upload, the line adds **trying again**.
 The thread goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
-on the bot’s **History** tab.
+on the bot’s **History** tab. The end reason distinguishes a planned pause for a computer update or shared login,
+a run handed back before starting, a reported runner restart, and a lost heartbeat.
+
+**What did every bot do, ask, and get blocked on?**
+**Settings → History → Log** is the audit log, newest first. It lists runs, task status changes, approvals asked,
+granted and denied, sends kept as drafts because the send switch was off, credential reveals, permission changes, and
+answers people gave bots (decisions). Filter by teammate, team (with the teams nested under it) or kind. The filters are
+in the address, so a filtered view can be shared; whoever opens it sees only the rows they may read. The owner and the
+Admins get **Export CSV**: time, actor, kind, subject, result and link for up to the newest 20,000 rows the filters
+show in one file. Narrow the dates when more remain.
+
+Not in the Log, because Tico does not record them in one place: a bot's mail send that the mail connector turned into a
+draft (kept in that connector's own log on the bot's computer), and a webhook send refused while the send switch is off.
 
 **What does *waiting* mean, and the other states?**
 *Waiting*: the bot is parked on something — a bot, a child task, or an answer from you.
@@ -185,8 +197,9 @@ back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
-Every bot reports in once a day, and on Friday with a week in review (five slides). People report in the same shape.
-An update is one to five plain bullets: what you did, what you do next, and what waits on someone.
+Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). Counsel
+speaks only on its own private tasks and is not asked for updates. People report in the same shape.
+An update is three plain bullets: what you did, what you do next, and what waits on someone, plus a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each suggestion the bot acted on. An update posted before this shape stays as it was written.
 
 **Updates roll up the org chart.** From 05:00 Pacific, Tico asks the bots one at a time, starting with those
 lowest on the chart. A bot that manages others is asked once each of its direct reports has posted, missed or been
@@ -240,14 +253,20 @@ hosted server asleep when idle wakes for it. Each deadline fires once, across re
 deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
 themselves, up to 20 a turn; the rest wait for the next turn.
 
-Defaults: plain Send is Steer for a message and a comment on a task a bot owns, as before (when the bot is idle
-that is the same as Queue). A comment on a task a bot filed for a
+Defaults, for a send that names no way (the API, CLI, MCP and Slack): Steer for a message and a comment on a task a
+bot owns, as before (when the bot is idle that is the same as Queue). A comment on a task a bot filed for a
 person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
 task has a 24-hour deadline unless you pick one; a deferred thread message or deferred message has none. Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 
-The web send menu (the caret beside Send, in a bot's Home and a task's thread) offers **Steer now**, **Queue**
-and **Defer** with its durations, then **Set as goal**. The CLI and API take the same words:
+In the web app a bot's chat (its Home and your DM with it) and a task's thread name a way every time. Send's icon shows it: an arrow for Steer, an arrow over
+lines for Queue, a clock for Defer (with its deadline), a target for Set as goal. The caret beside Send (or a
+right-click or long press on Send) offers **Steer now**, **Queue** and **Defer** with its durations, then **Set as
+goal**. The way you pick is kept for you on the server, across devices; it starts as Steer. Set as goal is for one
+goal (a **Goal** chip shows before the words), then Send goes back to your way. Someone who may not message the bot
+gets Defer with no deadline. A task with no bot on it and a thread between people have a plain Send. A custom client can read and set
+the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"value": "queue"}`; `steer`, `queue` or
+`defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
 hub chat send content "Skip the charts." --steer
@@ -259,6 +278,12 @@ hub task create --owner content --title "Check the refund counts" --defer 2d
 `queue` or `defer`; no `steer` on a new task) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
 defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `hub_chat_send`,
 `hub_message_send`, `hub_task_comment` and `hub_task_create` take the same fields.
+
+A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
+`POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
+post that names no way goes as it always did, `refs` and all. A way on a reply or in a thread with no bot across is
+refused (422); Steer, Queue or a deadline from someone who may not message the bot is refused (403), and their Defer
+waits for the bot's next turn even while it runs there.
 
 ## Leave work for the next run
 
@@ -289,8 +314,7 @@ sent notes and notes between bots whose activity they may read.
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
 `hub task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
-**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. The
-stalled-task check leaves a deferred task alone until a run carries it.
+**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. A deferred task is left alone until a run carries it.
 
 When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
 That reopening supersedes an earlier deferral. A later deferral, a stored resume condition,
@@ -320,7 +344,7 @@ hub task later <task-id> --handled              # this run is done with it for n
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
 working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
 condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
-own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). The Health Monitor names a deferred task handed
+own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). Check health names a deferred task handed
 to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
 
 The equivalent API calls are internal routes (subject to change); use your own rights and an

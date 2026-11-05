@@ -16,6 +16,7 @@ import json
 
 from . import access as Access
 from . import hubdb as H
+from . import invites
 from .store import Problem
 
 KEEPS = "Has history; stays as left"
@@ -23,7 +24,9 @@ KEEPS = "Has history; stays as left"
 # `human:<id>` identity that the humans trigger tombstones on delete). Events about them (person.added,
 # person.updated) name their bare id as the target, so `history` reads a target only as `human:<id>`.
 SKIP_TABLES = ("humans", "idempotency", "principals")
-OWN_COLUMNS = {("invite_sends", "person"), ("human_tokens", "human")}
+# A seat that reports to them is moved by `remove` to their manager (or the owner removing them), as people are: an
+# invite from setup moves the seats that waited with the owner under the person, which is not something they did.
+OWN_COLUMNS = {("human_tokens", "human"), ("seats", "reports_to")}
 # Settings that name them and are rewritten by `remove`.
 OWN_SETTINGS = (Access.ACCESS, "people", "invites")
 
@@ -96,13 +99,22 @@ def remove(c, actor, roster, person):
         raise Problem("not_removable", check(person), 409)
     if recent_history(c, pid):
         raise Problem("has_history", KEEPS, 409)
+    from . import pages
+    pages.forget_audience_member(c, actor, "people", pid)
     people = [p for p in roster["people"] if p["id"] != pid]
     people = [{**p, "reports_to": person.get("reports_to") or ""} if p.get("reports_to") == pid else p for p in people]
     Access.save_roster(c, {**roster, "people": people})
+    heir = "human:" + person["reports_to"] if person.get("reports_to") else str(actor)
+    for (seat_id,) in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + pid,)).fetchall():
+        c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?", (heir, H.now(), str(actor), seat_id))
+        H.event(c, actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     c.execute("DELETE FROM human_tokens WHERE human=?", (pid,))
-    c.execute("DELETE FROM invite_sends WHERE person=?", (pid,))
+    # The invite bindings stay, so a repeat of an invite request answers from them and never invites the person again
+    # (invites.replay). What names them goes: the hash of the address, and any refusal text that carries it.
+    c.execute("UPDATE idempotency SET request_hash='' WHERE binding=? AND subject=?", (invites.BINDING, pid))
+    c.execute("UPDATE idempotency SET error_detail=? WHERE binding=? AND subject=? AND state='refused'",
+              (invites.REMOVED, invites.BINDING, pid))
     c.execute("DELETE FROM humans WHERE id=?", (pid,))
-    from . import invites
     sent = invites.sent(c)
     if pid in sent:
         sent.pop(pid)

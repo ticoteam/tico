@@ -96,8 +96,8 @@ def _volume(sample):
 def backfill_last_sampled(c):
     """A computer that sampled before its last-sample mark existed takes the time of its newest kept sample. Runs at
     every start; a mark already set is left as it is."""
-    c.execute("UPDATE runners SET last_sampled_at=(SELECT max(sampled_at) FROM runner_load_samples s "
-              "WHERE s.runner_id=runners.id) WHERE last_sampled_at IS NULL")
+    c.execute("UPDATE runner_states SET last_sampled_at=(SELECT max(sampled_at) FROM runner_load_samples s "
+              "WHERE s.runner_id=runner_states.runner_id) WHERE last_sampled_at IS NULL")
 
 
 def ingest(c, runner_id, samples, now=None):
@@ -155,14 +155,16 @@ def ingest(c, runner_id, samples, now=None):
         # The readings in time order set the computer's memory hold (start_places.computer_hold): at 85% or more it
         # holds, below 80% it clears, and in between it keeps the state the earlier reading left. Replaying the batch
         # in order means 86% then 82% holds, and 79% then 82% releases, whichever way the batch was delivered.
-        held = c.execute("SELECT memory_hold FROM runners WHERE id=?", (runner_id,)).fetchone()[0]
+        held = (c.execute("SELECT memory_hold FROM runner_states WHERE runner_id=?", (runner_id,)).fetchone() or [0])[0]
         for _, mem in readings:
             if mem is not None and mem >= MEM_HOLD_AT:
                 held = 1
             elif mem is not None and mem < MEM_HOLD_CLEAR:
                 held = 0
-        c.execute("UPDATE runners SET memory_hold=?,last_sampled_at=max(coalesce(last_sampled_at,0),?) WHERE id=?",
-                  (held, max(at for at, _ in readings), runner_id))
+        c.execute("INSERT INTO runner_states(runner_id,memory_hold,last_sampled_at) VALUES(?,?,?) "
+                  "ON CONFLICT(runner_id) DO UPDATE SET memory_hold=excluded.memory_hold,"
+                  "last_sampled_at=max(coalesce(runner_states.last_sampled_at,0),excluded.last_sampled_at)",
+                  (runner_id, held, max(at for at, _ in readings)))
     for ts in sorted(set(minutes)):    # each minute in turn: a backlog's calm minute ends an overload
         detect(c, runner_id, ts)
     c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND created_at<?", (runner_id, now - 48 * 3600))
@@ -190,15 +192,15 @@ LOAD_FRESH_S = 120
 MEM_HOLD_AT, MEM_HOLD_CLEAR = 85.0, 80.0     # new starts wait at this memory, and start again below the lower one
 
 
-def load_status(c, runner_id, now=None):
+def load_status(c, runner_id, now=None, *, include_memory=True):
     """Numbers only, readable by every company bot. Six consecutive readings span five full minutes.
 
     A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
     """
-    return load_statuses(c, [runner_id], now)[runner_id]
+    return load_statuses(c, [runner_id], now, include_memory=include_memory)[runner_id]
 
 
-def load_statuses(c, runner_ids, now=None):
+def load_statuses(c, runner_ids, now=None, *, include_memory=True):
     """`load_status` for many computers: one read of their modes, one of their newest readings."""
     now = int(time.time() if now is None else now)
     ids = sorted(set(runner_ids))
@@ -212,7 +214,7 @@ def load_statuses(c, runner_ids, now=None):
     if on_ids:
         points = _newest_samples(c, on_ids, now - 48 * 3600)
         for rid in on_ids:
-            out[rid] = _load_from(points[rid], now)
+            out[rid] = _load_from(points[rid], now, include_memory=include_memory)
     return out
 
 
@@ -229,7 +231,7 @@ def _newest_samples(c, runner_ids, since):
     return out
 
 
-def _load_from(points, now):
+def _load_from(points, now, *, include_memory=True):
     if not points:
         return {"latest_sample": None, "overloaded": False}
     p = points[0]
@@ -239,7 +241,7 @@ def _load_from(points, now):
               "mem_used": p["mem_used"], "mem_total": p["mem_total"],
               "swap_used": p["swap_used"], "swap_total": p["swap_total"],
               "running_turns": p["running_turns"], "stale": not fresh}
-    loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
+    loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (include_memory and (_pct(x["mem_used"], x["mem_total"]) or 0) > 90)
     overloaded = (fresh and len(points) == 6
                   and all(points[i]["created_at"] - points[i+1]["created_at"] == 60 for i in range(5))
                   and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300
@@ -359,8 +361,8 @@ def _runs(c, runner_id, start, end, limit=500):
     # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
     # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
     # disk (Dev 249).
-    return c.execute("SELECT a.id,a.bot_id,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,t.model FROM attempts a "
-                     "LEFT JOIN turns t ON t.id=a.id WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
+    return c.execute("SELECT a.id,a.bot_id,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,a.usage_model AS model "
+                     "FROM attempts a WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
                      "AND finished_at>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished_at IS NULL) AND "
                      "coalesce(a.started_at,a.created_at)<? ORDER BY coalesce(a.started_at,a.created_at) DESC LIMIT ?",
                      (runner_id, _iso(start), runner_id, _iso(end), limit)).fetchall()[::-1]
@@ -622,7 +624,7 @@ def install(app, store, auth, mutate, execution):
     from . import models as M
 
     def computer(c, rid):
-        return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
     @app.post("/api/v2/runners/performance")
     def report(request: Request, body: M.PerformanceBatch):
@@ -682,7 +684,7 @@ def install(app, store, auth, mutate, execution):
         runner = computer(c, name)
         if runner:
             return runner
-        hit = c.execute("SELECT * FROM runners WHERE revoked_at IS NULL AND lower(trim(label))=lower(trim(?))",
+        hit = c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL AND lower(trim(label))=lower(trim(?))",
                         (name,)).fetchall()
         if len(hit) != 1:
             raise Problem("not_found", f"No computer named {name!r}" + ("; more than one has that label, use its id"

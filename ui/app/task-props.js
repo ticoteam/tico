@@ -64,7 +64,7 @@ function taskPropsHTML(t, opts = {}) {
   rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
   if (roadmapTask(t)) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
-    rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
+    rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size data-task-field="size" min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
   }
   // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due_at);
@@ -76,8 +76,15 @@ function taskPropsHTML(t, opts = {}) {
   const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
-      extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
+      extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date data-task-field="due" tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
+  if (t.check_back_at && t.check_back?.enabled !== false) {
+    const when = fmt(t.check_back_at);
+    const edit = r.edit || (r.reopen && ['done', 'declined'].includes(t.status));
+    rows.push(row('check_back', 'Follow up by', txt(when), {edit, words: when,
+      extra: t.check_back ? `<small>${esc(actorLabel(t.check_back.by))}${t.check_back.due ? ' · Due' : ''}${t.check_back.delivery ? ' · ' + esc(t.check_back.delivery.replaceAll('_', ' ')) : ''}</small>` : ''}));
+    rows.push(row('check_back_note', 'Expected result', txt(t.check_back_note || 'Inspect progress'), {edit, words: t.check_back_note || 'Inspect progress'}));
+  }
   // Tags: chips (each opens its tag) and a small +
   const chips = tagChips(t.labels || [], t.tags || [], r.links, true);
   rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips
@@ -108,7 +115,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
+const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -294,6 +301,14 @@ function taskPropsBind(d, task, change) {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
         return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner_id === actor, actor};
       }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
+    } else if (key === 'check_back') {
+      propMenu(d, b, {label: 'Follow up by', items: [
+        {value: '30m', text: 'In 30 minutes'}, {value: '2h', text: 'In two hours'}, {value: '1d', text: 'Tomorrow'}
+      ], entry: 'ISO date-time with timezone or duration', onPick: it => void save('check_back', {check_back_at: it.value}),
+      onEntry: at => void save('check_back', {check_back_at: at})});
+    } else if (key === 'check_back_note') {
+      propMenu(d, b, {label: 'Expected result', entry: 'What should be ready to inspect?',
+        onEntry: note => void save('check_back_note', {check_back_note: note})});
     } else if (key === 'due') {
       const input = $('[data-prop-date]', d);
       d.focusProp = 'due';
@@ -316,26 +331,14 @@ function taskPropsBind(d, task, change) {
         }});
     }
   };
-  const publication = $('[data-task-public]', box), size = $('[data-task-size]', box);
+  const publication = $('[data-task-public]', box);
   if (publication) publication.onchange = () => save('publication', {visibility: publication.checked ? 'public' : 'private'});
-  if (size) size.onchange = () => { if (size.checkValidity()) void save('size', {size: size.value === '' ? null : Number(size.value)}); };
   // A date saves only when it is whole and sensible. With the native picker that is its change; typed by hand (the
   // fallback field), only on Enter or leaving the field, so a half-typed year like 0002 never saves.
   const date = $('[data-prop-date]', d);
-  const saveDate = () => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.value || '');
-    if (!m) return;
-    const [y, mo, day] = m.slice(1).map(Number), when = new Date(y, mo - 1, day, 17, 0);
-    if (y < 2000 || y > 2200 || when.getMonth() !== mo - 1 || when.getDate() !== day) {
-      d.propsErrs = {id: String(task.id), map: new Map([['due', 'That date is not valid.']])}; taskPropsMsgPaint(d); return;
-    }
-    void save('due', {due: when.toISOString()});   // the end of that working day, local time
+  if (date) date.onkeydown = ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); date.dispatchEvent(new Event('change')); }
   };
-  if (date) {
-    date.onchange = () => { if (!date.classList.contains('shown')) saveDate(); };
-    date.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); saveDate(); } };
-    date.onblur = () => { if (date.classList.contains('shown')) saveDate(); };
-  }
   // the "…" menu in the header: what used to be links and buttons under the task
   const more = $('[data-task-more]', d);
   if (more) more.onclick = () => {

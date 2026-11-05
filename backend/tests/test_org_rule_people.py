@@ -20,6 +20,7 @@ from backend.tests.test_api import get, headers, post  # noqa: F401
 from backend.tests.test_org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, org, rule  # noqa: F401
 from backend.tests.test_thread_api import new_thread, say  # noqa: F401
+from backend.tests.test_bot_home_merge import merge as merge_homes, room as chat_room_with
 
 EVERYONE = {"everyone": True}
 
@@ -149,7 +150,7 @@ def test_a_new_server_process_can_send_every_write_it_registered(tmp_path):
         table, prepare, audience = create_app(Settings(db_path=root / "hub.db", registry_dir=registry)).state.rule_tables
         assert set(K.REPLAY) == set(table), set(K.REPLAY) ^ set(table)
         assert set(K.PREPARE) == set(prepare) and set(K.AUDIENCE) == set(audience)
-        assert {{"threads_edit", "assistant_message", "slack_message", "federated_message"}} <= set(table), set(table)
+        assert {{"threads_edit", "assistant_message", "slack_message"}} <= set(table), set(table)
     """)
     root = pathlib.Path(__file__).resolve().parents[2]
     done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
@@ -327,8 +328,8 @@ def test_an_inbound_message_with_no_principal_is_held_as_its_source(ruled):
     api, judge = ruled
     block_everyone(api)
     verdict = K.inbound(api.app.state.store, judge, None, "message", "Our favorite color is gold.", ["human:ben"],
-                        source="federation", origin="hub-b.example")
-    assert verdict["author"] == "federation:hub-b.example" and K.holds(verdict)
+                        source="slack", origin="C024BE91")
+    assert verdict["author"] == "slack:C024BE91" and K.holds(verdict)
 
 
 def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):
@@ -509,3 +510,78 @@ def test_a_thread_post_rechecks_its_audience_inside_the_write(ruled):
     with store.transaction() as c:
         held = T.post(c, cara, thread["id"], text, checked=verdict)
     assert held["held"]["can_withdraw"] and held["held"]["text"] == text and held["held"]["reason"]
+
+
+def moved_chat(api, bot="ops"):
+    """ana's personal chat with `bot` moved into the bot's Home: (the Home's id, the room the chat was in)."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        cid = chat_room_with(c, "human:ana", bot)
+        H.say(c, "human:ana", "bot:" + bot, "An earlier chat", conversation_id=cid)
+    merge_homes(api)
+    with store.read() as c:
+        return T.home(c, "bot:" + bot, create=False)["id"], cid
+
+
+def test_a_persons_message_to_a_moved_bot_with_no_room_named_is_checked_in_its_home(ruled):
+    """A person's message to a bot that names no room lands in the bot's Home once its chats have moved, so the rule check
+    names that Home: a `where: thread:<home>` rule holds it."""
+    api, _ = ruled
+    home, _ = moved_chat(api)
+    block_everyone(api, where=[f"thread:{home}"])
+    got = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Our favorite color is gold."},
+                   headers=headers("ana-test"))
+    assert got.status_code == 200, got.text
+    hold = hold_row(api, got.json()["held"]["id"])
+    assert json.loads(hold["payload"])["provenance"]["place"]["thread"] == home
+    assert not bodies(api, "favorite color is gold")
+
+
+def test_a_moved_bots_archived_home_is_made_again_before_a_persons_message_is_checked(ruled):
+    """Once the Home a moved chat went into is archived, the next message is checked in the Home it makes again (the write
+    would make the same one), not in the direct chat's place."""
+    api, _ = ruled
+    home, _ = moved_chat(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), home))
+    block_everyone(api)
+    got = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Our favorite color is gold again."},
+                   headers=headers("ana-test"))
+    assert got.status_code == 200, got.text
+    fresh = json.loads(hold_row(api, got.json()["held"]["id"])["payload"])["provenance"]["place"]["thread"]
+    with api.app.state.store.read() as c:
+        assert fresh and fresh != home
+        assert T.home(c, "bot:ops", create=False)["id"] == fresh
+        assert T.thread_row(c, fresh)["audience"] == "home"
+
+
+def test_a_persons_message_naming_a_moved_bot_by_slug_or_id_is_checked_in_its_home(ruled):
+    """A person's message names a bot by its bare slug or its id as well as by `bot:<slug>`. Each spelling is the same bot,
+    so each lands in its Home and a `where: thread:<home>` rule holds it there."""
+    api, _ = ruled
+    home, _ = moved_chat(api)
+    block_everyone(api, where=[f"thread:{home}"])
+    with api.app.state.store.read() as c:
+        bot_id = H.resolve_bot(c, "ops")["id"]
+    for to in ("ops", bot_id):
+        got = api.post("/api/v2/messages", json={"to": to, "text": f"Our favorite color is gold, sent to {to}."},
+                       headers=headers("ana-test"))
+        assert got.status_code == 200, got.text
+        hold = hold_row(api, got.json()["held"]["id"])
+        assert json.loads(hold["payload"])["provenance"]["place"]["thread"] == home, to
+    assert not bodies(api, "favorite color is gold")
+
+
+def test_a_native_post_to_a_moved_room_is_checked_in_its_home(ruled):
+    """A native thread post that names a moved room is checked as the Home it is written to (where `thread:<home>` reads
+    it), not as the old room."""
+    api, _ = ruled
+    home, old_room = moved_chat(api)
+    block_everyone(api, where=[f"thread:{home}"])
+    got = api.post(f"/api/v2/threads/{old_room}/messages", json={"text": "Our favorite color is gold."},
+                   headers=headers("ana-test"))
+    assert got.status_code == 200, got.text
+    assert "held" in got.json(), got.json()
+    hold = hold_row(api, got.json()["held"]["id"])
+    assert json.loads(hold["payload"])["provenance"]["place"]["thread"] == home
+    assert not bodies(api, "favorite color is gold")

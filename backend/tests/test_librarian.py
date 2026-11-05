@@ -6,6 +6,7 @@ import pytest
 from backend import librarian
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 RESULTS = [{"type": "internal", "id": "d1", "path": "finance/refunds.md", "title": "Refund policy",
             "excerpt": "Refunds within 14 days", "score": 1.0},
@@ -23,9 +24,10 @@ def desk(api, monkeypatch):
         return RESULTS
     monkeypatch.setattr(librarian, "_search", search)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+        BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
     r = runner(api)
     assign(api, r, "librarian")
     ready(api, r, ["librarian"])

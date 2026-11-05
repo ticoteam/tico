@@ -16,6 +16,7 @@ MAX_OPEN = 5            # asks one person may have waiting at once
 # What the asker is told, by how the card ended.
 TOLD = {"done": "{name} confirmed it: {what} is done.",
         "canceled": "{name} said no to {what}: nothing changed.",
+        "withdrawn": "{what} was withdrawn: nothing changed.",
         "failed": "{name} confirmed {what}, but it did not go through: {error}",
         "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed.",
         "interrupted": "{name} confirmed {what}, but it was cut off before it finished, so it may or may not have "
@@ -124,7 +125,7 @@ def settled(c, row, status, result=None):
     told = TOLD.get(status, TOLD["failed"]).format(name=name, what=what, error=error or "it was refused")
     task = H.task(c, ask["task"])
     if task and task.get("status") not in ("done", "declined", "closed"):
-        H.task_update(c, row["owner"], ask["task"], status="done" if status == "done" else "declined", note=told)
+        H.task_update(c, row["owner"], ask["task"], status="done" if status == "done" else "declined", note=told, strict=False)
     room = H.conversation(c, ask["room"]) if ask.get("room") else None
     if room and not room.get("closed_at"):
         H._write_message(c, "bot:" + ask.get("bot", BOTOPS), ask["asker"], told, room, "say",

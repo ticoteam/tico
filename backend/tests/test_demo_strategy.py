@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo
@@ -21,6 +22,13 @@ NEXT_YEAR = datetime(2027, 11, 2, 18, 30, tzinfo=timezone.utc)
 FIXED_SECTIONS = ("serve", "sell", "know", "how", "not")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     return demo.build(tmp_path_factory.mktemp("demo-strategy"), now=NOW)
@@ -28,7 +36,8 @@ def built(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def built_next_year(tmp_path_factory):
-    return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
+    with time_machine.travel(NEXT_YEAR, tick=False):
+        return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
 
 
 def signed_in(settings):
@@ -103,12 +112,15 @@ def test_this_weeks_briefing_is_posted_by_the_librarian(built):
 
 
 def test_the_same_now_builds_the_same_strategy_rows(built, tmp_path):
-    tables = ("strategy_versions", "strategy_bets", "strategy_events", "market_briefings", "goal_proposals",
+    tables = ("strategy_versions", "strategy_bets", "market_briefings", "goal_proposals",
               "market_sizes", "market_insights", "brand_versions")
 
     def rows(path):
         with sqlite3.connect(path) as db:
-            return {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            out = {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
+            out["strategy_events"] = db.execute("SELECT * FROM history_events WHERE subject_type='strategy' "
+                                                "ORDER BY 1").fetchall()
+            return out
 
     again = demo.build(tmp_path, now=NOW)
     assert rows(again.db_path) == rows(built.db_path)
@@ -191,7 +203,7 @@ def test_the_brand_book_is_published_by_the_owner(built):
 
 
 def test_a_build_in_another_year_dates_the_market_and_its_sources_to_that_year(built_next_year):
-    with signed_in(built_next_year) as api:
+    with time_machine.travel(NEXT_YEAR, tick=False), signed_in(built_next_year) as api:
         spend = api.get("/api/v2/market/spend").json()
         insights = api.get("/api/v2/market/insights").json()["insights"]
     assert spend["year"] == spend["definition"]["year"] == 2027

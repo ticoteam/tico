@@ -1,6 +1,8 @@
 //! The recorder's state and actions. It owns the library, the recording in progress and the
 //! background jobs; the window only draws `view()` and calls the actions below. Nothing here
 //! knows about Tauri, so it is tested as plain Rust.
+#[path = "task_links.rs"]
+mod task_links;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -12,6 +14,7 @@ use tico_recorder_native::{
     assist,
     audio::Channel,
     capture,
+    desktop::{self, DesktopOrg},
     engine::RecordingHandle,
     live::{self, LiveSync},
     network::{self, Tico, Transcriber},
@@ -59,7 +62,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 7] = [
+const BACKGROUND: [&str; 11] = [
     "live",
     "calendar",
     "autodraft",
@@ -67,6 +70,10 @@ const BACKGROUND: [&str; 7] = [
     "ask",
     "roster",
     "speech",
+    "task-links",
+    "more-links",
+    "items",
+    "presence",
 ];
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
@@ -76,6 +83,8 @@ const MESSAGE_FOR: Duration = Duration::from_secs(6);
 
 struct Reply {
     kind: String,
+    generation: u64,
+    connection: Option<(String, String, String)>,
     meeting: Option<String>,
     result: Result<Value, String>,
 }
@@ -158,14 +167,40 @@ pub fn sent_to(deliveries: &[store::Delivery], destination: &str) -> bool {
 }
 /// The Tico address in a `tico-recorder://connect?server=…` link.
 pub fn connect_address(link: &str) -> Option<String> {
+    link_address(link, "connect")
+}
+/// The Tico address in a `tico-recorder://<action>?server=…` link: `connect` (Tico's Connect recorder button) or
+/// `open` (Record in the Tico desktop app, which opens the Recorder on that org and starts nothing).
+pub fn link_address(link: &str, action: &str) -> Option<String> {
     let url = reqwest::Url::parse(link).ok()?;
-    if url.scheme() != "tico-recorder" || url.host_str() != Some("connect") {
+    if url.scheme() != "tico-recorder" || url.host_str() != Some(action) {
         return None;
     }
     let server = url.query_pairs().find(|(key, _)| key == "server")?.1;
     settings::safe_url(&server).ok()
 }
-/// The server the Tico desktop app on this Mac uses, to fill in the sign-in address.
+/// The sign-in address to suggest for a first connection: the org open in the Tico desktop app on this Mac, or,
+/// when that app keeps no orgs.json (an older or single-server build), the server in its server.txt.
+pub fn suggested_address(
+    orgs: Option<&[DesktopOrg]>,
+    server_txt: impl FnOnce() -> String,
+) -> String {
+    let bare = |url: &str| {
+        url.trim()
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .to_owned()
+    };
+    match orgs {
+        Some(orgs) => orgs
+            .iter()
+            .find(|org| org.active)
+            .map(|org| bare(&org.url))
+            .unwrap_or_default(),
+        None => bare(&server_txt()),
+    }
+}
+/// The server.txt of the Tico desktop app on this Mac, from before it kept a list of orgs.
 fn tico_desktop_server() -> String {
     let Some(home) = std::env::var_os("HOME") else {
         return String::new();
@@ -173,13 +208,42 @@ fn tico_desktop_server() -> String {
     std::fs::read_to_string(
         std::path::Path::new(&home).join("Library/Application Support/team.tico.app/server.txt"),
     )
-    .map(|text| {
-        text.trim()
-            .trim_start_matches("https://")
-            .trim_end_matches('/')
-            .to_owned()
-    })
     .unwrap_or_default()
+}
+/// Signs in to the Tico at `address` (`signin::sign_in_through`) and saves the connection; answers its name.
+/// Signing in again to the same Tico renews that connection in place, keeping its id and position; a new one goes
+/// last, so the first connection is the default.
+fn sign_in_saving(
+    root: &std::path::Path,
+    address: &str,
+    open: impl FnOnce(&str) -> bool,
+) -> anyhow::Result<String> {
+    let (mut destination, access, grant) =
+        signin::sign_in_through(address, open, signin::open_browser)?;
+    let mut config = settings::read(root)?;
+    let existing = config
+        .destinations
+        .iter_mut()
+        .find(|row| row.base_url == destination.base_url);
+    if let Some(row) = &existing {
+        destination.id = row.id.clone();
+    }
+    signin::save(&destination.id, &access, &grant)?;
+    let name = destination.name.clone();
+    match existing {
+        Some(row) => *row = destination,
+        None => config.destinations.push(destination),
+    }
+    settings::write(root, &config)?;
+    Ok(name)
+}
+/// "Signed in to A", "Signed in to A and B", "Signed in to A, B and C".
+pub fn signed_in_message(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("Signed in to {one}"),
+        [rest @ .., last] => format!("Signed in to {} and {last}", rest.join(", ")),
+    }
 }
 /// A library row's status, only when it says something the date doesn't. Tones are
 /// `red`, `amber`, `muted` and `accent`.
@@ -203,7 +267,7 @@ pub fn record_status(record: &Summary) -> Option<(String, &'static str)> {
     {
         ("Send failed".into(), "amber")
     } else if record.live_state == "live" {
-        ("Live in Tico".into(), "accent")
+        ("Live".into(), "live")
     } else {
         return None;
     };
@@ -243,10 +307,12 @@ pub struct SettingsForm {
 }
 
 pub struct Recorder {
+    pub screen: super::screen::ScreenShare,
     pub store: Store,
     _lock: Option<AppLock>,
     transcriber: Transcriber,
     pub live_sync: Option<LiveSync>,
+    _task_link_sync: Option<tico_recorder_native::task_links::TaskLinkSync>,
     pub config: Settings,
     pub records: Vec<Summary>,
     current: Option<Recording>,
@@ -254,11 +320,20 @@ pub struct Recorder {
     pub meeting: Option<String>,
     pub context: Context,
     active: Option<(String, RecordingHandle)>,
+    deleting: Option<std::thread::JoinHandle<()>>,
     /// Recordings made in this session; only these are drafted automatically.
     recorded_here: BTreeSet<String>,
     refresh: Instant,
     refresh_library: Instant,
     last_sync: Instant,
+    saved_items: Value,
+    items_cursor: u64,
+    items_generation: u64,
+    items_epoch: u64,
+    presence_at: Option<Instant>,
+    items_at: Instant,
+    presence_session: String,
+    presence_target: Option<(String, String)>,
     last_calendar: Instant,
     last_draft: Instant,
     draft_wait: Duration,
@@ -271,6 +346,8 @@ pub struct Recorder {
     message: (String, Instant),
     pub error: String,
     draft_status: String,
+    link_tasks: Value,
+    link_tasks_at: Instant,
     chat_error: String,
     /// A question or message that failed, offered back in the input.
     chat_retry: String,
@@ -278,6 +355,8 @@ pub struct Recorder {
     pub adding: Option<String>,
     pub destination: String,
     tico_url: String,
+    /// The Tico desktop app's orgs (its orgs.json), read again when that file changes. None in the demo library.
+    pub desktop: desktop::Watch,
     signing_in: bool,
     /// A Tico address from a Connect recorder link, waiting for the person to confirm.
     pub connect: Option<String>,
@@ -348,17 +427,22 @@ impl Recorder {
         } else {
             Some(LiveSync::start(store.clone()))
         };
-        // Suggest the Tico desktop app's server only for a first connection.
-        let tico_url = if config.destinations.is_empty() {
-            tico_desktop_server()
+        let mut desktop = desktop::Watch::new(if demo { None } else { desktop::path() });
+        // Suggest the Tico desktop app's open org only for a first connection.
+        let tico_url = if config.destinations.is_empty() && !demo {
+            suggested_address(desktop.orgs(), tico_desktop_server)
         } else {
             String::new()
         };
+        let task_link_sync =
+            (!demo).then(|| tico_recorder_native::task_links::TaskLinkSync::start(store.clone()));
         let mut app = Self {
+            screen: Default::default(),
             store,
             _lock: lock,
             transcriber,
             live_sync,
+            _task_link_sync: task_link_sync,
             destination: config
                 .destinations
                 .first()
@@ -371,10 +455,19 @@ impl Recorder {
             meeting: None,
             context: Context::default(),
             active: None,
+            deleting: None,
             recorded_here: BTreeSet::new(),
             refresh: Instant::now(),
             refresh_library: Instant::now(),
             last_sync: Instant::now(),
+            saved_items: Value::Null,
+            items_cursor: 0,
+            items_generation: 0,
+            items_epoch: 0,
+            presence_at: None,
+            items_at: Instant::now() - Duration::from_secs(30),
+            presence_session: uuid::Uuid::new_v4().to_string(),
+            presence_target: None,
             last_calendar: Instant::now(),
             last_draft: Instant::now(),
             draft_wait: DRAFT_INTERVAL,
@@ -386,10 +479,13 @@ impl Recorder {
             message: (String::new(), Instant::now()),
             error: String::new(),
             draft_status: String::new(),
+            link_tasks: Value::Null,
+            link_tasks_at: Instant::now() - Duration::from_secs(60),
             chat_error: String::new(),
             chat_retry: String::new(),
             adding: None,
             tico_url,
+            desktop,
             signing_in: false,
             connect: None,
             microphones: vec![],
@@ -453,20 +549,28 @@ impl Recorder {
         let tx = self.tx.clone();
         let store = self.store.clone();
         let background = BACKGROUND.contains(&kind);
+        let deleting = kind == "delete";
+        let generation = self.items_generation;
+        let connection = self.saved_connection();
         let kind = kind.to_string();
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             if background {
                 tico_recorder_native::qos::utility();
             }
             let result = work().map_err(|error| format!("{error:#}"));
             let _ = tx.send(Reply {
                 kind,
+                generation,
+                connection,
                 meeting,
                 result,
             });
             // Wakes the tick thread to handle the reply now.
             store.poke();
         });
+        if deleting {
+            self.deleting = Some(worker);
+        }
         true
     }
     pub fn report(&mut self, result: anyhow::Result<()>) {
@@ -482,14 +586,28 @@ impl Recorder {
                 // Drafts added and items sent in the background since this copy was loaded are
                 // kept; removing an item goes through `remove_item`.
                 let mut items = edited.items;
+                // Link actions write directly to the store. A stale window cannot restore a skipped or removed link.
+                items.retain(|item| {
+                    item.kind != "link" || current.items.iter().any(|stored| stored.id == item.id)
+                });
                 for item in std::mem::take(&mut current.items) {
                     match items.iter_mut().find(|row| row.id == item.id) {
                         Some(row) if !item.task_id.is_empty() => *row = item,
-                        Some(_) => {}
+                        Some(row) => {
+                            if item.closed_draft.is_some() {
+                                row.closed_draft = item.closed_draft;
+                            }
+                        }
                         None => items.push(item),
                     }
                 }
                 current.items = items;
+                if current.kept_on_mac {
+                    current.items.retain(|item| item.kind != "link");
+                    for item in &mut current.items {
+                        item.proposed_task_id.clear();
+                    }
+                }
                 current.participants = edited.participants;
                 current.calendar = edited.calendar;
                 Ok(())
@@ -510,6 +628,10 @@ impl Recorder {
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
         self.current = Some(record);
+        self.link_tasks = Value::Null;
+        self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+        self.reset_saved();
+        self.items_cursor = 0;
         self.meeting = Some(id.to_owned());
         self.live = json!({});
         self.chat_error.clear();
@@ -525,9 +647,11 @@ impl Recorder {
         if !self.context.live_id.is_empty() && self.context.live_state != "ended" {
             self.last_sync = Instant::now() - Duration::from_secs(5);
         }
+        self.store.poke();
         Ok(())
     }
     pub fn close(&mut self) {
+        self.reset_saved();
         self.save_context();
         self.meeting = None;
         self.current = None;
@@ -602,16 +726,26 @@ impl Recorder {
     }
     /// Stops the recording in progress; the audio worker flushes and finishes in the background.
     pub fn stop(&mut self) {
+        if let Some((id, _)) = &self.active {
+            self.screen.stop_meeting(id);
+        }
         if let Some((_, handle)) = &self.active {
             handle.stop();
         }
     }
     /// Used on quit: stop and wait for the final audio to be saved.
     pub fn shutdown(&mut self) {
+        self.screen.stop_and_wait();
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
         self.save_context();
+    }
+    fn join_delete(&mut self) {
+        if let Some(worker) = self.deleting.take() {
+            let _ = worker.join();
+        }
     }
     #[cfg(test)]
     pub fn mark_sending(&mut self, item: Option<&str>, meeting_step: Option<&str>) {
@@ -639,6 +773,14 @@ impl Recorder {
     }
     /// The open meeting refreshes often; the whole library only every few seconds.
     fn reload_open(&mut self) {
+        if let Some(id) = &self.meeting
+            && let Ok(stored) = self.store.context(id)
+            && stored.task_link_operations != self.context.task_link_operations
+        {
+            // Merge background link results without losing notes or unsent edits in the window.
+            self.save_context();
+            self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+        }
         self.seen_open = self.store.version();
         if let Some(id) = &self.meeting {
             self.ui_version += 1;
@@ -654,6 +796,144 @@ impl Recorder {
             .as_ref()
             .map(|worker| worker.error(id))
             .unwrap_or_default()
+    }
+    fn saved_connection(&self) -> Option<(String, String, String)> {
+        let router = self.router();
+        self.config
+            .destinations
+            .iter()
+            .find(|d| d.id == router)
+            .map(|d| (d.id.clone(), d.actor.clone(), d.base_url.clone()))
+    }
+    pub fn saved_scope(&self) -> u64 {
+        self.items_epoch
+    }
+    pub fn accept_saved_reply(
+        &mut self,
+        target: (String, String),
+        epoch: u64,
+        data: Value,
+    ) -> Result<(), String> {
+        if self.saved_target() != Some(target) || self.saved_scope() != epoch {
+            return Err("The Tico connection changed".into());
+        }
+        self.shared_items_reply(data);
+        Ok(())
+    }
+    fn reset_saved(&mut self) {
+        self.leave_saved();
+        self.saved_items = Value::Null;
+        self.items_generation += 1;
+        self.items_epoch += 1;
+        self.items_cursor = 0;
+        self.presence_at = None;
+        self.bump();
+    }
+    pub fn saved_target(&self) -> Option<(String, String)> {
+        self.saved_connection()?;
+        self.current
+            .as_ref()?
+            .deliveries
+            .iter()
+            .find(|entry| {
+                entry.destination_id == self.router()
+                    && entry.status == "sent"
+                    && !entry.meeting_id.is_empty()
+            })
+            .map(|entry| (entry.destination_id.clone(), entry.meeting_id.clone()))
+    }
+    pub fn shared_items_reply(&mut self, mut data: Value) {
+        if data["browser_url"].is_null() {
+            data["browser_url"] = self.saved_items["browser_url"].clone();
+        }
+        self.saved_items = data;
+        self.items_generation += 1;
+        self.bump();
+    }
+    fn leave_saved(&mut self) {
+        if let Some((destination, id)) = self.presence_target.take() {
+            let config = self.config.clone();
+            let session = self.presence_session.clone();
+            std::thread::spawn(move || {
+                if let Ok(tico) = Tico::saved(&config, &destination) {
+                    let _ = tico.call(
+                        "/api/v2/presence",
+                        Some(&json!({"place":format!("meeting:{id}"),
+                        "session_id":session,"gone":true})),
+                        &uuid::Uuid::new_v4().to_string(),
+                    );
+                }
+            });
+        }
+    }
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+        if !visible {
+            self.leave_saved();
+        }
+    }
+    fn presence_due(&self, now: Instant) -> bool {
+        self.presence_at
+            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(15))
+    }
+    fn sync_presence(&mut self) {
+        if !self.visible
+            || self.saved_items["gone"] == true
+            || self.background.contains("presence")
+            || !self.presence_due(Instant::now())
+        {
+            return;
+        }
+        let Some((destination, remote)) = self.saved_target() else {
+            return;
+        };
+        self.presence_at = Some(Instant::now());
+        self.presence_target = Some((destination.clone(), remote.clone()));
+        let config = self.config.clone();
+        let session = self.presence_session.clone();
+        self.job("presence", move || {
+            Tico::saved(&config, &destination)?.call(
+                "/api/v2/presence",
+                Some(&json!({"place":format!("meeting:{remote}"), "session_id":session})),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+        });
+    }
+    fn sync_saved(&mut self) {
+        if !self.visible
+            || self.saved_items["gone"] == true
+            || self.background.contains("items")
+            || self.items_at.elapsed() < Duration::from_secs(1)
+        {
+            return;
+        }
+        let Some((destination, remote)) = self.saved_target() else {
+            return;
+        };
+        self.items_at = Instant::now();
+        let after = self.items_cursor;
+        let generation = self.items_generation;
+        let config = self.config.clone();
+        let initial = self.saved_items.is_null();
+        let browser = self.saved_items["browser_url"].as_str().map(str::to_owned);
+        self.job("items", move || {
+            let tico = Tico::saved(&config, &destination)?;
+            let mut cursor = after;
+            if !initial {
+                for (seq, kind, value) in tico.events_until_change(&format!(
+                    "/api/v2/events?topics=meeting_items,presence&meeting={remote}&place=meeting:{remote}&after={after}"))? {
+                    cursor = cursor.max(seq);
+                    if kind == "ready" { cursor = cursor.max(value["seq"].as_u64().unwrap_or(0)); }
+                    if value["gone"] == true { return Ok(json!({"gone":true,"cursor":cursor,"generation":generation})); }
+                }
+            }
+            let mut data = tico.call(&format!("/api/v2/meetings/{remote}/items"), None, "")?;
+            data["presence"] = tico.call(&format!("/api/v2/presence?place=meeting:{remote}"), None, "")?;
+            data["browser_url"] = json!(browser.or_else(|| tico.browser_url().ok()));
+            data["cursor"] = json!(cursor);
+            data["generation"] = json!(generation);
+            Ok(data)
+        });
     }
     /// The connection whose router answers private questions and drafts for this meeting.
     pub fn router(&self) -> String {
@@ -810,15 +1090,28 @@ impl Recorder {
             return;
         }
         let (config, store) = (self.config.clone(), self.store.clone());
+        let destination = self.draft_destination(&id);
         self.job_for("autodraft", Some(id.clone()), move || {
+            let mut config = config;
+            if speech::source(&config) == speech::TICO
+                && let Some(at) = config.destinations.iter().position(|d| d.id == destination)
+            {
+                config.destinations.swap(0, at);
+            }
+            let tasks = Tico::saved(&config, &destination)
+                .and_then(|tico| tico.draft_tasks(&store, &id))
+                .unwrap_or_default();
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft(&store, &config, &key, &id)?}))
+            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
         while let Ok(reply) = self.rx.try_recv() {
+            if reply.kind == "delete" {
+                self.join_delete();
+            }
             if reply.kind != "live" {
                 self.bump();
             }
@@ -826,8 +1119,52 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            if reply.kind == "more-links" {
+                if here
+                    && let Ok(value) = reply.result
+                    && value["scope"] == self.link_scope()
+                {
+                    if let Some(rows) = value["linked"]["tasks"].as_array()
+                        && let Some(loaded) = self.link_tasks["linked"]["tasks"].as_array_mut()
+                    {
+                        loaded.extend(rows.iter().cloned());
+                    }
+                    self.link_tasks["linked"]["next_cursor"] =
+                        value["linked"]["next_cursor"].clone();
+                }
+                continue;
+            }
+            if reply.kind == "task-links" {
+                if here {
+                    self.link_tasks = reply
+                        .result
+                        .ok()
+                        .filter(|v| v["scope"] == self.link_scope())
+                        .unwrap_or(Value::Null);
+                }
+                continue;
+            }
+            if reply.kind == "link" && here {
+                self.save_context();
+                self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+            }
+            if ["items", "presence"].contains(&reply.kind.as_str())
+                && (!here
+                    || reply.generation != self.items_generation
+                    || reply.connection != self.saved_connection())
+            {
+                continue;
+            }
+            if reply.kind == "presence" {
+                continue;
+            }
             if reply.kind == "signin" {
                 self.signing_in = false;
+                // Signing in to several orgs keeps the ones that worked when a later one fails.
+                self.config = settings::read(self.store.root()).unwrap_or(self.config.clone());
+                self.reset_saved();
+                self.keep_destination();
+                self.services_at = None;
             }
             if reply.kind == "send" {
                 *self
@@ -935,7 +1272,7 @@ impl Recorder {
                 _ => {}
             }
             if [
-                "live", "task", "chat", "connect", "finish", "attach", "access",
+                "live", "items", "task", "chat", "connect", "finish", "attach", "access",
             ]
             .contains(&reply.kind.as_str())
                 && !here
@@ -945,6 +1282,17 @@ impl Recorder {
             }
             match reply.result {
                 Err(error) => {
+                    if reply.kind == "items"
+                        && (["HTTP 401 (", "HTTP 403 (", "HTTP 404 ("]
+                            .iter()
+                            .any(|status| error.contains(status))
+                            || error.contains("Sign in to Tico again")
+                            || error.contains("Choose a Tico connection"))
+                    {
+                        self.reset_saved();
+                        self.saved_items = json!({"gone":true});
+                        self.bump();
+                    }
                     if reply.kind != "live" {
                         self.error = error;
                     }
@@ -955,16 +1303,13 @@ impl Recorder {
                             self.microphones = serde_json::from_value(value).unwrap_or_default()
                         }
                         "signin" => {
-                            self.config =
-                                settings::read(self.store.root()).unwrap_or(self.config.clone());
-                            self.keep_destination();
-                            self.services_at = None;
                             self.tico_url.clear();
                             self.say(value["message"].as_str().unwrap_or_default());
                         }
                         "settings" => {
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
+                            self.reset_saved();
                             self.keep_destination();
                             self.services_at = None;
                             self.say("Settings saved");
@@ -978,9 +1323,21 @@ impl Recorder {
                             }
                             self.calendar = value;
                         }
+                        "items" => {
+                            self.items_cursor =
+                                value["cursor"].as_u64().unwrap_or(self.items_cursor);
+                            if value["generation"].as_u64() == Some(self.items_generation) {
+                                self.saved_items = value;
+                            }
+                        }
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
                             if self.live != value["view"] {
+                                if value["view"]["state"] != "live" {
+                                    if let Some(id) = &self.meeting {
+                                        self.screen.stop_meeting(id);
+                                    }
+                                }
                                 self.live = value["view"].clone();
                                 self.bump();
                             }
@@ -1004,8 +1361,9 @@ impl Recorder {
                         "roster" => {
                             self.roster = serde_json::from_value(value).unwrap_or_default();
                         }
-                        "send" => self.say("Sent to Tico"),
+                        "send" => self.say("Saved to Tico"),
                         "import" => {
+                            self.reset_saved();
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
                             self.destination = self
@@ -1034,7 +1392,8 @@ impl Recorder {
             .as_ref()
             .is_some_and(|(_, handle)| handle.is_finished())
         {
-            if let Some((_, handle)) = self.active.take() {
+            if let Some((id, handle)) = self.active.take() {
+                self.screen.stop_meeting(&id);
                 let result = handle.finish();
                 self.report(result);
             }
@@ -1053,6 +1412,9 @@ impl Recorder {
         {
             self.reload();
         }
+        self.refresh_task_links();
+        self.sync_presence();
+        self.sync_saved();
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -1170,8 +1532,12 @@ impl Recorder {
     }
     /// Why an app update waits right now: a recording runs, or a live meeting is connected.
     pub fn update_hold(&self) -> Option<&'static str> {
-        if self.active.is_some() {
+        if self.deleting.is_some() {
+            Some("After deletion finishes")
+        } else if self.active.is_some() {
             Some("After this recording")
+        } else if self.screen.view()["active"] == true {
+            Some("After screen sharing stops")
         } else if self
             .records
             .iter()
@@ -1212,7 +1578,7 @@ impl Recorder {
     /// in `levels`.
     fn outside_state(&self) -> String {
         use std::fmt::Write;
-        let mut out = String::new();
+        let mut out = self.screen.view().to_string();
         if let Some((id, handle)) = &self.active {
             let status = handle.status();
             let _ = write!(out, "{id}|{}|{}|", status.phase, status.error);
@@ -1301,6 +1667,11 @@ impl Recorder {
         self.reload();
     }
     pub fn control_live(&mut self, action: &str) {
+        if action != "resume" {
+            if let Some(id) = &self.meeting {
+                self.screen.stop_meeting(id);
+            }
+        }
         let Ok(record) = self.open_record() else {
             return;
         };
@@ -1328,6 +1699,9 @@ impl Recorder {
         self.reload();
     }
     pub fn finish_live(&mut self) {
+        if let Some(id) = &self.meeting {
+            self.screen.stop_meeting(id);
+        }
         if self.context.live_id.is_empty() {
             return;
         }
@@ -1373,14 +1747,21 @@ impl Recorder {
         } else {
             0
         };
+        let item_id = uuid::Uuid::new_v4().to_string();
         self.context.items.push(Item {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: item_id.clone(),
             kind: "task".into(),
             title,
             at_ms,
             ..Default::default()
         });
         self.save_context();
+        if self.saved_target().is_some() {
+            self.network_job("add-item", move |tico, store, id| {
+                tico.upload_pending_item(&store, &id, &item_id)?;
+                Ok(json!({}))
+            });
+        }
     }
     pub fn edit_item(&mut self, item_id: &str, title: &str) {
         let title: String = title.trim().chars().take(300).collect();
@@ -1436,7 +1817,7 @@ impl Recorder {
                         .map(str::to_owned)
                         .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
                             && context.items.iter().any(|i| i.id == item_id && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())))
-                            .then(|| "This action item may quote paused speech. Review its title and quote before sending".into()));
+                            .then(|| "This task may quote paused speech. Review its title and quote, then choose Create anyway".into()));
                     if let Some(reason) = reason {
                         self.item_error = Some((item_id.to_owned(), reason));
                         return;
@@ -1462,6 +1843,7 @@ impl Recorder {
         if org.is_empty()
             || self.choosing_org
             || self.sending.is_some()
+            || self.busy
             || owner.is_empty()
             || item.title.trim().is_empty()
             || !item.task_id.is_empty()
@@ -1486,10 +1868,10 @@ impl Recorder {
         self.item_error = None;
         // A task from a private meeting is between me and whoever gets it.
         let private = self.live["visibility"] != "team";
-        self.sending = Some(item_id.to_owned());
+        let sending_item = item_id.to_owned();
         let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
-        self.job_for("task", Some(id.clone()), move || {
+        if self.job_for("task", Some(id.clone()), move || {
             Tico::saved(&config, &destination)?.send_task_confirmed(
                 &store,
                 &id,
@@ -1500,7 +1882,9 @@ impl Recorder {
                 paused_confirmed,
             )?;
             Ok(json!({"message":format!("Sent to {name}")}))
-        });
+        }) {
+            self.sending = Some(sending_item);
+        }
     }
     /// The Tico that action items go to, when several are connected.
     pub fn choose_org(&mut self, destination: &str) {
@@ -1511,6 +1895,9 @@ impl Recorder {
             .any(|row| row.id == destination)
             && self.context.live_destination.is_empty()
         {
+            if self.destination != destination {
+                self.reset_saved();
+            }
             self.destination = destination.into();
             self.choosing_org = false;
             self.roster_for.clear();
@@ -1580,6 +1967,7 @@ impl Recorder {
         };
         self.adding = Some(id);
         if self.context.live_id.is_empty() {
+            self.reset_saved();
             if self.config.destinations.len() == 1 {
                 self.destination = self.config.destinations[0].id.clone();
                 self.load_roster();
@@ -1596,6 +1984,9 @@ impl Recorder {
                 .iter()
                 .any(|row| row.id == destination)
         {
+            if self.destination != destination {
+                self.reset_saved();
+            }
             self.destination = destination.into();
             self.load_roster();
         }
@@ -1689,6 +2080,90 @@ impl Recorder {
             }
         }
     }
+    /// Share live, from the sheet: nothing reaches Tico before this. Opens the meeting in
+    /// `destination` for its whole org (`team`) or only the people and bots chosen, then adds them.
+    pub fn share_live(&mut self, destination: &str, team: bool, actors: Vec<String>) {
+        let Some(meeting) = self.meeting.clone() else {
+            return;
+        };
+        if self.context.live_id.is_empty() {
+            if !self
+                .config
+                .destinations
+                .iter()
+                .any(|row| row.id == destination)
+            {
+                self.error = "Choose an org first".into();
+                return;
+            }
+            if self.destination != destination {
+                self.reset_saved();
+            }
+            self.destination = destination.into();
+        }
+        if team && self.screen.active_for(&meeting) {
+            self.error = "Stop screen sharing before making this meeting public".into();
+            return;
+        }
+        if !self.shareable() {
+            return;
+        }
+        let actors: Vec<String> = actors
+            .into_iter()
+            .filter(|actor| actor.starts_with("bot:") || actor.starts_with("human:"))
+            .filter(|actor| {
+                !self
+                    .adding_people
+                    .iter()
+                    .any(|row| row.meeting == meeting && &row.actor == actor)
+            })
+            .collect();
+        let humans: Vec<String> = actors
+            .iter()
+            .filter(|a| a.starts_with("human:"))
+            .cloned()
+            .collect();
+        let slugs: Vec<String> = actors
+            .iter()
+            .filter_map(|a| a.strip_prefix("bot:").map(str::to_owned))
+            .collect();
+        let started = self.network_job("access", move |tico, store, id| {
+            let live_id = tico.ensure_live(&store, &id, team)?;
+            let body = json!({"add":humans,"remove":[],"visibility":if team { "team" } else { "private" }});
+            let view = tico.call(
+                &format!("/api/v2/live-meetings/{live_id}/access"),
+                Some(&body),
+                &format!("recorder:{id}:access:{}", uuid::Uuid::new_v4()),
+            )?;
+            if !slugs.is_empty() {
+                tico.call(
+                    &format!("/api/v2/live-meetings/{live_id}/bots"),
+                    Some(&json!({"bots":slugs})),
+                    &format!("recorder:{id}:attach:{}", slugs.join(",")),
+                )?;
+            }
+            Ok(json!({"message":"Shared live","view":view}))
+        });
+        if !started {
+            return;
+        }
+        self.people_error.clear();
+        for actor in actors {
+            let name = self
+                .roster
+                .iter()
+                .find(|row| row.0 == actor)
+                .map_or(actor.as_str(), |row| row.1.as_str())
+                .to_owned();
+            self.adding_people.push(Adding {
+                meeting: meeting.clone(),
+                actor,
+                name,
+                step: AddStep::Sending,
+                added: None,
+            });
+        }
+    }
     /// Someone not in Tico: the name stays with the transcript only.
     pub fn add_participant(&mut self, name: &str) {
         let name: String = name.trim().chars().take(100).collect();
@@ -1705,6 +2180,15 @@ impl Recorder {
     }
     /// Everyone in the Tico (`team`) or only the people and bots added (private).
     pub fn set_team(&mut self, team: bool) {
+        if team
+            && self
+                .meeting
+                .as_ref()
+                .is_some_and(|id| self.screen.active_for(id))
+        {
+            self.error = "Stop screen sharing before making this meeting public".into();
+            return;
+        }
         if self.shareable() {
             let _ = self.access_job(Some(team), vec![], vec![]);
         }
@@ -1724,7 +2208,13 @@ impl Recorder {
     /// Where this recording can be sent: a meeting already open in one Tico, with its people and
     /// bots, goes only there.
     pub fn send_targets(&self, id: &str, deliveries: &[store::Delivery]) -> Vec<Value> {
-        let live = self.store.context(id).unwrap_or_default().live_destination;
+        let context = self.store.context(id).unwrap_or_default();
+        // Kept on this computer after a live share: it is a meeting recorded here again.
+        let live = if context.live_removed {
+            String::new()
+        } else {
+            context.live_destination
+        };
         self.targets(&live, deliveries)
     }
     /// `send_targets` for a meeting whose live connection is already known, without a read.
@@ -1744,15 +2234,97 @@ impl Recorder {
         self.send_meeting_confirmed(id, destination, false);
     }
     pub fn send_meeting_confirmed(&mut self, id: &str, destination: &str, paused_confirmed: bool) {
+        self.send_meeting_to(id, destination, paused_confirmed, "");
+    }
+    /// The Finish sheet's Save: `destination` is an org, or `local` to keep it on this computer
+    /// only (a live share then ends and what was said leaves Tico). `audience` is `team` or
+    /// `participants`. The title is saved first.
+    pub fn save(
+        &mut self,
+        id: &str,
+        destination: &str,
+        audience: &str,
+        title: &str,
+        paused_confirmed: bool,
+    ) {
+        let title: String = title.trim().chars().take(200).collect();
+        // A live-shared meeting is already in Tico; Save sends the new title there too.
+        if let Ok(record) = self.store.get(id)
+            && !title.is_empty()
+            && title != record.title
+            && record.deliveries.iter().all(|row| row.status != "sent")
+        {
+            let result = self.store.mutate(id, |r| {
+                r.title = title;
+                Ok(())
+            });
+            self.report(result);
+            self.reload();
+        }
+        if destination == "local" {
+            self.keep_local(id);
+            return;
+        }
+        if !["team", "participants"].contains(&audience) {
+            self.error = "Choose who can see it".into();
+            return;
+        }
+        self.send_meeting_to(id, destination, paused_confirmed, audience);
+    }
+    /// Keeps the recording here and removes its live share and pending meeting from Tico.
+    pub fn keep_local(&mut self, id: &str) {
+        self.screen.stop_meeting(id);
+        if self.active.as_ref().is_some_and(|(active, _)| active == id) {
+            self.stop();
+        }
+        if self.meeting.as_deref() == Some(id) {
+            self.save_context();
+        }
+        let context = self.store.context(id).unwrap_or_default();
+        if context.live_id.is_empty() || context.live_removed {
+            let result = self.store.update_context(id, |c| {
+                c.kept_on_mac = true;
+                c.task_link_operations.clear();
+                c.items.retain(|item| item.kind != "link");
+                for item in &mut c.items {
+                    item.proposed_task_id.clear();
+                }
+                Ok(())
+            });
+            self.report(result);
+            if self.meeting.as_deref() == Some(id) {
+                self.context = self.store.context(id).unwrap_or_default();
+                self.link_tasks = Value::Null;
+            }
+            self.reload_open();
+            return;
+        }
+        let config = self.config.clone();
+        let store = self.store.clone();
+        let (id, destination) = (id.to_owned(), context.live_destination);
+        self.job_for("keep", Some(id.clone()), move || {
+            wait_stopped(&store, &id)?;
+            Tico::saved(&config, &destination)?.keep_local(&store, &id)?;
+            Ok(json!({"message":"Kept on this Mac"}))
+        });
+    }
+    fn send_meeting_to(
+        &mut self,
+        id: &str,
+        destination: &str,
+        paused_confirmed: bool,
+        audience: &str,
+    ) {
         if self.updating {
             self.error = UPDATING.into();
             return;
         }
+        self.screen.stop_meeting(id);
         let Ok(record) = self.store.get(id) else {
             return;
         };
         if let Ok(context) = self.store.context(id) {
-            if context.live_discarded {
+            if context.live_discarded && !context.live_removed {
                 self.error =
                     "This meeting was discarded; its recording stays on this computer".into();
                 return;
@@ -1762,7 +2334,9 @@ impl Recorder {
                 return;
             }
             if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
-                self.error = "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.".into();
+                self.error =
+                    "A kept task may quote paused speech. Review it, then choose Save anyway."
+                        .into();
                 return;
             }
         }
@@ -1785,6 +2359,9 @@ impl Recorder {
         if self.meeting.as_deref() == Some(id) {
             self.save_context();
         }
+        if self.destination != destination {
+            self.reset_saved();
+        }
         self.destination = destination.into();
         let (config, store, step) = (
             self.config.clone(),
@@ -1802,6 +2379,7 @@ impl Recorder {
             "Sending…"
         });
         let id = record.id.clone();
+        let audience = audience.to_owned();
         self.job("send", move || {
             let deadline = Instant::now() + SEND_WAIT;
             loop {
@@ -1826,15 +2404,19 @@ impl Recorder {
             }
             let record = store.get(&id)?;
             network::ready(&record)?;
-            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
-                "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.");
+            anyhow::ensure!(
+                paused_confirmed
+                    || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
+                "A kept task may quote paused speech. Review it, then choose Save anyway."
+            );
             let tico = Tico::saved(&config, &destination)?;
-            if !store.context(&id)?.live_id.is_empty() {
+            let context = store.context(&id)?;
+            if !context.live_id.is_empty() && !context.live_removed {
                 say("Finishing…");
                 tico.finish_live(&store, &id)?;
             }
             say("Sending…");
-            tico.send(&store, &id, false)?;
+            tico.send_to(&store, &id, false, &audience)?;
             Ok(json!({}))
         });
     }
@@ -1858,6 +2440,52 @@ impl Recorder {
     }
     /// Removes the recording's audio and transcript from this Mac. The window asks first.
     pub fn delete(&mut self, id: &str) {
+        if self.busy {
+            return;
+        }
+        self.screen.stop_meeting(id);
+        let context = self.store.context(id).unwrap_or_default();
+        let filed = self.store.get(id).is_ok_and(|record| {
+            record
+                .deliveries
+                .iter()
+                .any(tico_recorder_native::live::saved_in_tico)
+        });
+        let discard_live = !context.live_id.is_empty() && !context.live_removed && !filed;
+        let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
+        if discard_live || recording_here {
+            let capture = if recording_here {
+                self.active.take().map(|(_, handle)| {
+                    handle.stop();
+                    handle
+                })
+            } else {
+                None
+            };
+            let config = self.config.clone();
+            let store = self.store.clone();
+            let (job_id, destination) = (id.to_owned(), context.live_destination);
+            self.job_for("delete", Some(id.to_owned()), move || {
+                if let Some(handle) = capture {
+                    // Join even during startup, when the saved state can still be "stopped".
+                    // Failed capture still needs deleting after its final error writes.
+                    let _ = handle.finish();
+                } else {
+                    wait_stopped(&store, &job_id)?;
+                }
+                if discard_live {
+                    Tico::saved(&config, &destination)?.keep_local(&store, &job_id)?;
+                }
+                store.delete(&job_id)?;
+                Ok(json!({"message":"Deleted"}))
+            });
+            if self.meeting.as_deref() == Some(id) {
+                self.meeting = None;
+                self.current = None;
+                self.context = Context::default();
+            }
+            return;
+        }
         let result = self.store.delete(id);
         let deleted = result.is_ok();
         self.report(result);
@@ -1889,6 +2517,7 @@ impl Recorder {
     }
     /// Change the saved connection list now.
     fn connections(&mut self, change: impl Fn(&mut Settings)) {
+        self.reset_saved();
         let mut saved = settings::read(self.store.root()).unwrap_or(self.config.clone());
         change(&mut saved);
         change(&mut self.config);
@@ -1908,6 +2537,7 @@ impl Recorder {
         }
     }
     pub fn sign_out(&mut self, id: &str) {
+        self.screen.stop_destination(id);
         let Some(destination) = self
             .config
             .destinations
@@ -1939,24 +2569,81 @@ impl Recorder {
         self.signing_in = true;
         self.connect = None;
         self.job("signin", move || {
-            let (mut destination, access, grant) = signin::sign_in(&address, signin::open_browser)?;
-            let mut config = settings::read(&root)?;
-            // Signing in again to the same Tico renews that connection in place, keeping its id and position.
-            let existing = config
-                .destinations
-                .iter_mut()
-                .find(|row| row.base_url == destination.base_url);
-            if let Some(row) = &existing {
-                destination.id = row.id.clone();
+            let name = sign_in_saving(&root, &address, |url| {
+                signin::open_browser(url);
+                false
+            })?;
+            Ok(json!({"message": signed_in_message(&[name])}))
+        });
+    }
+    /// The Tico desktop app's orgs, each with whether the Recorder is signed in to it.
+    pub fn desktop_orgs(&mut self) -> Vec<Value> {
+        let destinations = &self.config.destinations;
+        self.desktop
+            .orgs()
+            .unwrap_or_default()
+            .iter()
+            .map(|org| {
+                json!({"name":org.name,"url":org.url,"email":org.email,"active":org.active,
+                    "connected":destinations.iter().any(|row| desktop::matches(&org.url, row))})
+            })
+            .collect()
+    }
+    /// Signs in to every Tico desktop org the Recorder has none for, one at a time, the one open there first (so it
+    /// is the default when the Recorder had none). Each approval page opens in the desktop app on that org, which
+    /// already has its sign-in, so the person only chooses Allow; the browser shows it when the desktop app can't.
+    /// A failure goes on to the next org, except a timeout: nobody is there to choose Allow.
+    /// With `url`, only that org: Allow on its row.
+    pub fn sign_in_desktop(&mut self, url: Option<&str>) {
+        if self.busy {
+            return;
+        }
+        let mut orgs = desktop::to_sign_in(
+            self.desktop.orgs().unwrap_or_default(),
+            &self.config.destinations,
+        );
+        if let Some(url) = url {
+            orgs.retain(|org| org.url == url);
+        }
+        if orgs.is_empty() {
+            return;
+        }
+        let root = self.store.root().to_path_buf();
+        self.signing_in = true;
+        self.connect = None;
+        self.job("signin", move || {
+            let (mut signed, mut failed) = (vec![], vec![]);
+            for org in orgs {
+                let opened = sign_in_saving(&root, &org.url, |authorize| {
+                    if desktop::approval_link(&org.url, authorize)
+                        .is_some_and(|link| desktop::open_in_app(&link))
+                    {
+                        return true;
+                    }
+                    signin::open_browser(authorize);
+                    false
+                });
+                match opened {
+                    Ok(name) => signed.push(name),
+                    Err(error) => {
+                        let timed_out = error.to_string() == signin::TIMED_OUT;
+                        failed.push(format!("{}: {error:#}", org.name));
+                        if timed_out {
+                            break;
+                        }
+                    }
+                }
             }
-            signin::save(&destination.id, &access, &grant)?;
-            let name = destination.name.clone();
-            match existing {
-                Some(row) => *row = destination,
-                None => config.destinations.push(destination),
-            }
-            settings::write(&root, &config)?;
-            Ok(json!({"message": format!("Signed in to {name}")}))
+            anyhow::ensure!(
+                failed.is_empty(),
+                "{}{}",
+                match signed_in_message(&signed) {
+                    message if message.is_empty() => message,
+                    message => format!("{message}. "),
+                },
+                failed.join(". ")
+            );
+            Ok(json!({"message": signed_in_message(&signed)}))
         });
     }
     /// Saves the form over the saved settings, so connection changes made meanwhile are kept.
@@ -2026,8 +2713,33 @@ impl Recorder {
             Ok(json!({"message":format!("Imported {count} recordings")}))
         });
     }
-    /// A link macOS delivered to the app.
+    /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
+    /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
+    /// Neither starts a recording.
     pub fn link(&mut self, link: &str) {
+        if let Some(address) = link_address(link, "open") {
+            let connected = self
+                .config
+                .destinations
+                .iter()
+                .find(|row| desktop::matches(&address, row))
+                .map(|row| row.id.clone());
+            match connected {
+                Some(id) => {
+                    if self.context.live_destination.is_empty() {
+                        if self.destination != id {
+                            self.reset_saved();
+                        }
+                        self.destination = id;
+                        self.choosing_org = false;
+                        self.roster_for.clear();
+                    }
+                }
+                None if !self.signing_in => self.connect = Some(address),
+                None => {}
+            }
+            return;
+        }
         match connect_address(link) {
             Some(address) => self.connect = Some(address),
             None => self.error = "That link is not a Tico Recorder connect link".into(),
@@ -2042,13 +2754,29 @@ impl Recorder {
         self.connect = None;
     }
     pub fn dismiss_error(&mut self) {
+        self.screen.dismiss();
         self.error.clear();
     }
     /// Opens a Tico page (a sent task) in the browser. Only addresses of a connected Tico.
     pub fn open_url(&mut self, url: &str) {
-        let allowed = self.config.destinations.iter().any(|row| {
-            settings::safe_url(&row.base_url).is_ok_and(|base| url.starts_with(&format!("{base}/")))
-        });
+        let known_item = self
+            .context
+            .items
+            .iter()
+            .any(|item| !item.task_url.is_empty() && item.task_url == url)
+            && settings::safe_url(url.split('#').next().unwrap_or("")).is_ok();
+        let shared_url = self.saved_target().is_some()
+            && self.saved_items["browser_url"]
+                .as_str()
+                .and_then(|base| settings::safe_url(base).ok())
+                .is_some_and(|base| url.starts_with(&format!("{base}/#/task/")));
+        let allowed = known_item
+            || self.may_open_linked_task(url)
+            || shared_url
+            || self.config.destinations.iter().any(|row| {
+                settings::safe_url(&row.base_url)
+                    .is_ok_and(|base| url.starts_with(&format!("{base}/")))
+            });
         if allowed {
             signin::open_browser(url);
         }
@@ -2059,7 +2787,8 @@ impl Recorder {
     /// Everything the window shows. Parts the window already has (by hash) come back as null.
     pub fn view(&mut self, have: &Have) -> Value {
         self.viewed = self.ui_version;
-        let mut out = json!({"status": self.status_view(), "live": self.live_view()});
+        let mut out = json!({"status": self.status_view(), "live": self.live_view(),
+            "desktop_orgs": self.desktop_orgs()});
         let parts: [(&str, &str, Value); 4] = [
             ("library", &have.library, self.library_view()),
             ("settings", &have.settings, self.settings_view()),
@@ -2121,6 +2850,7 @@ impl Recorder {
             String::new()
         };
         json!({
+            "screen": self.screen.view(),
             "busy": self.busy,
             "demo": self.demo,
             "error": self.error,
@@ -2155,7 +2885,15 @@ impl Recorder {
                     Some(("Tico sync needs attention".into(), "amber"))
                 };
                 let context = self.store.context(&record.id).unwrap_or_default();
-                let status = if context.live_discarded { Some(if context.live_state == "ended" { ("Discarded · saved locally".into(), "muted") } else { ("Discard pending · saved locally".into(), "amber") }) } else { status };
+                // Kept on this Mac: its row says so; only a Tico that has not ended it yet is news.
+                let status = if context.live_discarded { (context.live_state != "ended").then(|| ("Ending in Tico".into(), "amber")) } else { status };
+                // The org it lives in: where it was saved, else where it is shared live.
+                let saved = record.deliveries.iter().find(|row| !row.meeting_id.is_empty() && row.status != "partial");
+                let home = saved.map(|row| row.destination_id.clone()).or_else(|| {
+                    (!context.live_removed && !context.live_destination.is_empty()).then(|| context.live_destination.clone())
+                });
+                let org = home.and_then(|id| self.config.destinations.iter().find(|row| row.id == id))
+                    .map(|row| json!({"id":row.id,"name":row.name,"url":row.base_url}));
                 let sent = self.sent_everywhere(&record.deliveries);
                 json!({
                     "id": record.id,
@@ -2167,8 +2905,11 @@ impl Recorder {
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
-                    "can_send": !context.live_discarded && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
-                    "targets": self.targets(&record.live_destination, &record.deliveries),
+                    "can_send": (!context.live_discarded || context.live_removed) && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
+                    "local": org.is_none(),
+                    "org": org,
+                    "live_org": (!context.live_removed).then_some(&context.live_destination).filter(|id| !id.is_empty()),
+                    "targets": self.targets(if context.live_removed { "" } else { &record.live_destination }, &record.deliveries),
                 })
             })
             .collect();
@@ -2203,7 +2944,7 @@ impl Recorder {
                     .trim_start_matches("https://")
                     .trim_end_matches('/');
                 json!({"id":row.id,"name":row.name,"host":if host == row.name { "" } else { host },
-                    "default":index == 0})
+                    "url":row.base_url,"default":index == 0})
             })
             .collect();
         json!({
@@ -2330,6 +3071,9 @@ impl Recorder {
         let sync_error = self.sync_error(&record.id);
         json!({
             "id": record.id,
+            "link_ready": !self.context.live_id.is_empty() || !record.deliveries.is_empty(),
+            "can_share_screen": record.deliveries.is_empty() && !self.context.live_discarded && !self.context.locally_paused
+                && (self.context.live_id.is_empty() || self.context.live_state == "live"),
             "title": record.title,
             "started_at": record.started_at,
             "duration_ms": record.chunks.iter().map(|chunk| chunk.end_ms).max().unwrap_or(0),
@@ -2339,7 +3083,11 @@ impl Recorder {
             "sent": self.sent_everywhere(&record.deliveries),
             "connected": !self.config.destinations.is_empty(),
             "send_blocked": if self.busy { None } else { blocked },
-            "targets": self.targets(&self.context.live_destination, &record.deliveries),
+            "targets": self.targets(if self.context.live_removed { "" } else { &self.context.live_destination }, &record.deliveries),
+            // The Finish sheet: the org it was shared live to (its default), and how.
+            "live_org": if live && !self.context.live_removed { Some(router.clone()) } else { None },
+            "team": team,
+            "kept_local": self.context.kept_on_mac,
             "live": if live { Some(match (ended, team) {
                 (true, _) => "Ended in Tico",
                 (false, true) => "Team can join",
@@ -2389,15 +3137,58 @@ impl Recorder {
         // Bots first: most action items go to one.
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
+        if self.saved_target().is_none()
+            && !self.context.live_id.is_empty()
+            && self.live["visibility"] != "team"
+        {
+            owners.retain(|row| {
+                self.live["owner_actor"] == row.0
+                    || self.live["access"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|a| a["actor"] == row.0)
+                    || self.live["bots"].as_array().into_iter().flatten().any(|b| {
+                        row.0 == format!("bot:{}", b["bot"].as_str().unwrap_or_default())
+                            && b["joined_by"] == self.live["owner_actor"]
+                    })
+            });
+        }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
-        let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
+        let can_send =
+            mode == "ready" && !self.busy && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
+        let unsaved = |item: &Item| {
+            self.current
+                .as_ref()
+                .and_then(|record| {
+                    record
+                        .deliveries
+                        .iter()
+                        .find(|delivery| delivery.destination_id == self.router())
+                })
+                .map(|delivery| {
+                    delivery.receipt["local_fields"]
+                        .get(&item.id)
+                        .unwrap_or(&delivery.receipt["items"][&item.id])
+                })
+                .is_some_and(|row| {
+                    !row["text"].is_null()
+                        && !tico_recorder_native::workspace::item_fields_match(item, row)
+                })
+        };
         let order = items
             .iter()
             .filter(|item| item.task_id.is_empty())
             .chain(items.iter().filter(|item| !item.task_id.is_empty()));
         let rows: Vec<Value> = order
+            .filter(|item| item.closed_draft.is_some() || unsaved(item) || item.task_id.is_empty() || self.link_tasks["scope"] != self.link_scope()
+                || !self.link_tasks["linked"]["tasks"].as_array().into_iter().flatten()
+                    .any(|remote| remote["task_id"] == item.task_id))
+            .filter(|item| item.closed_draft.is_some() || unsaved(item) || item.kind != "link" || self.linked_task(&item.task_id).is_some())
             .map(|item| {
+                let linked = self.linked_task(&item.task_id);
+                let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
                 let chosen = if item.owner.is_empty() {
                     self.last_owner.clone()
                 } else {
@@ -2416,14 +3207,30 @@ impl Recorder {
                     .unwrap_or_default();
                 json!({
                     "id": item.id,
-                    "title": item.title,
+                    "unsaved": unsaved(item),
+                    "server_item_id": (!unsaved(item)).then(|| self.current.as_ref().and_then(|r| r.deliveries.iter()
+                        .find(|d| d.destination_id == self.router()))
+                        .map(|d| d.receipt["items"][&item.id]["id"].clone())).flatten(),
+                    "title": if unsaved(item) { json!(item.title) } else { linked.map(|task| task["title"].clone()).unwrap_or(json!(item.title)) },
+                    "number": linked.map(|task| task["number"].clone()),
+                    "status": linked.map(|task| task["status"].clone()),
+                    "proposed_task_id": proposal.map(|task| task["id"].clone()),
+                    "proposed_number": proposal.map(|task| task["number"].clone()),
+                    "due": item.due,
+                    "body": item.body,
+                    "kind": item.kind,
+                    "document": item.document,
                     "quote": item.quote,
                     "at_ms": item.at_ms,
                     "owner": chosen,
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
+                    "pending": self.pending_task_link(&item.task_id),
                     "sent_to": item.sent_to,
-                    "task_url": item.task_url,
+                    "closed_draft": item.closed_draft,
+                    "task_id": if linked.is_some() { item.task_id.clone() } else { String::new() },
+                    "task_url": if item.kind == "link" { self.link_tasks["browser"].as_str().map(|base| format!("{base}/#/task/{}", item.task_id)).unwrap_or_default() } else if linked.is_some() { item.task_url.clone() } else { String::new() },
+                    "can_link": proposal.is_some() && mode == "ready" && !self.context.kept_on_mac,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,
                     "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
@@ -2433,12 +3240,22 @@ impl Recorder {
             })
             .collect();
         json!({
+            "linked": self.linked_tasks_view(),
+            "linked_browser": self.link_tasks["browser"],
+            "link_scope": self.link_scope(),
+            "can_link": mode == "ready" && !self.context.kept_on_mac,
+            "actor": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.actor),
+            "saved": self.saved_target().is_some(),
+            "shared": self.saved_items_with_links(),
+            "shared_url": self.saved_items["browser_url"],
+            "shared_scope": format!("{}:{}", self.router(), self.items_epoch),
             "mode": mode,
             "org": org,
             "orgs": self.config.destinations.iter().map(|row| json!({"id":row.id,"name":row.name})).collect::<Vec<_>>(),
             "multiple": self.config.destinations.len() > 1,
             "can_change": self.context.live_destination.is_empty(),
             "draft_status": self.draft_status,
+            "skipped_links": self.context.skipped_task_links,
             "items": rows,
             "waiting": items.iter().filter(|item| item.task_id.is_empty()).count(),
             "owners": owners.iter().map(|(actor, name)| json!({"actor":actor,"name":name,"bot":actor.starts_with("bot:")})).collect::<Vec<_>>(),
@@ -2700,6 +3517,7 @@ impl Drop for Recorder {
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        self.join_delete();
     }
 }
 
@@ -2759,4 +3577,234 @@ pub fn seed_demo(store: &Store) -> anyhow::Result<()> {
         Ok(())
     })?;
     Ok(())
+}
+
+/// Waits for a recording that was just stopped to close, so it can be ended or deleted.
+fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
+    let deadline = Instant::now() + SEND_WAIT;
+    while store.get(id)?.state == "recording" {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "The recording is still stopping. Try again."
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod saved_panel_tests {
+    use super::*;
+    fn fixture() -> (tempfile::TempDir, Recorder) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Saved meeting").unwrap();
+        for destination in ["one", "two"] {
+            store
+                .delivery(
+                    &record.id,
+                    &store::Delivery {
+                        destination_id: destination.into(),
+                        meeting_id: format!("remote-{destination}"),
+                        status: "sent".into(),
+                        error: String::new(),
+                        receipt: json!({}),
+                    },
+                )
+                .unwrap();
+        }
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.config.destinations = vec!["one", "two"]
+            .into_iter()
+            .map(|id| settings::Destination {
+                id: id.into(),
+                name: id.into(),
+                base_url: format!("https://{id}.example"),
+                actor: "human:ana".into(),
+            })
+            .collect();
+        app.destination = "one".into();
+        app.open(&record.id).unwrap();
+        app.visible = false;
+        (dir, app)
+    }
+    fn late_reply(app: &Recorder) -> Reply {
+        Reply {
+            kind: "items".into(),
+            meeting: app.meeting.clone(),
+            generation: app.items_generation,
+            connection: app.saved_connection(),
+            result: Ok(
+                json!({"generation":app.items_generation,"sections":{"task":[{"text":"Old org words"}]},"presence":{"actors":[{"name":"Old person"}]}}),
+            ),
+        }
+    }
+    #[test]
+    fn saved_panel_drops_reply_after_sign_out_and_org_switch() {
+        for sign_out in [true, false] {
+            let (_dir, mut app) = fixture();
+            let reply = late_reply(&app);
+            assert_eq!(
+                app.saved_target(),
+                Some(("one".into(), "remote-one".into()))
+            );
+            app.saved_items = json!({"sections":{"task":[{"text":"Cached"}]}});
+            // The destination stays pinned in a live meeting even after it is disconnected.
+            if sign_out {
+                app.context.live_destination = "one".into();
+                app.sign_out("one");
+            } else {
+                app.choose_org("two");
+            }
+            assert!(app.saved_items.is_null());
+            assert!(app.presence_target.is_none());
+            assert!(app.items_generation > reply.generation);
+            app.tx.send(reply).unwrap();
+            app.tick();
+            assert!(app.saved_items.is_null());
+            if sign_out {
+                assert!(app.saved_target().is_none());
+            }
+        }
+    }
+    #[test]
+    fn overlapping_item_saves_accept_both_replies_in_one_connection_epoch() {
+        let (_dir, mut app) = fixture();
+        let target = app.saved_target().unwrap();
+        let first_epoch = app.saved_scope();
+        let second_epoch = app.saved_scope();
+        let generation = app.items_generation;
+        app.accept_saved_reply(
+            target.clone(),
+            first_epoch,
+            json!({"sections":{"task":[{"id":"a","text":"A saved"}]}}),
+        )
+        .unwrap();
+        assert!(app.items_generation > generation);
+        app.accept_saved_reply(
+            target,
+            second_epoch,
+            json!({"sections":{"task":[{"id":"a","text":"A saved"},{"id":"b","text":"B saved"}]}}),
+        )
+        .unwrap();
+        assert_eq!(
+            app.saved_items["sections"]["task"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(app.saved_scope(), first_epoch);
+    }
+    #[test]
+    fn item_save_reply_is_discarded_after_org_switch_even_if_switched_back() {
+        let (_dir, mut app) = fixture();
+        let target = app.saved_target().unwrap();
+        let epoch = app.saved_scope();
+        app.choose_org("two");
+        app.choose_org("one");
+        assert_eq!(app.saved_target(), Some(target.clone()));
+        assert!(
+            app.accept_saved_reply(
+                target,
+                epoch,
+                json!({"sections":{"task":[{"text":"Old reply"}]}})
+            )
+            .is_err()
+        );
+        assert!(app.saved_items.is_null());
+    }
+    #[test]
+    fn saved_panel_connection_error_clears_cached_words() {
+        let (_dir, mut app) = fixture();
+        app.saved_items = json!({"sections":{"task":[{"text":"Cached"}]}});
+        let mut reply = late_reply(&app);
+        reply.result = Err("Choose a Tico connection".into());
+        app.tx.send(reply).unwrap();
+        app.tick();
+        assert_eq!(app.saved_items, json!({"gone":true}));
+    }
+    #[test]
+    fn create_during_add_upload_never_sets_sending_and_can_start_after_completion() {
+        let (_dir, mut app) = fixture();
+        app.context.items.push(Item {
+            id: "added".into(),
+            kind: "task".into(),
+            title: "One task".into(),
+            owner: "human:ana".into(),
+            ..Default::default()
+        });
+        app.save_context();
+        let (release, held) = mpsc::channel();
+        assert!(app.job("add-item", move || {
+            held.recv()?;
+            Ok(json!({}))
+        }));
+        app.send_item("added", "human:ana");
+        assert!(app.sending.is_none());
+        assert_eq!(app.actions_view("one")["items"][0]["can_send"], false);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while app.busy {
+            assert!(Instant::now() < deadline);
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.actions_view("one")["items"][0]["can_send"], true);
+        assert!(app.sending.is_none());
+        // The next Create can start a job and its reply clears sending normally.
+        assert!(app.job("task", || Ok(json!({}))));
+        app.sending = Some("added".into());
+        while app.background.contains("task") {
+            assert!(Instant::now() < deadline);
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.sending.is_none());
+    }
+    #[test]
+    fn linked_refresh_preserves_closed_cards_and_any_unsaved_local_fields() {
+        let (_dir, mut app) = fixture();
+        let server = json!({"id":"server-a","section":"task","status":"pushed","version":2,"text":"Server title","result_ref":"existing","detail":{"owner":"human:ana"}});
+        app.context.items.push(Item {
+            id: "a".into(),
+            kind: "task".into(),
+            title: "My unsaved title".into(),
+            owner: "human:ana".into(),
+            task_id: "existing".into(),
+            closed_draft: Some(
+                json!({"item":server,"text":"My unsaved title","detail":{"body":"My details"}}),
+            ),
+            ..Default::default()
+        });
+        app.save_context();
+        app.current.as_mut().unwrap().deliveries[0].receipt = json!({"items":{"a":server}});
+        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"existing","title":"Server title"}],"linked":{"tasks":[{"task_id":"existing","title":"Server title"}]}});
+        app.link_tasks_at = Instant::now();
+        let rows = app.actions_view("one")["items"].clone();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["closed_draft"]["text"], "My unsaved title");
+        app.context.items[0].closed_draft = None;
+        let rows = app.actions_view("one")["items"].clone();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["unsaved"], true);
+        assert_eq!(rows[0]["title"], "My unsaved title");
+        assert!(rows[0]["server_item_id"].is_null());
+    }
+    #[test]
+    fn saved_panel_presence_deadline_is_independent_of_continuous_edits() {
+        let (_dir, mut app) = fixture();
+        let start = Instant::now();
+        let mut beats = vec![];
+        for second in 0..61 {
+            // Every second brings a new item reply, just as a busy shared panel does.
+            app.shared_items_reply(json!({"sections":{"task":[]}}));
+            let now = start + Duration::from_secs(second);
+            if app.presence_due(now) {
+                beats.push(second);
+                app.presence_at = Some(now);
+            }
+        }
+        assert_eq!(beats, vec![0, 15, 30, 45, 60]);
+    }
 }

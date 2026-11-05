@@ -31,8 +31,8 @@ published port. Ordinary local installs still check their configured port.
 ## It cannot be mistaken for a real install
 
 - A **Demo — sample data** strip stays across the top of every page and cannot be closed.
-- Everything is fictional: humans are `@acme.example`, and dates are relative to now, so the week
-  always ends today.
+- Everything is fictional: humans are `@acme.example`, and dates are relative to when the demo is built, so its
+  week ends on the day it starts.
 - Nothing leaves the computer. The update check is off, there is no telemetry, and the process
   refuses every connection to a non-local address.
 - Bots do not run. There is no scheduler; **Run now** says so; a message to a bot is answered with one
@@ -43,6 +43,9 @@ published port. Ordinary local installs still check their configured port.
   demo is read-only, and its strip reads **Read only demo**.
 
 Poking around is safe: changes go to a temporary database.
+
+`--data-dir PATH` keeps the sample company and your edits between starts. Its dates keep their original build
+time; use an empty directory to start a fresh week.
 
 ## Tico's public demo
 
@@ -88,7 +91,7 @@ node scripts/screenshots --only updates,settings-health   # some pages
 
 `scripts/screenshots` starts a demo, visits Updates, Tasks, Needs you, the team chart, a bot chat, Meetings, a
 meeting, Settings > Health, Settings > Computers, Finish setup, a tour step, Docs, Market, Strategy, Growth, Finance,
-Rules, Automations, Learnings, Threads, a Recruiting seat and Settings > Email & Phone at a desktop and a phone
+Rules, Automations, Learnings, Threads, a Recruiting seat and Settings > Inboxes at a desktop and a phone
 width, light and dark, and writes `<page>-<desktop|phone>-<light|dark>.png`. It waits for the icon font and
 fails, instead of saving a bad picture, on any console error, failed request, error banner, unloaded icon or
 page that never finished loading.

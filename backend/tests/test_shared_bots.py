@@ -3,6 +3,7 @@ import json
 from backend import shared_bots
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner, restrict, ready, claim  # noqa: F401
+from backend import bot_settings as BS
 
 
 def revision(api, bot):
@@ -49,8 +50,7 @@ def test_a_saved_config_with_the_removed_rotation_settings_still_loads_and_is_no
     branch(api, computer)
     with api.app.state.store.transaction() as c:
         declared = shared_bots.declared(c, 'cpo')
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(
-            {**declared, 'model': 'team-model', 'rotate_at': 150000, 'rotate_after_turns': 3}), 'cpo'))
+        BS.write(c, 'cpo', {**declared, 'model': 'team-model', 'rotate_at': 150000, 'rotate_after_turns': 3})
     assert get(api, 'bots/cpo')
     config = get(api, 'runners/assignments', computer['token'])[0]['config']
     assert config['model'] == 'team-model' and 'rotate_at' not in config and 'rotate_after_turns' not in config
@@ -64,7 +64,7 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
         settings = {'runtime': 'fake', 'model': 'team-model', 'harness': 'fake', 'reasoning_effort': 'high',
                     'session': 'task', 'fallback': {'harness': 'fake', 'model': 'fallback-model'}}
         declared = shared_bots.declared(c, 'cpo')
-        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps({**declared, **settings}), 'cpo'))
+        BS.write(c, 'cpo', {**declared, **settings})
     assignment = get(api, 'runners/assignments', computer['token'])[0]
     assert all(assignment['config'][key] == value for key, value in settings.items())
     branch_id = bot_id(api, 'cpo-cara')
@@ -134,7 +134,7 @@ def test_archive_restores_branches_without_losing_their_work_or_assignment(api):
         assert c.execute('SELECT runner_id FROM assignments WHERE bot=?', (branch_id,)).fetchone()[0] == computer['runner_id']
     # Restore uses upstream's activation check; the original was already active before archive.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',true) WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'materialize': True})
     post(api, 'bots/cpo/restore', {})
     assert get(api, 'bots/cpo-cara')['state'] == 'active'
 
@@ -149,7 +149,7 @@ def test_original_archive_preserves_paused_and_independently_archived_branches(a
     post(api, 'bots/cpo-cara/definition', {'status': 'active', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
     post(api, 'bots/cpo-cara/status', {'state': 'active'}, 'cara-test', expected=409)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',true) WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'materialize': True})
     post(api, 'bots/cpo/restore', {})
     cara, ana = bot_id(api, 'cpo-cara'), bot_id(api, 'cpo-ana')
     with api.app.state.store.read() as c:
@@ -163,7 +163,9 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     branch(api, runner(api, 'cara'))
     branch_id = bot_id(api, 'cpo-cara')
     with api.app.state.store.transaction() as c:
-        reminder = H._setup_reminder(c, branch_id)
+        reminder = H.task_create(c, H.KEEPER, "Finish setting up cpo-cara", "Still onboarding.", "human:ben",
+                                 deduplicate=False, lint=False)
+        H.event(c, H.KEEPER, "bot.setup_reminder", branch_id, {"task": reminder["id"], "owner": "human:ben"})
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'
@@ -172,7 +174,7 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
 
 def test_name_only_roster_marks_branches_without_exposing_the_original(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config, '$.shared_from', 'finance') WHERE bot='cpo'")
+        BS.update(c, 'cpo', {'shared_from': 'finance'})
         restrict(c, 'cpo', see={'everyone': True}, read={'people': ['ben']}, write={'people': ['ben']})
         restrict(c, 'finance', people=['ana'])
     response = api.get('/api/employees', headers={'Authorization': 'Bearer cara-test'})

@@ -159,15 +159,27 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
         return {"team": team, "department": "", "roles": []}
     text = _briefing(briefing)
     ranked = R.rank(value, dept, text, _about(c, who), limit=len(value["cards"]))
-    picked = [row["template_id"] for row in ranked["bots"]]
     members = {card["template"]: card for card in value["cards"] if card["department"] == dept}
     filled = _filled(c, group)
+    picked = [row["template_id"] for row in ranked["bots"]]
+    # A filled role the recommender left out (a niche card the briefing does not name) still counts, after the ranked ones.
+    picked += [t for t in members if t in filled and t not in picked]
     words, common = R._words(text), R._common(list(members.values()))
     raw = {row["template"]: row for row in read_cards(onboarding.settings)}
     suggested = set(ranked["suggested_default"])
-    shown = picked[:ROLES]
+    # The head and every role the team already fills are always shown, whatever their rank (so more than ROLES when a
+    # team has that many); the other slots go in rank order.
+    head = R.head_of(value, dept)
+    kept = {t for t in picked if t in filled or t == head}
+    shown, open_slots = [], ROLES - len(kept)
+    for template in picked:
+        if template in kept:
+            shown.append(template)
+        elif open_slots > 0:
+            shown.append(template)
+            open_slots -= 1
     # The rest of the department, the recommender's leftovers first, as the alternatives a role can take instead.
-    rest = picked[ROLES:] + sorted((t for t in members if t not in picked),
+    rest = [t for t in picked if t not in shown] + sorted((t for t in members if t not in picked),
                                                 key=lambda t: ({"default": 0, "common": 1}.get(members[t]["suggest"], 2),
                                                                members[t]["name"].lower()))
     pool = [t for t in rest if t not in filled and t not in shown][:ALTERNATIVES]

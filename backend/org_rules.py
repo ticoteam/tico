@@ -36,6 +36,7 @@ from . import task_caps
 from . import teammate_access as TA
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 KINDS = ("internal", "external")
 SOURCE_KINDS = ("vendor", "customer", "government", "other")
@@ -81,10 +82,7 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
-    # A database made before `where:` keeps its org_rules as they are (CREATE TABLE IF NOT EXISTS), so the column is
-    # added here once.
-    if "where_terms" not in {row[1] for row in c.execute("PRAGMA table_info(org_rules)")}:
-        c.execute("ALTER TABLE org_rules ADD COLUMN where_terms TEXT NOT NULL DEFAULT '[]'")
+    # A database made before `where:` got org_rules.where_terms from migration 0047.
     D.ensure(c)
 
 
@@ -210,9 +208,7 @@ def redact_audit(c, auth, who, found):
             cite = snap.get("cite") if isinstance(snap, dict) else None
             if not cite:
                 continue
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
-            if not _cite_visible(c, auth, who, row, memo):
-                snap["cite"] = {"hidden": True}
+            snap["cite"] = _cite(c, auth, who, cite, memo)
 
 
 def _audit(c, actor, rule_id, before, after, who):
@@ -542,6 +538,10 @@ def _cite_visible(c, auth, who, row, memo):
 def _cite(c, auth, who, cite, memo=None):
     if not cite:
         return None
+    from .files import page_ref_denials
+    denied = page_ref_denials(c, auth, who, cite)
+    if "A deleted page" in denied.values():
+        return {"removed": True, "label": "A deleted page"}
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
     if not _cite_visible(c, auth, who, row, memo if memo is not None else {}):
         return {"hidden": True}
@@ -610,7 +610,8 @@ def settings_for(c, bot, ctx=None):
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
     mail = mail_settings.stored(c, bot)
-    sends = bool(mail and mail["outbound_send"])
+    from .google_workspace import permissions
+    sends = bool(mail and mail["outbound_send"]) and permissions(c)["send_mail"]   # the company's Send mail too
     out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
                 "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
 
@@ -638,7 +639,7 @@ def settings_for(c, bot, ctx=None):
                 out.append({"text": f"Spends up to ${caps[key]:g} a {PERIOD_WORDS[key[:-4]]} across {label}",
                             "source": "usage_limits", "edit": {"page": "strategy", "anchor": "budget", "path": path}})
 
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     declared = turn_budgets._declared(config["config"] if config else None)
     own = turn_budgets.own(declared)
     shared = turn_budgets.limits(c, declared)

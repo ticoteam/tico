@@ -46,7 +46,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import run_triggers
+from . import maintenance_limits, run_triggers
 from .store import H, Problem
 
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -55,17 +55,25 @@ RUN_LIMIT_S = 75 * 60       # a request whose run has not ended in this long is 
 PICKUP_LIMIT_S = 20 * 60    # ...and one no computer picked up in this long: move on (it may still post later)
 KINDS = ("daily", "weekly")
 MANAGER_WAIT_S = 90 * 60    # a manager waits this long for late reports, then writes with what it has
+LEARNINGS_MAX = 15          # learnings a bot is handed in one request (the Learn step, PR5)
 # A linter checks the shape of every update. The feed is skimmed, so a wall of text comes back with how to write it, as a
 # warning on the accepted post (refused only when TICO_STYLE_LINT=refuse): rewriting cost bots whole runs. An empty update
 # or a week in review without its slides is still refused. A writing correction never counts toward quarantine.
-# Updates have no title and no sections, just 1-5 bullets, never task ids, only plain English;
-# the word limits are 10% under the old 100 words.
-BULLETS_MAX = 5
+# Updates have no title and no sections, never task ids, only plain English. The linter checks the shape a post was
+# written under (`format_version`): only version 2 is linted, so an older update is never judged by these rules.
+FORMAT_VERSION = 2
+# Version 2 is three bullets of work, plus any `Blocked:` and `Suggestion:` bullets (up to FLAGS_MAX each), which the
+# writer adds when there are blockers or suggestions it acted on. BULLETS_MAX also bounds a rolling window that
+# automations keep (automation_actions._pointer), so it is the work-bullet count.
+BULLETS_MAX = 3
+FLAGS_MAX = 3
 LIMITS = {"daily": {"words": 90, "bullet": 25}, "weekly": {"words": 180, "bullet": 40}}
-SHAPE = ("An update is one to five bullets in plain English and nothing else: no title, no headings or "
-         "sections (no Done / Next), no task ids or internal codes. Each bullet is one line: what you did, "
-         "what you do next, or what waits on a person. Link a doc or PR in the words if it helps.")
+SHAPE = ("An update is three bullets in plain English: what you did, what you do next, or what waits on a person. "
+         "Add a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each suggestion you acted on, if any. "
+         "No title, no headings or sections (no Done / Next), no task ids or internal codes. Link a doc or PR in the "
+         "words if it helps.")
 BULLET = re.compile(r"^\s*[-*•]\s+\S")
+FLAG = re.compile(r"^\s*[-*•]\s+(blocked|suggestion)\s*:", re.I)
 HEADING = re.compile(r"^\s*(#{1,6}\s|\*\*[^*]+\*\*:?\s*$|__[^_]+__:?\s*$|[A-Z][A-Za-z /]{0,30}:\s*$)")
 LABEL = re.compile(r"^\s*[-*•]\s+(\*\*[^*]+\*\*|(done|next|blocked|needs you|blocked / needs you|this week|next week)\s*[:—-])", re.I)
 MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
@@ -89,6 +97,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS updates(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
  headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ format_version INTEGER NOT NULL DEFAULT 1, learnings_saved INTEGER, suggestions_seen TEXT, delivery_batch_id TEXT,
  UNIQUE(bot, kind, day));
 CREATE INDEX IF NOT EXISTS updates_created ON updates(created_at);
 CREATE TABLE IF NOT EXISTS update_reads(
@@ -101,6 +110,7 @@ CREATE INDEX IF NOT EXISTS update_archive_actor ON update_archive_overrides(acto
 CREATE TABLE IF NOT EXISTS update_queue(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL, rank INTEGER NOT NULL,
  state TEXT NOT NULL, message_id TEXT, sent_at TEXT, done_at TEXT, reason TEXT,
+ delivery_only INTEGER NOT NULL DEFAULT 0, run_id TEXT,
  UNIQUE(bot, kind, day));
 CREATE INDEX IF NOT EXISTS update_queue_day ON update_queue(day, state, rank);
 CREATE TABLE IF NOT EXISTS update_settings(
@@ -129,6 +139,9 @@ def effective_kind(kind, slides, day=None):
 
 
 def settings(c, bot):
+    # Counsel speaks only on the private task it was asked to read; it cannot publish an update.
+    if bot == H.COUNSEL:
+        return {"daily": False, "weekly": False}
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
 
@@ -137,6 +150,8 @@ def set_settings(c, bot, daily=None, weekly=None):
     now = settings(c, bot)
     daily = now["daily"] if daily is None else bool(daily)
     weekly = now["weekly"] if weekly is None else bool(weekly)
+    if bot == H.COUNSEL and (daily or weekly):
+        raise Problem("updates_unavailable", "Counsel speaks only on its own task and cannot publish updates", 422)
     c.execute("INSERT INTO update_settings(bot,daily,weekly) VALUES(?,?,?) ON CONFLICT(bot) DO UPDATE SET "
               "daily=excluded.daily, weekly=excluded.weekly", (bot, int(daily), int(weekly)))
     return {"daily": daily, "weekly": weekly}
@@ -287,7 +302,8 @@ def build_queue(c, day, kind, assistant=None):
         "SELECT b.id, b.slug, (SELECT max(u.created_at) FROM updates u WHERE u.bot=b.id) last_update, "
         "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.id) last_turn "
         "FROM bots b LEFT JOIN update_settings us ON us.bot=b.id "
-        "WHERE b.state='active' AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1").fetchall()
+        "WHERE b.state='active' AND b.id<>? AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1",
+        (H.COUNSEL,)).fetchall()
     depth = depths(c, [r["id"] for r in rows])
     order = sorted(rows, key=lambda r: (-depth[r["id"]], r["last_update"] or "", r["last_turn"] or "", r["slug"]))
     for rank, row in enumerate(order):
@@ -300,6 +316,12 @@ def build_queue(c, day, kind, assistant=None):
         c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,?,?,?,'queued')",
                   (H.new_id(), author, kind, day, rank))
     return len(order) + len(people)
+
+
+def cycle_done(c, day):
+    """Whether today's cycle has nothing left to send or settle: no request for `day` is queued or out. The Update step
+    is pending until this is true; Maintenance asks it on each tick and at the end of a run."""
+    return c.execute("SELECT 1 FROM update_queue WHERE day=? AND state IN ('queued','sent') LIMIT 1", (day,)).fetchone() is None
 
 
 def drafted_people(c):
@@ -398,11 +420,20 @@ def _finish(c, row, state, reason=None):
     c.execute("UPDATE update_queue SET state=?, done_at=?, reason=? WHERE id=?", (state, H.now(), reason, row["id"]))
 
 
+def _delivery_only(row):
+    return bool(row["delivery_only"]) if "delivery_only" in row.keys() else False
+
+
+NO_WORK = "no work since its last update"
+
+
 def settle_sent(c, row):
     """The request out now: posted, ended without a post, or still going. True while it is going."""
     redo = row["redo"] if "redo" in row.keys() else 0
-    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated_at>=?" if redo else ""),
-                 (row["bot"], row["kind"], row["day"], *([row["sent_at"]] if redo else []))).fetchone():
+    posted = c.execute("SELECT * FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated_at>=?" if redo else ""),
+                       (row["bot"], row["kind"], row["day"], *([row["sent_at"]] if redo else []))).fetchone()
+    if posted:
+        learning_feedback(c, row, posted)
         _finish(c, row, "posted")
         return False
     if is_person(row["bot"]):
@@ -414,6 +445,12 @@ def settle_sent(c, row):
     job = c.execute("SELECT j.state, a.state attempt_state FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                     "WHERE j.message_id=?", (row["message_id"],)).fetchone()
     age = (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds()
+    if job and job["state"] == "completed":
+        learning_feedback(c, row)
+    if job and job["state"] == "completed" and _delivery_only(row):
+        # A delivery turn writes no update by design: its turn ending is the delivery. Never asked again.
+        _finish(c, row, "delivered_without_update")
+        return False
     if job and job["state"] in ("completed", "canceled", "uncertain", "held"):
         _retry_or_miss(c, row, {"completed": "its run ended without posting an update",
                                    "canceled": "the request was canceled",
@@ -431,12 +468,103 @@ def settle_sent(c, row):
     return True
 
 
-def request_text(c, bot, kind, day, redo=False):
+def learning_feedback(c, row, posted=None):
+    """Use this bot's batch receipt, or its own completed turn's final reply."""
+    from . import learnings, suggestions
+    saved, attempt = None, None
+    if posted is not None:
+        if posted["delivery_batch_id"] not in (None, row["id"]):
+            return
+        saved = posted["learnings_saved"]
+    seen = posted["suggestions_seen"] if posted is not None else []
+    if isinstance(seen, str):
+        seen = json.loads(seen)
+    if "redo" not in row.keys() or not row["redo"]:
+        suggestions.feedback(c, row["bot"], row["id"], seen or (), settled=posted is not None)
+    if saved is None:
+        attempt = c.execute("SELECT a.final_text FROM learning_deliveries d "
+                            "JOIN jobs j ON j.message_id=coalesce(d.feedback_message_id,d.message_id) AND j.bot_id=d.recipient "
+                            "JOIN attempts a ON a.id=j.attempt_id "
+                            "WHERE d.update_batch_id=? AND d.recipient=? AND j.state='completed' "
+                            "ORDER BY a.finished_at DESC LIMIT 1",
+                            (row["id"], row["bot"])).fetchone()
+        match = re.search(r"(?im)^\s*learnings_saved:\s*(\d{1,2})\s*$", (attempt[0] or "") if attempt else "")
+        saved = int(match[1]) if match else None
+    if saved is not None:
+        learnings.record_saved(c, row["bot"], row["id"], saved)
+    if attempt:
+        learnings.settle_delivery(c, row["bot"], row["id"])
+    suggestions.settle_delivery(c, row["bot"], row["id"])
+
+
+def settle_learnings(c):
+    """A post can arrive before the turn's final reply; collect its count on a later pump tick."""
+    rows = c.execute("SELECT DISTINCT d.update_batch_id AS id,d.recipient AS bot,d.sent_at "
+                     "FROM learning_deliveries d JOIN jobs j "
+                     "ON j.message_id=coalesce(d.feedback_message_id,d.message_id) AND j.bot_id=d.recipient "
+                     "WHERE j.state='completed' AND d.settled_at IS NULL AND d.sent_at IS NOT NULL "
+                     "ORDER BY d.sent_at DESC LIMIT 100").fetchall()
+    for row in rows:
+        learning_feedback(c, row)
+    # Suggestions bound to a request whose turn completed and never got a post: delivered.
+    from . import suggestions
+    for row in c.execute("SELECT DISTINCT s.update_batch_id AS id,s.owner_bot_id AS bot FROM suggestions s "
+                         "JOIN jobs j ON j.message_id=s.message_id AND j.bot_id=s.owner_bot_id "
+                         "WHERE j.state='completed' AND s.status='sent' AND s.outcome IS NULL LIMIT 100").fetchall():
+        suggestions.settle_delivery(c, row["bot"], row["id"])
+
+
+def request_slots(c, bot, suggestion_items=None):
+    """What later steps put in a bot's request, each a list of one-line strings: quiet tasks (Find stuck), learnings
+    to keep (Learn, at most LEARNINGS_MAX) and suggestions (Suggest)."""
+    from . import learnings, suggestions
+    return {"quiet_tasks": [], "learnings": [i["line"] for i in learnings.pending(c, bot)],
+            "suggestions": [suggestion_line(i) for i in
+                            (suggestions.pending(c, bot) if suggestion_items is None else suggestion_items)]}
+
+
+def suggestion_line(item):
+    return f"{item['id']}: {item['title']} — {item['body']}"
+
+
+def _hidden_for(c, bot):
+    """The restricted bots' actors whose tasks stay out of this bot's request: every restricted bot but the bot itself,
+    whose own tasks are what the request is about."""
+    return [H.bot_actor(slug) for slug in sorted(restricted_bots(c)) if slug != bot]
+
+
+def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=None, batch_id=None, suggestion_items=None):
     """What the bot is asked, with its facts: done since its last update, open work, what waits on
-    a person, its goals. It writes from these, so the turn is short and says only what happened.
-    A redo of a past week takes that week's finished work and the bot's old update to rewrite."""
+    a person, its goals, and the slots for quiet tasks, learnings and suggestions. It writes from these, so the turn is
+    short and says only what happened. A redo of a past week takes that week's finished work and the bot's old update
+    to rewrite. A `delivery` asks only for the learnings and suggestions: the bot takes them in and writes no update.
+    Task facts are the ones every member may read (`shared_tasks_sql`): this request is in the bot's main session."""
     actor = H.bot_actor(bot)
     week = kind == "weekly"
+    slots = (request_slots(c, bot) if suggestion_items is None and not redo
+             else request_slots(c, bot, [] if redo else suggestion_items))
+    if learning_items is not None:
+        slots["learnings"] = [i["line"] for i in learning_items]
+    if redo:
+        slots["suggestions"] = []
+    elif slots["suggestions"]:
+        slots["suggestions"] = [*slots["suggestions"],
+                                "When posting an update, pass suggestions_seen with only the ids you acted on and "
+                                "delivery_batch_id=" + str(batch_id or "the request id") + "."]
+    learning_block = []
+    if slots["learnings"] and not redo:
+        learning_block = ["", "Learnings for you:",
+                          "Read memory/learnings.md and its working rules first. Keep durable statements and corrections; "
+                          "merge related entries and skip what is already known. Quote the source, keep personal preferences "
+                          "out of shared memory, and send instruction or settings changes to BotOps. Commit and push changes.",
+                          *["- " + str(item) for item in slots["learnings"][:LEARNINGS_MAX]],
+                          "Report learnings_saved: n (including zero) in your final reply. When posting an update, "
+                          "also pass learnings_saved and delivery_batch_id=" + str(batch_id or "the request id") + "."]
+    line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
+    if delivery and not redo:
+        ask = [f"Learnings and suggestions for you ({day}). Nothing changed since your last update, so do not post one "
+               "now: take in what is below, act on what applies, then carry on.", ""]
+        return "\n".join(ask + learning_block + ["Suggestions:", line(slots["suggestions"], str)])
     if redo:
         start = datetime.combine(datetime.fromisoformat(day).date(), datetime.min.time(), ZONE)
         utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
@@ -444,15 +572,15 @@ def request_text(c, bot, kind, day, redo=False):
     else:
         last = c.execute("SELECT max(created_at) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
         since, until = last or H.shift(H.now(), days=-7 if week else -1), "9999"
-    done = c.execute("SELECT title FROM tasks WHERE owner_id=? AND status IN ('done','closed') AND updated_at>=? AND updated_at<? "
-                     "ORDER BY updated_at DESC LIMIT 12", (actor, since, until)).fetchall()
-    open_ = c.execute("SELECT title, status FROM tasks WHERE owner_id=? AND status IN ('open','doing','waiting','review','ready') "
-                      "ORDER BY updated_at DESC LIMIT 12", (actor,)).fetchall()
-    asked = c.execute("SELECT title, owner_id FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND status IN "
-                      "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (actor,)).fetchall()
+    shared = shared_tasks_sql(_hidden_for(c, bot))
+    done = c.execute(f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status IN ('done','closed') "
+                     "AND updated_at>=? AND updated_at<? ORDER BY updated_at DESC LIMIT 12", (actor, since, until)).fetchall()
+    open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
+                      "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12", (actor,)).fetchall()
+    asked = c.execute(f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id LIKE 'human:%' "
+                      "AND status IN ('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (actor,)).fetchall()
     goals = c.execute("SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
                       "ORDER BY rank LIMIT 5", (actor,)).fetchall()
-    line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     post_day = f" with day {day}" if redo else ""
     if week:
         tracked = kpi_snapshot(c, bot)
@@ -480,11 +608,13 @@ def request_text(c, bot, kind, day, redo=False):
             f"Time for your daily update ({day}). Post it with hub_update_create{post_day} "
             "(or `hub update create`), in plain words, then carry on.",
             "",
-            "Write one to five bullets in plain English and nothing else: no title, no headings or sections, "
+            "Write three bullets in plain English and nothing else: no title, no headings or sections, "
             "no task ids or internal codes. Each bullet is one line: what you did, what you do next, or what "
-            f"waits on a person (say who). At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all.",
+            "waits on a person (say who). Add a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each "
+            f"suggestion you acted on, if any. At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} "
+            "in all, not counting those two.",
             "If nothing got done, say why in one bullet, then pick your most useful open task and start it in "
-            "this turn. Every bot moves at least once a day. An update that breaks these rules is refused.",
+            "this turn. An update that breaks these rules is refused.",
         ]
         facts = [
             "", f"Finished {'that day' if redo else 'since your last update'}:", line(done, lambda r: r["title"]),
@@ -492,6 +622,12 @@ def request_text(c, bot, kind, day, redo=False):
             "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
             "Your goals:", line(goals, lambda r: r["title"]),
         ]
+    # The slots go to either kind: a week in review is asked with what a day is, so a Friday request carries them too.
+    facts += [
+        "Quiet tasks (no change since your last update):", line(slots["quiet_tasks"], str),
+        "Suggestions:", line(slots["suggestions"], str),
+    ]
+    facts += learning_block
     team, missing = team_updates(c, bot, kind, day)
     if team or missing:
         ask.insert(1, "You manage a team: your update is your own work and what matters from theirs, naming who did it. "
@@ -585,28 +721,30 @@ def draft_facts(c, author, kind, day):
     goals = c.execute("SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
                       "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
     # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
-    decided = c.execute(f"SELECT t.title, e.new FROM task_events e JOIN tasks t ON t.id=e.task_id WHERE e.actor=? "
-                        f"AND e.field='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
+    decided = c.execute(f"SELECT t.title, e.new FROM history_events e JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id "
+                        f"WHERE e.actor_id=? AND e.kind='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
                         "ORDER BY e.created_at DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        "SELECT * FROM message_refs WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
         + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
-    comments = said("kind IN ('say','ask') AND json_extract(refs,'$.task') IS NOT NULL "
+    comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL "
                     "AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
     email = ((P.person(author[6:], _chart(c)[0]) or {}).get("email") or "").strip().lower()
     meetings = c.execute(
-        "SELECT m.title, m.notes FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+        "SELECT m.title, m.notes, m.metadata FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
         "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata,'$.kind')='meeting' "
         "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created_at>=? AND ("
         "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
         "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.participants')) "
         "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created_at DESC LIMIT ?",
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []
+    from .media import effective_audience
+    meetings = [row for row in meetings if effective_audience(H._json(row['metadata'], {})) == 'team']
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     facts = [f"{name}'s {'week in review' if week else 'daily update'} for {day}.", "",
              f"Finished {'this week' if week else 'since yesterday'}:", line(done, lambda r: r["title"]),
@@ -630,9 +768,10 @@ def draft_instructions(kind):
     if kind == "weekly":
         return DRAFT_INSTRUCTIONS + SLIDES_SHAPE + (' Reply with one JSON object and nothing else: {"slides": {"goal": "...", '
                                                     '"kpis": [], "done": [...], "focus": [...], "blockers": [...]}}.')
-    return DRAFT_INSTRUCTIONS + (f"Write one to five bullets in plain English: no title, headings or task ids, at most "
-                                 f"{LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all. Reply with "
-                                 'one JSON object and nothing else: {"body": "- first bullet\\n- second bullet"}.')
+    return DRAFT_INSTRUCTIONS + (f"Write three bullets in plain English: no title, headings or task ids, at most "
+                                 f"{LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all, plus a "
+                                 "`Blocked:` bullet for each blocker, if any. Reply with one JSON object and nothing else: "
+                                 '{"body": "- first bullet\\n- second bullet\\n- third bullet"}.')
 
 
 def writer_for(c, settings, store=None, vault=None):
@@ -667,6 +806,34 @@ def drafter(c, settings, author, assistant):
     return assistant
 
 
+DRAFT_LABEL = "update-draft"    # the spend row's label: a draft's model call under the decisions cap (`judge.spend`)
+
+
+def _draft_call(store, write, system, user):
+    """One draft model call, metered into the team's decision spend (`judge.metered`) as `update-draft`. A writer
+    returns no usage, so the call is charged at its ceiling and flagged `usage: unknown`, not priced. No writer is
+    an `unconfigured` call, which costs nothing."""
+    from clients import judge as J
+    from . import judge
+    if write is None:
+        raise J.JudgeError("unconfigured", "no model is set up to write a draft")
+    model = getattr(write, "model", "") or ""
+
+    def call():
+        return {"answers": True, "model": model, "answer": write(system, user)}
+    return judge.metered(store, [model], user, system, DRAFT_LABEL, call)["answer"]
+
+
+def _draft_failure(exc):
+    """The retry reason for a draft that did not come back."""
+    from clients import judge as J
+    if isinstance(exc, J.JudgeError) and exc.code == "spend_cap":
+        return "the team's decision spend cap is reached"
+    if isinstance(exc, J.JudgeError):
+        return "the draft model did not answer (" + exc.code + ")"
+    return "the draft model did not answer (" + type(exc).__name__ + ")"
+
+
 def write_draft(store, author, write, assistant):
     """Draft the person's update Tico has out, with `write(system, user)`, and post it labelled. Runs
     outside a transaction (the model call holds no lock). The call carries the instructions and
@@ -685,9 +852,9 @@ def write_draft(store, author, write, assistant):
     out = failed = None
     if not own:
         try:
-            out = write(system, user)
+            out = _draft_call(store, write, system, user)
         except Exception as exc:
-            failed = "the draft model did not answer (" + type(exc).__name__ + ")"
+            failed = _draft_failure(exc)
     with store.transaction() as c:
         row = c.execute("SELECT * FROM update_queue WHERE id=? AND state='sent'", (row["id"],)).fetchone()
         if not row:
@@ -720,27 +887,43 @@ def write_draft(store, author, write, assistant):
         return posted
 
 
-def send_request(c, row, assistant=None):
+def send_request(c, row, assistant=None, delivery=False):
     redo = bool(row["redo"]) if "redo" in row.keys() else False
     if is_person(row["bot"]):
         # No message: the server drafts it (`write_draft`), so no bot run is involved.
         c.execute("UPDATE update_queue SET state='sent', message_id=NULL, sent_at=? WHERE id=?", (H.now(), row["id"]))
         return None
-    message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"], redo),
-                    kind="notice", refs=run_triggers.stamp({"update_request": row["id"], "wake": "update"}, "schedule",
-                                                           row["id"], purpose="write update"))
-    c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=? WHERE id=?",
-              (message["id"], H.now(), row["id"]))
+    delivery = bool(delivery) and not redo
+    from . import learnings, suggestions
+    items = [] if redo else learnings.pending(c, row["bot"], row["id"])
+    suggestion_items = [] if redo else suggestions.pending(c, row["bot"], row["id"])
+    refs = {"update_request": row["id"], "wake": "update", **({"delivery_only": True} if delivery else {})}
+    message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]),
+                    request_text(c, row["bot"], row["kind"], row["day"], redo, delivery=delivery,
+                                 learning_items=items, batch_id=row["id"], suggestion_items=suggestion_items),
+                    kind="notice", refs=run_triggers.stamp(refs, "schedule", row["id"], purpose="write update"))
+    c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=?, delivery_only=? WHERE id=?",
+              (message["id"], H.now(), int(delivery), row["id"]))
+    if items:
+        learnings.mark_sent(c, row["bot"], row["id"], message["id"], items)
+    if suggestion_items:
+        suggestions.mark_sent(c, row["bot"], row["id"], message["id"], suggestion_items)
     return message
 
 
-def dispatch(c, at=None, assistant=None):
-    """One step, from the scheduler's tick: build today's queue after 05:00, settle the request
-    that is out, and send the next one. At most one request is out at a time. With an `assistant`
-    (drafting is on), a person's draft is next once no bot can be asked: the caller writes it."""
+def dispatch(c, at=None, assistant=None, build=True):
+    """One step, from the scheduler's tick: settle the request that is out and send the next one. The scheduler uses
+    build=False: Maintenance's Update step builds the day's queue. Direct callers may still build it after 05:00
+    with `build`. At most one request is out at a time. With an `assistant`
+    (drafting is on), a person's draft is next once no bot can be asked: the caller writes it. A bot's request
+    is sent as the Update step decided it (backend/maintenance_steps/update.py): a delivery-only turn when its row
+    says so, and a bot with no work is skipped on the row before it gets here."""
+    settle_learnings(c)
+    from . import suggestions
+    suggestions.expire(c)
     local = local_now(at)
     day = local.date().isoformat()
-    if local.hour >= START_HOUR:
+    if build and local.hour >= START_HOUR:
         build_queue(c, day, kind_for(day), assistant)
     out = c.execute("SELECT * FROM update_queue WHERE state='sent' ORDER BY sent_at LIMIT 1").fetchone()
     if out and settle_sent(c, out):
@@ -761,7 +944,10 @@ def dispatch(c, at=None, assistant=None):
         chart = chart or _chart(c)
         if waits_on_reports(c, row, chart):
             continue                      # asked once its reports are in, or the wait is up
-        send_request(c, row)
+        if not maintenance_limits.allow(c, row["bot"]):
+            continue                      # refused for now: the row stays queued, and the next pass asks again
+        send_request(c, row, delivery=bool(row["delivery_only"]))
+        maintenance_limits.record(c, row["bot"])     # one update request is one Maintenance wake
         return row["bot"]
     drafting = set(drafted_people(c))
     for row in c.execute("SELECT * FROM update_queue WHERE state='queued' AND day=? AND bot LIKE 'human:%' "
@@ -797,7 +983,7 @@ def redo(c, kind, day, bots=None, managers=False):
     if when.isoformat() > today():
         raise Problem("day", "A redo is for today or an earlier day", 422)
     rows = c.execute("SELECT b.id FROM bots b LEFT JOIN update_settings us ON us.bot=b.id WHERE b.state='active' "
-                     "AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug").fetchall()
+                     "AND b.id<>? AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug", (H.COUNSEL,)).fetchall()
     ids = {b: (H.resolve_bot(c, b) or {}).get("id", b) for b in bots or ()}
     chosen = [r["id"] for r in rows if not bots or r["id"] in ids.values()]
     unknown = sorted(b for b, bid in ids.items() if bid not in chosen)
@@ -929,6 +1115,9 @@ def _decode(row):
     raw = item.pop("slides", None)
     item["slides"] = json.loads(raw) if raw else None
     item.pop("meetings", None)            # read rules use it; it is not part of the card
+    item.pop("format_version", None)      # internal: the rules the post was checked by
+    if item.get("suggestions_seen"):
+        item["suggestions_seen"] = json.loads(item["suggestions_seen"])
     if "inputs" in item:
         inputs = item.pop("inputs")
         item["inputs"] = json.loads(inputs) if inputs else []
@@ -951,8 +1140,12 @@ def with_inputs(c, item, readable=None, meetings=False):
 
 
 # ----------------------------------------------------------------------------- posting and reading
-def lint(body, kind):
-    """What is wrong with an update, or None: 1-5 one-line bullets, plain English, short."""
+def lint(body, kind, version=FORMAT_VERSION):
+    """What is wrong with an update, or None. Version 2 is the three-bullet shape: up to BULLETS_MAX work bullets,
+    plus up to FLAGS_MAX `Blocked:` and as many `Suggestion:` bullets (flags are not section labels), plain English,
+    short. An update of an older version was checked by other rules, so it is not linted here (None)."""
+    if version < 2:
+        return None
     limit = LIMITS[kind]
     lines = [line for line in str(body or "").splitlines() if line.strip()]
     problems = []
@@ -965,15 +1158,21 @@ def lint(body, kind):
     if loose:
         problems.append(f"{len(loose)} line{'s are' if len(loose) != 1 else ' is'} not a bullet (" + repr(loose[0][:40]) + ")")
     bullets = [line for line in lines if BULLET.match(line)]
-    labelled = [b.strip() for b in bullets if LABEL.match(b)]
+    flags = [b for b in bullets if FLAG.match(b)]
+    work = [b for b in bullets if not FLAG.match(b)]
+    labelled = [b.strip() for b in work if LABEL.match(b)]
     if labelled:
         problems.append("a bullet starts with a section label (" + repr(labelled[0][:30]) + ")")
-    if len(bullets) > BULLETS_MAX:
-        problems.append(f"it has {len(bullets)} bullets (at most {BULLETS_MAX})")
+    if len(work) > BULLETS_MAX:
+        problems.append(f"it has {len(work)} bullets (at most {BULLETS_MAX})")
+    for name in ("blocked", "suggestion"):
+        count = sum(1 for b in flags if FLAG.match(b).group(1).lower() == name)
+        if count > FLAGS_MAX:
+            problems.append(f"it has {count} {name} bullets (at most {FLAGS_MAX})")
     long = [len(b.split()) - 1 for b in bullets if len(b.split()) - 1 > limit["bullet"]]
     if long:
         problems.append(f"{len(long)} bullet{'s are' if len(long) != 1 else ' is'} over {limit['bullet']} words (longest {max(long)})")
-    words = sum(len(b.split()) - 1 for b in bullets)
+    words = sum(len(b.split()) - 1 for b in work)
     if words > limit["words"]:
         problems.append(f"it is {words} words (a {kind} update is at most {limit['words']})")
     visible = MD_LINK.sub(r"\1", str(body or ""))
@@ -994,7 +1193,8 @@ def check_day(c, bot, day):
 
 
 def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
-         meetings=False, reader=True, source=None, warning=""):
+         meetings=False, reader=True, source=None, warning="", learnings_saved=None, suggestions_seen=None,
+         delivery_batch_id=None):
     """Store an update by `bot` (a bot id or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
@@ -1005,7 +1205,9 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     flagged draft, so what they post over it is their own words, and their reply links no flagged input. `source` is
     the automation run posting it ({automation, run, task}); any other post clears it. `warning` is an org rule's warn
     line (org_rule_check), put before the update once its own words pass the writing checks: a week in review's goal,
-    a daily's bullets, never linted itself."""
+    a daily's bullets, never linted itself. What the turn reports back is stored as given: `learnings_saved` (how many
+    learnings it kept), `suggestions_seen` (the suggestions it acted on) and `delivery_batch_id` (the delivery it answers).
+    Every post is written as the current format version, so an edit of an older update is linted by the current rules."""
     day = day or today()
     kind = effective_kind(kind, slides, day)
     if kind not in KINDS:
@@ -1042,6 +1244,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         inputs = [u["id"] for u in team_updates(c, bot, kind, day)[0]]
     inputs_json = json.dumps(list(inputs)) if inputs else None
     source_json = json.dumps(source, sort_keys=True) if source else None
+    seen_json = json.dumps([str(s) for s in suggestions_seen]) if suggestions_seen else None
     if drafted_by:
         draft, edited, flagged = drafted_by, None, int(bool(meetings))
     elif existing and existing["drafted_by"] and not replace_draft and (reader or not existing["meetings"]):
@@ -1050,16 +1253,19 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         draft, edited, flagged = None, None, 0
     if existing:
         c.execute("UPDATE updates SET headline=?, body=?, slides=?, updated_at=?, drafted_by=?, edited_by=?, "
-                  "inputs=?, meetings=?, source=? WHERE id=?",
-                  (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, existing["id"]))
+                  "inputs=?, meetings=?, source=?, format_version=?, learnings_saved=?, suggestions_seen=?, "
+                  "delivery_batch_id=? WHERE id=?",
+                  (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, FORMAT_VERSION,
+                   learnings_saved, seen_json, delivery_batch_id, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
         c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides,created_at,updated_at,drafted_by,edited_by,"
-                  "inputs,meetings,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "inputs,meetings,source,format_version,learnings_saved,suggestions_seen,delivery_batch_id) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged,
-                   source_json))
+                   source_json, FORMAT_VERSION, learnings_saved, seen_json, delivery_batch_id))
         # A new latest logical day supersedes updates this reader previously restored. A backdated
         # redo must not revoke a restore: there is already a newer day, and this post did not
         # supersede it. Removing just restore overrides keeps manual archives intact. Same-day
@@ -1072,6 +1278,13 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         # The update's card in its author's Home (backend/thread_cards.py): one per new update; an edit keeps it.
         from . import thread_cards
         thread_cards.post_card(c, uid, bot, kind, day)
+    if (learnings_saved is not None or suggestions_seen is not None) and not is_person(bot):
+        batch = c.execute("SELECT * FROM update_queue WHERE bot=? AND " +
+                          ("id=?" if delivery_batch_id else "kind=? AND day=? AND state='sent'"),
+                          (bot, delivery_batch_id) if delivery_batch_id else (bot, kind, day)).fetchone()
+        if batch:
+            learning_feedback(c, batch, {"learnings_saved": learnings_saved, "delivery_batch_id": delivery_batch_id,
+                                          "suggestions_seen": suggestions_seen})
     H.event(c, H.bot_actor(drafted_by) if drafted_by else author_actor(bot), "update.post", uid, {"kind": kind, "day": day, **({"warning": problem} if problem else {})})
     posted = with_inputs(c, one(c, uid), meetings=is_person(bot) and reader)
     return {**posted, "warning": problem} if problem else posted
@@ -1090,13 +1303,15 @@ def _style(problem):
 def purge_rejected(c):
     """Delete stored updates the linter would refuse now and ask their bots again (rejected updates are
     deleted and redone). Runs when the hub
-    starts; the linter refuses new ones at the door. Each bot goes to the back of its day's queue."""
+    starts; the linter refuses new ones at the door. Each bot goes to the back of its day's queue. Only version 2
+    updates are linted: a version 1 update (posted before the three-bullet shape) is never deleted for the new rules."""
     from . import org_rule_check
     removed = []
     # A week in review with slides was checked as slides; an older bullet one keeps the bullet rules.
     # Only when the shape is refused: a post accepted with a warning stays.
-    for row in c.execute("SELECT * FROM updates WHERE slides IS NULL").fetchall() if H.STYLE_LINT == "refuse" else ():
-        if not lint(org_rule_check.unwarned(row["body"]), row["kind"]):
+    for row in c.execute("SELECT * FROM updates WHERE slides IS NULL AND format_version >= 2").fetchall() \
+            if H.STYLE_LINT == "refuse" else ():
+        if not lint(org_rule_check.unwarned(row["body"]), row["kind"], row["format_version"]):
             continue
         c.execute("DELETE FROM update_reads WHERE update_id=?", (row["id"],))
         c.execute("DELETE FROM update_archive_overrides WHERE update_id=?", (row["id"],))
@@ -1175,12 +1390,13 @@ def _only(bots, column="u.bot"):
 
 
 def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, limit=40,
-            archive=False, include_archive=False, may_read=None, meetings=False):
+            archive=False, include_archive=False, may_read=None, meetings=False, brief=False):
     """The feed, newest first, with this person's read state, reply counts, and the requests that
     ended without an update (so a silent bot shows). `readable` is the set of bots to show; `may_read`,
     all the authors they may read, decides a card's links, so My bots or direct reports narrow the
     cards but not what a card was written from. Without `meetings` (`meeting_reader`), an update
-    flagged `meetings` is left out, and so is any link to one."""
+    flagged `meetings` is left out, and so is any link to one. `brief`: the updates with their read state and the
+    unread count only, as Home's Updates card shows them (no inputs, replies, missed requests or today's queue)."""
     where, args = [_kept(meetings)], []
     if not readable:
         where.append("0")
@@ -1208,12 +1424,18 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
-        item = with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
+        item = _decode(row) if brief else with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
         item["read"] = bool(item.pop("read_at"))
         item["archived"] = bool(row["archived"])
-        item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.update')=?",
-                                    (row["id"],)).fetchone()[0]
         items.append(item)
+    if brief:
+        return {"updates": items, "unread": count_unread(c, actor, readable, kind, meetings)}
+    # Every row's replies in one pass over messages: a count a row read all of them once each, 40 times a page.
+    replies = dict(c.execute(
+        "SELECT json_extract(refs,'$.update') AS u, count(*) FROM messages WHERE json_extract(refs,'$.update') IN (%s) "
+        "GROUP BY u" % ",".join("?" * len(items)), [item["id"] for item in items]).fetchall()) if items else {}
+    for item in items:
+        item["replies"] = replies.get(item["id"], 0)
     missed = []
     if not unread and not before and not archive and not include_archive:
         for row in c.execute("SELECT bot, kind, day, reason, done_at FROM update_queue WHERE state='missed' "

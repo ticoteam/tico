@@ -185,19 +185,22 @@ function updBadge(n) {
   const allRead = $('#upd-allread');
   if (allRead && UPD && updIsTree(UPD)) allRead.hidden = !(n > 0) && !(UPD.list || []).some(u => !u.read && !u.quiet);
 }
-// An update's author is a bot slug or `human:<id>` for a person, who posts in the same shape.
+// An update's author is a bot slug or `human:<id>` for a person, who posts in the same shape. Its avatar is the
+// height of the name's line (--upd-av, ui/styles/updates.css), at the start of it.
+const UPD_AV = 20;
 function updAuthor(key) {
   const person = String(key || '').startsWith('human:');
-  if (!person) return {person, name: empName(key), label: botDisplayName(key), avatar: avatar(key, 36), href: `#/bot/${encodeURIComponent(key)}`};
+  if (!person) return {person, name: empName(key), label: botDisplayName(key), avatar: avatar(key, UPD_AV), href: `#/bot/${encodeURIComponent(key)}`};
   const id = String(key).slice(6), p = (S.people || []).find(x => x.id === id);
-  return {person, name: esc(p?.name || id), label: p?.name || id, avatar: personAvatar(p || {id, name: id}, 36), href: `#/person/${encodeURIComponent(id)}`};
+  return {person, name: esc(p?.name || id), label: p?.name || id, avatar: personAvatar(p || {id, name: id}, UPD_AV), href: `#/person/${encodeURIComponent(id)}`};
 }
 // Today on the queue's clock (backend/updates.py ZONE). Friday's update is the week in review, so your own
 // is written on the Daily tab any day and on the Weekly tab on Friday.
 const updToday = () => new Date().toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const updCanWrite = state => state.kind === 'daily' || new Date(updToday() + 'T12:00:00Z').getUTCDay() === 5;
-// The action row is icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
-// on a phone). Mark read and Archive are swapped in place, so they have their own builders.
+// The actions are icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
+// on a phone). Reply, Mark read and Archive sit on the name's line; Mark read and Archive are swapped in place, so
+// they have their own builders.
 const updReadBtn = read => read
   ? '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark unread" title="Mark unread"><span class="nav-icon" aria-hidden="true">mark_email_unread</span></button>'
   : '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark read" title="Mark read"><span class="nav-icon" aria-hidden="true">mark_email_read</span></button>';
@@ -211,7 +214,8 @@ function updWriteBtn(u) {
   const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
   return `<button type="button" class="upd-act" data-upd-write aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">edit</span></button>`;
 }
-// `kids` is the tree's toggle for the cards of this card's reports, at the right end of the action row.
+// `kids` is the tree's toggle for the cards of this card's reports, at the right end of the row under the update
+// (with Edit on your own card); the row is gone when it has neither.
 function updCard(u, i, state, kids = '') {
   const who = updAuthor(u.bot);
   const open = state.open.has(u.id);
@@ -219,16 +223,13 @@ function updCard(u, i, state, kids = '') {
   const body = String(u.body || '').trim();
   const alert = !u.read && !u.quiet;
   return `<article class="upd-card${alert ? ' unread' : ''}${!u.read && u.quiet ? ' upd-quiet' : ''}${!u.slides && state.view === 'inbox' ? ' swipeable' : ''}${open ? ' open' : ''}${i === state.sel ? ' sel' : ''}" data-upd="${esc(u.id)}" data-i="${i}" tabindex="-1">
-    <div class="upd-av">${who.avatar}</div>
     <div class="upd-main">
-      <div class="upd-meta"><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
+      <div class="upd-meta"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
-        <span class="upd-corner">${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span></div>
+        <span class="upd-corner">${who.person ? '' : updReplyBtn(u)}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span></div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
-      <div class="upd-actions">
-        ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${kids}
-      </div>
+      <div class="upd-actions">${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${kids}</div>
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
           <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
@@ -360,7 +361,7 @@ function updEditor(u, n, state, kids = '') {
         <textarea rows="3" data-upd-slide="${key}">${esc((s[key] || []).join('\n'))}</textarea></label>`).join('')}
       <label class="upd-field">KPIs <span class="muted">optional, one per line as Name: value</span>
         <textarea rows="2" data-upd-slide="kpis">${esc((s.kpis || []).map(updKpiLine).join('\n'))}</textarea></label>`
-    : `<textarea rows="4" aria-label="Your update" placeholder="- One to five bullets: what you did, do next, or wait on">${esc(u?.body || '')}</textarea>`;
+    : `<textarea rows="4" aria-label="Your update" placeholder="- Three bullets: what you did, do next, or wait on (plus Blocked: lines)">${esc(u?.body || '')}</textarea>`;
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}

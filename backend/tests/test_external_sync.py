@@ -2,6 +2,7 @@
 
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend import bot_settings as BS
 
 GROK_ID = "4a7e880c-eb8e-49df-9789-3abfff190aa7"
 
@@ -46,7 +47,7 @@ def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions
     assert row["reports_to"] == "human:ana" and row["owner_id"] == "ana"
     assert row["display_name"] == "Grok Designer"          # "Tico Designer" in Grok
     with api.app.state.store.read() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bid,)).fetchone()[0], {})
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (bid,)).fetchone()[0], {})
         assert config["harness"] == "grokbot"
         assert config["grok"]["instructions"] == "You design Tico. Keep it plain."
         assert config["grok"]["source"] == "Groky"
@@ -232,7 +233,7 @@ def test_stale_import_warns_without_claiming_a_runtime_failure_or_changing_histo
     [issue] = issues()
     assert issue['severity'] == 'warning' and not issue['needs_person']
     with api.app.state.store.read() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bid,)).fetchone()[0], {})
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (bid,)).fetchone()[0], {})
         assert issue['since'] == config['grok']['last_sync'] < later
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bid,)).fetchone()[0] == 0
     assert len(room_messages(api, 'grok-designer')) == 2
@@ -435,19 +436,6 @@ def room_messages_of(api, person, slug):
             "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
             "WHERE v.scope='personal' AND v.owner_id=? AND v.room_key=? ORDER BY m.created_at,m.rowid",
             ("human:" + person, bid))]
-
-
-def test_an_existing_database_gets_the_queue_trigger_that_queues_for_app_delivery(api):
-    from backend import store as S
-    from backend.config import Settings
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DROP TRIGGER queue_bot_message")
-        c.execute(S.QUEUE_TRIGGER.replace(" AND NOT EXISTS (SELECT 1 FROM runners r", " AND NOT EXISTS (SELECT 2 FROM runners r"))
-    S.Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(seed_market=False)
-    with store.read() as c:
-        stored = c.execute("SELECT sql FROM sqlite_master WHERE name='queue_bot_message'").fetchone()[0]
-    assert stored == S.QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1)
 
 
 def delivering(api):

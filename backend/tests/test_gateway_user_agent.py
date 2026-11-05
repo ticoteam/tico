@@ -2,7 +2,7 @@
 answers a library's default one (`Python-urllib/3.12`) with 403 before the request reaches the Gateway, so a Decide
 call sent without it never arrives, and with no other provider left nothing answers. CI talks to a fake Gateway
 directly; here that fake refuses every agent that is not Tico's, the way the release guard's proxy does for the runner
-(runner/tests/test_conformance.py `RefusingProxy`)."""
+(runner_support/tests/test_conformance.py `RefusingProxy`)."""
 
 import json
 import re
@@ -115,6 +115,14 @@ def turn(base):
 CALLS = {"decisions": decide, "chat completions": write, "key check": check, "enroll": enrol, "rotate": turn}
 
 
+def letters(base):
+    G.letters(KEY, base, "?limit=1")
+    return "GET", "/v1/gateway/letters?limit=1"
+
+
+CALLS["letters"] = letters
+
+
 @pytest.mark.parametrize("call", list(CALLS))
 def test_every_gateway_call_carries_ticos_user_agent_past_an_edge_that_refuses_the_default(call, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", "v0.3.65")
@@ -152,6 +160,7 @@ HQ_CLIENTS = {
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',
     "backend/support_access.py": '"User-Agent": "tico-support-access"',
+    "backend/suggestions.py": '"User-Agent": G.user_agent()',
     "clients/gateway.py": "branded_opener(*handlers).open(",
     "clients/judge.py": "G.branded_opener(*handlers).open(",
     "setup/support.py": '"User-Agent": "tico-setup"',
@@ -163,7 +172,7 @@ def test_every_module_that_sends_to_tico_hq_is_known_and_names_its_user_agent():
     """A new client of Tico HQ or the Gateway fails here until it sends a user agent of its own (a library's default
     is refused at the edge) and is listed above; one that stops naming its agent fails too."""
     found = set()
-    for folder in ("backend", "clients", "setup", "connectors", "runner", "scripts"):
+    for folder in ("backend", "clients", "setup", "connectors", "runner_support", "scripts"):
         for path in (ROOT / folder).rglob("*.py"):
             if "tests" in path.relative_to(ROOT).parts:
                 continue

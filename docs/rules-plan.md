@@ -254,7 +254,7 @@ ahead of time so it doesn't try.
     (`GET /api/v2/rule-holds?thread=`), which the chat draws under its messages.
   - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
     conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
-    `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
+    `has_outside_members` (someone in it is outside the roster, or is a Slack actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
     sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar
@@ -306,6 +306,8 @@ ahead of time so it doesn't try.
   - A held output never shows as a task hold or on the Blocked tab.
 - **Rollout:** live with Block by default when it ships; no observe-only week (Chris, Oct 30). A team setting turns
   checks Off. The rule-check eval runs before merge and picks the level.
+- A verdict applies to the route it checked, even when it passes or goes unchecked. If the recipients change while
+  the judge runs, the send returns 409 `moved` and sends nothing. A new send checks the new route.
 - **Fails open:** no engine, the team's spend cap, the day's call cap, the deadline, an error or a malformed answer let
   the output through, with a `rules.unchecked` event. Each block, escalate or warn is one `rules.blocked` /
   `rules.escalated` / `rules.warned` event. Never the text.
