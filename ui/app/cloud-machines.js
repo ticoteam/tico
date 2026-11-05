@@ -35,7 +35,8 @@ async function cloudMachineSizes() {
 }
 function cloudSizeLabel(size) {
   if (!size.cpu) return cloudSizeName(size.name);
-  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB · $${Number(size.usd_per_hour).toFixed(2)}/h`;
+  const hourly = Number(size.usd_per_hour).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
+  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB · $${hourly}/h`;
 }
 // "Running · Default · $0.42 this month · 3 starts", then a size waiting for the next start; a problem replaces the state.
 function cloudMachineStatus(m) {
