@@ -630,7 +630,7 @@ class Letters:
             if exc.code == "idempotency_key_abandoned" and not row["hq_letter_id"]:
                 self.abandoned(ident)
                 return
-            if exc.code in ("quote_changed", "quote_expired") and not row["hq_letter_id"]:
+            if exc.code in ("quote_changed", "quote_expired") and not had_claim and not row["hq_letter_id"]:
                 # HQ refused before claiming the send. A new quote must receive a new approval.
                 self.refused(ident, exc.code)
                 try:
