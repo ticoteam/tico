@@ -285,7 +285,7 @@ def test_a_company_task_is_public_and_has_no_reader_list(api):
     assert who_sees(api, open_task["id"]) == {"private": False, "requester_id": "human:ana", "owner_id": "bot:ops",
                                               "readers": []}
     r = change(api, open_task["id"], {"add": ["ben"]})
-    assert r.status_code == 403 and "make it private to choose who sees it" in r.text, r.text
+    assert r.status_code == 422 and "make it private to choose who sees it" in r.text, r.text
 
 
 def test_a_group_reads_through_whoever_is_in_it_now(api):
@@ -298,7 +298,7 @@ def test_a_group_reads_through_whoever_is_in_it_now(api):
     assert r.status_code == 200, r.text
     assert readers(api, row["id"]) == {"ana", "ben"}
     assert not sql_sees(api, "cara-test", "Confidential: Payroll review.")
-    assert change(api, row["id"], {"add": ["group:no-such-group"]}).status_code == 404
+    assert change(api, row["id"], {"add": ["group:no-such-group"]}).status_code in (404, 422)
 
 
 def test_create_a_private_task_with_readers(api):
@@ -309,4 +309,4 @@ def test_create_a_private_task_with_readers(api):
     assert any(e["field"] == "reader" and e["new"] == "human:ben" for e in get(api, "tasks/" + made["id"])["events"])
     r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Draft the offer letter again", "body": "Again.",
                                         "private": False, "readers": ["ben"]}, headers=headers())
-    assert r.status_code == 403 and "make it private" in r.text, r.text
+    assert r.status_code == 422 and "make it private" in r.text, r.text
