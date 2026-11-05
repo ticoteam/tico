@@ -4,7 +4,9 @@ import json
 import pytest
 
 from backend.auth import Identity
+from backend.models import ReviewAsk
 from backend.store import H
+from backend.task_review import check_ask
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_file_reviews import ask as review_ask
 from backend.tests.test_org_rule_check import Judge
@@ -84,9 +86,10 @@ def test_held_runner_answer_keeps_its_question_option_source(api):
     fid = made.json()["page"]["file_id"]
     question = ask("bot:ops")
     question["questions"][0]["options"][0].update(label=label, file=fid + "@1")
-    asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question})["comment"]
     # Give the already-claimed test turn this question as its input, as a runner claim would.
     with api.app.state.store.transaction() as c:
+        value = check_ask(c, tid, ReviewAsk.model_validate(question), api.app.state.auth, Identity("human:ana", "owner"))
+        asked = H.task_comment(c, "human:ana", tid, "Choose the draft", wake=False, ask=value)
         c.execute("UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
                   (asked["id"], attempt["id"]))
     text = "Never publish an unreviewed draft."
