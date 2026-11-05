@@ -41,7 +41,7 @@ def check(c, auth, who, owner, *, record=None, live_id=None, roles=None, guest=N
         live = c.execute("SELECT * FROM live_meetings WHERE id=?", (live_id,)).fetchone()
         if not live or not live_privacy.member(c, who.actor, live):
             raise Problem('not_found', 'Meeting not found', 404)
-    private = bool(record and record['metadata'].get('private')) or bool(live and live['visibility'] != 'team')
+    private = bool(record and media.effective_audience(record['metadata']) != 'team') or bool(live and live['visibility'] != 'team')
     if not private:
         return None
     allowed = audience(c, auth, record=record, live=live)

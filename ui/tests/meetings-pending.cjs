@@ -22,6 +22,7 @@ const server = http.createServer(async (req, res) => {
       const S={me:{id:me},people:[{id:'ana',name:'Ana'},{id:'ben',name:'Sam'}]};
       const $=s=>document.querySelector(s), esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
       const actorLabel=a=>a==='human:ben'?'Sam':'Ana', activeEmps=()=>[], getForget=()=>{}, toast=()=>{}, liveOn=()=>{};
+      const copyText=async text=>{window.copiedText=text;};
       const taskOwnerOptions=()=>'<option value="human:ben">Sam</option>', botByRef=()=>null;
       const get=p=>fetch(API+p).then(r=>r.json());
       const post=async(p,body)=>{const r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json','X-Viewer':me},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const e=new Error(data.error?.detail || data.error);e.body=data;throw e;}return data;};
@@ -57,6 +58,7 @@ const server = http.createServer(async (req, res) => {
     item.version++;
     if (body.text !== undefined) item.text=body.text;
     if (body.detail) Object.assign(item.detail, body.detail);
+    if (body.status) item.status=body.status;
     if (pushing && item.status === 'proposed') { item.status='pushed'; sent++; lastSend=structuredClone(body); }
     item.updated_by='human:' + req.headers['x-viewer'];
     answer({item,pushed:pushing}); emit('meeting_items',{meeting_id:'m1',kind:'items'}); return;
@@ -142,6 +144,36 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     assert.equal(item.detail.body,'B saved focused Details');
     assert.equal(item.version,version+1);
     assert.equal(sent,2);
+    for (const [action, inFlight] of [['Send to Sam', true], ['Dismiss', false]]) {
+      for (const page of [a,b]) await page.evaluate(()=>MEET.pendingDrafts.clear());
+      item.status='proposed'; item.version++; emit('meeting_items',{meeting_id:'m1',kind:'items'});
+      await a.locator('[data-pending="i1"] [data-send]').waitFor();
+      await b.locator('[data-pending="i1"] [data-send]').waitFor();
+      if (inFlight) pauseWrite();
+      await a.evaluate(() => {
+        for (const [key,value] of [['text','My unsaved title'],['body','My unsaved details']]) {
+          const field=document.querySelector(`[data-pending-field="${key}"]`);
+          field.value=value; field.dispatchEvent(new Event('input',{bubbles:true}));
+        }
+      });
+      if (inFlight) await a.waitForFunction(()=>!!meetPendingDraft(MEET,'i1').flight);
+      await b.getByRole('button',{name:action,exact:true}).click();
+      const closed=a.locator('[data-pending="i1"]');
+      await closed.getByText(action === 'Dismiss' ? 'Dismissed by Sam' : 'Sent by Sam',{exact:true}).waitFor();
+      assert.match(await closed.locator('pre').textContent(),/My unsaved title/);
+      assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
+      assert.equal(await closed.locator('textarea,input,select').count(),0);
+      if (inFlight) {
+        release();
+        await a.waitForFunction(()=>!meetPendingDraft(MEET,'i1').flight);
+        assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
+        await closed.getByRole('button',{name:'Copy',exact:true}).click();
+        assert.match(await a.evaluate(()=>window.copiedText),/My unsaved title[\s\S]*My unsaved details/);
+      } else await closed.getByRole('button',{name:'Close',exact:true}).click();
+      await closed.waitFor({state:'detached'});
+      await a.evaluate(()=>meetItemsLoad(MEET,'m1'));
+      assert.equal(await a.locator('[data-pending="i1"]').count(),0,'acknowledged drafts stay closed');
+    }
     emit('meeting_items',{meeting_id:'m1',gone:true});
     await b.waitForFunction(()=>MEET.open===false);
     assert.deepEqual(errors,[]);

@@ -1188,7 +1188,7 @@ function meetPendingAccepted(draft, patch, item) {
 async function meetPendingSave(state, rid, iid) {
   const draft = meetPendingDraft(state, iid);
   clearTimeout(draft.timer);
-  if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
+  if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
   const patch = draft.patch;
   draft.patch = {}; draft.error = '';
   draft.inflightPatch = patch;
@@ -1207,7 +1207,18 @@ function meetPendingRender(state, rec, data) {
   if (!panel) return;
   if (!panel.firstElementChild) panel.innerHTML = '<header class="row"><h4>Pending tasks</h4><span data-meet-presence class="muted"></span></header><div data-pending-rows></div>';
   const list = panel.querySelector('[data-pending-rows]');
-  const pending = Object.values(data.sections || {}).flat().filter(it => it.status === 'proposed');
+  const pending = Object.values(data.sections || {}).flat().filter(it => {
+    const draft = meetPendingDraft(state, it.id);
+    if (it.status === 'proposed') return true;
+    if (draft.sending && it.updated_by === 'human:' + S.me?.id) return false;
+    if (!draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length)) {
+      clearTimeout(draft.timer);
+      // Capture before a late save reply can replace the draft's base or dirty fields.
+      draft.closed ||= meetPendingMerge(meetPendingMerge(draft.base || it, draft.inflightPatch || {}), draft.patch);
+      return true;
+    }
+    return false;
+  });
   for (const node of [...list.children]) if (!pending.some(it => it.id === node.dataset.pending)) node.remove();
   panel.hidden = !pending.length;
   for (const item of pending) {
@@ -1215,6 +1226,18 @@ function meetPendingRender(state, rec, data) {
     const server = draft.base?.version > item.version ? draft.base : item;
     if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
     let node = [...list.children].find(row => row.dataset.pending === item.id);
+    if (item.status !== 'proposed') {
+      if (!node) {
+        node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id; list.append(node);
+      }
+      const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
+      node.innerHTML = `<div>${esc(item.status === 'pushed' ? 'Sent by ' : 'Dismissed by ')}${esc(meetAuthor(item.updated_by))}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><button type="button" class="ghost" data-copy>Copy</button> <button type="button" class="ghost" data-close>Close</button>`;
+      node.querySelector('pre').textContent = text;
+      const close = () => { draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {}; node.remove(); panel.hidden = !list.children.length; };
+      node.querySelector('[data-copy]').onclick = async () => { try { await copyText(text); close(); } catch (e) { toast(e.message, true); } };
+      node.querySelector('[data-close]').onclick = close;
+      continue;
+    }
     if (!node) {
       node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
       node.innerHTML = `<label>Title<textarea data-pending-field="text" aria-label="Title"></textarea></label>
@@ -1245,7 +1268,7 @@ function meetPendingRender(state, rec, data) {
           if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
           await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
                      send ? {...draft.patch, force, version: draft.version} : {status: 'dismissed', version: draft.version});
-          draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current = null;
+          draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current = null; draft.closed = null;
           await meetItemsLoad(state, rec.id);
         } catch (e) {
           draft.error = e.message;
@@ -1263,7 +1286,8 @@ function meetPendingRender(state, rec, data) {
         }
         finally { draft.sending = false; node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = false); }
         await meetItemsLoad(state, rec.id);
-        node.querySelector('[data-save-error]').hidden = !draft.error;
+        const error = node.querySelector('[data-save-error]');
+        if (error) error.hidden = !draft.error;
       };
       node.querySelector('[data-send]').onclick = () => finish(true);
       node.querySelector('[data-dismiss]').onclick = () => finish(false);

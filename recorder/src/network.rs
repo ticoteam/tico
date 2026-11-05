@@ -982,7 +982,9 @@ impl Tico {
         if !context.live_id.is_empty() {
             body["live_meeting_id"] = json!(context.live_id);
         }
-        let reply = if let Some(entry) = filed.filter(|entry| entry.status == "sent") {
+        let reply = if let Some(entry) =
+            filed.filter(|entry| entry.receipt["items"][item_id]["id"].as_str().is_some())
+        {
             let server_item = entry.receipt["items"][item_id]["id"]
                 .as_str()
                 .context("This item is not saved on the meeting")?;

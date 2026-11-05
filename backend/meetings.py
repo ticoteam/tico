@@ -93,7 +93,8 @@ def initial_review(c, who):
 
 def announce(c, auth, rid, meta):
     """Publish a shared transcript once, in the transaction that makes it live."""
-    if meta.get('review_state', 'live') != 'live' or meta.get('private') or meta.get('ready_announced'):
+    from .media import effective_audience
+    if meta.get('review_state', 'live') != 'live' or effective_audience(meta) != 'team' or meta.get('ready_announced'):
         return
     done = get(rid, c)
     if not done['transcript_original'] and not meta.get('turns'):

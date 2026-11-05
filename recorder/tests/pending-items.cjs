@@ -22,6 +22,7 @@ const path = require('node:path');
       a.shared = {can_send:true, audience:['human:sam','human:dana'],
         presence:{actors:[{actor:'human:sam',name:'Sam'}]},
         sections:{task:[{version:1,id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',body:'Details'}}]}};
+      Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text;}},configurable:true});
       window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
       const original = window.__TAURI__.core.invoke;
       window.__TAURI__.core.invoke = async (cmd, args) => {
@@ -36,6 +37,7 @@ const path = require('node:path');
         item.version++;
         if (args.body.text !== undefined) item.text=args.body.text;
         Object.assign(item.detail,args.body.detail || {});
+        item.updated_by='human:dana';
         if (args.action === 'send') { item.status='pushed'; item.result_ref='created-task'; f.sent=structuredClone(item); f.lastSend=structuredClone(args.body); }
         return {item:structuredClone(item)};
       };
@@ -101,8 +103,42 @@ const path = require('node:path');
     assert.deepEqual(await page.evaluate(()=>window.pendingFixture.lastSend),{text:'Title only',version});
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved focused Details');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.version),version+1);
-    await page.evaluate(()=>window.pendingFixture.a.shared.sections.task[0].status='proposed');
-    await title.fill('Still editing');
+    for (const [status, inFlight] of [['pushed',true],['dismissed',false]]) {
+      const id='recovery-'+status;
+      await page.evaluate(({id})=>{
+        const f=window.pendingFixture;
+        f.a.shared.sections.task=[{id,version:1,section:'task',text:'Remote title',status:'proposed',detail:{owner:'human:sam',body:'Remote details'}}];
+      },{id});
+      const row=page.locator(`[data-shared-item="${id}"]`);
+      await row.waitFor();
+      if(inFlight) await page.evaluate(()=>{const f=window.pendingFixture;f.hold=new Promise(resolve=>f.release=resolve);});
+      await row.evaluate(el=>{
+        for(const [key,value] of [['text','My unsaved title'],['body','My unsaved details']]) {
+          const field=el.querySelector(`[data-shared-field="${key}"]`);
+          field.value=value;field.dispatchEvent(new Event('input',{bubbles:true}));
+        }
+      });
+      if(inFlight) await page.waitForFunction(()=>window.pendingFixture.inflight===1);
+      await page.evaluate(({status})=>{
+        const item=window.pendingFixture.a.shared.sections.task[0];
+        item.status=status;item.updated_by='human:sam';item.text='Sent title';item.detail.body='Sent details';item.version++;
+      },{status});
+      const closed=page.locator(`[data-shared-row="${id}"]`);
+      await closed.getByText(status==='pushed'?'Sent by Sam Okafor':'Dismissed by Sam Okafor',{exact:true}).waitFor();
+      assert.match(await closed.locator('pre').textContent(),/My unsaved title/);
+      assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
+      assert.equal(await closed.locator('textarea,input,select').count(),0);
+      if(inFlight) {
+        await page.evaluate(()=>window.pendingFixture.release());
+        await page.waitForFunction(()=>!window.pendingFixture.inflight);
+        assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
+        await closed.getByRole('button',{name:'Copy',exact:true}).click();
+        assert.match(await page.evaluate(()=>window.copiedText),/My unsaved title[\s\S]*My unsaved details/);
+      } else await closed.getByRole('button',{name:'Close',exact:true}).click();
+      await closed.waitFor({state:'detached'});
+    }
+    await page.evaluate(()=>window.pendingFixture.a.shared.sections.task=[{id:'gone-test',version:1,section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam'}}]);
+    await page.locator('[data-shared-item]').getByRole('textbox',{name:'Title',exact:true}).fill('Still editing');
     await page.evaluate(()=>window.pendingFixture.a.shared={gone:true});
     await page.locator('[data-shared-item]').waitFor({state:'detached'});
     assert.deepEqual(errors,[]);
