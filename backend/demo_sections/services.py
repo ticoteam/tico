@@ -124,13 +124,17 @@ def seed(b):
         c.execute("UPDATE postal_mail_settings SET created_at=?,updated_at=? WHERE id=1", (H.now(), H.now()))
     b.write(mail_clock)
     _letters(b)
-    b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
     _gateway(b)
     _runners(b)
     _move_gateway_bots(b)
     _models(b)
     _subscription(b)
     _connectors(b)
+
+
+def mail_access(b):
+    """Seed after the company's conversations so the grant's audit ids do not shift their stable ids."""
+    b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
 
 
 def _inboxes(b):
