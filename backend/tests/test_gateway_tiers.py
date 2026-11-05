@@ -399,3 +399,45 @@ def test_the_meeting_tier_is_a_meeting_model_not_a_bots_pick():
     assert "tico-meeting-1.0" not in {row["id"] for row in providers.provider_models("tico")}
     assert "tico-meeting-1.0" in {row["id"] for row in providers.provider_models("tico", meeting=True)}
     assert "tico-meeting" not in T.view()["tiers"]
+
+
+def _tier_running_a_held_model(current_held=True):
+    """HQ's first department tier with one more version that runs the held Terra model (synthetic; no HQ data)."""
+    doc = json.loads(json.dumps({**T.SNAPSHOT, "schema": 1}))
+    row = next(r for r in doc["models"] if r.get("department"))
+    held = dict(row["versions"][-1], version="2.0", id=f"{row['id']}-2.0", model="GPT-6.1 Terra")
+    row["versions"].append(held)
+    if current_held:
+        row["current"] = "2.0"
+    return T.validate(doc), row
+
+
+def test_a_live_tier_running_the_held_model_is_left_out_of_every_gateway_view():
+    """Dev 693: once HQ publishes a tier on the held model, the picker, the lineup and the resolver never offer it."""
+    cat, row = _tier_running_a_held_model(current_held=True)
+    assert row["id"] not in T.view(cat)["tiers"]
+    assert row["id"] not in [m["id"] for m in T.lineup(cat=cat)["models"]]
+    assert T.resolve(row["id"], cat) is None and T.resolve(f"{row['id']}-2.0", cat) is None
+    assert T.row_for(f"{row['id']}-2.0") is None
+
+
+def test_a_held_pinned_version_is_left_out_but_the_tier_stays_on_its_current_version():
+    cat, row = _tier_running_a_held_model(current_held=False)
+    assert T.resolve(f"{row['id']}-2.0", cat) is None
+    assert T.resolve(row["id"], cat)["version"] == row["current"]
+    assert "2.0" not in [v["version"] for v in T.view(cat)["tiers"][row["id"]]["versions"]]
+    assert [m["pinned"] for m in T.lineup(cat=cat)["models"] if m["id"] == row["id"]] == [f"{row['id']}-{row['current']}"]
+
+
+def test_a_saved_or_fresh_pick_of_a_held_tier_is_refused_by_the_model_check(monkeypatch):
+    cat, row = _tier_running_a_held_model(current_held=True)
+    monkeypatch.setattr(T, "catalog", lambda: cat)
+    with pytest.raises(providers.ProviderError):
+        providers.complete_choice(["tico"], model=f"{row['id']}-2.0")
+    assert providers.complete_choice(["tico"], model=f"{row['id']}-{T.FIRST_VERSION}") == ("pi", f"{row['id']}-{T.FIRST_VERSION}")
+
+
+def test_every_held_catalog_model_is_held_by_the_gateway_too():
+    """The Gateway's held list names each held catalog row's model, so a live tier cannot reopen one of them."""
+    held = [row["id"] for row in providers.MODEL_CATALOG if row.get("held")]
+    assert held and all(T._model_key(model) in T.HELD_MODELS for model in held)
