@@ -22,7 +22,7 @@ def no_sources(value, secrets):
 
 def sources(api):
     t = task(api, owner="bot:ops", private=False)
-    _, publisher = turn(api, "ops")
+    _, publisher = turn(api, "cpo")
     hidden = published(api, publisher, task=t["id"], name="restricted.html", title="Restricted source")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
@@ -86,7 +86,7 @@ def test_real_write_leak_sweep(api, make):
                   "messages/" + data["answered"]["comment"]["id"],
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/messages",
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/snapshot",
-                  "files/" + data["allowed"] + "/meta", "bots/ops/files", "pages", "files/search?q=source"]
+                  "files/" + data["allowed"] + "/meta", "bots/cpo/files", "pages", "files/search?q=source"]
     for path in paths:
         no_sources(get(api, path, token), secrets(data))
     for path in ("files/" + data["hidden"], "files/" + data["bid"], "files/" + data["hidden"] + "/versions/1"):
@@ -117,6 +117,9 @@ def test_scoped_routes_deny_sql_csv_history_downloads_and_new_surfaces(api, make
                  "live-meetings/missing/events", "runners/me/events", "not-yet-reviewed"):
         get(api, path, token, expected=403)
     post(api, "sql", {"sql": "SELECT hex(detail) FROM events"}, token, expected=403)
+    for path in ("/healthz", "/download/missing", "/index.html"):
+        response = api.get(path, headers=headers(token))
+        assert response.status_code == 403, (path, response.text)
     # The file tool's download is allowed only after checking the individual source id.
     narrow(api, data)
     for path in ("files/" + data["hidden"], "files/" + data["bid"], "files/nonexistent"):
@@ -125,7 +128,7 @@ def test_scoped_routes_deny_sql_csv_history_downloads_and_new_surfaces(api, make
 
 
 def test_prose_unknown_references_and_task_origins_keep_their_bytes(api, monkeypatch):
-    text = '{"digest":"example"}\n  file-0123456789abcdef01234567\n{"spaces":  [1, 2]}\n'
+    text = '{"digest":"example"}\n  file-0123456789abcdef01234567\n{"spaces":  [1, 2]}'
     t, attempt = task_turn(api, body=text)
     token = attempt["token"]
     got = get(api, "tasks/" + t["id"], token)

@@ -39,7 +39,18 @@ other tasks. Several carried tasks get their intersection. Access changes apply 
 file and blob addresses and retried runner claims. Outside task turns, a bot attached by a private meeting's owner may
 read that saved meeting.
 
-Every JSON or plain-text response to a scoped turn, including nested review and message references, passes through the same source projector. Claims and queued runner inputs apply it before delivery, and saved claim retries reapply current access to the whole payload. Out-of-scope references and their metadata disappear. Make-page attempts and scoped bot task turns receive `403` on event streams; the runner follows work with its separate runner identity.
+Scoped task turns and Make-page attempts use the reviewed method/path allowlist in
+`backend/scoped_routes.py`. Other routes return `403`, including raw SQL, CSV/exports, saved run
+history, admin APIs and event streams. File downloads must name an individually in-scope source.
+Make page can read task context, pages, files and meeting transcripts, and publish its page; it has no
+conversation or task-history read. The runner follows work with its separate runner identity.
+
+Allowed JSON responses, claims, steering inputs and saved retries project structured source references.
+A known out-of-scope page, file, blob or meeting disappears with its metadata and copied review labels.
+Generated answer prose keeps source provenance too. Legacy choices without provenance lose labels that
+exactly match an out-of-scope source title attached to the task. Free text, unknown references and
+references to tasks or conversations stay unchanged. Only the named runner `refs_json` copy follows its
+structured `refs`; JSON written inside ordinary text is never parsed.
 
 **What a page may hold.** One `.html` file, up to 10 MB. It runs no script and loads nothing from elsewhere. Tico
 removes scripts and outside addresses when the page is published, and the answer lists what it removed

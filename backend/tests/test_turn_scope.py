@@ -111,7 +111,7 @@ def test_filed_bot_party_pages_are_local_to_that_task_and_multiple_tasks_interse
     get(api, "pages/" + public, attempt["token"])
     carry(api, attempt, other["id"])
     get(api, "pages/" + fid, attempt["token"], expected=404)
-    get(api, "files/" + blob(api, fid), attempt["token"], expected=404)
+    get(api, "files/" + blob(api, fid), attempt["token"], expected=403)
     get(api, "pages/" + public, attempt["token"])
 
 
@@ -287,7 +287,7 @@ def test_make_page_file_reads_log_file_identity_and_obey_the_ten_item_list(api):
     make_scope(api, attempt, t["id"])
     token = attempt["token"]
     get(api, "pages/" + outside, token, expected=404)
-    get(api, "files/" + outside + "/versions", token, expected=404)
+    get(api, "files/" + outside + "/versions", token, expected=403)
     for target in (fid, blob(api, fid)):
         response = api.get("/api/v2/files/" + target, headers=headers(token))
         assert response.status_code == 200, response.text
