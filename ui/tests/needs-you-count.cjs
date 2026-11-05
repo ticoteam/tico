@@ -162,6 +162,8 @@ const plateCount = rows => {
       for (const theme of ['light', 'dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, theme + ': no sideways page scroll');
+        if (process.env.TICO_UI_SHOTS) await page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS,
+          `needs-you-${width === 390 ? 'phone' : 'desktop'}-${theme}.png`)});
       }
       await page.setViewportSize({width: width === 390 ? 1440 : 390, height: 844});
       assert.equal(await count(page), '13');
