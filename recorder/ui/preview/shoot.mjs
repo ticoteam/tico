@@ -45,6 +45,8 @@ const scenes = {
   connect: [],
   demo: [],
   meeting: [open('m1')],
+  // A created task's row is the way into Tico.
+  'task-open': ['meeting', open('m1'), async (page) => page.focus('.item.task.open')],
   'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); await page.click('[data-id="t44"]'); }],
   owner: [open('m1'), async (page) => page.click('.owner.empty')],
   'add-mention': ['meeting', open('m1'), async (page) => { await page.click('[data-act="add-open"]'); await page.keyboard.type('Send notes to @me'); }],
