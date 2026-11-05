@@ -719,10 +719,11 @@ def test_external_sender_losing_an_inferred_source_thread_gets_only_metadata(api
     assert api.get(row["proof"], headers=headers(token)).status_code == 200
     if audience == "company":
         from backend import bot_settings
+        from starlette.datastructures import Headers
         with api.app.state.store.transaction() as c:
             bot_settings.update(c, ident, {"harness": "codex", "runtime": "codex"})
         # A profile edit does not turn the still-active standing credential into a runner lease.
-        assert api.app.state.auth.authenticate(headers(token), "/api/v2/letters", "GET").agent == "hermes"
+        assert api.app.state.auth.authenticate(Headers(headers(token)), "/api/v2/letters", "GET").agent == "hermes"
     removed = api.delete("/api/v2/threads/" + thread["id"] + "/members/bot:" + ident, headers=headers())
     assert removed.status_code == 200 and removed.json()["removed"]
     get(api, "threads/" + thread["id"], token, expected=404)

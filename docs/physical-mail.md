@@ -118,9 +118,12 @@ access block approved sends too.
 
 Quotes last 15 minutes. When approval lands Tico re-quotes; any changed approval hash asks again. Earlier proofs stay
 readable only while the caller has current access to the original source's tasks, runs and threads. Both the
-represented person and an acting bot must qualify. Admins without source access see a metadata-only row (status,
+represented person and an acting bot must qualify. Admins and the sender without source access see a metadata-only row (status,
 class, pages, cost, date and sending bot) and may cancel; recipients, contents and PDFs stay private. Letters without
 a task follow their sender, manager and outbox grants. HQ keeps no letter contents.
+
+External agents keep their narrower thread access rules when Tico checks a saved proof or an approved send.
+Changes to a source task's privacy or parties update open outbox rows through the live stream.
 
 Submission durably commits its quote, approval consumption and a key derived from the Tico letter id before the
 HTTP call. A known pre-claim refusal releases the hold and remains cancellable; a later attempt gets a new quote
