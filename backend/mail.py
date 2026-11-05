@@ -1,7 +1,8 @@
-"""Human read API over live Workspace Gmail or the existing personal/legacy mail copy.
+"""Read API over live Workspace Gmail or the existing copy, and live organizing for authorized callers.
 
 People browse the mailboxes they hold a level on (backend/mailbox_access.py), the
-owner and managers included, with no bypass. Bots and runners are refused here. Every thread or message body read is
+owner and managers included, with no bypass. Reads refuse bots and runners; organizing uses each caller's own level.
+Every thread or message body read is
 audited as `mail.read`.
 
 `GET /api/v2/mail/access` is the mail CLI's question (connectors/mail/access.py): what the caller, a person or a bot's
@@ -22,6 +23,36 @@ FTS_TOKEN = re.compile(r"[A-Za-z0-9_@.+'-]+")
 CURSOR = re.compile(r"^(\d+)\|([^|]+)\|([^|]+)$")
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 DURATION = {"d": 86400, "h": 3600, "m": 60}
+ORGANIZE_ACTIONS = {"archive": ((), ("INBOX",), "unarchive"),
+                    "unarchive": (("INBOX",), (), "archive"),
+                    "mark_read": ((), ("UNREAD",), "mark_unread"),
+                    "mark_unread": (("UNREAD",), (), "mark_read"),
+                    "label": ((), (), "unlabel"), "unlabel": ((), (), "label")}
+
+
+def organize_selection(body):
+    action, ids, query = body.get("action"), body.get("ids"), body.get("query")
+    if not isinstance(action, str) or action not in ORGANIZE_ACTIONS:
+        raise Problem("action", "Choose archive, unarchive, mark_read, mark_unread, label or unlabel", 422)
+    if (ids is not None) == (query is not None):
+        raise Problem("selection", "Choose either message ids or a Gmail query", 422)
+    if ids is not None and (not isinstance(ids, list) or not 1 <= len(ids) <= 500
+                            or any(not isinstance(mid, str) or not mid.strip() or not mid.isascii()
+                                   or len(mid) > 128 for mid in ids)):
+        raise Problem("ids", "Choose 1 to 500 message ids (up to 128 characters each)", 422)
+    if query is not None and (not isinstance(query, str) or not query.strip() or len(query) > 4096):
+        raise Problem("query", "A Gmail query is required (up to 4096 characters)", 422)
+    limit = body.get("limit", 100)
+    if type(limit) is not int or not 1 <= limit <= 500:
+        raise Problem("limit", "limit must be between 1 and 500", 422)
+    label = body.get("label")
+    if action in ("label", "unlabel"):
+        if not isinstance(label, str) or not label.strip() or len(label) > 225:
+            raise Problem("label", "A label is required (up to 225 characters)", 422)
+        label = label.strip()
+    elif label is not None:
+        raise Problem("label", "label is only used with label or unlabel", 422)
+    return action, list(dict.fromkeys(ids)) if ids is not None else None, query, limit, label
 
 
 def sanitize_fts(q):
@@ -156,6 +187,57 @@ def mailbox_view(c, address, people, who, auth):
 
 
 def install_mail(app, store, auth):
+    @app.post("/api/v2/mail/messages/organize")
+    def organize(request: Request, body: dict):
+        who = request.state.identity
+        addr = body.get("mailbox")
+        if not isinstance(addr, str) or not addr.strip() or len(addr) > 254:
+            raise Problem("mailbox", "mailbox is required", 422)
+        addr = addr.strip().lower()
+
+        def access(c):
+            if not mailbox_access.may(c, who, addr)["organize"]:
+                if mailbox_access.level(c, who, addr) == "read_write":
+                    reason = f"Tico may not organize {addr}: it is off in Settings > Inboxes > Settings > What Tico may do"
+                else:
+                    reason = f"You may not organize {addr} (Settings > Inboxes: Who can use it)"
+                raise Problem("forbidden", reason, 403)
+            if google_workspace.authority(c, addr) != "workspace":
+                raise Problem("mailbox", "Live organizing needs Whole Workspace", 422)
+            if store.settings.rehearsal or store.settings.demo:
+                raise Problem("rehearsal", "This install does not organize live email", 403)
+
+        key, selection_operation = request.headers.get("idempotency-key"), request.url.path + ":selection"
+        with store.read() as c:
+            access(c)
+            action, ids, query, limit, label = organize_selection(body)
+            completed = store.saved(c, who, request.url.path, key)
+            if ids is None and not completed and not store.saved(c, who, selection_operation, key):
+                ids = gmail_live.message_ids(c, addr, query, limit)
+        if completed:
+            def expired(c):
+                raise Problem("receipt_expired", "This organize receipt expired; retry the request", 409)
+            return store.mutate(who, request.url.path, key, body, expired, check=access)
+        # Retain only ids before writing Gmail. A retry of an archive query must not pick another page of mail.
+        ids = store.mutate(who, selection_operation, key, body, lambda c: {"ids": ids}, check=access)["ids"]
+        with store.read() as c:
+            access(c)
+            add, remove, inverse = ORGANIZE_ACTIONS[action]
+            if label is not None and ids:
+                label_id = gmail_live.resolve_label(c, addr, label, create=action == "label")
+                add, remove = ((label_id,), ()) if action == "label" else ((), (label_id,))
+            gmail_live.organize(c, addr, ids, add=add, remove=remove)
+        detail = {"mailbox": addr, "action": action, "label": label, "count": len(ids), "ids": ids}
+        label_fields = {"label": label} if label is not None else {}
+        result = {"mailbox": addr, "action": action, "count": len(ids), "ids": ids, **label_fields,
+                  "undo": {"action": inverse, "ids": ids, **label_fields}}
+
+        def record(c):
+            H.event(c, who.actor, "mail.organize", addr, detail)
+            return result
+
+        return store.mutate(who, request.url.path, key, body, record, check=access)
+
     @app.get("/api/v2/mail/access")
     def mail_access(request: Request, mailbox: str = ""):
         """What the caller may do: on every mailbox it holds, and on `mailbox` when named. A person (their Assistant

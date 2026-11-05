@@ -7,7 +7,7 @@
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <meta name="theme-color" content="#131413">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=39b2d0e13e8a" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=9a9b29affe50" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -129,7 +129,7 @@
     <a class="nav-link" href="#/growth" data-nav="growth"><span class="nav-icon" aria-hidden="true">rocket_launch</span>Growth</a>
     <a class="nav-link" href="#/finance" data-nav="finance" id="nav-finance"><span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance</a>
     <a class="nav-link" href="#/updates" data-nav="updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Updates<span class="nav-badge" data-upd-badge hidden></span></a>
-    <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
+    <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks<span class="nav-badge" data-needs-badge hidden></span></a>
     <a class="nav-link" href="#/automations" data-nav="automations"><span class="nav-icon" aria-hidden="true">bolt</span>Automations</a>
     <div class="nav-row rd-lib-row"><a class="nav-link rd-lib-head" href="#/docs" data-nav="library"><span class="nav-icon" aria-hidden="true">local_library</span>Library</a><button class="rd-lib-toggle" type="button" aria-label="Library pages" aria-controls="rd-lib" aria-expanded="true"><span class="section-chev" aria-hidden="true">›</span></button></div>
     <div class="rd-lib" id="rd-lib">
@@ -232,7 +232,7 @@
   <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads"><span class="mobile-nav-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog" hidden><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Ask Tico</span></button>
-  <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>
+  <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span><span class="nav-badge" data-needs-badge hidden></span></a>
   <a class="mobile-nav-item" href="#/updates" data-nav="updates"><span class="mobile-nav-icon" aria-hidden="true">dynamic_feed</span><span class="mobile-nav-label">Updates</span><span class="nav-badge" data-upd-badge hidden></span></a>
   <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span></button>
 </nav>
@@ -306,6 +306,7 @@
 <script src="/tico/ui/app/meetings.js"></script>
 <script src="/tico/ui/app/live-meetings.js"></script>
 <script src="/tico/ui/app/meetings-granola.js"></script>
+<script src="/tico/ui/app/meetings-sources.js"></script>
 <script src="/tico/ui/app/person-page.js"></script>
 <script src="/tico/ui/app/assistant-page.js"></script>
 <script src="/tico/ui/app/learned.js"></script>

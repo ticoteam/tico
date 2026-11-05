@@ -2120,3 +2120,26 @@ def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch)
     with api.app.state.store.transaction() as c:
         pointed = AA._pointer(c, "ops", "Northwind moved")
     assert pointed.startswith(line + "\n\n- Our favorite color is blue.\n- Market briefing:"), pointed
+
+
+def test_send_anyway_keeps_an_ask_refusal_audit_after_rolling_back_the_send(ruled):
+    api, rules = ruled
+    from backend import ask_ingest
+    from backend.tests.test_ask_ingest import FakeModel, assert_refused, calls, items, write_state
+    asks = FakeModel(kind="own_work")
+
+    def judge(state, questions, label=None):
+        return asks(state, questions, label) if str(label).startswith(ask_ingest.QUESTION_SET) else rules(
+            state, questions, label)
+
+    api.app.state.judge = judge
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    held = say(api, "Our favorite color is gold, right?", to="ben", kind="ask")["held"]
+    assert asks.calls == [], "org-rule holds skip the ask check until Send anyway"
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
+    before = write_state(api)
+    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
+    assert_refused(api, r, before)
+    [item], [call] = items(api), calls(api)
+    assert item["call_id"] == call["id"] and item["outcome"] == ask_ingest.SENT_BACK
+    assert hold_row(api, held["id"])["state"] == "held"

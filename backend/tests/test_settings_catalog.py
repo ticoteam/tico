@@ -225,8 +225,9 @@ def test_mailbox_routine_class_does_not_override_other_automation_routes(api):
             ids[name] = ident
 
         classes = {name: settings_catalog.stored_class(
-            c, "PATCH", "automations/" + ident, {"name": "renamed"})[2] for name, ident in ids.items()}
-    assert classes == {"mail": "person", "event": "direct"}
+            c, "PATCH", "automations/" + ident, {"name": "renamed"}) for name, ident in ids.items()}
+    assert classes["mail"][2] == "confirm"  # The route keeps its existing Assistant confirmation behavior.
+    assert classes["event"] is None       # An unrelated automation is not a mailbox Settings catalogue entry.
 
 
 def test_someone_without_the_rights_is_told_who_can(api, botops):

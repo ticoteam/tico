@@ -239,8 +239,8 @@ impl Transcriber {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
-    /// Workers wake when the library changes (a saved chunk, a retry, `Store::poke` after
-    /// Settings change) instead of polling. Settings are read when there is audio to send.
+    /// Workers wake when the library changes or settings/credentials are saved instead of
+    /// polling. Settings are read when there is audio to send.
     pub fn start(store: Store) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(String::new()));
@@ -555,6 +555,14 @@ impl Tico {
     }
     /// People and the bots this person may give work to, from the team chart.
     pub fn roster(&self) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .draft_people()?
+            .into_iter()
+            .map(|p| (p.actor, p.name))
+            .collect())
+    }
+    /// The same assignable teammates, retaining jobs for meeting owner suggestions.
+    pub fn draft_people(&self) -> Result<Vec<crate::assist::Person>> {
         let org = self.call("/api/v2/org?can=write", None, "")?;
         let mut result = vec![];
         for row in org["people"].as_array().into_iter().flatten() {
@@ -562,10 +570,11 @@ impl Tico {
                 && let Some(id) = row["id"].as_str()
             {
                 let name = row["name"].as_str().filter(|name| !name.is_empty());
-                result.push((
-                    format!("human:{id}"),
-                    name.or(row["email"].as_str()).unwrap_or(id).into(),
-                ));
+                result.push(crate::assist::Person {
+                    actor: format!("human:{id}"),
+                    name: name.or(row["email"].as_str()).unwrap_or(id).into(),
+                    job: row["title"].as_str().unwrap_or_default().into(),
+                });
             }
         }
         for row in org["bots"].as_array().into_iter().flatten() {
@@ -575,10 +584,11 @@ impl Tico {
                 && let Some(slug) = row["id"].as_str()
             {
                 let name = row["display_name"].as_str().filter(|name| !name.is_empty());
-                result.push((
-                    format!("bot:{slug}"),
-                    name.or(row["name"].as_str()).unwrap_or(slug).into(),
-                ));
+                result.push(crate::assist::Person {
+                    actor: format!("bot:{slug}"),
+                    name: name.or(row["name"].as_str()).unwrap_or(slug).into(),
+                    job: row["description"].as_str().unwrap_or_default().into(),
+                });
             }
         }
         Ok(result)

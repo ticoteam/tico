@@ -69,6 +69,10 @@ export type ApprovalRequested = {
   status?: string;
 };
 
+export type AsksSeen = {
+  asks: Array<string>;
+};
+
 export type Assistant = {
   actions: Record<string, unknown>;
   actors?: Record<string, string>;
@@ -3413,6 +3417,37 @@ export type Locations = {
   next_cursor: string | null;
 };
 
+export type MailOrganizeBody = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids: Array<string>;
+  label?: string;
+  limit?: number;
+  mailbox: string;
+  query?: string;
+} | {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids?: Array<string>;
+  label?: string;
+  limit?: number;
+  mailbox: string;
+  query: string;
+};
+
+export type MailOrganizeResult = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  count: number;
+  ids: Array<string>;
+  label?: string;
+  mailbox: string;
+  undo: MailOrganizeUndo;
+};
+
+export type MailOrganizeUndo = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids: Array<string>;
+  label?: string;
+};
+
 export type Mailbox = {
   address: string;
   connection: "workspace" | "personal";
@@ -3663,6 +3698,7 @@ export type Message = {
   sender_id: string;
   sender_name?: string;
   sent_as?: SentAs;
+  source?: MessageSource;
   woke?: boolean;
 };
 
@@ -3695,6 +3731,12 @@ export type MessagePatch = {
 
 export type MessageResult = {
   message: Message;
+};
+
+export type MessageSource = {
+  kind: "person" | "bot" | "assistant_for" | "task_update" | "builtin" | "automation" | "system";
+  link: string | null;
+  name: string;
 };
 
 export type MessageTask = {
@@ -3772,11 +3814,13 @@ export type NeedsYou = {
   items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
+  plate_count?: number;
   restart?: boolean;
   went_away?: Record<string, unknown>;
 } | {
   actor: string;
   count: number;
+  plate_count: number;
 };
 
 export type NeedsYouItem = {
@@ -5413,6 +5457,24 @@ export type TaskComments = {
   comments: Array<Message>;
 };
 
+export type TaskContext = {
+  meetings: Array<TaskContextMeeting>;
+  pages: Array<TaskContextPage>;
+};
+
+export type TaskContextMeeting = {
+  date: string;
+  id: string;
+  title: string;
+};
+
+export type TaskContextPage = {
+  id: string;
+  title: string;
+  updated_at: string;
+  version: number;
+};
+
 export type TaskCreate = {
   acceptance_criteria?: Array<string>;
   blocker?: TaskBlocker | null;
@@ -5459,7 +5521,9 @@ export type TaskDetail = {
   children: Array<unknown>;
   comment_delivery?: CommentDelivery | null;
   comments: Array<Message>;
-  events: Array<unknown>;
+  events: Array<{
+  source: MessageSource;
+}>;
   has_more: boolean;
   messages: Array<Message>;
   mover?: boolean;
@@ -5868,6 +5932,7 @@ export type ThreadMessage = {
   routed?: ThreadRouted | null;
   sender_id?: string;
   seq: number;
+  source?: MessageSource;
   sub_thread?: Record<string, unknown> | null;
   thread_id: string;
 };
@@ -5943,6 +6008,7 @@ export type ThreadSearch = {
   excerpt: string;
   message_id: string;
   sender_id?: string;
+  source?: MessageSource;
   thread_id: string;
   title?: string;
 }>;
@@ -8143,6 +8209,7 @@ export type GetMeetingReviewSettingsResponse = MeetingReviewPreferences;
 export type GetMeetingTranscriptParams = {
   id: string;
   limit?: number;
+  notes?: boolean;
   offset?: number;
 };
 export type GetMeetingTranscriptBody = never;
@@ -8391,6 +8458,13 @@ export type GetTaskResponse = TaskDetail;
 export type GetTaskCapsParams = Record<string, never>;
 export type GetTaskCapsBody = never;
 export type GetTaskCapsResponse = TaskCaps;
+
+/** GET /api/v2/tasks/{tid}/context */
+export type GetTaskContextParams = {
+  tid: string;
+};
+export type GetTaskContextBody = never;
+export type GetTaskContextResponse = TaskContext;
 
 /** GET /api/v2/task-manager */
 export type GetTaskManagerParams = Record<string, never>;
@@ -9860,6 +9934,13 @@ export type ModerateTaskCommentParams = {
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
 
+/** POST /api/v2/needs-you/seen */
+export type NeedsYouSeenParams = {
+  "Idempotency-Key": string;
+};
+export type NeedsYouSeenBody = AsksSeen;
+export type NeedsYouSeenResponse = unknown;
+
 /** POST /api/v2/threads/{thread_id}/open-earlier */
 export type OpenEarlierMessagesParams = {
   "Idempotency-Key": string;
@@ -9883,6 +9964,13 @@ export type OrderPlaceParams = {
 };
 export type OrderPlaceBody = PlaceOrder;
 export type OrderPlaceResponse = Place;
+
+/** POST /api/v2/mail/messages/organize */
+export type OrganizeMailMessagesParams = {
+  "Idempotency-Key": string;
+};
+export type OrganizeMailMessagesBody = MailOrganizeBody;
+export type OrganizeMailMessagesResponse = MailOrganizeResult;
 
 /** POST /api/v2/editions/{edition_id}/override */
 export type OverrideEditionParams = {
@@ -11298,6 +11386,14 @@ export type TakeRecommendationParams = {
 };
 export type TakeRecommendationBody = TakeRecommendation;
 export type TakeRecommendationResponse = unknown;
+
+/** POST /api/v2/tasks/{tid}/seen */
+export type TaskSeenParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type TaskSeenBody = Empty;
+export type TaskSeenResponse = unknown;
 
 /** POST /api/v2/alerts/me/test */
 export type TestMyAlertsParams = {

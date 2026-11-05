@@ -23,7 +23,7 @@ import pytest
 
 from backend import (bot_settings as BS, diagnostics, health, hosted_updates, invariants, mail_settings,
                      maintenance as M, maintenance_health as MH, maintenance_limits as L,
-                     providers, replication, routines, support)
+                     providers, replication, routines, support, task_check_backs, task_roundup)
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
 from backend.store import H, Problem
@@ -1167,6 +1167,23 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
         found = {f["check_id"]: f for f in MH.findings(c, api.app.state.store.settings)}
     assert found["runner_outdated"]["severity"] == severity
 
+
+@pytest.mark.parametrize("reason", ["will be recovered automatically on the next update",
+                                  "cannot recover: 1 changed file; commit or stash it first: app.py",
+                                  "switch it to main to follow releases"])
+def test_branch_blocks_give_botops_the_branch_and_its_recovery_or_refusal(environment, monkeypatch, reason):
+    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    api, runner = built(environment)
+    error = "the checkout is on branch tico/b427e9ee-fix-runner; " + reason
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
+        c.execute("INSERT INTO runner_versions(runner_id,release,update_state,update_error,reported_at) "
+                  "VALUES(?,?,'blocked',?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
+                  "update_state=excluded.update_state,update_error=excluded.update_error",
+                  (runner["runner_id"], "0.4.40", error, H.now()))
+        found = next(f for f in MH.findings(c, api.app.state.store.settings) if f["check_id"] == "runner_outdated")
+    assert error in found["detail"] and found["fix"] == error
+
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, readers, monkeypatch):
     api, runner = built(environment)
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T23:00:00Z")      # this process: far from the lines
@@ -1565,6 +1582,46 @@ def test_another_maintenance_wake_for_botops_in_the_same_run_holds_health(enviro
     with store.transaction() as c:
         c.execute("UPDATE maintenance_runs SET finished_at=? WHERE id=?", (H.now(), run_id))
     assert run(api)["woke"] == 1 and wake_marker(api) is None
+
+
+def test_find_stuck_sends_botops_its_list_and_health_wakes_on_the_next_run(environment, code_findings, clock, monkeypatch):
+    api, _ = built(environment)
+    store, auth = api.app.state.store, api.app.state.auth
+    monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
+    code_findings[:] = [item("push_stuck", key="push_stuck:A")]
+    with store.transaction() as c:
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','find_stuck','check_health')")
+        follow_up = H.task_create(c, H.KEEPER, "Chase the quote", "Check whether the quote came in.",
+                                  H.bot_actor(MH.BOTOPS), lint=False, quiet_notice=True)["id"]
+        task_check_backs.set_time(c, H.task(c, follow_up), H.shift(H.now(), hours=-40), "Check the quote",
+                                  actor=H.bot_actor(MH.BOTOPS), at=H.shift(H.now(), hours=-42))
+
+    first = M.get_run(store, M.tick(store, auth, clock.at))
+    steps = {s["step"]: s for s in first["steps"]}
+    assert first["ok"] == 1, first
+    assert steps["find_stuck"]["woke"] == 1 and MH.BOTOPS in steps["find_stuck"]["details"]["woken"]
+    assert steps["check_health"]["woke"] == 0
+    health_task = registry(api, "push_stuck")["task"]
+    assert wake_marker(api) == [health_task] and wake_jobs(api) == []
+    with store.read() as c:
+        (body,) = [r[0] for r in c.execute(
+            "SELECT m.body FROM messages m JOIN jobs j ON j.message_id=m.id "
+            "WHERE j.bot_id=? AND m.body LIKE ?", (MH.BOTOPS, task_roundup.HEADING + "%"))]
+        assert follow_up[:8] in body and "Check the quote" in body
+        assert H.task(c, follow_up)["check_back_at"] is None
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                         (L.BOT_ACTION, MH.BOTOPS)).fetchone()[0] == 1
+
+    clock.at += timedelta(hours=1)
+    second = M.get_run(store, M.tick(store, auth, clock.at))
+    steps = {s["step"]: s for s in second["steps"]}
+    assert second["ok"] == 1, second
+    assert steps["find_stuck"]["status"] == "skipped" and steps["find_stuck"]["reason"] == "not due"
+    assert steps["check_health"]["woke"] == 1 and wake_marker(api) is None
+    assert [job["task"] for job in wake_jobs(api)] == [health_task]
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                         (L.BOT_ACTION, MH.BOTOPS)).fetchone()[0] == 2
 
 
 def test_a_grouped_wake_on_a_shared_task_hides_a_private_tasks_title_and_id(environment, readers, code_findings, monkeypatch):

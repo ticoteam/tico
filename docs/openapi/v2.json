@@ -191,6 +191,10 @@
       "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
     },
     {
+      "name": "Email",
+      "description": "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids."
+    },
+    {
       "name": "Letters out",
       "description": "Physical letters sent through the Gateway; approvals bind the saved proof and price."
     },
@@ -9783,7 +9787,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12904,7 +12908,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "x-task-event-schema": {
               "$ref": "#/components/schemas/TaskEvent"
             },
@@ -24471,6 +24475,78 @@
         ]
       }
     },
+    "/api/v2/mail/messages/organize": {
+      "post": {
+        "summary": "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+        "operationId": "organizeMailMessages",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailOrganizeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailOrganizeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Email"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/mailboxes": {
       "get": {
         "summary": "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them",
@@ -26474,7 +26550,7 @@
     },
     "/api/v2/meetings/transcript": {
       "get": {
-        "summary": "A meeting's transcript",
+        "summary": "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true",
         "operationId": "getMeetingTranscript",
         "parameters": [
           {
@@ -26509,6 +26585,16 @@
               "minimum": 1,
               "default": 20000,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "notes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Notes"
             }
           }
         ],
@@ -27442,7 +27528,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28314,6 +28400,66 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/TakeRecommendation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/needs-you/seen": {
+      "post": {
+        "summary": "The caller's Needs you shows these questions to them (asks=<message ids>, at most 200): each open one is delivered",
+        "operationId": "needsYouSeen",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsksSeen"
               }
             }
           },
@@ -37980,7 +38126,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -38211,7 +38357,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -38524,7 +38670,7 @@
             }
           },
           "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "description": "ask_refused: a bot ask fails the person's asking criteria; detail gives the reason and fix. Nothing is created or changed; no quarantine or org-rule hold. Progress notes should be posted as updates.",
             "content": {
               "application/json": {
                 "schema": {
@@ -38827,6 +38973,58 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommentResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/context": {
+      "get": {
+        "summary": "Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only",
+        "operationId": "getTaskContext",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskContext"
                 }
               }
             }
@@ -39972,6 +40170,75 @@
         },
         "tags": [
           "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/seen": {
+      "post": {
+        "summary": "The caller opened the task: its open questions to them are read",
+        "operationId": "taskSeen",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
         ]
       }
     },
@@ -46545,6 +46812,27 @@
           "kind"
         ],
         "additionalProperties": true
+      },
+      "AsksSeen": {
+        "properties": {
+          "asks": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Asks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "asks"
+        ],
+        "title": "AsksSeen",
+        "description": "Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."
       },
       "Assistant": {
         "type": "object",
@@ -62933,6 +63221,188 @@
         ],
         "additionalProperties": true
       },
+      "MailOrganizeBody": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mailbox": {
+                "type": "string",
+                "maxLength": 254
+              },
+              "action": {
+                "enum": [
+                  "archive",
+                  "unarchive",
+                  "mark_read",
+                  "mark_unread",
+                  "label",
+                  "unlabel"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 225
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            },
+            "required": [
+              "action",
+              "ids",
+              "mailbox"
+            ],
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mailbox": {
+                "type": "string",
+                "maxLength": 254
+              },
+              "action": {
+                "enum": [
+                  "archive",
+                  "unarchive",
+                  "mark_read",
+                  "mark_unread",
+                  "label",
+                  "unlabel"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 225
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            },
+            "required": [
+              "action",
+              "mailbox",
+              "query"
+            ],
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "ids"
+              ]
+            }
+          }
+        ]
+      },
+      "MailOrganizeResult": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "archive",
+              "unarchive",
+              "mark_read",
+              "mark_unread",
+              "label",
+              "unlabel"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "ids": {
+            "type": "array",
+            "items": "s"
+          },
+          "undo": {
+            "$ref": "#/components/schemas/MailOrganizeUndo"
+          }
+        },
+        "required": [
+          "action",
+          "count",
+          "ids",
+          "mailbox",
+          "undo"
+        ],
+        "additionalProperties": true
+      },
+      "MailOrganizeUndo": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "enum": [
+              "archive",
+              "unarchive",
+              "mark_read",
+              "mark_unread",
+              "label",
+              "unlabel"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "items": "s"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "ids"
+        ],
+        "additionalProperties": true
+      },
       "Mailbox": {
         "type": "object",
         "properties": {
@@ -64135,6 +64605,9 @@
           "sent_as": {
             "$ref": "#/components/schemas/SentAs",
             "description": "On a send to a bot: the way it went (steer, queue or defer) and a defer's deadline (backend/delivery.py)"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -64341,6 +64814,38 @@
         },
         "required": [
           "message"
+        ],
+        "additionalProperties": true
+      },
+      "MessageSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "bot",
+              "assistant_for",
+              "task_update",
+              "builtin",
+              "automation",
+              "system"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "link",
+          "name"
         ],
         "additionalProperties": true
       },
@@ -64686,6 +65191,10 @@
                 "type": "integer",
                 "description": "Items in the whole list, whatever page this is"
               },
+              "plate_count": {
+                "type": "integer",
+                "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, excluding folded or merged tasks; excludes thread and update attention"
+              },
               "by_kind": {
                 "type": "object",
                 "additionalProperties": {
@@ -64733,11 +65242,15 @@
               },
               "count": {
                 "type": "integer"
+              },
+              "plate_count": {
+                "type": "integer"
               }
             },
             "required": [
               "actor",
-              "count"
+              "count",
+              "plate_count"
             ],
             "additionalProperties": true
           }
@@ -73406,6 +73919,74 @@
         ],
         "additionalProperties": true
       },
+      "TaskContext": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextPage"
+            },
+            "maxItems": 10
+          },
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextMeeting"
+            },
+            "maxItems": 10
+          }
+        },
+        "required": [
+          "meetings",
+          "pages"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextMeeting": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextPage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at",
+          "version"
+        ],
+        "additionalProperties": true
+      },
       "TaskCreate": {
         "properties": {
           "live_meeting_id": {
@@ -73814,7 +74395,19 @@
             "$ref": "#/components/schemas/Task"
           },
           "events": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "additionalProperties": true
+            }
           },
           "children": {
             "type": "array"
@@ -76195,6 +76788,9 @@
               }
             ],
             "description": "Who routing asked to answer this message (`to` empty: nobody); null when routing never looked at it"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MessageSource"
           }
         },
         "required": [
@@ -76556,6 +77152,9 @@
                 },
                 "excerpt": {
                   "type": "string"
+                },
+                "source": {
+                  "$ref": "#/components/schemas/MessageSource"
                 }
               },
               "required": [

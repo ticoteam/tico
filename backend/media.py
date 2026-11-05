@@ -270,6 +270,9 @@ def shared_meeting(record, who):
 
 
 def authorized(c, who, rid, *, include_deleted=False, write=False):
+    if who.role == "bot" and not write:
+        from .context_search import readable
+        return readable(c, who, rid)
     record = MS.get(rid, c)
     if not record:
         raise Problem("not_found", "Note or meeting not found", 404)
@@ -298,6 +301,9 @@ def view(c, who, rid, *, auth, include_transcripts=False):
               "can_edit": may_write(who, record)}
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
     result["outbox"] = outbox(c, rid, who, auth)
+    # The live meeting it was filed from holds its chat and attached bots; that read keeps the live meeting's own rules.
+    live = c.execute("SELECT id FROM live_meetings WHERE imported_meeting_id=? AND discarded_at IS NULL", (rid,)).fetchone()
+    result["live_meeting_id"] = live["id"] if live else None
     if include_transcripts:
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
@@ -460,6 +466,13 @@ def blob_for(c, auth, who, bid):
     # object below, using the same authorization as its conversation or task.
     allowed = who.role in ("owner", "human") and row["owner"] == who.actor
     if not allowed and who.role in ("owner", "human", "bot"):
+        for linked in c.execute("SELECT meeting_id FROM media_assets WHERE blob_id=?", (bid,)):
+            try:
+                authorized(c, who, linked[0])
+                allowed = True
+                break
+            except Problem:
+                pass
         for linked in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)):
             try:
                 auth.conversation(c, who, linked["conversation_id"])
@@ -875,8 +888,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
         rc = rule_check(who, "task_question", question_text(body, review_text),
                         lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
-        # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
-        # withdrawn as soon as it is asked and the task does not wait on the person.
+        # Ask ingest (backend/ask_ingest.py): judged before the write. A refused question is
+        # rolled back with its task, attachments and wait.
         with store.read() as c:
             retry = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
         ingest = None if org_rule_check.holds(rc) or retry else question_ingest(who, body)
@@ -1073,7 +1086,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             else:
                 status = "delayed"
             extra = []
-            from .meeting_importers import IMPORTERS, status_of
+            from .meeting_importers import ERROR_TEXT, IMPORTERS, status_of
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
@@ -1086,7 +1099,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                               "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
-                              "error_code": detail.get("error_code", "")})
+                              "error_code": detail.get("error_code", ""),
+                              # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
+                              "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
+                              if detail.get("error_code") else ""})
             return {"sources": [
                 {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,

@@ -1,7 +1,78 @@
 """Bot files never belong in the Tico checkout running this code."""
 from pathlib import Path
+import os
+import stat
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _git_identity(path):
+    # Git resolves .git files, commondir and linked installs; inherited turn overrides must not redirect it.
+    try:
+        existing = path
+        while True:
+            try:
+                info = existing.stat()
+                break
+            except FileNotFoundError:
+                if existing.parent == existing:
+                    raise
+                existing = existing.parent
+        if not stat.S_ISDIR(info.st_mode):
+            existing = existing.parent
+        # Ownership checks require the worktree root, even when the requested directory already exists.
+        for root in (existing, *existing.parents):
+            marker = root / ".git"
+            try:
+                marker.lstat()
+            except FileNotFoundError:
+                try:
+                    (root / "HEAD").stat()
+                    objects = (root / "objects").stat()
+                except FileNotFoundError:
+                    continue
+                if not stat.S_ISDIR(objects.st_mode):
+                    continue
+            else:
+                # A worktree whose Git directory is gone keeps its normal missing-worktree report.
+                try:
+                    info = marker.stat()
+                    if stat.S_ISREG(info.st_mode):
+                        pointer = marker.read_text()
+                        if pointer.startswith("gitdir: ") and pointer[8:].strip():
+                            (root / pointer[8:].rstrip("\r\n")).stat()
+                except FileNotFoundError:
+                    return ()
+            break
+        else:
+            return ()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        done = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+                               "-c", "safe.directory=" + str(root), "-C", str(root),
+                               "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+                              env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10, check=False)
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"Cannot check repository identity: {path}") from exc
+    if done.returncode:
+        raise ValueError(f"Cannot check repository identity: {path}")
+    names = done.stdout.splitlines()
+    if len(names) != 2 or any(not Path(name).is_absolute() for name in names):
+        raise ValueError(f"Cannot check repository identity: {path}")
+    try:
+        return tuple(_resolve(Path(name)) for name in names)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"Cannot check repository identity: {path}") from exc
+
+
+def _same_path(left, right):
+    if left == right:
+        return True
+    try:
+        return left.samefile(right)
+    except OSError:
+        return False
 
 
 def _resolve(path):
@@ -43,6 +114,10 @@ def outside_installation(path):
                 continue
     if inside:
         raise ValueError(f"Repository path is inside the Tico install: {path}")
+    installation_git = _git_identity(installation)
+    repository_git = _git_identity(resolved)
+    if any(_same_path(left, right) for left in repository_git for right in installation_git):
+        raise ValueError(f"Repository shares Git metadata with the Tico install: {path}")
     return resolved
 
 

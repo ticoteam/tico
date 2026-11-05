@@ -463,6 +463,130 @@ def test_update_switches_to_the_servers_tag_not_main(repos):
     assert ru.read_status(state)["state"] == "healthy" and ru.read_status(state)["target"] == "0.2.0"
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("branch,version", [("tico/b427e9ee-fix-runner", "0.2.0"),
+                                          ("tico-session/task-123", "0.1.0")])
+def test_bot_branch_recovery_keeps_both_refs_and_detaches_even_on_the_same_commit(repos, capsys, branch, version):
+    from runner_support import release_branch
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", branch)
+    before = head(checkout)
+    inspected = release_branch.inspect(checkout, lambda *a: ru.git(checkout, *a))
+    assert inspected["recover"] and branch in inspected["error"] and "automatically" in inspected["error"]
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+    result, calls = run_apply(checkout, state, version)
+    assert result["state"] == "healthy" and calls.restarts == 1
+    assert head(checkout) == sh(checkout, "git", "rev-parse", "v" + version)
+    assert not sh(checkout, "git", "branch", "--show-current")
+    assert sh(checkout, "git", "rev-parse", branch) == before
+    saved = sh(checkout, "git", "for-each-ref", "--format=%(refname)", "refs/tico/recovered/")
+    assert saved.endswith("-" + branch) and sh(checkout, "git", "rev-parse", saved) == before
+    assert result["note"] == ru.read_status(state)["note"] == f"moved the install off bot branch {branch} (kept at {saved})"
+    assert result["note"] in capsys.readouterr().out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", ["person", "dirty", "staged", "merge", "rebase", "cherry-pick", "bisect", "untracked"])
+def test_unsafe_branch_recovery_leaves_the_install_and_its_work_alone(repos, case):
+    _, checkout, state = repos
+    branch = "chris/my-work" if case == "person" else "tico/b427e9ee-fix-runner"
+    sh(checkout, "git", "checkout", "-qb", branch)
+    operations = {"merge": "MERGE_HEAD", "rebase": "rebase-merge", "cherry-pick": "CHERRY_PICK_HEAD", "bisect": "BISECT_START"}
+    if case in ("dirty", "staged"):
+        (checkout / "app.py").write_text("keep this work")
+        if case == "staged":
+            sh(checkout, "git", "add", "app.py")
+    elif case in operations:
+        marker = checkout / ".git" / operations[case]
+        if case == "rebase":
+            marker.mkdir()
+        else:
+            marker.write_text(head(checkout) + "\n")
+    elif case == "untracked":
+        # The release adds this file; a non-colliding untracked file does not block an update.
+        public = repos[0]
+        commit(public, "new.txt", "release content")
+        sh(public, "git", "tag", "v0.3.0")
+        (checkout / "new.txt").write_text("keep this untracked work")
+    before = head(checkout)
+    index = (checkout / ".git/index").read_bytes()
+    result, calls = run_apply(checkout, state, "0.3.0" if case == "untracked" else "0.2.0")
+    assert result["state"] == "blocked" and calls.restarts == 0
+    assert branch in result["error"]
+    assert head(checkout) == before and sh(checkout, "git", "branch", "--show-current") == branch
+    assert sh(checkout, "git", "rev-parse", branch) == before
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+    assert (checkout / ".git/index").read_bytes() == index
+    if case == "untracked":
+        assert (checkout / "new.txt").read_text() == "keep this untracked work"
+        from runner_support import release_branch
+        inspected = release_branch.inspect(checkout, lambda *a: ru.git(checkout, *a), "0.3.0")
+        assert not inspected["recover"] and "local files are in the way" in inspected["error"]
+    elif case in operations:
+        assert case in result["error"]
+    elif case in ("dirty", "staged"):
+        assert "changed file" in result["error"] and (checkout / "app.py").read_text() == "keep this work"
+
+
+@pytest.mark.slow
+def test_recovered_branch_rolls_back_without_losing_the_saved_commit(repos):
+    _, checkout, state = repos
+    branch = "tico/b427e9ee-fix-runner"
+    sh(checkout, "git", "checkout", "-qb", branch)
+    before = commit(checkout, "unpublished.txt", "keep my commit")
+    result, calls = run_apply(checkout, state, calls=Calls(healthy=(False, True)))
+    assert result["state"] == "rolled_back" and calls.restarts == 2 and head(checkout) == before
+    assert sh(checkout, "git", "branch", "--show-current") == branch
+    assert sh(checkout, "git", "rev-parse", branch) == before
+    assert before in sh(checkout, "git", "for-each-ref", "--format=%(objectname)", "refs/tico/recovered/")
+    assert "kept at refs/tico/recovered/" in ru.read_status(state)["note"]
+
+
+@pytest.mark.slow
+def test_recovery_waits_for_writers_and_holds_the_update_lock(repos, monkeypatch):
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", "tico/b427e9ee-fix-runner")
+    result, _ = run_apply(checkout, state, busy=lambda: True)
+    assert result["state"] in ("idle", "failed") and "work running" in result["error"]
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+    original = ru.git
+    checked = []
+
+    def git(root, *args, **kw):
+        if args[0] in ("update-ref", "checkout"):
+            with ru.lock_path(root).open("a") as handle:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            checked.append(args[0])
+        return original(root, *args, **kw)
+
+    monkeypatch.setattr(ru, "git", git)
+    (checkout / "safe-untracked.txt").write_text("keep this too")
+    result, _ = run_apply(checkout, state, busy=lambda: False)
+    assert result["state"] == "healthy" and checked == ["update-ref", "checkout"]
+    assert (checkout / "safe-untracked.txt").read_text() == "keep this too"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("change", ["branch", "dirty", "operation"])
+def test_recovery_rechecks_the_checkout_after_fetching(repos, change):
+    _, checkout, state = repos
+    sh(checkout, "git", "checkout", "-qb", "tico/b427e9ee-fix-runner")
+
+    def busy():
+        if change == "branch":
+            sh(checkout, "git", "checkout", "-q", "main")
+        elif change == "dirty":
+            (checkout / "app.py").write_text("keep this late edit")
+        else:
+            (checkout / ".git/MERGE_HEAD").write_text(head(checkout) + "\n")
+        return False
+
+    result, calls = run_apply(checkout, state, busy=busy)
+    assert result["state"] == "blocked" and result["error"] and calls.restarts == 0
+    assert not sh(checkout, "git", "for-each-ref", "refs/tico/recovered/")
+
+
 def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
     public, checkout, state = repos
     (checkout / "app.py").write_text("my local edit")

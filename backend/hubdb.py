@@ -100,6 +100,7 @@ from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
 from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
 from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
 from . import bot_settings as BS
+from . import sources as SRC
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -1823,6 +1824,7 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "via": VIA.get()}
         if VIA.get() in ("botops", "assistant") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
+    detail = SRC.stamp_data(detail, actor)      # what a keeper event was for (backend/sources.py), when a scope names it
     row = {"id": new_id(), "created_at": now(), "actor": str(actor), "action": action,
            "target": str(target or ""), "detail": _dump(detail)}
     conn.execute("INSERT INTO events (id, created_at, actor, action, target, detail) "
@@ -3617,7 +3619,7 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
     row = {"id": new_id(), "conversation_id": conv["id"], "sender_id": actor, "recipient_id": target,
-           "kind": kind, "body": str(body or ""), "refs": _dump(refs or {}),
+           "kind": kind, "body": str(body or ""), "refs": _dump(SRC.stamp(refs or {}, actor)),
            "in_reply_to": in_reply_to, "created_at": now(), "delivered_at": delivered_at,
            "read_at": read_at, "expires_at": expires_at, "wait_s": wait_s}
     if delivered_at is None:
@@ -3794,6 +3796,23 @@ def mark_delivered(conn, actor, message_id, recipient=None):
                      (now(), message_id))
     event(conn, actor, "message.delivered", message_id)
     return message(conn, message_id)
+
+
+def asks_seen(conn, actor, ids, read=False):
+    """`actor`, a person, has the questions `ids` asked of them on their Needs you (delivered) or opened them there or on
+    their task (`read`, delivered too). Only open questions to them change, each once: a withdrawn question then says
+    whether they had seen it (backend/task_holds.py). Returns the ids that changed."""
+    at, out = now(), []
+    for mid in list(dict.fromkeys(str(i) for i in ids if i))[:200]:
+        cur = conn.execute(
+            "UPDATE messages SET delivered_at=coalesce(delivered_at,?)" + (", read_at=coalesce(read_at,?)" if read else "")
+            + " WHERE id=? AND recipient_id=? AND kind='ask' AND deleted_at IS NULL AND id IN (SELECT m.id FROM messages m "
+            "WHERE m.id=messages.id AND " + OPEN_ASK_SQL + ") AND (delivered_at IS NULL" + (" OR read_at IS NULL)" if read else ")"),
+            (at, at, mid, actor) if read else (at, mid, actor))
+        if cur.rowcount:
+            out.append(mid)
+            event(conn, actor, "message.read" if read else "message.delivered", mid)
+    return out
 
 
 def mark_read(conn, actor, message_id, recipient=None):
@@ -5072,7 +5091,7 @@ def _answered(conn, actor, task_id, card, told=None):
         return False
     name = person_name(conn, person)
     said = str(card.get("note") or "").strip() or {"done": "Done.", "declined": "Declined."}.get(card["status"], "")
-    closer = "Tico" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
+    closer = "The system" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
     if card["status"] == "closed":
         who = f"{name} closed the ask" if actor == person else f"{closer} closed the ask to {name}"
     else:
@@ -8061,6 +8080,7 @@ def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=Non
     for a caller whose id is deterministic (backend/task_check_backs.py)."""
     if subject_type not in HISTORY_SUBJECTS:
         raise ValueError(f"unknown history subject type {subject_type!r}")
+    data = SRC.stamp_data(data, actor)
     event_id = event_id or new_id()
     conn.execute("INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, action_id, "
                  "via, data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",

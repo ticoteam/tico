@@ -489,19 +489,22 @@ def matched(method, path, body):
 def stored_class(c, method, path, body, trial=None):
     """`matched`, with a change classed by what it does to stored state, as `plan` classes it: a repository change is a
     card when `trial(e, target, body)` (the change tried as the person's own click, `repositories.card_words`) says
-    the route would make one; a mailbox routine is person-only only when the stored automation hears an email inbox."""
+    the route would make one; a mailbox routine keeps the route's existing confirmation behavior."""
     found = matched(method, path, body)
     if not found:
         return found
     e, target, _ = found
     if e.key == "mailbox.routine":
-        # Inboxes exposes email message automations as mailbox routines. This route also edits every other kind of
-        # automation, whose existing Assistant route permissions must remain intact.
+        # The catalogue must not treat every automation edit as an inbox setting. Email routines still use the route's
+        # confirmation gate for Assistant writes; other automations keep their existing route behavior and are not
+        # reclassified as Settings entries.
         from . import automations
         row = automations._row(c, str(target.get("id") or ""))
         trigger = (automations.flow_of(row).get("trigger") or {}) if row else {}
         inbox = str(trigger.get("inbox") or "")
-        return e, target, "person" if trigger.get("type") == "message" and "@" in inbox else "direct"
+        if trigger.get("type") != "message" or "@" not in inbox:
+            return None
+        return e, target, "confirm"
     if found[2] != "stored":
         return found
     return e, target, "direct" if trial and not trial(e, target, body) else e.when_held

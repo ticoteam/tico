@@ -229,30 +229,34 @@ jobs:
           - {name: browser-2, part: browser, shard: '2/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-1, part: python, shard: '1/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-3, part: python, shard: '3/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-4, part: python, shard: '4/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-5, part: python, shard: '5/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-6, part: python, shard: '6/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-7, part: python, shard: '7/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-8, part: python, shard: '8/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-9, part: python, shard: '9/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-10, part: python, shard: '10/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-11, part: python, shard: '11/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-12, part: python, shard: '12/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-13, part: python, shard: '13/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-14, part: python, shard: '14/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-15, part: python, shard: '15/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-16, part: python, shard: '16/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-17, part: python, shard: '17/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-18, part: python, shard: '18/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-19, part: python, shard: '19/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-20, part: python, shard: '20/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-21, part: python, shard: '21/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-22, part: python, shard: '22/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-23, part: python, shard: '23/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-24, part: python, shard: '24/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-1, part: python, shard: '1/28', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-2, part: python, shard: '2/28', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-3, part: python, shard: '3/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-4, part: python, shard: '4/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-5, part: python, shard: '5/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-6, part: python, shard: '6/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-7, part: python, shard: '7/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-8, part: python, shard: '8/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-9, part: python, shard: '9/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-10, part: python, shard: '10/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-11, part: python, shard: '11/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-12, part: python, shard: '12/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-13, part: python, shard: '13/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-14, part: python, shard: '14/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-15, part: python, shard: '15/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-16, part: python, shard: '16/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-17, part: python, shard: '17/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-18, part: python, shard: '18/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-19, part: python, shard: '19/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-20, part: python, shard: '20/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-21, part: python, shard: '21/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-22, part: python, shard: '22/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-23, part: python, shard: '23/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-24, part: python, shard: '24/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-25, part: python, shard: '25/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-26, part: python, shard: '26/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-27, part: python, shard: '27/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-28, part: python, shard: '28/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
           - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
     runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=80gb/spot=false/extras=s3-cache
@@ -315,6 +319,16 @@ jobs:
           # uv installs the same pinned lock as pip, in seconds instead of about a minute.
           python3 -m pip install --disable-pip-version-check uv==0.13.1
           python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
+      # One real collection validates the filesystem shard plan while native-linux is still building. The other
+      # 27 Python VMs never collect the whole suite; python-1 has about two minutes of binary-wait slack here.
+      - name: Check Python shard coverage during the native build
+        if: matrix.name == 'python-1'
+        working-directory: candidate
+        run: |
+          # Frozen candidates predating filesystem sharding still collect on each shard.
+          if grep -q -- '--check-shard-coverage' scripts/release_checks.py; then
+            "$RUNNER_TEMP/release-venv/bin/python" scripts/release_checks.py --check-shard-coverage --release
+          fi
       # The browser VM runs the browser tests; for a candidate frozen before --part existed, the helper runs its whole
       # gate on the product VM instead, so that VM needs browsers too.
       - name: Does this VM run browser tests

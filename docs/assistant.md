@@ -43,7 +43,7 @@ What waits on you from elsewhere comes at the end of the DM as cards: a Confirm 
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
 task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
-question answer --on-behalf-of turn`, below). A Confirm card always needs your own tap.
+question answer --on-behalf-of turn`, below). A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 
@@ -59,15 +59,39 @@ The Assistant files a helper a task with `--request-id turn`. The same citation 
 wrote in your own Assistant DM in the last 30 minutes, and the owner's rule "Assistant acts without asking" on.
 The task opens with your words quoted.
 For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
-`cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy or goal
-change stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. A task for any other bot that cites your words is refused
-(`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
+`cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
+stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The Strategy Bot's goal
+suggestions are agreed the way your own goal changes are: a plain yes in your chat confirms one ([below](#goals-agreed-in-words)).
+A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
 Assistant DM instead.
 
 The owner used to message the Strategy Bot itself (`room_key: ceo`). That DM stays the owner's as read-only history:
 `GET /api/v2/assistant` lists it under `"earlier": {"room_id", "bot", "name"}`, and new messages go to the Assistant.
 On the first start after the update, Confirm cards still waiting there move to the owner's Assistant DM, once
 (event `assistant.strategy_cards_moved`). A card runs only on its owner's own tap, so moving it is safe.
+
+### Goals, agreed in words
+
+For your own goals, measures and targets, and for the Strategy Bot's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
+in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
+
+- A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
+- **Yes to 1 and 3** or **yes except 2** saves only those numbered changes.
+
+Your yes counts only if it is your very next message after the read-back, with nothing from anyone else in between and
+nothing else from you after it, and within 30 minutes of the read-back. Any other reply saves nothing. Ask again, and the
+Assistant reads it back again.
+
+Colour, done or dropped and archive are not agreed in words. They stay your click on the Goals page. If a read-back would
+include one, Tico refuses the whole read-back and saves nothing, and the Assistant says why in one sentence and leaves
+that change for your click. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
+clicks too, and are refused the same way.
+
+A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
+its card. A message from you that opens with a no, such as "no" or "no, too high", turns down a Strategy Bot suggestion
+about a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag at once. It needs no read-back
+and no second yes. Your message is kept as the reason, unless it is only a no. A "no" to a Why line stays a click on its
+card. Only the owner's Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
 

@@ -1268,7 +1268,7 @@ def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing
 # What a card takes, as the groups Needs you shows in this order: a yes/no or a pick, money, an account to sign in to
 # or connect, something written to read and let go out, and everything else. Read from the card's own words, so the
 # same card always lands in the same group.
-NEED_GROUPS = ("decide", "pay", "connect", "review", "hands", "do")     # hands: chores the ask filter grouped
+NEED_GROUPS = ("decide", "pay", "connect", "review", "do")
 _NEED_PAY = re.compile(r"\b(pay|paid|payment|invoices?|billing|bills|subscription|renew(al)?|refund|purchase|"
                        r"top[- ]up|credit card|card on file|company card)\b", re.I)
 # Words that are about money only next to an amount: "spend $400", not "spend an hour"; "buy" but not "buy-in".
@@ -1833,7 +1833,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
         msg["refs"] = H._json(msg.get("refs"), {}) or {}
-        ask = {k: msg[k] for k in ("id", "sender_id", "recipient_id", "body", "created_at", "conversation_id", "refs")}
+        ask = {k: msg[k] for k in ("id", "sender_id", "recipient_id", "body", "created_at", "conversation_id", "refs",
+                                   "delivered_at", "read_at")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
                 "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester_id": msg["sender_id"],
                 "origin_actor": msg["sender_id"], "conversation_id": msg["conversation_id"],
@@ -1900,12 +1901,9 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         return readable_memo[tid]
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
-    from . import ask_ingest
-    # The chores the ask filter let through under their own budget (backend/ask_ingest.py) group as Hands needed.
-    hands = ask_ingest.hands_ids(c, who.actor) if H.is_human(who.actor) else set()
     for item in items:
         item["pressing"] = pressing(item, at)
-        item["need"] = "hands" if item.get("id") in hands else need_of(item)
+        item["need"] = need_of(item)
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item
@@ -2001,6 +1999,16 @@ def needs_folded_ids(items):
     """Task ids represented by another card, including cards on unread pages, so Tasks counts each blocker once."""
     return sorted({str(f["id"]) for it in items for f in it.get("folded", [])}
                   | {str(tid) for it in items for tid in it.get("merged", [])})
+
+
+def needs_plate_count(items):
+    """Everything on the person's plate across boards, counted once; folded tasks count through their card."""
+    task_kinds = {"task", "question", "waiting", "declined"}
+    plate_kinds = task_kinds | {"approval", "ask", "stale", "memory_tidy"}
+    folded = set(needs_folded_ids(items))
+    return len({("task" if it["kind"] in task_kinds else it["kind"], str(it["id"]))
+                for it in items if it["kind"] in plate_kinds
+                and not (it["kind"] in task_kinds and str(it["id"]) in folded)})
 
 
 def needs_actor(it, me):
@@ -3049,7 +3057,9 @@ def install_views(app, store, auth, mutate, task_view):
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
-        by other cards over the whole list, including unread pages.
+        by other cards over the whole list, including unread pages. Every response includes `plate_count`: unique
+        task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, less folded or merged
+        tasks. It excludes thread and update attention; `count` keeps counting the whole attention list.
         A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each
         item's place are the same as the full read's and the live event's."""
@@ -3057,21 +3067,25 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(who)
         with store.read_transaction() as c:
             if count:
-                return {"actor": who.actor, "count": len(needs_items(c, auth, who, task_view, count_only=True))}
+                items = needs_items(c, auth, who, task_view, count_only=True)
+                return {"actor": who.actor, "count": len(items), "plate_count": needs_plate_count(items)}
             older = []
             items = needs_items(c, auth, who, task_view, older)
             current = needs_marks(items)[1]
+            plate_count = needs_plate_count(items)
             if version and version == current and not cursor:
-                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True,
+                return {"actor": who.actor, "count": len(items), "plate_count": plate_count,
+                        "version": current, "unchanged": True,
                         "went_away": went_away(c, who.actor)}
             if ids is not None:
                 wanted = {part.strip() for part in ids.split(",") if part.strip()}
                 if len(wanted) > NEEDS_IDS_MAX:
                     raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
-                return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
+                return {"actor": who.actor, "count": len(items), "plate_count": plate_count,
+                        "version": current, "positions": positions,
                         "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
-            out = {"actor": who.actor, "count": len(items), "by_kind": needs_kinds(items),
+            out = {"actor": who.actor, "count": len(items), "plate_count": plate_count, "by_kind": needs_kinds(items),
                    "folded_task_ids": needs_folded_ids(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:

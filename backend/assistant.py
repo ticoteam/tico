@@ -100,6 +100,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Queuing mail does not deliver it: the shared send gate owns approval, undo, revocation and dispatch.
     if path == "/api/v2/email/sends" or re.fullmatch(r"/api/v2/email/sends/[^/]+/cancel", path):
         return True
+    # Reversible Gmail labels; the route checks the person's mailbox level and the company organize switch.
+    if path == "/api/v2/mail/messages/organize":
+        return True
     # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
     # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
     if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
@@ -703,7 +706,7 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/system/storage/move"), ("DELETE", r"/api/v2/(?:people|humans)/[^/]+"),
     ("POST", r"/api/v2/settings/turn-levels"), ("POST", r"/api/v2/me/tokens/[^/]+/revoke"),
     ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
-    ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
+    ("POST", r"/api/v2/bots/[^/]+/cloud-machine(?:/replace)?"), ("POST", r"/api/v2/cloud-machines/shared"),
     ("PUT", r"/api/v2/cloud-machines/support"),
     ("POST", r"/api/v2/postal/orders"),
     ("PUT", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
@@ -989,6 +992,7 @@ def describe(c, method, path, body):
         (r"/api/v2/me/tokens/([^/]+)/revoke", lambda g: "Revoke the API token “" + ((c.execute(
             "SELECT label FROM human_tokens WHERE id=?", (g[0],)).fetchone() or {"label": g[0]})["label"]) + "”"),
         (r"/api/v2/bots/([^/]+)/cloud-machine", lambda g: f"Change bot {bot(g[0])}'s cloud machine: " + values(body)),
+        (r"/api/v2/bots/([^/]+)/cloud-machine/replace", lambda g: f"Replace bot {bot(g[0])}'s cloud machine and delete its disk. The next task starts a fresh one."),
         (r"/api/v2/cloud-machines/shared", lambda g: "Change the shared cloud machine: " + values(body)),
         (r"/api/v2/postal/orders", lambda g: "Order a postal address for the mailbox: " + values(body)),
         (r"/api/v2/bots/([^/]+)/budget", lambda g: f"Change bot {bot(g[0])}'s run budget: " + values(body)),

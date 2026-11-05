@@ -44,6 +44,8 @@ TABLES = {
     rows.MaintenanceHandoffRow: "maintenance_handoffs",
     rows.MaintenanceRequestRow: "maintenance_requests",
     rows.AttemptRow: "attempts",
+    rows.CloudMachineDeletionRow: "cloud_machine_deletions",
+    rows.CloudMachineEnrollmentFailureRow: "cloud_machine_enrollment_failures",
     rows.RunnerRow: "runners",
     rows.RunnerStateRow: "runner_states",
     rows.ApprovalRow: "approvals",

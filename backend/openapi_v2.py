@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from . import needs_shape
+from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
 COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
@@ -72,8 +73,8 @@ EVENTS_DESCRIPTION = (
     "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
     "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
-    "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
+    "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
+    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
     "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
@@ -347,6 +348,10 @@ STABLE = [
     ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
     ("/api/v2/needs-you/recommended", "post", "Needs you", "takeRecommendation",
      "Do what the bot recommends: answer its ask with what it said it would do, and close the card", None),
+    ("/api/v2/needs-you/seen", "post", "Needs you", "needsYouSeen",
+     "The caller's Needs you shows these questions to them (asks=<message ids>, at most 200): each open one is delivered", None),
+    ("/api/v2/tasks/{tid}/seen", "post", "Needs you", "taskSeen",
+     "The caller opened the task: its open questions to them are read", None),
     ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
      "Ask the bot behind a stale question whether it still matters, in clearer words", None),
     ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",
@@ -373,7 +378,7 @@ STABLE = [
     ("/api/v2/meetings/granola/connect", "delete", "Meetings", "disconnectGranola", "Delete your encrypted Granola tokens", "GranolaDisconnect"),
     ("/api/v2/meetings/granola/sync", "post", "Meetings", "syncGranola", "Start a background sync; reuse the last two minutes", "GranolaSync"),
     ("/api/v2/meetings/search", "get", "Meetings", "searchMeetings", "Search or list recorded meetings", "MeetingSearch"),
-    ("/api/v2/meetings/transcript", "get", "Meetings", "getMeetingTranscript", "A meeting's transcript", None),
+    ("/api/v2/meetings/transcript", "get", "Meetings", "getMeetingTranscript", "A meeting's transcript; includes saved notes at offset zero, or notes only with notes=true", None),
     ("/api/v2/bots/{bot}/files", "get", "Files", "listBotFiles",
      "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page", "BotFileList"),
     ("/api/v2/files/uploads", "post", "Files", "uploadBotFile",
@@ -727,7 +732,12 @@ NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs yo
                              "description": "The writes that settle it: " + "; ".join(
                                  f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())}})
 
+# Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
+SOURCE_SCHEMA = obj({"kind": {"type": "string", "enum": list(SOURCE_KINDS)}, "name": "s", "link": "n"},
+                    required=["kind", "name", "link"])
+
 SCHEMAS = {
+    "MessageSource": SOURCE_SCHEMA,
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
     "SubscriptionIdentity": obj({"id": "s", "display_name": "s"}),
@@ -1073,6 +1083,8 @@ SCHEMAS = {
                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
                                   "answered by their Assistant, and the total"},
         count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
+        plate_count={"type": "integer", "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items "
+                     "across all boards, excluding folded or merged tasks; excludes thread and update attention"},
         by_kind={"type": "object", "additionalProperties": {"type": "integer"},
                  "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds"},
         folded_task_ids={"type": "array", "items": {"type": "string"},
@@ -1082,7 +1094,7 @@ SCHEMAS = {
         bots={"type": "object", "additionalProperties": {"type": "integer"},
               "description": "With limit or cursor: how many items in the whole list each bot is behind"},
         restart={"type": "boolean", "description": "The cursor was from an older version: this page is the first"}),
-        obj({"actor": "s", "count": "i"})]},
+        obj({"actor": "s", "count": "i", "plate_count": "i"})]},
     "GranolaStatus": obj({"mode": {"type": "string", "enum": ["account", "api_key", "off"]},
                           "connected": "b", "email": "n", "plan_hint": {"type": ["string", "null"], "enum": ["free", "paid", None]},
                           "last_synced_at": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
@@ -1460,6 +1472,8 @@ SCHEMAS.update({
                       "next_offset": {"type": ["integer", "null"]}}),
 })
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
+SCHEMAS["Message"]["properties"]["source"] = ref("MessageSource")
+SCHEMAS["TaskDetail"]["properties"]["events"] = items(obj({"source": ref("MessageSource")}, required=["source"]))
 
 # The named events automations and outgoing webhooks listen for (backend/event_catalog.py).
 TAGS["Events"] = "The catalog of named events (docs/routines.md)."
@@ -2698,6 +2712,8 @@ SCHEMAS.update({
     "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
     "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
 })
+SCHEMAS["ThreadMessage"]["properties"]["source"] = ref("MessageSource")
+SCHEMAS["ThreadSearch"]["properties"]["hits"]["items"]["properties"]["source"] = ref("MessageSource")
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
      "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page "
@@ -2868,6 +2884,8 @@ STABLE.extend([
      'Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data', 'MeetingTaskLinkBatch'),
     ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
+    ('/api/v2/tasks/{tid}/context', 'get', 'Tasks', 'getTaskContext',
+     'Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only', 'TaskContext'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
      'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
 ])
@@ -2880,6 +2898,10 @@ SCHEMAS.update({
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'TaskContextPage': obj({'id': 's', 'title': 's', 'version': 'i', 'updated_at': 's'}),
+    'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
+    'TaskContext': obj({'pages': {**items(ref('TaskContextPage')), 'maxItems': 10},
+                        'meetings': {**items(ref('TaskContextMeeting')), 'maxItems': 10}}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 
@@ -2937,10 +2959,19 @@ def spec(app):
         if not path.startswith("/public/roadmaps/") and path not in ("/healthz", "/auth/login", "/auth/token"):
             responses["401"] = {"description": "Not signed in", **ERROR}
             responses["422"] = {"description": "Invalid request or rule: error.code and field-specific error.detail", **ERROR}
+        if method == "post" and path in (
+                "/api/v2/tasks", "/api/v2/tasks/{tid}", "/api/v2/tasks/{tid}/comments",
+                "/api/v2/messages", "/api/v2/conversations/{cid}/messages"):
+            responses["422"] = {**ERROR, "description": "ask_refused: a bot ask fails the person's asking criteria; "
+                                "detail gives the reason and fix. Nothing is created or changed; no quarantine "
+                                "or org-rule hold. Progress notes should be posted as updates."}
         if path == "/auth/token":
             op["requestBody"] = TOKEN_REQUEST
             op["security"] = []
             responses["400"] = {"description": "invalid_grant, or the request is malformed", **ERROR}
+        if path == "/api/v2/mail/messages/organize":
+            op["requestBody"] = {"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}}
+            responses["403"] = {"description": "Organize access or the company organize switch is off", **ERROR}
         connection = path == '/api/v2/inbound/company-connection'
         if connection:
             op['requestBody'] = {'required':True,'content':{'application/json':{'schema':{
@@ -3251,6 +3282,27 @@ STABLE.extend([
     ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
      "Take one person's or bot's access away", "MailboxDetail"),
 ])
+
+TAGS["Email"] = "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids."
+MAIL_ORGANIZE_ACTION = {"enum": ["archive", "unarchive", "mark_read", "mark_unread", "label", "unlabel"]}
+MAIL_ORGANIZE_IDS = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "minItems": 1, "maxItems": 500}
+MAIL_ORGANIZE_FIELDS = {
+    "mailbox": {"type": "string", "maxLength": 254}, "action": MAIL_ORGANIZE_ACTION,
+    "ids": MAIL_ORGANIZE_IDS, "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "label": {"type": "string", "minLength": 1, "maxLength": 225},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}
+SCHEMAS["MailOrganizeBody"] = {"oneOf": [
+    {**obj(MAIL_ORGANIZE_FIELDS, required=("mailbox", "action", "ids")), "not": {"required": ["query"]}},
+    {**obj(MAIL_ORGANIZE_FIELDS, required=("mailbox", "action", "query")), "not": {"required": ["ids"]}}]}
+SCHEMAS["MailOrganizeUndo"] = obj({"action": MAIL_ORGANIZE_ACTION, "ids": items("s"), "label": "s"},
+                                  required=("action", "ids"))
+SCHEMAS["MailOrganizeResult"] = obj({"mailbox": "s", "action": MAIL_ORGANIZE_ACTION, "label": "s", "count": "i",
+                                    "ids": items("s"), "undo": ref("MailOrganizeUndo")},
+                                    required=("mailbox", "action", "count", "ids", "undo"))
+STABLE.append(("/api/v2/mail/messages/organize", "post", "Email", "organizeMailMessages",
+               "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+               "MailOrganizeResult"))
 
 TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
 SCHEMAS["LetterOutContents"] = obj({

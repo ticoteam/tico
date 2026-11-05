@@ -4,8 +4,8 @@
 
 In the web app, each connected mailbox and Slack channel is listed in the Team sidebar under the bot that covers it:
 an Inbox Manager's under **Message bots**, a team bot's under that bot. Open one to see that bot's instructions and routines on the
-left and example messages on the right. Whole Workspace email threads are read live from Gmail; the mail tool still
-handles Gmail actions. A messaging icon beside a human in the team chart opens their message bot.
+left and example messages on the right. Whole Workspace email threads are read and organized live in Gmail.
+A messaging icon beside a human in the team chart opens their message bot.
 The old `#/mail` route remains available for existing deep links.
 
 ## Reading mail
@@ -20,6 +20,20 @@ The mail API requires a mailbox for live lists; it does not combine Workspace in
 and legacy connections keep their existing stored reads; live reading needs Whole Workspace. Existing mail sync and
 stored copies are unchanged by live reads. Opening a message or thread checks access and records `mail.read`.
 
+## Organizing live
+
+With Whole Workspace, use `hub email archive|unarchive|mark-read|mark-unread <address> <id> ...` or
+`hub email label|unlabel <address> <label> <id> ...`. Supply ids (up to 500) or `--query "<Gmail query>"` with
+`--limit` (default 100, maximum 500). Each call needs Read and write and the company's **What Tico may do >
+Organize mail** switch; the Assistant acts as its person, bots at their own level. Gmail keeps the mail;
+`mail.organize` records only ids and action details. Output gives count and undo; `--json` includes all ids.
+Undo applies the inverse to those ids, including mail already in that state. Only labeling creates a missing user
+label. These commands never delete, trash, or change Spam, Sent or Draft labels.
+API: `POST /api/v2/mail/messages/organize`.
+
+Automation archive, label and leave actions run on the server for Whole Workspace mailboxes, without waiting for a
+computer. Other mail actions and personal connections still use the mailbox's computer; owner access is checked again before acting.
+
 Mail is one shared tool, `$HUB_DIR/scripts/mail.sh`. One Google service account acts as every
 mailbox; who may act as which one comes from the `tools:` block in your `bot.yaml`
 (`policies/access.md`), never from a prompt. Every read of a body and every label, archive or
@@ -30,8 +44,8 @@ from your own `software/`. The access checks, the rules, the audit log and the r
 live in the tool; a direct call skips all four and is a policy violation, not a shortcut. The
 service-account key is not in your environment, so a direct call would not work anyway.
 
-The dispatcher gives every run `HUB_BOT` (your slug) and `HUB_DIR` (the Tico clone), so
-`mail.sh` already knows who you are. `--as <slug>` is only for running it by hand.
+The dispatcher gives every run `HUB_BOT` (your slug) and `HUB_DIR` (Tico's own install, never a place
+for Git work), so `mail.sh` already knows who you are. `--as <slug>` is only for running it by hand.
 
 ## What you can do today
 

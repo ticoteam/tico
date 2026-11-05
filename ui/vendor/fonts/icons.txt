@@ -105,6 +105,7 @@ monitoring
 more_horiz
 new_releases
 newspaper
+open_in_full
 open_in_new
 paid
 palette
