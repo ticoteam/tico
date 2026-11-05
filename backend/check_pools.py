@@ -699,9 +699,9 @@ RETRY_WAITS_SQL = ("SELECT id,step_id,created_at FROM check_waits WHERE step_id=
                    "ORDER BY created_at,id LIMIT ?")
 
 
-def _retry_waits(c, limit, after):
-    """Seek a bounded queue for each step with room, then take the oldest waits across those steps."""
-    capacity, waits = {}, []
+def _retry_waits(c, limit, after, after_step=None):
+    """Seek bounded queues for steps with room, taking turns across pools and oldest first within each queue."""
+    capacity, queues = {}, {}
     for raw in c.execute("SELECT id,check_pool,check_limit FROM task_steps WHERE check_pool IS NOT NULL"):
         slugs = members(raw["check_pool"]) or []
         if not slugs:
@@ -716,8 +716,18 @@ def _retry_waits(c, limit, after):
         rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], *cursor, limit))]
         if not rows and cursor != ("", ""):
             rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], "", "", limit))]
-        waits.extend(rows)
-    return sorted(waits, key=lambda w: (w["created_at"], w["id"]))[:limit]
+        if rows:
+            queues[raw["id"]] = rows
+    # Keep the next pool's turn across passes, even when one pool has a whole batch of unplaceable waits.
+    order = sorted(queues, key=lambda sid: (sid <= (after_step or ""), sid))
+    waits = []
+    for n in range(limit):
+        for sid in order:
+            if n < len(queues[sid]):
+                waits.append(queues[sid][n])
+                if len(waits) == limit:
+                    return waits
+    return waits
 
 
 def retry(store, limit=RETRY_LIMIT):
@@ -731,11 +741,12 @@ def retry(store, limit=RETRY_LIMIT):
     with store.read_transaction() as c:
         if not _ready(c):
             return []
-        waits = _retry_waits(c, limit, after)
+        waits = _retry_waits(c, limit, after, getattr(store, "_check_retry_step", None))
     out = []
     for wait in waits:
         wid = wait["id"]
         after[wait["step_id"]] = (wait["created_at"], wid)
+        store._check_retry_step = wait["step_id"]
         with store.read_transaction() as c:
             row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
             if not row:

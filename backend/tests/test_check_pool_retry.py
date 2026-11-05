@@ -3,6 +3,8 @@ import importlib
 import json
 import sqlite3
 
+import pytest
+
 from backend import check_pools as P, hubdb as H
 from backend.tests.test_check_pools import busy, checks, team
 from backend.tests.test_github import api  # noqa: F401
@@ -34,6 +36,21 @@ def backlog(c, wait, count, prefix='older'):
                   "VALUES(?,?,?,?,?,?,'waiting',?,?)",
                   [(f'{prefix}-{n:06}', wait['ticket_id'], wait['step_id'], wait['title'], wait['heads'],
                     wait['reason'], '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z') for n in range(count)])
+
+
+def self_owned_waits(c, task, wait, count):
+    step = dict(c.execute('SELECT * FROM task_steps WHERE id=?', (task['step_id'],)).fetchone())
+    _, reason = P.ranked(c, {**task, 'owner_id': 'bot:rev-a'}, step, ['rev-a'], 1)
+    for n in range(count):
+        tid, wid = f'self-{n:03}', f'wait-self-{n:03}'
+        c.execute('INSERT INTO tasks(id,title,requester_id,owner_id,status,type_id,step_id,created_at,updated_at,private) '
+                  "VALUES(?,'Own change','human:ana','bot:rev-a','review',?,?,?,?,0)",
+                  (tid, task['type_id'], task['step_id'], H.now(), H.now()))
+        c.execute('INSERT INTO check_waits(id,ticket_id,step_id,title,heads,reason,state,created_at,updated_at) '
+                  "VALUES(?,?,?,?,?,?,'waiting',?,?)",
+                  (wid, tid, task['step_id'], wait['title'], HEAD, reason,
+                   '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'))
+    return reason
 
 
 def test_a_thousand_busy_waits_do_not_consume_a_free_pools_retry_batch(api):
@@ -76,17 +93,7 @@ def test_ineligible_waits_advance_without_idle_writes_and_do_not_starve_the_same
     task, wait = waiting_ticket(api, 504, 'rev-a')
     store = api.app.state.store
     with store.transaction() as c:
-        step = dict(c.execute('SELECT * FROM task_steps WHERE id=?', (task['step_id'],)).fetchone())
-        _, reason = P.ranked(c, {**task, 'owner_id': 'bot:rev-a'}, step, ['rev-a'], 1)
-        for n in range(P.RETRY_LIMIT + 1):
-            tid, wid = f'self-{n:03}', f'wait-self-{n:03}'
-            c.execute('INSERT INTO tasks(id,title,requester_id,owner_id,status,type_id,step_id,created_at,updated_at,private) '
-                      "VALUES(?,'Own change','human:ana','bot:rev-a','review',?,?,?, ?,0)",
-                      (tid, task['type_id'], task['step_id'], H.now(), H.now()))
-            c.execute('INSERT INTO check_waits(id,ticket_id,step_id,title,heads,reason,state,created_at,updated_at) '
-                      "VALUES(?,?,?,?,?,?,'waiting',?,?)",
-                      (wid, tid, task['step_id'], wait['title'], HEAD, reason,
-                       '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'))
+        self_owned_waits(c, task, wait, P.RETRY_LIMIT + 1)
 
     def unexpected(*args, **kwargs):
         raise AssertionError('unchanged ineligible waits need no writer')
@@ -99,6 +106,45 @@ def test_ineligible_waits_advance_without_idle_writes_and_do_not_starve_the_same
     with store.read_transaction() as c:
         assert c.execute("SELECT count(*) FROM check_waits WHERE id LIKE 'wait-self-%' AND state='waiting' "
                          "AND updated_at='2020-01-01T00:00:00Z'").fetchone()[0] == P.RETRY_LIMIT + 1
+
+
+@pytest.mark.parametrize('limit', [1, P.RETRY_LIMIT])
+def test_ineligible_waits_do_not_starve_other_pools_across_retry_passes(api, monkeypatch, limit):
+    team(api)
+    blocked, wait = waiting_ticket(api, 506, 'rev-a')
+    eligible = [waiting_ticket(api, number, reviewer)[0] for number, reviewer in ((507, 'rev-b'), (508, 'rev-c'))]
+    store = api.app.state.store
+    with store.transaction() as c:
+        reason = self_owned_waits(c, blocked, wait, P.RETRY_LIMIT - 1)
+        c.execute("UPDATE tasks SET owner_id='bot:rev-a' WHERE id=?", (blocked['id'],))
+        c.execute("UPDATE check_waits SET reason=?,created_at='2019-01-01T00:00:00Z' WHERE id=?", (reason, wait['id']))
+        before = [tuple(r) for r in c.execute('SELECT * FROM check_waits WHERE step_id=? ORDER BY id', (blocked['step_id'],))]
+
+    # Start at the ineligible pool so a one-wait batch must advance to another pool on its next pass.
+    step_ids = sorted([blocked['step_id'], *(task['step_id'] for task in eligible)])
+    store._check_retry_step = step_ids[step_ids.index(blocked['step_id']) - 1]
+    filed = []
+    for turn in range(3):
+        batch = P.retry(store, limit=limit)
+        assert len(batch) <= limit
+        if turn == 0 and limit == 1:
+            assert batch == []
+        filed.extend(batch)
+    assert len(filed) == len(set(filed)) == 2
+    for task, reviewer in zip(eligible, ('rev-b', 'rev-c')):
+        [check] = checks(api, task)
+        assert check['id'] in filed and check['owner_id'] == 'bot:' + reviewer
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('unchanged ineligible waits need no writer after other pools make progress')
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, 'transaction', unexpected)
+        for _ in range(3):
+            assert P.retry(store, limit=limit) == []
+    with store.read_transaction() as c:
+        assert [tuple(r) for r in c.execute('SELECT * FROM check_waits WHERE step_id=? ORDER BY id',
+                                           (blocked['step_id'],))] == before
 
 
 def test_retry_read_work_and_query_plan_stay_bounded_as_the_queue_grows(api):
