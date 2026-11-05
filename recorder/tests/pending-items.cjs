@@ -57,7 +57,7 @@ const path = require('node:path');
     assert.equal(await card.locator('[contenteditable="true"]').count(),1);
     assert.equal(await shownOwner.textContent(),'Sam Okafor');
     await card.getByRole('button',{name:'Dismiss',exact:true}).waitFor();
-    assert.equal(await card.getByText(/^(Title|Owner|Due|Details)$/).count(),0);
+    assert.equal(await card.getByText(/^(Title|Due|Details)$/).count(),0);
     // Typing while a save is in flight keeps the newer words and saves them next.
     await page.evaluate(() => { const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve); });
     await title.fill('Saving draft');

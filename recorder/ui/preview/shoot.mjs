@@ -49,7 +49,7 @@ const scenes = {
   'live-card': ['library', async (page) => page.evaluate(() => {
     const a = window.__PREVIEW__.state.meetings.m1.actions;
     a.saved = true; a.shared_url = 'https://hub.tico.team';
-    a.shared = { can_send: true, presence: { actors: [] }, sections: { task: [{ version: 1, id: 's1', section: 'task', text: 'Send the pricing recap to Dana', status: 'proposed', detail: { owner: 'human:dana', due: '2026-12-01T17:00:00.000Z', body: 'Older details' } }] } };
+    a.shared = { can_send: true, presence: { actors: [] }, sections: { task: [{ version: 1, id: 's1', section: 'task', text: 'Send the pricing recap to Dana', quote: "I'll send Dana the pricing recap.", at_ms: 1150000, status: 'proposed', detail: { owner: 'human:dana', due: '2026-12-01T17:00:00.000Z', body: 'Older details' } }] } };
   }), open('m1')],
   // A created task's row is the way into Tico.
   'task-open': ['meeting', open('m1'), async (page) => { await page.focus('[data-act="add-open"]'); await page.keyboard.press('Tab'); }],
