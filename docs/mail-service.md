@@ -139,8 +139,8 @@ uncertain delivery is recorded as Unknown and never automatically retried.
   thread and its recipient, signature present, one language.
 - Scheduling: when times are offered there are at least two, in the future, chronological,
   weekdays in business hours, time zone spelled out, and each one is actually free on every
-  calendar on ana@acme.example with a 30-minute buffer (checked live). A confirmation cannot be
-  sent without the invite; `mail schedule` does both or neither.
+  calendar on ana@acme.example with a 30-minute buffer (checked live). `mail schedule` creates the
+  invite before queueing its confirmation email, which follows the sending policy and undo window.
 
 **3. Reviewer (a second model, different vendor from the writer).**
 The bots write with Codex (OpenAI). The CLI asks Grok 4.6 to review the draft against the
@@ -156,15 +156,16 @@ tone. Any commitment or unsupported claim fails the draft. The verdict is stored
 If the reviewer is unreachable, `send` fails closed; `draft` proceeds with a warning flag.
 
 **4. Execution.**
-Idempotency key written to the database before every API call, so a retried run cannot
-double-send. Exponential backoff on 429 and 5xx. `mail schedule` creates the event, then sends;
-if the send fails it deletes the event. The sent-log row comes from the API response, and a
-nightly reconcile against Gmail's Sent folder makes Ana's own sends count toward cooldowns.
+The durable queue records its content-and-recipient idempotency key before dispatch. A provider attempt is never
+automatically repeated if delivery is uncertain. `mail schedule` deletes its newly created event if queueing the
+confirmation fails; a queued confirmation leaves the event in place even while awaiting approval or after cancellation.
+The sent-log row comes from the provider response, and a nightly reconcile against Gmail's Sent folder makes Ana's
+own sends count toward the connector's cooldowns.
 
 **5. Audit.**
 Every read of a thread body, label change, draft, send, and reviewer verdict goes to
 `runtime/mail/audit.jsonl` and the database: bot, task, mailbox, recipient, rule results,
-message id. `mail audit` prints it; Tico gets a Message bots tab later.
+message id. `mail audit` prints it; Inboxes shows pending sends, cancellation and the server's send audit.
 
 ## Mailbox rules (deterministic, run before any model sees the mail)
 
