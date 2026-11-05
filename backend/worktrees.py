@@ -437,12 +437,19 @@ def holdings(c, owner):
 
 
 def preparable(c, row, detail):
-    """A worktree reserved for a waiting task (backend/worktree_waits.py): its computer checks it out and runs setup
-    while the bot is idle, then reports it present. A failed attempt is not repeated; the task is told instead."""
+    """An idle computer prepares a reserved wait or a requested recovery with the same checkout proof."""
+    recovery = bool(detail.get('recovery'))
+    if recovery:
+        computer = c.execute('SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL',
+                             (row['computer_id'],)).fetchone()
+        if not computer or not readiness_document(computer['readiness']).get('worktree_recovery'):
+            return False
+        if start_refusal(c, H.task(c, row['task_id'])):
+            return False
     return (row['state'] == 'pending' and bool(detail.get('wait_id') or detail.get('recovery')) and not detail.get('error')
             and not detail.get('pending_expired')
             and detail.get('checkout_state') in ('queued', 'initializing', 'checkout_ready', 'setup_running')
-            and (bool(waits.preparing(c, row['id'])) or bool(detail.get('recovery')) and not start_refusal(c, H.task(c, row['task_id']))))
+            and (recovery or bool(waits.preparing(c, row['id']))))
 
 
 def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
@@ -750,6 +757,9 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             raise Problem('forbidden', 'Worktree belongs to another live computer', 403)
         if existing['state'] != 'removed' and not retired(c, existing['computer_id']):
             detail = json.loads(existing['detail'] or '{}')
+            if (detail.get('recovery') and detail.get('checkout_state') == 'queued'
+                    and not readiness_document(assigned['readiness']).get('worktree_recovery')):
+                raise Problem('computer_update', 'Update this computer to bring back work from a retired computer', 409)
             if existing['state'] == 'pending' and detail.get('pending_expired'):
                 # A retry after the deadline starts the same worktree over: same link, path and branch.
                 if why := start_refusal(c, task):
