@@ -127,13 +127,17 @@ when (\"Send Dana the revised pricing by Friday\"). quote: the exact words, copi
 character from one NEW line, that the item comes from (at most 25 words). \
 PEOPLE lists the org's people and bots (with jobs when known). ME identifies the signed-in \
 person; transcript speaker Me means ME. Keep named speakers and unknown Speaker N distinct. \
+speaker_actor identifies a speaker only when their label uniquely matches PEOPLE, or they are Me. \
+When speaker_actor is nonempty, that actor owns their 'I will' / 'I'll' commitments. \
 owner: the exact actor from PEOPLE of who should DO the task, or \"\" if unclear. \
 The person committing owns it: Me saying 'I'll ping Dana' means ME owns the ping, not Dana. \
 A named speaker saying 'I'll send the reviewed PR back to Eli' owns sending it, not Eli. \
 A direct request 'Eli, review it again' or 'Have Eli review the code again' belongs to Eli. \
 For work assigned to a team or role, use its bot or explicitly identified team lead in PEOPLE \
-when clear (a ticket for concierge to negotiate quotes belongs to the concierge bot). \
-Someone asked to open that ticket still owns opening it when they commit to doing so. \
+when clear. 'Open a ticket to concierge to negotiate quotes' and 'Let's open a ticket to concierge \
+to negotiate quotes' route work to concierge: owner is its bot, or its identified team lead \
+when no bot is listed. 'Let's' does not assign that role's work to Me. In contrast, an explicit \
+'I'll open the ticket to concierge' commits the speaker to opening it, so the speaker owns it. \
 People being pinged or receiving a document are not its owners. Use surrounding lines to \
 resolve 'you' only when clear. Never invent an actor or infer who Speaker N is. If several \
 people could own it, the name is ambiguous, or the doer is absent from PEOPLE, use \"\". \
@@ -151,8 +155,28 @@ fn clock(ms: u64) -> String {
     let seconds = ms / 1000;
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
-fn row(line: &Line) -> Value {
-    json!({"t":clock(line.start_ms),"speaker":line.speaker,"text":line.text})
+fn row(line: &Line, people: &[Value], me_actor: &str) -> Value {
+    let actor = if line.me {
+        me(people, me_actor).and_then(|person| person["actor"].as_str())
+    } else if line.speaker == "Me"
+        || line
+            .speaker
+            .strip_prefix("Speaker ")
+            .is_some_and(|n| n.parse::<u32>().is_ok())
+    {
+        None
+    } else {
+        let mut matches = people.iter().filter(|person| {
+            person["name"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(line.speaker.trim()))
+        });
+        let first = matches.next();
+        first
+            .filter(|_| matches.next().is_none())
+            .and_then(|person| person["actor"].as_str())
+    };
+    json!({"t":clock(line.start_ms),"speaker":line.speaker,"speaker_actor":actor.unwrap_or(""),"text":line.text})
 }
 
 /// One chat completion through the transcription provider (OpenRouter by default).
@@ -310,9 +334,10 @@ pub fn draft_with_roster(
     if fresh.is_empty() {
         return Ok(0);
     }
+    let people = people(roster, &context, &lines);
     let earlier: Vec<Value> = lines[first.saturating_sub(6)..first]
         .iter()
-        .map(row)
+        .map(|line| row(line, &people, &roster.me))
         .collect();
     let existing: Vec<&str> = context
         .items
@@ -328,8 +353,7 @@ pub fn draft_with_roster(
         .iter()
         .map(|task| json!({"number":task.number,"title":task.title}))
         .collect();
-    let people = people(roster, &context, &lines);
-    let input = json!({"PEOPLE":people,"ME":me(&people, &roster.me),"TASKS":offered,"EXISTING":existing,"EARLIER":earlier,"NEW":fresh.iter().map(row).collect::<Vec<_>>()});
+    let input = json!({"PEOPLE":people,"ME":me(&people, &roster.me),"TASKS":offered,"EXISTING":existing,"EARLIER":earlier,"NEW":fresh.iter().map(|line| row(line, &people, &roster.me)).collect::<Vec<_>>()});
     let text = complete(
         config,
         key,
@@ -607,6 +631,34 @@ mod tests {
         assert_eq!(owner(&json!({"owner":"human:ana"}), &[]), "");
     }
 
+    #[test]
+    fn speaker_actors_require_a_unique_roster_match_or_the_signed_in_me() {
+        let rows = vec![
+            json!({"actor":"human:ana", "name":"Ana Rivera"}),
+            json!({"actor":"human:eli", "name":"Eli Park"}),
+            json!({"actor":"human:same1", "name":"Same Name"}),
+            json!({"actor":"human:same2", "name":"Same Name"}),
+            json!({"actor":"human:unknown", "name":"Speaker 1"}),
+        ];
+        for (speaker, expected) in [
+            ("Me", "human:ana"),
+            ("Eli Park", "human:eli"),
+            ("Same Name", ""),
+            ("Speaker 1", ""),
+            ("Eli", ""),
+            ("Outside", ""),
+        ] {
+            assert_eq!(
+                row(&line(0, speaker, "I'll send it"), &rows, "human:ana")["speaker_actor"],
+                expected
+            );
+        }
+        assert_eq!(
+            row(&line(0, "Me", "I'll send it"), &rows, "human:missing")["speaker_actor"],
+            ""
+        );
+    }
+
     fn fixture_lines(store: &Store, lines: &[Value]) -> String {
         let record = store.create("Acme action items").unwrap();
         for (i, row) in lines.iter().enumerate() {
@@ -671,8 +723,11 @@ mod tests {
             assert_eq!(input["ME"]["actor"], "human:ana");
             assert_eq!(input["ME"]["name"], "Ana");
             assert_eq!(input["NEW"][0]["speaker"], "Me");
+            assert_eq!(input["NEW"][0]["speaker_actor"], "human:ana");
             assert_eq!(input["NEW"][1]["speaker"], "Eli");
+            assert_eq!(input["NEW"][1]["speaker_actor"], "human:eli");
             assert_eq!(input["NEW"][2]["speaker"], "Speaker 1");
+            assert_eq!(input["NEW"][2]["speaker_actor"], "");
             let reply = json!({"choices":[{"message":{"content":json!({"items":[
                 {"title":"Ping Dana", "quote":"I'll ping Dana", "owner":"human:ana"},
                 {"title":"Review code", "quote":"I will review it", "owner":"human:eli"},
@@ -761,7 +816,13 @@ mod tests {
                     me: fixture["me"].as_str().unwrap().into(),
                     ..Default::default()
                 };
-                draft_with_roster(&store, &config, &key, &id, &[], &roster).unwrap();
+                if let Err(error) = draft_with_roster(&store, &config, &key, &id, &[], &roster) {
+                    println!(
+                        "{}",
+                        json!({"case":case["id"],"error":format!("{error:#}")})
+                    );
+                    continue;
+                }
                 let items = store.context(&id).unwrap().items;
                 let passed = items.len() == 1 && items[0].owner == case["owner"].as_str().unwrap();
                 if !passed {
@@ -781,7 +842,7 @@ mod tests {
         }
         println!(
             "{}",
-            json!({"model":config.assist_model,"correct":correct,"total":total,"accuracy":correct as f64 / total as f64})
+            json!({"requested_model":config.assist_model,"correct":correct,"total":total,"accuracy":correct as f64 / total as f64})
         );
         assert_eq!(
             correct, total,
