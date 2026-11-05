@@ -70,6 +70,7 @@ def project(c, scoped, payload, *, auth=None):
     from .files import file_visible, prime_visible
 
     tokens = re.compile(r"[A-Za-z0-9_-]+")
+    source_id = re.compile(r"file-[A-Za-z0-9_-]+|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
     parsed, names, explicit, digest_refs = {}, set(), set(), set()
 
     def source_ref(value):
@@ -78,9 +79,9 @@ def project(c, scoped, payload, *, auth=None):
         value = unquote(value)
         found = re.findall(r"(?:page:|file:|/pages?/|/files/|[?&]page=)([A-Za-z0-9_-]+)", value)
         compact = value.rsplit("@", 1)[0]
-        if re.fullmatch(r"file-[A-Za-z0-9_-]+|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", compact):
+        if source_id.fullmatch(compact):
             found.append(compact)
-        explicit.update(found)
+        explicit.update(ref for ref in found if source_id.fullmatch(ref))
 
     def strings(value, parent=""):
         if isinstance(value, str):
@@ -102,7 +103,9 @@ def project(c, scoped, payload, *, auth=None):
             if parent in {"digest", "source_digest"} and value:
                 digest_refs.add(value)
         elif isinstance(value, dict):
-            if parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str) and value["id"]:
+            # Other namespaces also call their rows pages (the public manual, for example).
+            if (parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str)
+                    and source_id.fullmatch(value["id"])):
                 explicit.add(value["id"])
             for key, item in value.items():
                 strings(key)

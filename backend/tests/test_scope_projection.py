@@ -130,12 +130,14 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
              "messages/" + question["id"], "inbox", "pages", "pages?ids=" + hidden + "," + allowed,
              "pages/" + allowed, "files/" + allowed + "/meta", "files/" + allowed + "/versions",
              "files/" + allowed + "/activity", "bots/cpo/files", "meetings/search", "recordings/search",
-             "meetings/transcript?id=" + shared]
+             "meetings/transcript?id=" + shared, "docs/manual"]
     for path in paths:
         response = api.get("/api/v2/" + path, headers=headers(token))
         assert response.status_code == 200, (path, response.status_code, response.text)
         no_sources(response.json(), secrets)
         assert int(response.headers["content-length"]) == len(response.content)
+        if path == "docs/manual":
+            assert response.json()["pages"] and all(p["id"].startswith("manual:") for p in response.json()["pages"])
     if assistant:
         response = api.get("/api/v2/assistant", headers=headers(token))
         assert response.status_code == 403
