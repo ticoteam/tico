@@ -1672,7 +1672,10 @@ pub async fn base_kept(path: &Path) -> Result<Option<String>, String> {
 mod tests {
     use super::*;
 
-    struct RepoFixture { root: PathBuf, remote: PathBuf, seed: PathBuf, base: PathBuf, env: Env }
+    // Exiting Git from another fixture can be temporarily unreadable to the live-owner safety check.
+    static FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct RepoFixture { root: PathBuf, remote: PathBuf, seed: PathBuf, base: PathBuf, env: Env, _guard: tokio::sync::MutexGuard<'static, ()> }
 
     fn sh(path: &Path, args: &[&str]) -> String {
         let out = std::process::Command::new("git").args(["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "-c", "commit.gpgsign=false"])
@@ -1682,7 +1685,8 @@ mod tests {
     }
 
     impl RepoFixture {
-        fn new() -> Self {
+        async fn new() -> Self {
+            let guard = FIXTURES.lock().await;
             let root = std::env::temp_dir().join(format!("tico-repair-{}", uuid::Uuid::new_v4().simple()));
             std::fs::create_dir(&root).unwrap();
             let (remote, seed, base) = (root.join("remote.git"), root.join("seed"), root.join("base"));
@@ -1701,7 +1705,7 @@ mod tests {
             let mut env = crate::safegit::clean_environment(&crate::env::process_environment());
             env.extend([("GIT_CONFIG_COUNT".into(), "1".into()), ("GIT_CONFIG_KEY_0".into(), "protocol.file.allow".into()), ("GIT_CONFIG_VALUE_0".into(), "always".into())]);
             crate::gitlocks::own(std::slice::from_ref(&root));
-            Self { root, remote, seed, base, env }
+            Self { root, remote, seed, base, env, _guard: guard }
         }
         fn manager(&self) -> Repositories {
             Repositories::new(&self.root.join("workspace"), &self.root.join("state"), Client::new("http://localhost", "unused", 1, 0).unwrap())
@@ -1713,7 +1717,7 @@ mod tests {
 
     #[tokio::test]
     async fn repository_syncs_do_not_block_other_refreshes_and_same_repository_wait_is_bounded() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let manager = f.manager();
         manager.rows.lock().unwrap().insert("acme/web".into(), json!({"full_name": "Acme/Web", "state": "cloned"}));
         let guard = manager.sync_guard("acme/web").await.unwrap();
@@ -1732,7 +1736,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_mirror_config_is_rebuilt_from_the_remote_but_locked_mirrors_stay() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let manager = f.manager();
         let mirror = manager.mirror_path("acme/web").ok().unwrap();
         std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();
@@ -1773,7 +1777,7 @@ mod tests {
 
     #[tokio::test]
     async fn rebuilding_base_config_preserves_unpushed_branches_stash_index_files_and_worktrees() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         sh(&f.base, &["checkout", "-qb", "bot-work"]);
         std::fs::write(f.base.join("feature"), "unpublished\n").unwrap();
         sh(&f.base, &["add", "feature"]);
@@ -1816,7 +1820,7 @@ mod tests {
     async fn isolated_base_config_failure_refuses_before_creating_bot_controlled_scratch() {
         assert_eq!(unsafe { libc::geteuid() }, 0);
         assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         crate::isolation::adopt(std::slice::from_ref(&f.base));
         let git = f.base.join(".git");
         let original = std::fs::read(git.join("config")).unwrap();
@@ -1836,7 +1840,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_adopted_base_config_keeps_the_original_instead_of_a_local_mirror_origin() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         sh(&f.base, &["remote", "set-url", "origin", "git@github.com:acme/web.git"]);
         mark_managed(&f.base, Some("acme/web"), true).unwrap();
         let config = f.base.join(".git/config");
@@ -1856,7 +1860,7 @@ mod tests {
 
     #[tokio::test]
     async fn flattened_instruction_links_are_repaired_but_bot_edits_stay_and_are_named() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let interrupted = f.base.join(".git").join(format!("tico-instruction-link-{}", uuid::Uuid::new_v4().simple()));
         std::os::unix::fs::symlink("CLAUDE.md", &interrupted).unwrap();
         for (name, text) in [("AGENTS.md", "Repository rules\n"), ("templates/employee-repo/AGENTS.md", "Bot rules\n"), ("templates/employee-repo/CLAUDE.md", "Bot rules\n")] {
@@ -1902,6 +1906,7 @@ mod tests {
     #[tokio::test]
     async fn a_half_clone_the_bot_user_made_is_still_tico_s_and_one_by_anyone_else_is_not() {
         use std::os::unix::fs::MetadataExt;
+        let _guard = FIXTURES.lock().await;
         let tmp = std::env::temp_dir().join(format!("tico-half-clone-{}", std::process::id()));
         let path = tmp.join("half");
         std::fs::create_dir_all(&path).unwrap();
@@ -1921,7 +1926,7 @@ mod tests {
     }
     #[tokio::test]
     async fn mirror_rebuild_refuses_registered_worktrees() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let manager = f.manager();
         let mirror = manager.mirror_path("acme/web").ok().unwrap();
         std::fs::create_dir_all(&manager.mirrors).unwrap();
@@ -1938,7 +1943,7 @@ mod tests {
 
     #[tokio::test]
     async fn mirror_rebuild_refuses_a_repository_using_its_objects() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let manager = f.manager();
         let mirror = manager.mirror_path("acme/web").ok().unwrap();
         std::fs::create_dir_all(&manager.mirrors).unwrap();
@@ -1957,7 +1962,7 @@ mod tests {
 
     #[tokio::test]
     async fn mirror_rebuild_refuses_unpublished_refs_and_different_remote_shas() {
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let manager = f.manager();
         let mirror = manager.mirror_path("acme/web").ok().unwrap();
         std::fs::create_dir_all(&manager.mirrors).unwrap();
@@ -1981,7 +1986,7 @@ mod tests {
     #[tokio::test]
     async fn legacy_instruction_backups_gain_a_baseline_without_losing_open_writers() {
         use std::io::Write;
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let saved = f.base.join(".git/tico-instruction-backups");
         std::fs::create_dir_all(&saved).unwrap();
         let legacy = saved.join("AGENTS.md.tico-backup-1");
@@ -2000,7 +2005,7 @@ mod tests {
     #[tokio::test]
     async fn accepted_instruction_backups_survive_changed_or_removed_targets_but_late_edits_are_reported() {
         use std::io::{Seek, SeekFrom, Write};
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let path = f.base.join("AGENTS.md");
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, "Repository rules\n").unwrap();
@@ -2030,7 +2035,7 @@ mod tests {
     #[tokio::test]
     async fn differing_instruction_backups_are_kept_and_late_open_writers_are_reported() {
         use std::io::{Seek, SeekFrom, Write};
-        let f = RepoFixture::new();
+        let f = RepoFixture::new().await;
         let path = f.base.join("AGENTS.md");
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, "CLAUDE.md").unwrap();

@@ -98,33 +98,20 @@ async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf], stric
         let Ok(process) = process else { return false };
         if !process.file_name().to_string_lossy().bytes().all(|c| c.is_ascii_digit()) { continue; }
         if inaccessible_git(&process.path()) && git_related(&process.path(), roots) != Some(false) {
-            if !exited(&process.path()) {
-                #[cfg(test)]
-                eprintln!("Git owner inspection refused {:?}: comm={:?}, cwd={:?}, stat={:?}", process.path(), std::fs::read_to_string(process.path().join("comm")), std::fs::read_link(process.path().join("cwd")), std::fs::read_to_string(process.path().join("stat")));
-                return false;
-            }
+            if !exited(&process.path()) { return false; }
             continue;
         }
         let files = match std::fs::read_dir(process.path().join("fd")) {
             Ok(files) => files,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) if !strict && !inaccessible_git(&process.path()) => continue,
-            Err(e) => {
-                #[cfg(test)]
-                eprintln!("Git descriptor inspection refused {:?}: {e}", process.path());
-                let _ = e;
-                return false;
-            },
+            Err(_) => return false,
         };
         for file in files {
             let Ok(file) = file else { return false };
             match std::fs::metadata(file.path()) {
                 Ok(m) if m.dev() == lock.dev() && m.ino() == lock.ino() => return false,
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound && (strict || inaccessible_git(&process.path())) => {
-                    #[cfg(test)]
-                    eprintln!("Git descriptor inspection refused {:?}: {e}", file.path());
-                    return false;
-                },
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound && (strict || inaccessible_git(&process.path())) => return false,
                 _ => {}
             }
         }
