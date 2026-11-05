@@ -225,3 +225,86 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         sock.close()
         provider.shutdown()
         provider.server_close()
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not os.environ.get('TICO_NATIVE_CLI'), reason='Build CLI and set TICO_NATIVE_CLI')
+def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp_path):
+    from backend.tests.test_api import post
+    targets = [post(api, 'tasks', {'title': f'Review pricing {n}', 'owner': 'human:ana'}, 'ana-test')['task']['id']
+               for n in range(45)]
+    batches, uploads = [], []
+    lost_item = False
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+
+    async def transport(scope, receive, send):
+        nonlocal lost_item
+        path = scope.get('path', '')
+        if scope.get('method') != 'POST':
+            return await api.app(scope, receive, send)
+        body = b''
+        while True:
+            message = await receive()
+            body += message.get('body', b'')
+            if not message.get('more_body'):
+                break
+        payload = json.loads(body or '{}')
+        async def replay_body():
+            return {'type': 'http.request', 'body': body, 'more_body': False}
+        fail = False
+        if path.endswith('/tasks') and '/meetings/' in path:
+            batches.append((payload['task_ids'], dict(scope['headers']).get(b'idempotency-key')))
+            fail = len(batches) == 2
+        lose = path.endswith('/items') and payload.get('text') == 'Original retry title' and not lost_item
+        if path.endswith('/items'):
+            uploads.append((payload, dict(scope['headers']).get(b'idempotency-key')))
+        if lose:
+            messages = []
+            async def collect(message):
+                messages.append(message)
+            await api.app(scope, replay_body, collect)
+            assert messages[0]['status'] == 200
+            lost_item = True
+        if fail or lose:
+            await send({'type': 'http.response.start', 'status': 503, 'headers': []})
+            return await send({'type': 'http.response.body', 'body': b'Interrupted synthetic delivery'})
+        await api.app(scope, replay_body, send)
+
+    server = uvicorn.Server(uvicorn.Config(transport, lifespan='off', log_level='error'))
+    thread = threading.Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        threading.Event().wait(.02)
+    assert server.started
+    try:
+        result = subprocess.run([os.environ['TICO_NATIVE_CLI'], 'task-rows-test', '--tico-url',
+                                 f'http://127.0.0.1:{sock.getsockname()[1]}'],
+                                env={**os.environ, 'TICO_RECORDER_DATA_DIR': str(tmp_path / 'rows-library'),
+                                     'TICO_REPLAY_TEST_TOKEN': 'ana-test', 'TICO_LINK_TEST_TASKS': json.dumps(targets)},
+                                text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out['synthetic'] and out['local']['kept_on_mac'] and not out['local']['items']
+        assert [len(ids) for ids, _ in batches] == [20, 20, 20, 5]
+        assert batches[1] == batches[2]
+        linked = get(api, f"meetings/{out['meeting']}/tasks")['tasks']
+        assert {row['task_id'] for row in linked} == {*targets, out['created']}
+        for target in (targets[0], targets[-1], out['created']):
+            assert get(api, f'tasks/{target}/meetings')['meetings'][0]['meeting_id'] == out['meeting']
+        retry_uploads = [row for row in uploads if row[0]['text'] == 'Original retry title']
+        assert len(retry_uploads) == 2 and retry_uploads[0] == retry_uploads[1]
+        retry = get(api, f"meetings/{out['retry_meeting']}/items")['sections']['task'][0]
+        assert retry['text'] == 'Current retry title' and retry['version'] == 2
+        assert retry['detail'] == {'owner': 'human:ben', 'body': 'Current retry details', 'due': '2026-12-01T12:00:00Z'}
+        with api.app.state.store.read() as c:
+            assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 46
+            assert c.execute('SELECT count(*) FROM meetings').fetchone()[0] == 2
+            proposal = c.execute("SELECT * FROM meeting_items WHERE proposed_task_id IS NOT NULL").fetchone()
+            assert proposal['status'] == 'pushed' and proposal['result_ref'] == targets[0]
+            assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == 0
+    finally:
+        server.should_exit = True
+        thread.join(5)
+        sock.close()

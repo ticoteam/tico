@@ -243,7 +243,7 @@ def push_task(c, settings, task_create, who, record, row, detail, private=False)
     created = task_create(c, who, M.TaskCreate(title=row["text"][:300], body=body, owner=owner,
                                               due=detail.get("due") or None,
                                               private=bool(private or record['metadata'].get('private')
-                                                           or media.participants_only(record))))
+                                                           or media.effective_audience(record['metadata']) != 'team')))
     return created["task"]["id"]
 
 

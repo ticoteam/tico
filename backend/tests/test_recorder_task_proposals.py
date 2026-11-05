@@ -110,7 +110,7 @@ def test_task_trash_keeps_proposals_with_the_meeting_and_restores_only_the_point
 ])
 def test_push_keeps_private_and_participants_meeting_text_private_for_human_owners(api, audience, requested_private):
     from backend.tests.test_meeting_items import push
-    rid = record(api, audience, 'ben-test')
+    rid = record(api, {**audience, 'participants': ['ana@acme.example']}, 'ben-test')
     iid = add(api, rid, {'section': 'task', 'text': 'Send the pricing plan',
                         'quote': 'A confidential quote', 'detail': {'owner': 'human:ana'}}, 'ben-test')['item']['id']
     result = push(api, rid, iid, {'private': requested_private}, 'ben-test')

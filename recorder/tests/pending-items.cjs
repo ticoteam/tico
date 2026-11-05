@@ -25,6 +25,7 @@ const path = require('node:path');
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text;}},configurable:true});
       window.pendingFixture = {a, calls:0, inflight:0, max:0, fail:false};
       const original = window.__TAURI__.core.invoke;
+      window.pendingFixture.original=original;
       window.__TAURI__.core.invoke = async (cmd, args) => {
         if (cmd !== 'shared_item') return original(cmd, args);
         const f = window.pendingFixture;
@@ -143,6 +144,7 @@ const path = require('node:path');
     await page.locator('[data-shared-item]').waitFor({state:'detached'});
     await page.evaluate(() => {
       const original = window.__TAURI__.core.invoke;
+      window.pendingFixture.original=original;
       window.__TAURI__.core.invoke = async (cmd, args) => {
         if (cmd !== 'send_item') return original(cmd, args);
         const f = window.pendingFixture, local = f.a.items.find(it => it.id === args.id);
@@ -187,7 +189,36 @@ const path = require('node:path');
       await page.getByText('Original server title · Sent',{exact:false}).waitFor();
       assert.equal(await page.locator('[data-shared-row] pre').count(),0);
     }
-    assert.deepEqual(errors,[]);
+    // Linking controls and remote rows stay in the saved shared panel.
+    await page.evaluate(() => {
+      const f=window.pendingFixture, a=f.a;
+      a.items=[]; a.can_link=true; a.link_scope=['m1','acme'];
+      a.shared_scope='saved-links'; a.linked_browser='https://app.acme.example';
+      a.linked={tasks:[{task_id:'linked-task',number:45,title:'Linked pricing',status:'open'}]};
+      a.shared={can_send:true,sections:{task:[{id:'link-proposal',version:1,section:'task',status:'proposed',text:'Pricing follow up',proposed_task_id:'linked-task',proposed_number:45,detail:{}}]}};
+      window.__TAURI__.core.invoke=async (cmd,args) => {
+        if(cmd==='shared_item') {
+          f.linkAction=args.action; f.linkBody=args.body;
+          const item=a.shared.sections.task[0]; item.status='pushed';item.result_ref='linked-task';item.version++;
+          return {item:structuredClone(item),pushed:true};
+        }
+        return f.original(cmd,args);
+      };
+    });
+    await page.getByRole('button',{name:'Link #45',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:/^Send/}).count(),0);
+    await page.getByRole('button',{name:'Link',exact:true}).waitFor();
+    await page.getByText('Linked pricing',{exact:false}).waitFor();
+    await page.getByRole('button',{name:'Unlink',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Link #45',exact:true}).click();
+    await page.waitForFunction(()=>window.pendingFixture.linkAction==='link');
+    assert.deepEqual(await page.evaluate(()=>window.pendingFixture.linkBody),{});
+    assert.equal(await page.locator('[data-shared-row="link-proposal"]').count(),0);
+    assert.equal(await page.getByText('Linked pricing',{exact:false}).count(),1);
+    await page.getByRole('button',{name:'Add',exact:true}).click();
+    await page.getByRole('textbox',{name:'Add a task',exact:true}).fill('Added after Save');
+    assert.equal(await page.getByRole('textbox',{name:'Add a task',exact:true}).inputValue(),'Added after Save');
+        assert.deepEqual(errors,[]);
     console.log('Recorder: in-flight draft, retry and final Send passed');
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

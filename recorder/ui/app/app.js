@@ -416,7 +416,7 @@
     draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
     const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
     const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
-    return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : 'Dismissed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
+    return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : it.status === 'dismissed' ? 'Dismissed by ' : 'Changed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
   }
   function sharedActions(a, recovered = []) {
     const data = a.shared;
@@ -470,7 +470,10 @@
     for (const row of next.querySelectorAll('[data-shared-row]')) {
       const old = [...panel.querySelectorAll('[data-shared-row]')].find(n => n.dataset.sharedRow === row.dataset.sharedRow);
       if (!old) { panel.append(row); continue; }
-      if (!old.hasAttribute('data-shared-item') || !row.hasAttribute('data-shared-item')) { old.replaceWith(row); continue; }
+      if (!old.hasAttribute('data-shared-item') || !row.hasAttribute('data-shared-item')) {
+        if (old.innerHTML !== row.innerHTML && !old.contains(document.activeElement)) old.replaceWith(row);
+        continue;
+      }
       // Keep field nodes in place so a refresh never interrupts typing or moves the caret.
       for (const field of old.querySelectorAll('[data-shared-field]')) {
         const value = row.querySelector(`[data-shared-field="${field.dataset.sharedField}"]`);
