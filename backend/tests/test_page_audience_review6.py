@@ -8,9 +8,11 @@ from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_file_reviews import ask as review_ask
 from backend.tests.test_org_rule_check import Judge
-from backend.tests.test_org_rules import rule
+from backend.tests.test_files import turn
+from backend.tests.test_org_rules import org, rule
 from backend.tests.test_page_audience import edit
 from backend.tests.test_page_audience_review4 import public_page
+from backend.tests.test_pages import page
 from backend.tests.test_task_review import ask
 
 
@@ -73,8 +75,13 @@ def test_held_and_replayed_answers_revoke_question_option_labels(api, send):
 
 
 def test_held_runner_answer_keeps_its_question_option_source(api):
-    tid, attempt, fid = public_page(api)
+    org(api)
+    machine, attempt = turn(api)
     label = "Confidential draft"
+    tid = post(api, "tasks", {"owner": "ops", "title": "Review drafts", "body": "Review", "private": False})["id"]
+    made = page(api, attempt, task=tid, title=label)
+    assert made.status_code == 200, made.text
+    fid = made.json()["page"]["file_id"]
     question = ask("bot:ops")
     question["questions"][0]["options"][0].update(label=label, file=fid + "@1")
     asked = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question})["comment"]
@@ -86,9 +93,9 @@ def test_held_runner_answer_keeps_its_question_option_source(api):
     api.app.state.judge = Judge(api.app.state.store, {text: label})
     rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]},
                "if_broken": "escalate", "reviewer": "cara"})
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "held-answer"}, token=attempt["token"])
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "held-answer"}, token=machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
-         token=attempt["token"])
+         token=machine["token"])
     with api.app.state.store.read() as c:
         row = c.execute("SELECT id,payload FROM org_rule_holds WHERE operation='reply'").fetchone()
         assert row and {"file": fid, "version": 1} in H._json(row["payload"], {})["body_sources"]
