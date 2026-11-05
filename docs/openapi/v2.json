@@ -24645,7 +24645,7 @@
     },
     "/api/v2/meetings/{rid}/items/{iid}/push": {
       "post": {
-        "summary": "Apply final fields at the expected version and send in one transaction; stale sends return 409 with the current item. Private meetings require every task reader inside the meeting audience",
+        "summary": "Apply final fields at the expected version and send in one transaction, or reconcile an already created task with an authorized result_ref. Stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience",
         "operationId": "sendMeetingItem",
         "parameters": [
           {
@@ -57547,6 +57547,19 @@
               }
             ],
             "title": "Detail"
+          },
+          "result_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Ref"
           }
         },
         "additionalProperties": false,

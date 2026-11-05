@@ -66,6 +66,7 @@ class ItemPush(M.Contract):
     force: bool = False
     text: str | None = Field(default=None, min_length=1, max_length=2_000)
     detail: dict | None = None
+    result_ref: str | None = Field(default=None, min_length=1, max_length=240)
 
 
 class CommentCreate(M.Contract):
@@ -179,7 +180,7 @@ def require_version(row, version):
         raise Problem("version_conflict", "This item changed", 409, extra={"item": view(row)})
 
 
-def edit(c, rid, author, iid, body):
+def edit(c, rid, author, iid, body, *, bump_version=True):
     row = one(c, rid, iid)
     require_version(row, body.version)
     if body.text is None and body.detail is None and body.status is None:
@@ -188,7 +189,9 @@ def edit(c, rid, author, iid, body):
         raise Problem("status", "Already sent", 409)
     if body.status == "dismissed" and row["status"] != "proposed":
         raise Problem("status", "Only a proposed item can be deleted", 409)
-    sets, args = ["version=version+1", "updated_by=?", "updated_at=?"], [author, H.now()]
+    sets, args = ["updated_by=?", "updated_at=?"], [author, H.now()]
+    if bump_version:
+        sets.append("version=version+1")
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
@@ -428,10 +431,20 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         def work(c):
             record, row = pushable(c, who, rid, iid)
             require_version(row, body.version)
+            if body.result_ref is not None:
+                auth.task(c, who, body.result_ref)
+                if body.text is not None or body.detail is not None:
+                    raise Problem("validation", "Save edits before linking a sent task", 422)
+                if row["status"] == "pushed" and row["result_ref"] != body.result_ref:
+                    raise Problem("status", "Already sent to another task", 409)
+                item = record_push(c, who, rid, iid, body.result_ref)
+                meeting_audience.record_sent_link(c, rid, body.result_ref, who.actor)
+                return {"item": item, "pushed": row["status"] != "pushed"}
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
             if body.text is not None or body.detail is not None:
-                edit(c, rid, who.actor, iid, ItemEdit(version=body.version, text=body.text, detail=body.detail))
+                # The final edits and task creation are one atomic version change.
+                edit(c, rid, who.actor, iid, ItemEdit(version=body.version, text=body.text, detail=body.detail), bump_version=False)
                 row = one(c, rid, iid)
             detail = json.loads(row["detail"] or "{}")
             owner = (owner_of(c, detail) if row["section"] == "task" else

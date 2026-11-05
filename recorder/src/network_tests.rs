@@ -2657,3 +2657,112 @@ fn a_task_created_before_save_is_uploaded_as_a_sent_meeting_item() {
     assert_eq!(calls[3].1["result_ref"], "created-task");
     assert!(!calls.iter().any(|r| r.0.contains("/push")));
 }
+
+#[test]
+fn partial_save_reconciles_a_task_created_after_the_failure_even_if_its_reply_is_lost() {
+    for lost_reply in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Partial Save");
+        store
+            .update_context(&record.id, |context| {
+                for id in ["a", "b"] {
+                    context.items.push(crate::workspace::Item {
+                        id: id.into(),
+                        title: format!("Task {id}"),
+                        kind: "task".into(),
+                        owner: "human:test".into(),
+                        ..Default::default()
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test","name":"Test"});
+        let a = json!({"id":"server-a","version":1,"status":"proposed"});
+        let sent_a = json!({"id":"server-a","version":2,"status":"pushed","result_ref":"task-a"});
+        let b = json!({"id":"server-b","version":1,"status":"proposed"});
+        let mut steps = vec![
+            Some(who.clone()),
+            Some(json!({"id":"saved-meeting"})),
+            Some(json!({"sections":{"task":[]}})),
+            Some(json!({"item":a})),
+            Some(json!({"status":503,"error":{"code":"unavailable"}})),
+            // Create A takes the direct path while the delivery is failed.
+            Some(who.clone()),
+            Some(json!({"url":"https://acme.example"})),
+            Some(json!({"task":{"id":"task-a"}})),
+            Some(who.clone()),
+            Some(json!({"sections":{"task":[a]}})),
+            if lost_reply {
+                None
+            } else {
+                Some(json!({"item":sent_a}))
+            },
+        ];
+        if lost_reply {
+            steps.extend([
+                Some(who.clone()),
+                Some(json!({"sections":{"task":[sent_a]}})),
+            ]);
+        }
+        steps.extend([
+            Some(json!({"item":b})),
+            // Send after Save can push B, but must never create A again.
+            Some(who), Some(json!({"people":[{"id":"test","name":"Test"}]})),
+            Some(json!({"sections":{"task":[sent_a,b]}})),
+            Some(json!({"item":{"id":"server-b","version":2,"status":"pushed","result_ref":"task-b"}})),
+        ]);
+        let (tico, seen, worker) = server(steps);
+        assert!(tico.send(&store, &record.id, false).is_err());
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].status,
+            "failed"
+        );
+        tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+            .unwrap();
+        assert_eq!(
+            store.context(&record.id).unwrap().items[0].task_id,
+            "task-a"
+        );
+        let result = tico.send(&store, &record.id, false);
+        if lost_reply {
+            assert!(result.is_err());
+            tico.send(&store, &record.id, false).unwrap();
+        } else {
+            result.unwrap();
+        }
+        let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+        assert_eq!(receipt["items"]["a"]["status"], "pushed");
+        assert_eq!(receipt["items"]["a"]["result_ref"], "task-a");
+        assert_eq!(receipt["items"]["a"]["version"], 2);
+        tico.send(&store, &record.id, true).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let reconcile: Vec<_> = calls
+            .iter()
+            .filter(|r| {
+                r.0.starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+            })
+            .collect();
+        assert_eq!(reconcile.len(), 1);
+        assert_eq!(reconcile[0].1, json!({"version":1,"result_ref":"task-a"}));
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| r.0.starts_with("POST /api/v2/tasks "))
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| r
+                    .0
+                    .starts_with("POST /api/v2/meetings/saved-meeting/items ")
+                    && r.1["text"] == "Task a")
+                .count(),
+            1
+        );
+    }
+}

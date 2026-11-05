@@ -8,7 +8,7 @@ const path = require('node:path');
 const code = fs.readFileSync(path.join(__dirname, '../app/meetings.js'), 'utf8');
 const item = {version:1, id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
 const streams = new Set(), sessions = new Map(), errors = [];
-let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0;
+let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0, lastSend;
 const emit = (topic, data) => { for (const res of streams) res.write(`event: ${topic}\ndata: ${JSON.stringify(data)}\n\n`); };
 const actors = () => [...new Set(sessions.values())].map(id => ({actor:'human:' + id, name:id === 'ana' ? 'Ana' : 'Sam'}));
 const server = http.createServer(async (req, res) => {
@@ -57,7 +57,7 @@ const server = http.createServer(async (req, res) => {
     item.version++;
     if (body.text !== undefined) item.text=body.text;
     if (body.detail) Object.assign(item.detail, body.detail);
-    if (pushing && item.status === 'proposed') { item.status='pushed'; sent++; }
+    if (pushing && item.status === 'proposed') { item.status='pushed'; sent++; lastSend=structuredClone(body); }
     item.updated_by='human:' + req.headers['x-viewer'];
     answer({item,pushed:pushing}); emit('meeting_items',{meeting_id:'m1',kind:'items'}); return;
   }
@@ -119,6 +119,29 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
     assert.equal(item.text,'Final words'); assert.equal(sent,1);
     assert.equal(item.detail.body,'B saved before Send');
+    item.status='proposed'; item.version++; emit('meeting_items',{meeting_id:'m1',kind:'items'});
+    await a.locator('[data-pending="i1"]').waitFor();
+    await b.locator('[data-pending="i1"]').waitFor();
+    pauseWrite(); await title.fill('Title only');
+    await a.waitForFunction(()=>!!meetPendingDraft(MEET,'i1').flight);
+    const details=a.getByRole('textbox',{name:'Details',exact:true});
+    await details.evaluate(el=>{el.focus();el.setSelectionRange(2,4);});
+    await b.getByRole('textbox',{name:'Details',exact:true}).fill('B saved focused Details');
+    await b.locator('#blur').click();
+    await b.waitForFunction(()=>MEET.items.m1.sections.task[0].detail.body==='B saved focused Details');
+    release();
+    await a.getByRole('button',{name:'Retry',exact:true}).waitFor();
+    assert.equal(await title.inputValue(),'Title only');
+    assert.equal(await details.inputValue(),'B saved focused Details');
+    assert.deepEqual(await details.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,2,4]);
+    assert.equal(await a.evaluate(()=>meetPendingDraft(MEET,'i1').dirty.text),'Final words');
+    const version=item.version;
+    await a.getByRole('button',{name:'Send to Sam',exact:true}).evaluate(el=>el.click());
+    await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
+    assert.deepEqual(lastSend,{text:'Title only',force:false,version});
+    assert.equal(item.detail.body,'B saved focused Details');
+    assert.equal(item.version,version+1);
+    assert.equal(sent,2);
     emit('meeting_items',{meeting_id:'m1',gone:true});
     await b.waitForFunction(()=>MEET.open===false);
     assert.deepEqual(errors,[]);

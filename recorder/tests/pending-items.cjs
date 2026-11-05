@@ -36,7 +36,7 @@ const path = require('node:path');
         item.version++;
         if (args.body.text !== undefined) item.text=args.body.text;
         Object.assign(item.detail,args.body.detail || {});
-        if (args.action === 'send') { item.status='pushed'; item.result_ref='created-task'; f.sent=structuredClone(item); }
+        if (args.action === 'send') { item.status='pushed'; item.result_ref='created-task'; f.sent=structuredClone(item); f.lastSend=structuredClone(args.body); }
         return {item:structuredClone(item)};
       };
     });
@@ -83,7 +83,25 @@ const path = require('node:path');
     await page.evaluate(() => {
       const a=window.pendingFixture.a;
       a.shared.sections.task[0].status='proposed';
+      const f=window.pendingFixture; f.hold=new Promise(resolve=>f.release=resolve);
     });
+    await title.fill('Title only');
+    await page.waitForFunction(()=>window.pendingFixture.inflight===1);
+    const details=page.getByRole('textbox',{name:'Details',exact:true});
+    await details.evaluate(el=>{el.focus();el.setSelectionRange(2,4);});
+    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.detail.body='B saved focused Details';item.version++;});
+    await page.evaluate(()=>window.pendingFixture.release());
+    await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
+    assert.equal(await title.inputValue(),'Title only');
+    assert.equal(await details.inputValue(),'B saved focused Details');
+    assert.deepEqual(await details.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,2,4]);
+    const version=await page.evaluate(()=>window.pendingFixture.a.shared.sections.task[0].version);
+    await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).evaluate(el=>el.click());
+    await page.waitForFunction(()=>window.pendingFixture.sent?.text==='Title only');
+    assert.deepEqual(await page.evaluate(()=>window.pendingFixture.lastSend),{text:'Title only',version});
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved focused Details');
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.version),version+1);
+    await page.evaluate(()=>window.pendingFixture.a.shared.sections.task[0].status='proposed');
     await title.fill('Still editing');
     await page.evaluate(()=>window.pendingFixture.a.shared={gone:true});
     await page.locator('[data-shared-item]').waitFor({state:'detached'});

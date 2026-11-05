@@ -3172,7 +3172,7 @@ STABLE.extend([
     ("/api/v2/meetings/{rid}/items/{iid}", "post", "Meetings", "editMeetingItem",
      "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits", None),
     ("/api/v2/meetings/{rid}/items/{iid}/push", "post", "Meetings", "sendMeetingItem",
-     "Apply final fields at the expected version and send in one transaction; stale sends return 409 with the current item. Private meetings require every task reader inside the meeting audience", None),
+     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task with an authorized result_ref. Stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
     ("/api/v2/presence", "get", "Live events", "getPresence", "Current actors aggregated across unexpired sessions at an authorized place", None),
     ("/api/v2/presence", "post", "Live events", "heartbeatPresence", "Heartbeat one session every 15 seconds, or leave with gone=true; sessions expire after 30 seconds", None),
 ])

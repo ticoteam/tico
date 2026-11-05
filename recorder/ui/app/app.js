@@ -382,49 +382,80 @@
   const sharedKey = id => `${S.meeting.id}:${S.meeting.actions.shared_scope || ''}:${id}`;
   function sharedDraft(id) {
     const key = sharedKey(id);
-    if (!sharedDrafts.has(key)) sharedDrafts.set(key, {patch: {}, flight: null, error: '', timer: 0, version:null, current:null});
+    if (!sharedDrafts.has(key)) sharedDrafts.set(key, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version:null, current:null});
     return sharedDrafts.get(key);
   }
-  const mergeShared = (a, b) => ({...a, ...b, detail: {...a.detail, ...b.detail}});
+  const mergeShared = (a, b) => ({...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})});
+  const sharedValue = (item, key) => (key === 'text' ? item?.text : item?.detail?.[key]) || '';
+  function sharedAccepted(draft, patch, item) {
+    for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
+      if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = sharedValue(item, key);
+      else delete draft.dirty[key];
+    }
+    draft.version = item.version; draft.base = item; draft.current = null;
+  }
   function sharedActions(a) {
     const data = a.shared;
     if (data?.gone) return '';
     if (!data || !data.sections) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
     const here = (data.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
-    return `<section class="section"><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
+    return `<section class="section" data-shared-panel><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
       Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
-        if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
-        const draft = sharedDraft(it.id), current = mergeShared(mergeShared(it, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
-        if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...document.querySelectorAll('[data-shared-item]')].find(n=>n.dataset.sharedItem===it.id)?.contains(document.activeElement)) { draft.version = it.version; draft.base = it; }
+        if (it.status === 'pushed') return `<div class="item sent" data-shared-row="${esc(it.id)}">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
+        const draft = sharedDraft(it.id), server = draft.base?.version > it.version ? draft.base : it;
+        const current = mergeShared(mergeShared(server, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
+        if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
         const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
         const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
-        return `<div class="shared-item" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
+        return `<div class="shared-item" data-shared-row="${esc(it.id)}" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
           const label = ({body:'Details', owner:'Owner', due:'Due'})[key] || key;
           if (key === 'owner') return `<label>Owner<select data-defer data-shared-field="owner" aria-label="Owner"><option value="">Choose</option>${owners.map(o => `<option value="${esc(o.actor)}" ${o.actor === detail.owner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
           const value = key === 'due' ? String(detail[key] || '').slice(0, 10) : detail[key] || '';
           return `<label>${label}<${key === 'body' ? 'textarea' : 'input'} data-defer data-shared-field="${key}" aria-label="${label}" ${key === 'due' ? 'type="date"' : ''} ${key === 'body' ? '' : `value="${esc(value)}"`}>${key === 'body' ? esc(detail.body || '') + '</textarea>' : ''}</label>`;
-        }).join('') + `<div class="aside">${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
+        }).join('') + `<div class="aside" data-shared-edited>${it.updated_by ? esc((a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by) + ' edited · just now') : ''}</div>
           <span class="error" data-shared-error ${draft.error ? '' : 'hidden'}>Not saved · <button class="link" data-act="shared-retry" data-id="${esc(it.id)}">Retry</button></span>
-          ${draft.current ? `<div class="aside">Current: ${esc(draft.current.text)} · ${esc(Object.values(draft.current.detail || {}).join(' · '))}</div>` : ''}
+          <div class="aside" data-shared-current ${draft.current ? '' : 'hidden'}>${draft.current ? `Current: ${esc(draft.current.text)} · ${esc(Object.values(draft.current.detail || {}).join(' · '))}` : ''}</div>
           <div class="actions"><button class="btn small" data-act="shared-dismiss" data-id="${esc(it.id)}">Dismiss</button><button class="btn small primary" data-act="shared-send" data-id="${esc(it.id)}" ${draft.sending || !data.can_send ? 'disabled' : ''}>Send${detail.owner ? ' to ' + esc(owners.find(o => o.actor === detail.owner)?.name || detail.owner) : ''}</button></div></div>`;
       }).join('') + '</section>';
+  }
+  function sharedRefresh(element, content) {
+    const panel = element.querySelector('[data-shared-panel]');
+    if (!panel) return;
+    const template = document.createElement('template'); template.innerHTML = content;
+    const next = template.content.querySelector('[data-shared-panel]');
+    if (!next) return;
+    panel.querySelector('.section-head').innerHTML = next.querySelector('.section-head').innerHTML;
+    for (const row of panel.querySelectorAll('[data-shared-row]')) {
+      if (![...next.querySelectorAll('[data-shared-row]')].some(n => n.dataset.sharedRow === row.dataset.sharedRow)) row.remove();
+    }
+    for (const row of next.querySelectorAll('[data-shared-row]')) {
+      const old = [...panel.querySelectorAll('[data-shared-row]')].find(n => n.dataset.sharedRow === row.dataset.sharedRow);
+      if (!old) { panel.append(row); continue; }
+      if (!old.hasAttribute('data-shared-item') || !row.hasAttribute('data-shared-item')) { old.replaceWith(row); continue; }
+      // Keep field nodes in place so a refresh never interrupts typing or moves the caret.
+      for (const field of old.querySelectorAll('[data-shared-field]')) {
+        const value = row.querySelector(`[data-shared-field="${field.dataset.sharedField}"]`);
+        if (field.tagName === 'SELECT' && field.innerHTML !== value.innerHTML) field.innerHTML = value.innerHTML;
+        if (field.value !== value.value) {
+          const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
+          field.value = value.value;
+          if (selection) field.setSelectionRange(...selection);
+        }
+      }
+      for (const selector of ['[data-shared-edited]', '[data-shared-error]', '[data-shared-current]', '.actions']) {
+        const target = old.querySelector(selector), value = row.querySelector(selector);
+        target.innerHTML = value.innerHTML; target.hidden = value.hidden;
+      }
+    }
   }
   const sharedFieldValue = field => field.dataset.sharedField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
   function sharedChanged(field) {
     const id = field.closest('[data-shared-item]').dataset.sharedItem, draft = sharedDraft(id), key = field.dataset.sharedField;
+    if (!(key in draft.dirty)) draft.dirty[key] = sharedValue(draft.base, key);
     if (key === 'text') draft.patch.text = field.value;
     else (draft.patch.detail ||= {})[key] = sharedFieldValue(field);
     clearTimeout(draft.timer);
     if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
-  }
-  function sharedDifference(value, base = {}) {
-    const patch = {};
-    if (value.text !== base.text) patch.text = value.text;
-    for (const [key, part] of Object.entries(value.detail || {})) {
-      const old = base.detail?.[key] || '';
-      if (key === 'due' ? String(part).slice(0,10) !== String(old).slice(0,10) : part !== old) (patch.detail ||= {})[key] = part;
-    }
-    return patch;
   }
   async function sharedSave(id) {
     const draft = sharedDraft(id);
@@ -433,7 +464,7 @@
     const patch = draft.patch; draft.patch = {}; draft.error = '';
     draft.inflightPatch = patch;
     draft.flight = invoke('shared_item', {id, body:{...patch, version:draft.version}});
-    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); } draft.version=reply.item.version; draft.base=reply.item; draft.current=null; }
+    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); } sharedAccepted(draft, patch, reply.item); }
     catch (e) { draft.patch = mergeShared(patch, draft.patch); draft.error = String(e); }
     finally { draft.flight = null; draft.inflightPatch = null; }
     if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedSave(id);
@@ -446,16 +477,11 @@
     const id = button.dataset.id, draft = sharedDraft(id), node = button.closest('[data-shared-item]');
     if (draft.sending) return;
     draft.sending = true; clearTimeout(draft.timer); node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = true);
-    const body = {detail:{}};
-    for (const f of node.querySelectorAll('[data-shared-field]')) {
-      if (f.dataset.sharedField === 'text') body.text = f.value;
-      else body.detail[f.dataset.sharedField] = sharedFieldValue(f);
-    }
     try {
       if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
-      const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...sharedDifference(body,draft.base),version:draft.version} : {status:'dismissed',version:draft.version}});
-      if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.patch=mergeShared(sharedDifference(body,draft.base),draft.patch); draft.base=reply.conflict; throw new Error('This item changed'); }
-      draft.patch = {}; draft.error = ''; draft.current=null;
+      const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...draft.patch,version:draft.version} : {status:'dismissed',version:draft.version}});
+      if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); }
+      draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current=null;
     } catch (e) { draft.error = String(e); }
     finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }
     await poll(); render();
@@ -1100,6 +1126,7 @@
       const element = document.getElementById(`r-${name}`);
       // Never replace text the person is editing; it renders once they leave it.
       if (element.contains(active) && active.matches('[data-defer]') && !(name === 'page' && S.meeting?.actions?.shared?.gone)) {
+        if (name === 'page') sharedRefresh(element, content);
         S.deferred = true;
         continue;
       }

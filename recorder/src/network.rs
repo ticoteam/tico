@@ -824,6 +824,36 @@ impl Tico {
                         .as_str()
                         .context("Tico did not return an item ID")?
                         .into();
+                } else if !item.task_id.is_empty() {
+                    // A task can be created after only part of Save reached Tico. Reconcile
+                    // its existing row before marking the delivery sent, including after a lost reply.
+                    let current = listing["sections"][section]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|row| row["id"] == item_id);
+                    if let Some(row) = current {
+                        item_version = row["version"].as_u64().unwrap_or(item_version);
+                    }
+                    if !current.is_some_and(|row| {
+                        row["status"] == "pushed" && row["result_ref"] == item.task_id
+                    }) {
+                        let reconcile = json!({"version":item_version,"result_ref":item.task_id});
+                        let reply = self.call_meeting(
+                            &format!("{path}/{item_id}/push"),
+                            Some(&reconcile),
+                            &format!(
+                                "recorder:{id}:{}:reconcile:{item_id}:{}",
+                                item.id,
+                                hash(&reconcile)
+                            ),
+                        )?;
+                        ensure!(
+                            reply["item"]["result_ref"] == item.task_id,
+                            "Tico did not return the created task reference"
+                        );
+                        item_version = reply["item"]["version"].as_u64().unwrap_or(item_version);
+                    }
                 }
                 delivery.receipt["items"][&item.id] = if item.task_id.is_empty() {
                     json!({"id":item_id,"status":"proposed","version":item_version})

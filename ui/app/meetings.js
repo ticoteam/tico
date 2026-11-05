@@ -1164,24 +1164,26 @@ async function meetComments(state, rec, quiet) {
 // One queue per item. Only changed keys are sent; newer edits survive either an old reply or a failed write.
 function meetPendingDraft(state, id) {
   state.pendingDrafts ||= new Map();
-  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, flight: null, error: '', timer: 0, version: null, current: null});
+  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version: null, current: null});
   return state.pendingDrafts.get(id);
 }
 function meetPendingPatch(draft, key, value) {
+  if (!(key in draft.dirty)) draft.dirty[key] = meetPendingValue(draft.base, key);
   if (key === 'text') draft.patch.text = value;
   else (draft.patch.detail ||= {})[key] = value;
 }
 function meetPendingMerge(a, b) {
   return {...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})};
 }
-function meetPendingDifference(value, base = {}) {
-  const patch = {};
-  if (value.text !== base.text) patch.text = value.text;
-  for (const [key, part] of Object.entries(value.detail || {})) {
-    const old = base.detail?.[key] || '';
-    if ((key === 'due' ? String(part).slice(0, 10) !== String(old).slice(0, 10) : part !== old)) (patch.detail ||= {})[key] = part;
+function meetPendingValue(item, key) {
+  return (key === 'text' ? item?.text : item?.detail?.[key]) || '';
+}
+function meetPendingAccepted(draft, patch, item) {
+  for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
+    if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = meetPendingValue(item, key);
+    else delete draft.dirty[key];
   }
-  return patch;
+  draft.version = item.version; draft.base = item; draft.current = null;
 }
 async function meetPendingSave(state, rid, iid) {
   const draft = meetPendingDraft(state, iid);
@@ -1189,13 +1191,14 @@ async function meetPendingSave(state, rid, iid) {
   if (draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
   const patch = draft.patch;
   draft.patch = {}; draft.error = '';
+  draft.inflightPatch = patch;
   draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version: draft.version});
-  try { const reply = await draft.flight; draft.version = reply.item.version; draft.base = reply.item; draft.current = null; }
+  try { const reply = await draft.flight; meetPendingAccepted(draft, patch, reply.item); }
   catch (e) {
     draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message;
     if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; draft.base = draft.current; }
   }
-  finally { draft.flight = null; }
+  finally { draft.flight = null; draft.inflightPatch = null; }
   if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return meetPendingSave(state, rid, iid);
   await meetItemsLoad(state, rid);
 }
@@ -1209,7 +1212,8 @@ function meetPendingRender(state, rec, data) {
   panel.hidden = !pending.length;
   for (const item of pending) {
     const draft = meetPendingDraft(state, item.id);
-    if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...list.children].find(n => n.dataset.pending === item.id)?.contains(document.activeElement)) { draft.version = item.version; draft.base = item; }
+    const server = draft.base?.version > item.version ? draft.base : item;
+    if (!draft.flight && !draft.sending && !Object.keys(draft.dirty).length) { draft.version = server.version; draft.base = server; }
     let node = [...list.children].find(row => row.dataset.pending === item.id);
     if (!node) {
       node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
@@ -1239,27 +1243,15 @@ function meetPendingRender(state, rec, data) {
         node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = true);
         try {
           if (draft.flight) { try { await draft.flight; } catch {} if (draft.error) throw new Error(draft.error); }
-          // Read the fields after the queued write settles: these are the final words on screen.
-          const final = {detail: {}};
-          for (const field of node.querySelectorAll('[data-pending-field]')) {
-            const key = field.dataset.pendingField;
-            if (key === 'text') final.text = field.value;
-            else final.detail[key] = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
-          }
           await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
-                     send ? {...meetPendingDifference(final, draft.base), force, version: draft.version} : {status: 'dismissed', version: draft.version});
-          draft.patch = {}; draft.error = ''; draft.current = null;
+                     send ? {...draft.patch, force, version: draft.version} : {status: 'dismissed', version: draft.version});
+          draft.patch = {}; draft.dirty = {}; draft.error = ''; draft.current = null;
           await meetItemsLoad(state, rec.id);
         } catch (e) {
           draft.error = e.message;
           if (e.body?.error?.item) {
             const current = e.body.error.item;
-            const final = {detail:{}};
-            for (const field of node.querySelectorAll('[data-pending-field]')) {
-              if (field.dataset.pendingField === 'text') final.text = field.value;
-              else final.detail[field.dataset.pendingField] = field.dataset.pendingField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
-            }
-            draft.patch = meetPendingMerge(meetPendingDifference(final, draft.base), draft.patch); draft.current = current; draft.version = current.version; draft.base = current;
+            draft.current = current; draft.version = current.version; draft.base = current;
           }
           const duplicate = e.body?.error?.duplicate;
           if (duplicate) {
@@ -1277,18 +1269,24 @@ function meetPendingRender(state, rec, data) {
       node.querySelector('[data-dismiss]').onclick = () => finish(false);
     }
     node._item = item;
-    const displayed = meetPendingMerge({text: item.text, detail: item.detail || {}}, draft.patch);
+    const displayed = meetPendingMerge(meetPendingMerge(server, draft.inflightPatch || {}), draft.patch);
     for (const field of node.querySelectorAll('[data-pending-field]')) {
       const key = field.dataset.pendingField;
-      if (field === document.activeElement || draft.flight || draft.sending) continue;
+      if (draft.sending) continue;
       const value = key === 'text' ? displayed.text : displayed.detail[key] || '';
       if (key === 'owner') {
         const options = [...(S.people || []).map(p => ['human:' + p.id, p.name || p.id]),
                          ...activeEmps().map(b => ['bot:' + b.id, b.display_name])]
           .filter(([actor]) => !data.audience || data.audience.includes(actor));
-        field.innerHTML = '<option value="">Choose</option>' + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
+        const html = '<option value="">Choose</option>' + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
+        if (field.innerHTML !== html) field.innerHTML = html;
       }
-      field.value = key === 'due' ? String(value).slice(0, 10) : value;
+      const next = key === 'due' ? String(value).slice(0, 10) : value;
+      if (field.value !== next) {
+        const selection = field === document.activeElement && typeof field.selectionStart === 'number' ? [field.selectionStart, field.selectionEnd] : null;
+        field.value = next;
+        if (selection) field.setSelectionRange(...selection);
+      }
     }
     node.querySelector('[data-edited]').textContent = item.updated_by ? `${meetAuthor(item.updated_by)} edited · just now` : '';
     node.querySelector('[data-save-error]').hidden = !draft.error;

@@ -260,6 +260,7 @@ def test_stale_save_and_send_return_current_without_overwriting_or_creating(api)
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == before
     sent = push(api, rid, item['id'], {'version':newer['version'], 'text':'A unsent title'})['item']
+    assert sent['version'] == newer['version'] + 1
     again = push(api, rid, item['id'], {'version':newer['version']}, expected=409)
     assert again['error']['item'] == sent
     assert items(api, rid)['sections']['task'][0]['detail']['body'] == 'B details'
@@ -309,6 +310,30 @@ def test_sent_item_upload_survives_save_and_redacts_reference(api):
     sent = add(api,rid,{'section':'task','text':'Already created','status':'pushed','result_ref':tid})['item']
     assert sent['status'] == 'pushed' and sent['result_ref'] == tid
     assert items(api,rid,'ben-test')['sections']['task'][0]['result_ref'] is None
+
+
+def test_partial_save_reconciles_an_existing_task_without_creating_another(api):
+    from backend.tests.test_api import post
+    rid = record(api)
+    item = add(api, rid, {'section':'task','text':'Created after partial Save'})['item']
+    tid = post(api, 'tasks', {'title':item['text'], 'body':'Words', 'owner':'human:ana','private':True})['id']
+    with api.app.state.store.read() as c:
+        before = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
+    body = {'version':item['version'], 'result_ref':tid}
+    push(api, rid, item['id'], body, 'ben-test', expected=404)
+    sent = push(api, rid, item['id'], body, key='reconcile-sent-item')['item']
+    replay = push(api, rid, item['id'], body, key='reconcile-sent-item')['item']
+    assert replay == sent
+    assert sent['version'] == item['version'] + 1
+    assert sent['status'] == 'pushed' and sent['result_ref'] == tid
+    assert push(api, rid, item['id'], {'result_ref':tid})['pushed'] is False
+    assert push(api, rid, item['id'])['item']['result_ref'] == tid
+    assert items(api, rid, 'ben-test')['sections']['task'][0]['result_ref'] is None
+    other = post(api, 'tasks', {'title':'Another task', 'body':'Words', 'owner':'human:ana'})['id']
+    push(api, rid, item['id'], {'result_ref':other}, expected=409)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == before + 1
+        assert c.execute("SELECT task_id FROM meeting_task_links WHERE meeting_id=? AND kind='sent'", (rid,)).fetchone()[0] == tid
 
 
 def test_presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):

@@ -2886,6 +2886,7 @@ export type ItemOne = {
 export type ItemPush = {
   detail?: Record<string, unknown> | null;
   force?: boolean;
+  result_ref?: string | null;
   text?: string | null;
   version?: number;
 };
