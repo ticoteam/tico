@@ -9373,9 +9373,8 @@ def conversations_for(conn, actor, limit=100):
 
 
 def chats_with(conn, actor, bot_actor_id):
-    """The open chats (not task threads) that this actor and this bot are both in, newest first.
-    A covered bot's moved chats resolve to its readable Home, as they do when sending. Found
-    directly, not from the newest conversations: a bot's page opened a month after the last
+    """The actor's open chat with this bot, or its readable Home after the bot's chats move, newest first.
+    Found directly, not from the newest conversations: a bot's page opened a month after the last
     message still finds its chat (conversations_for scans a recent window only)."""
     out = []
     for row in _rows(conn.execute("SELECT * FROM conversations WHERE kind='chat' AND task_id IS NULL "

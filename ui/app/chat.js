@@ -15,8 +15,8 @@ function v2ChatStop() {
   clearTimeout(V2C.waitTimer);
   V2C = null;
 }
-// Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page shows this
-// one room.
+// Which of the viewer's rooms with a bot is its chat: its Home after the move, otherwise the shared room or one of
+// their own. The bot page shows this one room.
 function v2ChatMode(slug) {
   slug = botBranchChatTarget(slug);
   const bot = botRow(slug);
@@ -29,10 +29,13 @@ function v2ChatMode(slug) {
 function v2ChatRoom(conversations, slug, mode = v2ChatMode(slug)) {
   const me = myActor();
   slug = botBranchChatTarget(slug);
-  return (conversations || []).find(c => String(c.kind) === 'chat' && !c.task_id
+  const rows = (conversations || []).filter(c => String(c.kind) === 'chat' && !c.task_id
     && !c.closed_at
-    && (c.participants || []).includes(`bot:${slug}`)
-    && String(c.scope || 'direct') === mode
+    && (c.participants || []).includes(`bot:${slug}`));
+  // The API includes the Home for a covered bot. It has direct scope and only the bot as a participant, so prefer it
+  // over a remaining pair DM and don't apply the pair-room scope or viewer-participant checks to it.
+  const home = rows.find(c => c.audience === 'home');
+  return home || rows.find(c => String(c.scope || 'direct') === mode
     && (!me || (c.participants || []).includes(me))) || null;
 }
 // A run still to show as live: not one that finished, nor one a person stopped or dismissed.
