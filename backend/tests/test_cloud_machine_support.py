@@ -211,7 +211,7 @@ def test_owner_assistant_needs_the_same_confirmation_as_the_support_access_rule(
     _, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
     # This is a real leased Assistant credential, which authenticates as the owner without support scope.
-    who = api.app.state.auth.authenticate(headers(token), PATH, "PUT")
+    who = api.app.state.auth.authenticate({name.lower(): value for name, value in headers(token).items()}, PATH, "PUT")
     assert who.role == "owner" and who.via == "assistant" and not who.support
     for on in (False, True):
         for path, body in (("/api/v2/access/rules", {"support_access": on}), (PATH, {"on": on})):
