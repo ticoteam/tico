@@ -16,6 +16,14 @@ function chatViewport() {
   if (root.getPropertyValue('--chat-viewport-height') !== height) root.setProperty('--chat-viewport-height', height);
   if (root.getPropertyValue('--chat-viewport-top') !== top) root.setProperty('--chat-viewport-top', top);
 }
+// The desktop-app banner (#topbar) takes its own room above a phone's full-screen chat, which starts under it
+// (--top-strip, ui/styles/chat.css) instead of drawing its header over the banner.
+function topStrip() {
+  const bar = document.getElementById('topbar'), root = document.documentElement.style;
+  const strip = `${bar ? Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) : 0}px`;
+  if (root.getPropertyValue('--top-strip') !== strip) root.setProperty('--top-strip', strip);
+}
+if (window.ResizeObserver && document.getElementById('topbar')) new ResizeObserver(topStrip).observe(document.getElementById('topbar'));
 window.visualViewport?.addEventListener('resize', chatViewport);
 window.visualViewport?.addEventListener('scroll', chatViewport);
 window.addEventListener('resize', chatViewport);

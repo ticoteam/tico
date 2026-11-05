@@ -103,6 +103,28 @@ def granted(c, subject):
     return found
 
 
+def prime_granted(c, subjects):
+    """`granted` for many subjects in one read per 500, seeded into the snapshot so each later `granted(c, subject)`
+    reads nothing. Outside a snapshot nothing is kept."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    wanted = sorted({s for s in subjects if ("credential_granted", s) not in values})
+    found = {s: set() for s in wanted}
+    for part in H.chunks(wanted):
+        for subject, credential in c.execute(
+                'SELECT g.subject,g.credential_id FROM credential_grants g '
+                'LEFT JOIN credential_grants p ON p.id=g.parent_id '
+                "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+                f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
+                "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
+                "AND p.subject='human:'||bc.owner_id))", part):
+            found[subject].add(credential)
+    for subject in wanted:
+        values[("credential_granted", subject)] = frozenset(found[subject])
+
+
 def permitted(c, who, credential, admins):
     return administrator(c, who, admins) or (who.role in ('human', 'owner', 'bot')
                                              and effective_grant(c, credential, who.actor) is not None)
@@ -254,12 +276,16 @@ class CredentialCipher:
             c.execute('INSERT INTO credential_keys VALUES(?,?,?)', ('v1', LOCAL, check))
         return key
 
-    def kms_key(self, c, row):
+    def kms_client(self):
         if self.kms is None:
             import boto3
             from botocore.config import Config
             # Called inside write transactions: fail in seconds, not botocore's 60 s timeouts and retries.
             self.kms = boto3.client('kms', config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
+        return self.kms
+
+    def kms_key(self, c, row):
+        self.kms_client()
         if row and row['kms_key'] == LOCAL:
             # Credentials saved before a KMS key was set: wrap the same key with KMS, so nothing is re-encrypted.
             key = self.local_key(c, row)
@@ -293,6 +319,26 @@ class CredentialCipher:
             raise
         except Exception:
             raise Problem('vault_unavailable', 'Credential encryption is temporarily unavailable', 503) from None
+
+    def prepare(self, store):
+        """Load an existing key before a write; KMS unwrap/rewrap I/O stays outside the store's writer."""
+        while self.cached is None:
+            with store.read_transaction() as c:
+                row = c.execute("SELECT * FROM credential_keys WHERE id='v1'").fetchone()
+                if not row:
+                    return
+                if not self.key_id or row['kms_key'] != LOCAL:
+                    self.key(c)
+                    return
+                key = self.local_key(c, row)
+            wrapped = self.kms_client().encrypt(KeyId=self.key_id, Plaintext=key,
+                                                EncryptionContext=CONTEXT)['CiphertextBlob']
+            with store.transaction() as c:
+                changed = c.execute("UPDATE credential_keys SET kms_key=?,wrapped_key=? "
+                                    "WHERE id='v1' AND kms_key=? AND wrapped_key=?",
+                                    (self.key_id, wrapped, row['kms_key'], row['wrapped_key'])).rowcount
+            if changed:
+                self.cached = key
 
     def warm(self, store):
         """Unwrap a stored KMS key once at start, outside any transaction, so the first write that needs it does not
@@ -366,14 +412,14 @@ class Vault:
             if isinstance(payload.get('secret'), SecretStr):
                 payload['secret'] = payload['secret'].get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
-            old = c.execute('SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?',
+            old = c.execute('SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
             if old:
                 if not hmac.compare_digest(old['request_hash'], fingerprint):
                     raise Problem('idempotency_conflict', 'This request key was already used for different content', 409)
                 return json.loads(old['response'])
             result = fn(c)
-            c.execute('INSERT INTO idempotency VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)',
                       (who.actor, operation, key, fingerprint, encode(result), H.now()))
             return result
 
@@ -675,6 +721,14 @@ def install_credentials(app,store,delegate=None,propose=None):
         # credential a person asked it to grant (no manual steps).
         who=acting(request,None,on_behalf_of) if on_behalf_of else request.state.identity
         with store.read() as c:
+            if who.role=='bot' and not on_behalf_of and str(who.actor).startswith('bot:'):
+                # A bot sees the names and env names of what it is granted (granted: the same rule a run's values
+                # follow), so it can check they reach its turn. No preview, no other subject's grants, no people.
+                ids=granted(c,who.actor)
+                mine=[{k:v for k,v in vault.brief(row).items() if k!='preview'}|{'can_reveal':False,'grants':[]}
+                      for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id') if row['id'] in ids]
+                return {'credentials':mine,'can_manage':False,'people':[],'bots':[],'computers':[],
+                        'configured':vault.configured,'key_storage':vault.cipher.storage}
             if who.role not in ('human','owner') or not can_open(c,who,vault.admins):
                 raise Problem('forbidden',ask_admin_detail(c,vault.admins,'share credentials, or grant you access to one'),403)
             admin=administrator(c,who,vault.admins)

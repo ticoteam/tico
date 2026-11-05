@@ -46,6 +46,19 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 /* a task's pages, at its top */
 .task-pages{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
 .task-pages[hidden]{display:none}
+.tp-head,.tp-actions,.tp-search{display:flex;align-items:center;gap:8px}
+.tp-head{justify-content:space-between}
+.tp-head button,.tp-search button,.tp-unlink{font-size:var(--t-sm)}
+.tp-actions{flex-wrap:wrap;justify-content:flex-end}
+.tp-picker{border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
+.tp-search input{min-width:0;flex:1;width:100%}
+.tp-results{max-height:240px;overflow:auto}
+.tp-results p{margin:8px 4px;font-size:var(--t-sm)}
+.tp-result{display:block;width:100%;border:0;background:none;color:var(--ink);text-align:left;padding:9px 6px;font:inherit;font-size:var(--t-sm);border-radius:6px;overflow-wrap:anywhere}
+.tp-result:hover{background:var(--hover)}
+.tp-pages{display:flex;flex-direction:column;gap:12px}
+.tp-page{min-width:0}
+.tp-unlink{display:block;margin:4px 0 0 auto}
 
 /* Library › Files */
 .lf{max-width:960px;padding:0 0 48px}
@@ -85,3 +98,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 }
 .pg-pinned{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .pg-pinned a{color:var(--link-quiet)}
+
+.pg-access { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; }
+.pg-access button { text-align: left; white-space: normal; }
+.pg-lock { font-size: 14px; vertical-align: middle; }

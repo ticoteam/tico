@@ -2,6 +2,8 @@
 import json
 import uuid
 
+import pytest
+
 from backend import hubdb as H
 from backend import worktree_waits as waits
 from backend import worktrees as W
@@ -21,7 +23,7 @@ def turn_on(c, task_id):
 def setup_wait(api, tid, readiness=READY):
     """The bot's turn works on `tid`, and the bot already holds LIMIT worktrees on another task."""
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps(readiness),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps(readiness),))
         turn_on(c, tid)
         filler = H.task_create(c, 'human:ana', 'Earlier work', 'Older worktrees', 'bot:cmo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
@@ -70,9 +72,9 @@ def wakes(api, tid):
                 (tid,))
 
 
-def free(api, filler, link):
+def free(api, filler, link, readiness=READY):
     """A finished worktree on the other task is removed by its computer: the event a waiting task needs."""
-    return beat(api, [{'link_id': link, 'state': 'removed', 'branch': None}])
+    return beat(api, [{'link_id': link, 'state': 'removed', 'branch': None}], readiness=readiness)
 
 
 def test_only_the_limit_for_the_turns_own_task_records_a_wait(prepared):
@@ -310,7 +312,7 @@ def test_old_computers_keep_the_old_answer_and_health_and_the_task_show_the_wait
     assert 'wait' not in refused and 'Oldest idle: ' in refused['detail'] and 'End your turn' not in refused['detail']
     assert not rows(api, 'SELECT * FROM worktree_waits')
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps(READY),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps(READY),))
     wait = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']['wait']
     shown = api.get(f'/api/v2/tasks/{tid}', headers=auth()).json()['task']['worktree_waits']
     assert shown == [{'id': wait['id'], 'repo': 'Acme/product', 'state': 'waiting', 'since': wait['since'],
@@ -384,6 +386,49 @@ def test_a_reserved_worktree_whose_task_closes_is_canceled_once_and_never_prepar
     assert rows(api, 'SELECT state FROM task_links WHERE id=?', (link['id'],))[0]['state'] == 'removed'
     assert len(rows(api, "SELECT * FROM events WHERE action='worktree.released' AND target=?", (tid,))) == 1
     assert not wakes(api, tid)
+
+
+@pytest.mark.parametrize('revoked', [False, True], ids=['live-original', 'revoked-original'])
+def test_served_wait_restores_a_removed_human_link_before_preparing(prepared, revoked):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    assert finish_setup(api, tid, link['link_id']).status_code == 200
+    assert runner_patch(api, tid, link['link_id'], state='removed', cleanup=True).status_code == 200
+    with api.app_state.store.transaction() as c:
+        # The bot moved to r1 after cleanup on its original computer.
+        old = dict(c.execute("SELECT * FROM runners WHERE id='r1'").fetchone())
+        old.update(id='old', token_hash='old-token', revoked_at=H.now() if revoked else None)
+        c.execute(f"INSERT INTO runners({','.join(old)}) VALUES({','.join('?' * len(old))})", tuple(old.values()))
+        c.execute("UPDATE task_links SET computer_id='old' WHERE id=?", (link['link_id'],))
+    readiness = {**READY, 'worktree_recovery': True}
+    filler, links = setup_wait(api, tid, readiness=readiness)
+    refusal = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert refusal.status_code == 409 and refusal.json()['error']['wait']['state'] == 'waiting'
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='a1'")
+    actions = free(api, filler, links[0], readiness=readiness)
+    action = 'prepare' if revoked else 'restore'
+    assert [(a['link_id'], a['action']) for a in actions] == [(link['link_id'], action)]
+    reserved = rows(api, 'SELECT * FROM worktree_waits')[0]
+    assert reserved['state'] == 'reserved' and reserved['link_id'] == link['link_id']
+    reused = rows(api, 'SELECT * FROM task_links WHERE id=?', (link['link_id'],))[0]
+    assert reused['computer_id'] == 'r1' and reused['branch'] == link['branch']
+    assert reused['added_by'].startswith('human:')
+    assert ('recovery' in json.loads(reused['detail'])) == revoked
+    assert not wakes(api, tid)
+    # Both restore and guarded recovery fetch saved history before setup can finish this allocation.
+    assert [(a['link_id'], a['action']) for a in beat(api, readiness=readiness)] == [(link['link_id'], action)]
+    assert runner_patch(api, tid, link['link_id'], state='pending', checkout_state='checkout_ready',
+                        setup_pending=True, expected_head='c' * 40,
+                        checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64).status_code == 200
+    assert [(a['link_id'], a['action']) for a in beat(api, readiness=readiness)] == [(link['link_id'], 'prepare')]
+    assert not wakes(api, tid)
+    ready = runner_patch(api, tid, link['link_id'], state='present', checkout_state='ready',
+                         setup_pending=False, expected_head='c' * 40,
+                         checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64)
+    assert ready.status_code == 200, ready.text
+    assert len(wakes(api, tid)) == 1 and rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
+    assert beat(api, readiness=readiness) == [] and len(wakes(api, tid)) == 1
 
 
 def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):

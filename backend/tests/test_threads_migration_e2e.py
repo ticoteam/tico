@@ -19,6 +19,9 @@ The file is written one entry per line, so a change shows as the lines it touche
 Regenerate after a deliberate change to who reads what, and review the diff:
     TICO_WRITE_READER_GOLDENS=1 python3 -m pytest -q backend/tests/test_threads_migration_e2e.py
 
+Changes to demo row creation also require regeneration: its ids share one deterministic counter, so replacing
+packet tasks with Update turns changes later conversation and message ids without changing their audience rules.
+
 The comparisons run `threads.migrate(c)` and assert `threads.readable` gives the same sets. The freshness test
 fails when the golden no longer matches what today's predicates read, so a golden is never compared against a stale
 baseline.
@@ -28,11 +31,11 @@ import dataclasses
 import importlib
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -48,6 +51,13 @@ WORLDS = ("demo", "devcopy")
 AGENT = "standing"          # the harness label of a bot's standing credential; Auth.conversation only checks it is set
 
 
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """The demo's readers and the dev copy's retention window use the build's day."""
+    with time_machine.travel(NOW, tick=False):
+        yield
+
+
 # ----------------------------------------------------------------------------- the worlds
 def build(world, directory):
     """The demo world, or a dev copy of it made the way a dev server gets its data. The copy keeps the demo's company
@@ -56,8 +66,7 @@ def build(world, directory):
     if world == "demo":
         return settings
     dest = directory / "devcopy" / "hub.sqlite"
-    # devcopy cuts history back from the real clock, while the demo's history is dated from NOW: a 30-day window
-    # would drop every message. Ten years keeps all of it, so the copy's messages are the ones the golden pins.
+    # Keep the demo's whole history, including its older weeks, so the copy's messages are the ones the golden pins.
     devcopy.build(settings.db_path, dest, days=3650)
     return dataclasses.replace(settings, db_path=dest, registry_dir=dest.parent / "registry",
                                blob_dir=dest.parent / "blobs", demo=False, demo_public=False,
@@ -118,8 +127,8 @@ def today_sets(settings):
             who = identities(c, auth)
             conversations = {}
             for row in c.execute("SELECT id,audience FROM conversations ORDER BY id").fetchall():
-                if row["audience"] == "home" and uuid.UUID(row["id"]).version == 4:
-                    continue    # a Home threads made for itself while the demo seeded (an update card): not legacy data
+                # Every Home thread counts. (The demo patches uuid4 to a digest of its counter, so a Home thread's
+                # version nibble is chance: skipping "version 4" dropped real Home threads on some seeds.)
                 conversations[row["id"]] = {actor for actor, identity in who.items()
                                             if can_read(auth, c, identity, row["id"])}
             messages = {}

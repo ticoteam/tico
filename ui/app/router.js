@@ -3,6 +3,8 @@
 'use strict';
 
 let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
+// The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
+const routePage = h => { const p = String(h || '').split('?')[0]; return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
 function route(hash = location.hash) {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
@@ -38,7 +40,7 @@ function route(hash = location.hash) {
   main.className = '';
   // A new page fades in (opacity only); a query change within the same page does not. A view transition
   // (routeChanged) already cross-fades it, so this is the fallback for a browser without one.
-  const newPath = !from || from.split('?')[0] !== S.route.split('?')[0];
+  const newPath = !from || routePage(from) !== routePage(S.route);
   if (from && newPath && !ROUTE_FADING && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
   document.body.classList.remove('task-peek-open');
@@ -53,6 +55,7 @@ function route(hash = location.hash) {
   if (!S.route.startsWith(MAIL)) { MAIL_LOAD++; clearTimeout(MAIL_SEARCH); mailForget(); }
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
   decideStop();     // the Needs you card closes with its page; its waiting answer goes now
+  window.liveMeetingsStop?.();
   convStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); tasksKeep(TASKS_ST); TASKS_ST = null; // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
@@ -61,7 +64,8 @@ function route(hash = location.hash) {
   if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
-  threadsSync();      // the Threads and DMs sidebar sections (ui/app/threads.js)
+  threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
+  setupMark();        // the wizard's mark first: Ask stays away from it (ui/app/notices.js)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.js)
   renderTree();
   if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }
@@ -84,7 +88,12 @@ function route(hash = location.hash) {
   else if (S.route.startsWith('#/task/')) pageTasks('', decodeURIComponent(S.route.slice(7)));
   else if (S.route.startsWith(TASKS + '/')) { location.replace('#/task/' + S.route.slice(TASKS.length + 1).split('?')[0]); return; }   // #/tasks/<id> is the same task
   else if (S.route === CHAT) { location.hash = TASKS; return; }
-  else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) pageNotes();
+  else if (S.route.startsWith(MEETINGS + '/live/')) pageLiveMeetings({pinned: decodeURIComponent(S.route.slice((MEETINGS + '/live/').length))});
+  else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) {
+    const live = new URLSearchParams(S.route.split('?')[1] || '').get('live');
+    if (live) { location.replace(MEETINGS + '/live/' + encodeURIComponent(live)); return; }
+    pageNotes();
+  }
   else if (S.route.startsWith('#/bot/')) {
     // A bot's page is at its id; a link that names it by slug (typed, or from before ids) moves to the id.
     const [ref, tab] = S.route.slice(6).split('/'), found = botByRef(decodeURIComponent(ref));
@@ -117,8 +126,18 @@ function route(hash = location.hash) {
     SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
-  else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }
-  else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
+  // Settings > Inboxes (ui/app/inboxes.js): the list, Inboxes > Settings and its sections, or one inbox.
+  else if (/^#\/settings\/inboxes\/[A-Za-z0-9_.@%:-]+(?:\/[A-Za-z0-9_.@%:-]+)?\/?$/.test(S.route)) {
+    INBOXES_VIEW = inboxesRoute(S.route.slice('#/settings/inboxes/'.length)); SETTINGS_TAB = 'inboxes'; location.replace(SETTINGS); return;
+  }
+  // The tabs Inboxes replaced: Mailboxes and one mailbox, Email & Phone, Mail, and Google's sign-in return
+  // (backend/google_connect.py INBOX), which lands on the Connection card in Inboxes > Settings > Email.
+  else if (/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(\/[A-Za-z0-9-]+)?\/?$/.test(S.route)) {
+    const [, old, rest] = S.route.match(/^#\/settings\/([a-z-]+)(?:\/([A-Za-z0-9-]+))?/);
+    INBOXES_VIEW = old === 'mailboxes' ? (rest ? 'mailbox/' + rest : '') : old === 'mail' ? 'settings/letters-in'
+      : ['inbox', 'google'].includes(old) ? 'settings/email' : rest === 'set-inbound' ? 'settings/email' : '';
+    SETTINGS_TAB = 'inboxes'; SETTINGS_REVEAL = ''; location.replace(SETTINGS); return;
+  }
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
   // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
@@ -132,7 +151,9 @@ function route(hash = location.hash) {
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
   // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
-    const [tab, card] = S.route.slice(11).split('?')[0].split('/'); SETTINGS_REVEAL = card ? '#' + card : '';
+    const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
+    SETTINGS_REVEAL = card ? '#' + card : ''; INBOXES_VIEW = '';
     // The Models card and Company turn levels moved from Computers to Models.
     SETTINGS_TAB = tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL) ? 'models' : tab; location.replace(SETTINGS); return;
   }
@@ -171,7 +192,7 @@ function route(hash = location.hash) {
 // change, reduced motion, a hidden window and a browser without view transitions draw at once. An error in route()
 // still surfaces as an error (not a rejected transition).
 function routeChanged() {
-  const path = h => (h || UPDATES).split('?')[0], seq = ++ROUTE_SEQ;
+  const path = h => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
   // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
   // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
   // first page writes for itself (Settings names its tab) gives way to the newer one.

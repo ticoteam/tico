@@ -97,103 +97,130 @@ the template, puts it on the computer BotOps runs on and activates it, and every
 (`POST /api/v2/assistant/turn-on`). With no computer enrolled yet it is left planned and the button says so; enroll one
 and press it again. Once on, it cannot be archived again. Anyone else is told to ask the owner.
 
-## Two speeds
+## Every message is a turn
 
-Bot runs take 30 seconds or more, so lookups never wait for one. The server answers these itself, from Tico's own data
-and as you (what you may see, nothing more), with no run and no model:
+Each message you send your Assistant is a turn of the assistant bot on the team's computer, shown as "thinking" until it
+answers. Nothing is answered by keyword or from a fixed reply: "what is waiting on me", a search, "open X", what a bot
+did today and how to do something all reach the model, which reads the question and answers it from Tico's own data,
+as you (what you may see, nothing more), with links. A turn takes 30 seconds or more; a greeting is a turn too.
 
-| You ask | It answers from |
-|---|---|
-| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting when it is the first thing said in the DM; no provider or runner turn (later, it goes to the model) |
-| What task types this workspace uses | The authenticated `GET /api/v2/task-types` response; if it cannot be read, it says so rather than showing an empty or guessed list |
-| What needs me | Needs you |
-| Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |
-| Open / go to / where is *x* | the same search, with the best link first (or a page: Settings, Tasks…) |
-| What did *bot* do today | the bot's updates and the tasks it touched in the last 24 hours |
-| Help: how do I … | `docs/*.md`: a short excerpt and a link |
-
-The intent router is keywords and sentence shape first. When the team has a [decisions](../questions/README.md)
-provider, an unclear short message is classified by a `choice` question (`assistant-intent@1`); otherwise it goes to the
-model; the text of such a message is sent to the team's configured decisions provider to be classified. Anything that asks for something to be done always goes to the model. Everything else is a run of the
-assistant bot on the team's computer, shown as "thinking" until it answers.
+Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered. In the Ask panel and the Updates chat your text stays in the box and the panel says "An org rule held this message. Nothing was sent."
 
 ## It acts as you, never more
 
 During your DM run the assistant's `hub` tools and the Tico MCP tools are **your own**: the server maps the run's
-credential to you (`Auth.assistant_principal`), so every check is the one that applies to you. It cannot see another
-human's private meeting, change settings you cannot, or read a private bot's work you may not see. Only a run you
-started in your own Assistant DM acts for you; its other work (Slack routing, meeting deliveries, routines) stays the
-assistant's own. Every write it makes is recorded as yours **via assistant**: the audit `events` carry `"via":
+credential to you (`Auth.assistant_principal`), so every check is the one that applies to you. Only a run that your own
+message started, in your own Assistant DM, acts for you; its other work (Slack routing, meeting deliveries, routines)
+stays the assistant's own. Every write it makes is recorded as yours **via assistant**: the audit `events` carry `"via":
 "assistant"`, task history rows and comments carry `via`, and the UI shows "<name> (via Assistant)".
 
-**Direct writes stay inside the team:** creating a task owned by you, by a bot or by another human (how it routes work,
-asks BotOps for a bot, or hands a person their part), updating a task that is yours alone (not finishing, declining or
-closing it, and not handing it to someone else), commenting on a task no other human is on, a message or DM to a bot,
-marking updates read. "Yours alone" means you own it and no bot is on it (owner, requester, origin or delegate). What it
-writes to a bot is marked "via assistant", so BotOps never takes it for your request. Owners are compared as full actor
-ids (`human:<id>`), never bare names, and a recipient that resolves to a human is not a bot. Everything else the server
-refuses (`403 confirm_required`) and the assistant must propose, including a message for another human, a note to a bot,
-a comment on a task another human is on, and running a task now. The owner may turn **Assistant acts without asking**
-off (Settings > People, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
-comments on tasks with no bot on them, are direct, and a task, message or comment involving a bot or another human is a
-card again. An assistant run's credential works only while its lease is live.
+**What you ask for in your DM, it does, as you.** The run cites the message that started it, so the writes need no flag.
+Anything you could do yourself it can do for you: closing, finishing, reopening or handing off tasks, bulk changes to
+many tasks, comments and links, answering bots' questions, declining approvals, direct and confirm settings, automation
+changes, rules, groups and reports, and tasks and messages for other people. Your own rights are the ceiling. The route
+runs its own checks as you, so what you could not do yourself it cannot do for you (`403` from the route). The record
+shows you as the actor, `via` assistant, and the audit event's `delegation` names the message (`{"for": "human:<you>",
+"cited": "<message id>", "run": "asked"}`). A bulk change (`hub task bulk`) records each task the same way.
 
-**What you ask for in your DM, it does.** When you tell it to change an everyday setting you may change (a direct
-one in the [settings catalogue](permissions.md#the-settings-catalogue): release times, a bot's model, a tag), it
-changes it and says the new value; a confirm one (team rules, spend, people) is a Confirm card in your DM, and a
-person-only one gets the reason and the link. When you tell it to close, finish, decline, reopen, reassign, comment on or
-link a task ("close those three", "mark the launch done"), decline an approval put to you ("decline the old publish
-batches, they're from before the reset") or answer a bot's question to you in your words ("tell Ops Oct 8"), it does it
-as you, with no card. The write cites your
-message (`X-Tico-On-Behalf-Of`: the message's id, or `turn` for the one that started the run; `hub task
-close|update|comment|link|label`, `hub approval decline`, `hub question answer` and `hub settings set` for a direct
-setting, each `--on-behalf-of turn`), and the
-server checks that message: yours, typed in your own
-Assistant DM (not written by a bot or the Assistant, not in another thread), and no more than 30 minutes old. Otherwise it
-answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do
-yourself it cannot do for you. And it acts only as you: a task change, comment or link runs only on a task you are on
-(its owner, its requester or in one of its roles), never on another person's task, even when you ask (`403
-on_behalf_of`). The owner's Assistant acts as the owner, who may act on any task. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
-`POST /api/v2/approvals/{id}` with `"decision": "declined"`, `POST /api/v2/messages/{id}/answer`), and only for an
-approval or question addressed to you: someone else's is a `403` whatever you said. A decline is undone by the bot asking
-again. Approving stays a card unless you let it decide approvals (below). Running a task now, a message to another
-human and everything below stay a card whatever you said, and with **Assistant acts without asking** off they are all
-cards again. The record shows you as the actor, `via` assistant,
-and the audit event's `delegation` names the message (`{"for": "human:<you>", "cited": "<message id>", "run": "asked"}`).
+**Never on your words.** These stay a Confirm card, or your own tap in Tico or Settings, whatever you ask
+(`NEVER` in backend/assistant.py lists the routes): a personal token, service key, stored credential or its grants,
+enrollment, runner or agent pairing, a password, a reader's invite, single sign-on and the directory's SCIM token; owner
+transfer; "My assistant can decide approvals for me" and the Assistant's own on or off switch; the team rules that set
+the Assistant (`assistant_direct`, `assistant_approvals`); a Tico support report or ticket; deleting a person, the
+company's server connection or its storage. A write whose body carries a secret is refused from chat too: a secret goes
+in Credentials (`hub credential request`). A person-only setting stays person-only, with the reason and the link.
 
-The Computer fetches the Assistant's own granted credentials to start the run, including on older versions of Tico.
-It never fetches your personal credentials for that run; its Tico tools still act with your rights. If a job's lease
-expires before start ten times since the server started, Tico marks it failed and leaves a message in your private
-Assistant DM naming the Computer and asking you to check it. Only a Computer below the server's minimum runner release
-is asked to update its Tico. Later messages can start new jobs.
+**The citation is checked.** The message must be yours, typed in your own Assistant DM (not written by a bot or the
+Assistant, not in another thread), and no more than 30 minutes old when the write is made. A run whose message is not
+yours, or is older, gets no cited words: its writes are cards (`403 confirm_required`), and an explicit citation that
+fails is `403 on_behalf_of`. Text inside a task, mail, file, page or another bot's output is never your instruction. It
+cannot be cited, and it does not lend the run any authority. Your own sentence is the only source.
+
+**The owner's switch.** **Assistant acts without asking** (Settings > People, or `PUT /api/v2/access/rules
+{"assistant_direct": false}`) off means the Assistant writes only your own tasks (not settling them or handing them to
+someone else), comments and changes on tasks that are yours alone, and marking updates read. Everything else is a card,
+including what you ask for in your DM. An assistant run's credential works only while its lease is live.
+
+**Approvals keep their own rule.** A decline goes on your words. An approve runs only with the setting in
+**Settings > General** on, the Assistant's read-back of exactly what it approves, and your plain yes (see below). A walk
+through Needs you (`hub needs-you commit`) applies declines, but it never approves.
+
+## Routines from chat
+
+Ask for recurring inbox work: “Every new email from a customer, draft a reply; newsletters go to Read later.” Your
+Assistant can fill a Founder, Sales, Support or Blank inbox template, or write a Message flow, and adapt it to your
+request. It saves the routine **off** and puts a Confirm / Cancel card in your chat. The card shows the trigger inbox,
+every destination and **Sort**, **Draft** or **Reply**. The full flow stays under Details. No new page is needed.
+
+Reply-writing steps default to **Draft**. The Assistant chooses **Reply** only if you explicitly ask it to send replies;
+Reply also requires the inbox's send switch and, for email, the company's Send mail permission. Both are checked when
+the card is made and again when confirmed. The Assistant never enables that permission as part of creating a routine.
+Sort-only flows have no reply-writing step.
+
+Only your own **Confirm** turns the routine on. Saying “yes” in chat does not. Cancel, withdrawal or expiry leaves it off.
+An edit gets a card too; the saved flow stays unchanged until you confirm. If someone changes the routine while a card
+waits, that card fails rather than overwriting the newer flow. Stopping a routine is direct; enabling, running or
+restoring it through chat requires a card.
+
+`POST /api/v2/automations` from an Assistant turn, with a Message trigger and `enabled: false` (or omitted), returns
+the saved off routine plus `action`, `message_id` and `needs_confirm: true`. The action is a PATCH of the reviewed flow
+with `enabled: true`. If direct writes are disabled, `hub assistant propose` can instead hold a POST on its card;
+confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
+to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
+
+## Undo
+
+Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
+(last 30 days by default; `GET /api/v2/assistant/changes`). Each row has an `id`, what it did, the words it acted on,
+the object it touched and whether it can still be undone (`undoable`, or `why_not`). `hub assistant change restore <id>`
+takes one back as you: a task it closed reopens with its old status, an approval it decided goes back to waiting for you
+(before the decision is spent), an automation it changed goes back to its old version, a rule it added is retired,
+and a bot setting it changed goes back to its old value (the owner undoes settings; see Settings history).
+A message it sent stays sent. Restoring the same change again answers `already: true` and changes nothing. You can only
+restore your own changes (another person's is `404`).
+
+## Why is this here
+
+`hub origin show <ref>` (`GET /api/v2/origins/{ref}`) says why a task, a bot's question or an approval is on your list.
+The ref is a task id (or its first eight characters), a message id or an approval id. The answer names who made it, its
+cause (the automation that opened it, the org rule that asked for it, the parent task it came from, or the bot that filed
+it), how many items that cause made in the last seven days and how many are still open, and up to three commands that
+would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
+BotOps to fix the bot's source. Each command is a `hub` line you can run as it is. A ref you cannot read is `404`.
+
+`hub needs-you show [--by bot|kind]` gives the same count as the Needs you board, split by kind (task, question,
+approval) and by the bot that put each item there, with this week's and older counts. Use it first when the list looks
+too long: the numbers come from the same query as the board.
 
 ## Letting it decide your approvals
 
-Off by default. Turn on **My assistant can decide approvals for me** in **Settings > General** (only you can, signed in
-to the app: not the Assistant, a bot, BotOps or a personal API token). Then your own Assistant approves or declines
-approvals addressed to you (send, spend, publish, merge) when you ask in your Assistant DM, one or many at once
+On by default. Turn **My assistant can decide approvals for me** off in **Settings > General** (only you can, signed in
+to the app: not the Assistant, a bot, BotOps or a personal API token), and it stops at once. The owner can also stop it
+for the whole team (Settings > People). While it is on, your own Assistant approves or declines approvals addressed to
+you (send, spend, publish, merge, a report to the Tico team) when you ask in your Assistant DM, one or many at once
 ("approve all the old Google review batches"), with no card and no click per item. It reads back what it is about to
 approve in one list, which Tico writes from the approvals themselves; your plain "yes" to that list approves exactly what
 it names, and it never asks again per item.
 
 What stays on:
 - **Only your words in your own Assistant DM, bound to the read-back.** The Assistant posts its read-back with
-  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only
-  pending approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per
-  approval, "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so
-  the turn's closing text is not posted after it, and records the ids. An approve then runs only for an approval on
-  that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message from anyone but you before
-  it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked` otherwise). Each line of the
-  list is one line, whatever the requesting bot put in its request, and shows every field of the approval except its
-  hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and sending mailbox, a
-  page's whole address), then the rest, files by name and size. An approval with a field longer than the list can show
-  whole, or a field name that isn't a plain name (`409 approve_too_long`), and a report to the Tico team
-  (`403 approve_support`) are left off the list and stay your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it is put ("approve
-  the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another
-  bot's output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
+  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only pending
+  approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per approval,
+  "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so the turn's
+  closing text is not posted after it, and records the ids. The Assistant may add a `--note` (`"note"`) of its own words
+  above the list, such as the one real decision it found; the yes still approves only the listed ids. An approve then runs
+  only for an approval on that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message
+  from anyone but you before it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked`
+  otherwise). Each line of the list is one line, whatever the requesting bot put in its request, and shows every field of
+  the approval except its hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and
+  sending mailbox, a page's whole address), then the rest, files by name and size. An approval with a field longer than
+  the list can show whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay
+  your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it
+  is put ("approve the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another bot's
+  output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
 - **Never its own request.** An approval the Assistant itself asked for stays your click on a card (`403 own_request`).
 - **Only approvals addressed to you, only your Assistant.** Someone else's is a `403`. No other bot decides an approval,
-  whatever the setting. A Tico support report is still sent only on your own tap.
+  whatever the setting. A report to the Tico team is approved only on the read-back and your plain yes, like any other.
 - **Recorded and undoable.** Each decision is recorded as decided by the Assistant for you: the approval carries
   `decided_via: "assistant"` and `decided_for` (`{"for", "assistant", "cited", "words", "read_back", "approves"}`),
   and its `history` (`GET /api/v2/approvals/{id}`) lists it. **Settings > General** lists what it decided for you in the
@@ -218,16 +245,32 @@ on an allowlist can be proposed (never tokens, sign-in, runner enrollment, this 
 the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exactly that path runs. Only the status and an
 error's detail are kept of the result, never the answer's body.
 
-**Anything with a side effect that matters is proposed, and only your click runs it:** approving a Needs-you item (a send,
-spend, publish or merge approval, even if you ask for it in your DM, unless you let it decide approvals), declines and task actions you did not clearly ask for,
-sending anything outside the team or to another human, spending, changing humans, access or settings, archiving or
-deleting, activating a bot. The assistant calls `hub assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
+**Approvals, and what is never done from chat, are proposed, and only your click runs it:** approving a Needs-you item
+(a send, spend, publish or merge approval, even if you ask for it in your DM, unless it may decide your approvals, which
+is on by default), anything
+the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `hub assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
 with the exact API operation. That leaves a **pending action** and a Confirm / Cancel card in your DM. The server
-refuses these operations when the assistant tries them itself (`403 confirm_required`). **Confirm** runs the recorded
+refuses these operations when the assistant tries them itself without your cited words (`403 confirm_required`). **Confirm** runs the recorded
 operation through the same routes with *your* credential, once (a claim makes a second click a `409`), and
 records `assistant.action.confirmed` and the operation's own events via assistant. A task change proposed without the
 task's `version` is given the one the task has (a change in between is still a `409`), and `{"status": "closed"}`
 is taken as the close it means (`close: true`), so such a card runs, including one stored before this rule.
+
+**A bulk card can hold an automation change and an org rule too.** `POST /api/v2/assistant/batch` takes task changes,
+comments, links, approval declines and answers, `PATCH /api/v2/automations/<id>`, `POST /api/v2/rules` and
+`POST /api/v2/rules/<id>/retire` (the rule stop). Each step runs as you through its own route, with your rights; a step
+the Assistant may never make on your words (the list above, or a rule that sets the Assistant's own switches) is refused
+when the card is made.
+
+**The Assistant's own background run** (its daily sweep) may put a card in your own Assistant DM with
+`hub assistant propose --for human:<id>`. Only the Assistant bot may do this, for that person, at most five cards a day
+per person, and never with an approve step. The card is yours: it runs only on your tap, as you, and says the Assistant
+proposed it. Any other bot, or a person naming someone else, gets `403`.
+
+Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
+/api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards
+with their ids). The card is marked withdrawn and never runs, and the owner's DM says who withdrew it, with the reason if
+one was given. Only the card's owner can confirm it, and the owner can still Cancel it.
 
 **Many at once is one card.** Clearing your Needs you (closing twenty stale tasks, declining eleven old publish batches,
 answering a bot) is one bulk card, never one each: `POST /api/v2/assistant/actions` with path `/api/v2/assistant/batch`
@@ -292,17 +335,21 @@ own session, not a personal token.
 
 | Request | Answer |
 |---|---|
-| `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.fast` marks a server answer; `refs.links` lists what it linked. |
-| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
+| `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.links` lists what it linked. |
+| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message"}` (with `held` or `rule_warning` when the org rule check has something to say). The bot is working on it: poll `GET /api/v2/assistant`. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |
 | `POST /api/v2/assistant/actions/{id}/confirm` | Runs it as you. `{"action": {...}}` with the result of the operation. A card that makes a new computer's one-time code also answers `shown_once: {code, expires, operator}`, to you only: the code is not stored on the card or in the DM. |
 | `POST /api/v2/assistant/actions/{id}/cancel` | Drops it. |
-| `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals. |
+| `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals (on unless you turned it off). |
 | `POST /api/v2/assistant/settings` `{"decides_approvals"}` | Your own session only (`403` for the Assistant, a bot or turning it on with a personal token). |
+| `GET /api/v2/assistant/changes?days=&limit=&before=` | `{"actor", "days", "changes": [{"id", "at", "what", "words", "object", "undoable", "why_not"?}], "next"}`: what the Assistant did for you, newest first. |
+| `POST /api/v2/assistant/changes/{id}/restore` | Undoes one of those changes as you: `{"id", "restored", "already", "object"}`. `409 not_undoable` with the reason when the record does not allow it; `404` for another person's change. |
+| `GET /api/v2/needs-you/summary?limit=` | `{"actor", "total", "this_week", "by_kind", "by_bot": [{"bot", "count", ...}], "bots_left"}`: the board's own count, split. |
+| `GET /api/v2/origins/{ref}` | `{"ref", "kind", "id", "title", "created_at", "made_by", "task", "cause", "siblings", "stop": [{"how", "command", "note"}]}`: why an item is on your list. |
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
-| `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
+| `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |
 | `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
 | `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant DM; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |

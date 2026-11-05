@@ -65,7 +65,10 @@ def classify(directory):
 def manifest(version, base, scans, previous, notes="", signed=False, notarized=False, github=False, tag=None,
              kind="app"):
     asset_base = f"https://github.com/ticoteam/tico/releases/download/{quote(tag or 'v' + version, safe='')}"
-    platforms = dict((previous or {}).get("platforms") or {})
+    # Another version's updates are signed for that version, and the updater refuses a signature whose version is
+    # not the one announced. So only a publish of the same version keeps platforms it does not bring itself.
+    same = (previous or {}).get("version") == version
+    platforms = dict((previous or {}).get("platforms") or {}) if same else {}
     installers = dict((previous or {}).get("installers") or {})
     for scan in scans:
         for target, entry in scan["platforms"].items():

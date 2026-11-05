@@ -2,6 +2,7 @@
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
 from backend import verdict_moves as V
+from backend import bot_settings as BS
 
 
 def claimed_refs(api, attempt):
@@ -30,7 +31,7 @@ def test_a_hand_off_is_claimed_before_the_bots_older_higher_ranked_job(api):
 
 def test_a_hand_off_always_wakes_and_is_never_held_for_a_batch(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.wake_preset','token_saver') WHERE bot='ops'")
+        BS.update(c, 'ops', {'wake_preset': 'token_saver'})
         task = H.task_create(c, "bot:coo", "Fix the import", "Fix it.", "bot:ops", lint=False)
         c.execute("DELETE FROM jobs")
         H._wake(c, H.task(c, task["id"]), "bot:ops", "Checks finished: failed.",

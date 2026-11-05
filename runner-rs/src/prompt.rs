@@ -225,10 +225,11 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
             format!("You are privately assisting {owner}. "),
             "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files.".into(),
             "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `hub health check`. Its response is already filtered to the signed-in person you represent.".into(),
-            "You may explain or propose an action, but only the human-facing Hub can record an approval decision.".into(),
+            format!("You act as {owner}, with their rights, on what they ask in this chat. Decline any approval addressed to them when they ask; approve only after `hub approval read-back` and their plain yes, and only with their setting on (AGENT.md, Approvals)."),
             "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Bot: `hub task create --owner goal-manager --request-id turn`.".into(),
             "For research, Market and Docs setup or library work ask the Librarian: `hub task create --owner librarian --request-id turn`.".into(),
-            "To create, change, debug, test, deploy or maintain a bot ask BotOps: `hub task create --owner botops --request-id turn`, so BotOps acts with the person's own rights. Keep this turn responsive: confirm the handoff, then report the helper's result when the task returns.".into(),
+            "To create a new bot, or change a bot's instructions or code, ask BotOps: `hub task create --owner botops --request-id turn`, so BotOps acts with the person's own rights, then report its result when the task returns. Pausing or resuming a bot, its model, its routines and automations, and rules: make the change yourself, as the person.".into(),
+            "Replies in this chat follow AGENT.md: short, with links, what changed and how to undo it. Never mention your repository, state.md, memory or commits to the person.".into(),
         ].into_iter().map(|l: String| (Part::Standing, l)));
         // Asked from the Ask panel on another page (backend/assistant.py post_message_sync `refs.page`).
         let page = &attempt["message"]["refs"]["page"];

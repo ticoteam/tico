@@ -7,6 +7,7 @@ from pydantic import Field
 
 from . import models as M, providers
 from .store import H, Problem, bot_readiness, readiness_document, encode
+from . import bot_settings as BS
 
 TICO_COMMANDS = [
     {"name": "goal", "args": "<objective>", "help": "Pin a goal the bot works toward", "kind": "tico",
@@ -34,12 +35,17 @@ def capabilities(c, auth, conv):
         # A task's own room is its owning bot's, whoever else is in it (a requesting bot).
         owner = (H.task(c, conv["task_id"]) or {}).get("owner_id") or ""
         bots = [H.actor_id(owner)] if H.is_bot(owner) else []
+    elif not bots and conv.get("audience") in ("personal", "members") and not conv.get("parent_id"):
+        # A DM made as threads make one (threads.dm) lists its people as members, not participants: a bot's DM is
+        # the bot's chat, as the bot's chat room was.
+        bots = [H.actor_id(r[0]) for r in c.execute(
+            "SELECT actor FROM thread_members WHERE thread_id=? AND actor LIKE 'bot:%'", (conv["id"],))]
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     report = readiness_document(row[0]) if row else {}
     detail = bot_readiness(row[0], bot) if row else {}
@@ -194,7 +200,7 @@ def task_goal_ended(c, goal, task_id, status, note):
         steps = H.steps_only(c, row)
         if (row["status"] in ("open", "doing") and goal["set_by"] == H.KEEPER and wanted and not steps
                 and goal["objective"] == task_goal_objective(row, wanted["objective"], steps)):
-            H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000])
+            H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000], strict=False)
         return
     if status in ("paused", "stopped"):
         # A harness pauses a goal that needs a person (Codex "blocked"); the runner's tries guard pauses a stuck one.

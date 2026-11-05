@@ -8,6 +8,7 @@ import pytest
 from backend import github_app, hubdb as H, repositories as R
 from backend.store import Store
 from backend.tests.test_github_app import api, gh, auth, connect, runner_token, turn_token, put_extras  # noqa: F401
+from backend import bot_settings as BS
 
 
 def put(api, path, body, token='owner-test'):
@@ -135,8 +136,9 @@ def test_modes_mixed_scopes_alias_and_default(api, gh):
     put(api, 'repositories/settings', {'new_bot_default': 'all'})
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,created_at) VALUES('new-test','new-test','Sam',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='new-test'").fetchone()[0])['repo_access_mode'] == 'all'
+        c.execute("INSERT INTO bot_config(bot,team,owner_id,repo) VALUES('new-test','t','ana','bot-new-test')")
+        BS.write(c, 'new-test', {})
+        assert BS.read(c, 'new-test')['repo_access_mode'] == 'all'
 
 
 def test_upgrade_migrates_existing_extras_once(api, gh):

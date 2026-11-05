@@ -7,6 +7,7 @@ from backend.store import encode
 from backend.tests.test_getting_started import add_bot, enrolled, SIGNED_IN, heartbeat  # noqa: F401
 from backend.tests.test_onboarding import (PEOPLE, ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, LIBRARIAN_CARD,  # noqa: F401
                                            environment, machine, signed_in)
+from backend import bot_settings as BS
 
 
 def setup(api):
@@ -20,8 +21,8 @@ def setup(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
         for slug in ("mail", "helper", "mail2"):
-            c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                      (slug, "{}", "morgan", "emp-" + slug))
+            if c.execute('INSERT OR IGNORE INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'morgan', 'emp-' + slug)).rowcount:
+                BS.write(c, slug, {})
     return enrolled(api)
 
 

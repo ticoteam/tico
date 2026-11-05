@@ -80,7 +80,7 @@ def fingerprint(root, kind):
     if kind == "runner":
         paths = [root / "runner-rs" / name for name in ("build.rs", "Cargo.toml", "Cargo.lock")]
         paths += list((root / "runner-rs/src").rglob("*"))
-        paths += list((root / "runner/harnesses").glob("*.toml"))
+        paths += list((root / "runner-rs/harnesses").glob("*.toml"))
         named = [(p.relative_to(root).as_posix(), p) for p in paths if p.is_file()]
     else:
         crate = root / "relay-rs"
@@ -208,8 +208,8 @@ def main():
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
         env = {**os.environ, "TMPDIR": str(gate_temp)}
-        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shard 1
-        # (release_checks.py gives it every native test file; a shard without binaries refuses native tests).
+        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shards 1-2
+        # (release_checks.py NATIVE_SHARDS gives them the native test files; a shard without binaries refuses native tests).
         # Browser tests use none. Where the binaries were placed, they must be the candidate's.
         placed = (root / "runner-rs/target/release/tico-runner").exists()
         if args.part == "python" and not placed and "native_first" not in (root / "scripts/release_checks.py").read_text():

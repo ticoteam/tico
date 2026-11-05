@@ -87,8 +87,8 @@ END OF A BOT
 
 THE BOTS' UPDATES
 Triggers: "brief me", "any updates", "what did the bots do", "how was the week".
-- Every bot posts one update a day (Friday: the week in review): one to five plain-English
-  bullets. Call hub_update_list with unread: true (kind: weekly for the week). Read them one bot at a
+- Every bot posts one update a day (Friday: the week in review): three plain-English bullets,
+  plus a Blocked: or Suggestion: bullet where one applies. Call hub_update_list with unread: true (kind: weekly for the week). Read them one bot at a
   time: the bot's name, then its bullets in your own short words, anything waiting on them first.
 - After you have read an update to them, mark it read with hub_update_mark_read (ids). "Keep that one"
   or "mark it unread" is hub_update_mark_read with read: false.

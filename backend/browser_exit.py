@@ -65,7 +65,7 @@ def today():
 
 
 def _computer(c, rid):
-    return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
 
 def _bots(value):
@@ -129,6 +129,17 @@ def generations(c):
     """({exit runner_id: policy generation}, {bot: selection generation}): what the relay should have."""
     return ({r[0]: int(r[1]) for r in c.execute("SELECT runner_id,generation FROM browser_exits")},
             {r[0]: int(r[1]) for r in c.execute("SELECT bot,generation FROM bot_browser_exits")})
+
+
+def exits_of(c, bots):
+    """{bot: the computer its browser exit is set on, or None} for every bot in `bots`, read in set queries (bot_exit)."""
+    from .hubdb import chunks
+    found = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT bot,runner_id FROM bot_browser_exits WHERE bot IN ({','.join('?' * len(part))})",
+                             part):
+            found[row["bot"]] = row["runner_id"]
+    return {bot: found.get(bot) for bot in bots}
 
 
 def bot_exits(c):

@@ -15,7 +15,7 @@ watched against the numbers and the market.
   bet keeps its goals.
 - The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
   exercises run against a strategy are lenses (backend/lenses.py).
-- Every change is a `strategy_events` row with the old and new values, like `market_events`.
+- Every change is a `history_events` row (subject_type `strategy`, its values in `data`), like the market's changes.
 - Publishing emits `strategy.published`, puts `/strategy/summary` in every run's context from the next run
   (backend/learned.py `for_turn`, runner-rs/src/prompt.rs), and files one Decide card for the owner when a bet with
   goals was retired or rewritten (`strategy_realign`, decided through the goal proposals).
@@ -95,10 +95,6 @@ SCHEMA = (
     "why TEXT NOT NULL DEFAULT '', rules_out TEXT NOT NULL DEFAULT '', wrong_if TEXT, cites TEXT NOT NULL DEFAULT '[]', "
     "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
     "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS strategy_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')",
-    "CREATE INDEX IF NOT EXISTS strategy_events_at ON strategy_events(created_at)",
-    "CREATE INDEX IF NOT EXISTS strategy_events_kind ON strategy_events(kind, created_at)",
 )
 
 
@@ -146,8 +142,7 @@ def loads(value, default):
 
 
 def _event(c, actor, kind, payload):
-    c.execute("INSERT INTO strategy_events (id, kind, actor, created_at, payload) VALUES (?,?,?,?,?)",
-              (H.new_id(), kind, actor, H.now(), dumps(payload or {})))
+    H.history_event(c, "strategy", "strategy", actor, kind, data=payload or {})
 
 
 def _clean(c, actor, value, limit, what, one_line=False):
@@ -495,8 +490,7 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
 
 def _vision_event(c, actor, old, new):
     """The vision everyone sees changed: its history on the Goals page (GET /company/history)."""
-    c.execute("INSERT INTO company_events (id, created_at, actor, field, old, new) VALUES (?,?,?,?,?,?)",
-              (H.new_id(), H.now(), actor, "vision", old, new))
+    H.history_event(c, "company", "company", actor, "vision", old or "", new or "")
 
 
 def sync_vision(c):
@@ -840,7 +834,7 @@ def settle_card(c, actor, proposal_id, note):
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.LIVE_STATUSES:
-        H.task_close(c, actor, task["id"], note=note, quiet=True)
+        H.task_close(c, actor, task["id"], note=note, quiet=True, strict=False)
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
 
 
@@ -931,8 +925,9 @@ def _evidence(c, item, published, today):
         ids = list(dict.fromkeys([wrong["market_id"], *(item.get("cites") or [])]))
         marks = ",".join("?" * len(ids))
         rows = H._rows(c.execute(
-            f"SELECT subject_kind, subject_id, field, old, new, created_at, actor FROM market_events WHERE subject_id IN "
-            f"({marks}) AND created_at > ? AND actor <> 'seed' ORDER BY created_at DESC LIMIT 3", (*ids, published or "")))
+            "SELECT substr(subject_type, 8) AS subject_kind, subject_id, kind AS field, old, new, created_at, "
+            f"actor_id AS actor FROM history_events WHERE subject_type IN {H.MARKET_SUBJECTS_SQL} AND subject_id IN "
+            f"({marks}) AND created_at > ? AND actor_id <> 'seed' ORDER BY created_at DESC LIMIT 3", (*ids, published or "")))
         if not rows:
             return None
         return "The market changed since it was published: " + "; ".join(
@@ -941,6 +936,12 @@ def _evidence(c, item, published, today):
     if wrong.get("kind") == "text" and wrong.get("check_by") and wrong["check_by"] < today:
         return f"Its check date {wrong['check_by']} has passed: look again at \"{wrong.get('text')}\"."
     return None
+
+
+def local_day():
+    """Today on this server's calendar, read from the hub clock. A check falls due on the day the owner reads on this
+    machine, so a server west of UTC does not trip a bet the evening before its date."""
+    return H.parse_ts(H.now()).astimezone().date().isoformat()
 
 
 def watch(c, kpi_id=None, market_id=None, today=None):
@@ -961,9 +962,9 @@ def watch(c, kpi_id=None, market_id=None, today=None):
     active = [b for b in loads(row["bets"], []) if b.get("status") == "active" and b.get("wrong_if")]
     if not active or not strategy_bot.checks(c) or not GA.manager_ready(c):
         return []
-    done = {r[0] for r in c.execute("SELECT json_extract(payload,'$.bet_id') FROM strategy_events WHERE kind=? AND "
-                                    "json_extract(payload,'$.n')=?", (TRIPPED, row["n"]))}
-    today = today or date.today().isoformat()
+    done = {r[0] for r in c.execute("SELECT json_extract(data,'$.bet_id') FROM history_events WHERE subject_type='strategy' "
+                                    "AND kind=? AND json_extract(data,'$.n')=?", (TRIPPED, row["n"]))}
+    today = today or local_day()                         # the hub clock on this server's calendar; a demo build uses its own
     tripped = []
     for number, item in enumerate(active, 1):
         wrong = item["wrong_if"]

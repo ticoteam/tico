@@ -148,7 +148,7 @@ function ogMetaHtml(node) {
     const {all} = ogRulesOf(node.key);
     const flag = all.some(r => r.if_broken === 'block') ? 'block' : all.some(r => r.if_broken === 'escalate') ? 'escalate' : '';
     return `<span class="og-count${all.length ? '' : ' none'}"><b class="tnum">${all.length}</b> ${all.length === 1 ? 'rule' : 'rules'}</span>`
-      + (flag ? `<span class="og-flag ${flag}">${flag === 'block' ? 'Block' : 'Escalate'}</span>` : '');
+      + (flag ? `<span class="og-flag ${flag}">${flag === 'block' ? 'Stop' : 'Ask first'}</span>` : '');
   }
   if (!Array.isArray(OG.goals)) return '';
   const goals = ogGoalsOf(node.key);
@@ -368,8 +368,8 @@ function ogRuleHtml(r, key, side) {
   const edit = r.can_edit ?? OG.edit[r.id];
   const on = OG.rule === r.id;
   return `<li class="og-rule${on ? ' on' : ''}">
-      <button type="button" class="og-rule-t" data-og-rule="${esc(r.id)}" aria-pressed="${on}">${esc(r.text)}</button>
-      <div class="og-rule-m">${r.if_broken === 'block' || r.if_broken === 'escalate' ? `<span class="og-flag ${r.if_broken}">${r.if_broken === 'block' ? 'Block' : 'Escalate'}</span>` : ''}
+      <button type="button" class="og-rule-t" data-og-rule="${esc(r.id)}" aria-pressed="${on}">${ruTextHTML(r.text, 'plain')}</button>
+      <div class="og-rule-m">${r.if_broken === 'block' || r.if_broken === 'escalate' ? `<span class="og-flag ${r.if_broken}">${r.if_broken === 'block' ? 'Stop' : 'Ask first'}</span>` : ''}
         ${others.length && ogGoList(others) ? `<span class="og-with-l">${side === 'who' ? 'With' : 'Who'}</span>${ogGoList(others)}` : ''}
         <span class="spacer"></span><a class="og-rule-a" href="${ruHref(r.kind, {rule: r.id})}">${edit ? 'Edit' : 'Open'}</a></div></li>`;
 }

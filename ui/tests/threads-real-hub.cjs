@@ -1,11 +1,12 @@
 // Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
-// Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
-// shows inline under its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
-// desktop, sees the company thread in the sidebar but not the members-only one, and its text is not on his page; opened by
+// Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread reply under one of its
+// messages shows in time order, quoting that message, and the sub-thread still opens on its own; and her bot page
+// switches between the bot's Home and DM. Omar, a teammate on the
+// desktop, sees the company thread on the thread rail but not the members-only one, and its text is not on his page; opened by
 // direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
-// in the sidebar, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
-// by its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
+// on the rail, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
+// on its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -72,13 +73,12 @@ async function restrictPerson(hub) {
     await dana.locator('.thv-composer .p-send').click();
     await dana.getByText('Monday works.').waitFor({timeout: t(15000)});
 
-    // Dana: a sub-thread's header shows under its message with the reply count, and opens the sub-thread on its own page.
-    const head = dana.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`);
-    await head.waitFor({timeout: t(15000)});
-    assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
-    // The sub-thread's messages sit inline under it, indented; the header, or tapping one, opens it.
-    await dana.locator('.th-msg.th-sub', {hasText: RISKS}).waitFor({timeout: t(15000)});
-    await head.click();
+    // Dana: the sub-thread's reply reads flat, quoting the message it answers; the sub-thread still opens on its own page.
+    const reply = dana.locator('.th-msg', {hasText: RISKS}).first();
+    await reply.waitFor({timeout: t(15000)});
+    assert.equal(await reply.locator('.th-quote').getAttribute('data-th-quote'), kickoff.id, 'the reply quotes its message');
+    assert.equal(await dana.locator('.th-subhead').count(), 0, 'no sub-thread heads');
+    await dana.goto(hub.url + '/#/thread/' + risks.thread_id);
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
     await dana.getByText(RISKS).waitFor({timeout: t(15000)});
@@ -86,26 +86,27 @@ async function restrictPerson(hub) {
     // Dana: Keep messages saves through the real PATCH: the server holds it, a fresh load shows it, and it clears.
     const keepDialog = async () => {
       await dana.locator('[data-thv-menu]').click();
-      await dana.locator('.thv-pop').getByText('Keep messages').click();
-      return dana.locator('#thread-keep select');
+      return dana.locator('#thread-settings[open] #ths-keep');
     };
-    const saveKeep = async () => {
-      await dana.locator('#thread-keep [type=submit]').click();
-      await dana.waitForFunction(() => !document.querySelector('#thread-keep')?.open, null, {timeout: t(15000)});
+    // The select saves as it changes; the panel then closes.
+    const setKeep = async (select, days) => {
+      const saved = dana.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/v2/threads/'), {timeout: t(15000)});
+      await select.selectOption(days);
+      await saved;
+      await dana.locator('#thread-settings .tmodal-x').click();
+      await dana.waitForFunction(() => !document.querySelector('#thread-settings')?.open, null, {timeout: t(15000)});
     };
     await dana.goto(hub.url + '/#/thread/' + plan.id);
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
     const keep = await keepDialog();
     assert.equal(await keep.inputValue(), '', 'a thread keeps its messages by default');
-    await keep.selectOption('90');
-    await saveKeep();
+    await setKeep(keep, '90');
     assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, 90, 'the server holds the length');
     await dana.reload();
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
     const kept = await keepDialog();
     assert.equal(await kept.inputValue(), '90', 'a fresh load shows the saved length');
-    await kept.selectOption('');
-    await saveKeep();
+    await setKeep(kept, '');
     assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, null, 'and it clears');
     await dana.context().close();
 
@@ -125,13 +126,20 @@ async function restrictPerson(hub) {
       null, {timeout: t(15000)});
     await bot.context().close();
 
-    // Omar, desktop: the company thread is in his sidebar; the members-only one is not, and its text is not on the page.
+    // Omar, desktop: he reads the company thread but is not in it, so Browse threads offers it and his rail does not list it;
+    // the members-only one is in neither, and its text is not on the page.
     // Opened by direct URL, the members-only thread is "Not found", and the bot he may only see has no Home tab.
     const omar = await pageAs(browser, hub, 'omar');
-    await omar.goto(hub.url + '/#/tasks');
-    await omar.locator('#th-list .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await omar.locator('#th-list .th-row-title', {hasText: 'Pricing war room'}).count(), 0,
-      'a members-only thread Omar is not in is not in his sidebar');
+    await omar.goto(hub.url + '/#/threads');
+    await omar.locator('#thread-rail [data-tr-browse]:not([hidden])').click({timeout: t(15000)});
+    const browse = omar.locator('#thread-browse');
+    await browse.locator(`li[data-thread="${plan.id}"]`).waitFor({timeout: t(15000)});
+    assert.equal(await browse.locator(`li[data-thread="${secret.id}"]`).count(), 0, 'Browse does not offer a members-only thread');
+    assert.equal(await omar.locator(`#thread-rail a.tr-row[data-thread="${plan.id}"]`).count(), 0,
+      'a thread Omar only reads is not on his rail');
+    assert.equal(await omar.locator(`#thread-rail a.tr-row[data-thread="${secret.id}"]`).count(), 0,
+      'a members-only thread Omar is not in is not on his rail');
+    await omar.keyboard.press('Escape');
     await omar.goto(hub.url + '/#/thread/' + secret.id);
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
@@ -170,18 +178,18 @@ async function restrictPerson(hub) {
     assert.equal(await manager.locator('#person-dm').count(), 1, 'her manager may write to her');
     await manager.context().close();
 
-    // Priya, phone: the company thread is on the Threads tab (the sidebar is in the closed drawer); tapping it opens the
-    // thread with its composer, and the page does not scroll sideways.
+    // Priya, phone: the Threads tab in the bottom bar opens the rail, which lists the company thread; tapping it opens
+    // the thread with its composer, and the page does not scroll sideways.
+    // Priya follows the company thread first: the rail lists only threads she is in.
+    await api(hub, 'priya', 'PUT', `/v2/threads/${plan.id}/follow`, {notify: 'live'});
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
-    // On a phone the list is one tap away, the Threads tab in the bottom bar (ui/tests/threads.cjs does the same): the
-    // sidebar on this page sits off screen.
     await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
     await priya.locator('#mobile-threads').click();
     await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
-    await priya.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await priya.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
-    await priya.locator('.threads-page a.th-row[data-thread="' + plan.id + '"]').tap();
+    await priya.locator('#thread-rail .tr-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
+    assert.equal(await priya.locator('#thread-rail .tr-title', {hasText: 'Pricing war room'}).count(), 0);
+    await priya.locator('#thread-rail a.tr-row[data-thread="' + plan.id + '"]').tap();
     await priya.waitForURL(new RegExp('#/thread/' + plan.id), {timeout: t(15000)});
     await priya.getByText(PLAN).waitFor({timeout: t(15000)});
     await priya.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
@@ -189,38 +197,41 @@ async function restrictPerson(hub) {
     assert.equal(sideways, false, 'the phone page does not scroll sideways');
     await priya.context().close();
 
-    // Dana, phone. Omar answers in the old sub-thread: the list still shows only roots, the root's row carries the reply,
-    // and tapping it lands on that reply. Opening the sub-thread adds no row for it.
+    // Dana, phone. Omar answers in the old sub-thread: the rail still shows only roots, the root's row carries the reply,
+    // and tapping it opens the root with the reply in it. Opening the sub-thread adds no row for it.
     const late = await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
     const pair = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya']});
-    const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar']});
+    const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar'], title: 'Launch trio'});
     await api(hub, 'priya', 'POST', `/v2/threads/${(pair.thread || pair).id}/messages`, {text: 'Got a minute?', kind: 'say'});
     const phone = await pageAs(browser, hub, 'dana', {phone: true});
     await phone.goto(hub.url + '/#/threads');
-    const planRow = phone.locator(`.threads-page a.th-row[data-thread="${plan.id}"]`).first();
+    const planRow = phone.locator(`#thread-rail a.tr-row[data-thread="${plan.id}"]`).first();
     await planRow.waitFor({timeout: t(15000)});
-    const rowTitles = await phone.locator('.threads-page .th-row-title').allInnerTexts();
+    const rowTitles = await phone.locator('#thread-rail .tr-title').allInnerTexts();
     assert.ok(!rowTitles.some(title => [PLAN, KICKOFF, RISKS].includes(title)), 'a sub-thread is not a row: ' + rowTitles);
-    assert.equal(await phone.locator(`.threads-page a.th-row[data-thread="${risks.thread_id}"]`).count(), 0);
+    assert.equal(await phone.locator(`#thread-rail a.tr-row[data-thread="${risks.thread_id}"]`).count(), 0);
     assert.match(await planRow.getAttribute('class'), /unread/, 'the root carries the new reply');
-    const marked = phone.waitForResponse(r => r.url().includes(`/threads/${risks.thread_id}/read`), {timeout: t(15000)});
     await planRow.tap();
-    await phone.waitForURL(new RegExp(`#/thread/${risks.thread_id}\\?m=${late.id}`), {timeout: t(15000)});
-    await phone.locator('.th-msg.th-focus', {hasText: 'A late risk from Omar'}).waitFor({timeout: t(15000)});
-    await marked;
-    assert.equal(await phone.locator(`#th-list a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
-    await phone.goto(hub.url + '/#/threads?view=dms');
-    await phone.locator(`.threads-page a.th-row[data-thread="${(pair.thread || pair).id}"]`).waitFor({timeout: t(15000)});
+    await phone.waitForURL(new RegExp(`#/thread/${plan.id}$`), {timeout: t(15000)});
+    await phone.locator('.th-msg', {hasText: 'A late risk from Omar'}).waitFor({state: 'attached', timeout: t(15000)});
+    await phone.goto(hub.url + '/#/thread/' + risks.thread_id);
+    await phone.getByText('A late risk from Omar').waitFor({timeout: t(15000)});
+    await phone.goto(hub.url + '/#/threads');
+    await planRow.waitFor({timeout: t(15000)});
+    assert.equal(await phone.locator(`#thread-rail a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
 
-    // The same phone: a DM reads as who it is with, in the list and on the Unread threads card.
-    const titleOf = id => phone.locator(`.threads-page a.th-row[data-thread="${id}"] .th-row-title`).innerText();
-    assert.match(await titleOf((pair.thread || pair).id), /Priya/);
-    const group = await titleOf((trio.thread || trio).id);
-    assert.ok(group.includes('Priya') && group.includes('Omar'), 'a group DM names everyone: ' + group);
+    // The same phone: a group chat is on the rail by its name; a 1:1 DM is not, and reads as who it is with in its own
+    // header and on the Unread threads card.
+    const group = await phone.locator(`#thread-rail a.tr-row[data-thread="${(trio.thread || trio).id}"] .tr-title`).innerText({timeout: t(15000)});
+    assert.equal(group.trim(), 'Launch trio', 'a group chat is on the rail by its name');
+    assert.equal(await phone.locator(`#thread-rail a[data-thread="${(pair.thread || pair).id}"]`).count(), 0, 'a 1:1 DM is on its teammate, not the rail');
+    // The card first: opening the DM reads it, and the card lists only unread threads.
     await phone.goto(hub.url + '/#/home');
     const card = phone.locator('.dash-list a', {hasText: 'Priya'}).first();
     await card.waitFor({timeout: t(15000)});
     assert.equal(await phone.locator('.dash-list a', {hasText: 'Untitled'}).count(), 0, 'no DM on the card is Untitled');
+    await phone.goto(hub.url + '/#/thread/' + (pair.thread || pair).id);
+    await phone.locator('.thv-title', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
 
     // The same phone: a bot's Home and DM are named in the top line, and each one switches the page.
     await phone.goto(hub.url + '/#/bot/' + BOT + '/home');
@@ -243,12 +254,10 @@ async function restrictPerson(hub) {
     await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
     assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
     await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');
-    const rowsBefore = await talk.locator('#dm-list [data-thread]').count();
     const started = talk.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/threads/dm' && r.request().method() === 'POST', {timeout: t(15000)});
     await talk.locator('#bot-thread .thv-composer .p-send').click();
     await started;
     assert.equal(await dmCount(), dmsBefore + 1, 'the first message made the DM');
-    await talk.waitForFunction(n => document.querySelectorAll('#dm-list [data-thread]').length === n, rowsBefore + 1, {timeout: t(15000)});
     await talk.context().close();
 
     const groups = await api(hub, 'dana', 'GET', '/v2/groups');
@@ -257,50 +266,26 @@ async function restrictPerson(hub) {
       const tag = isPhone ? 'phone' : 'desktop';
       const page = await pageAs(browser, hub, 'dana', {phone: isPhone});
 
-      // Calls are not set up on this hub: the owner sees so on load, with no Start call to find out from.
+      // Calls are not set up on this hub: no Start call, and no note about it.
       await page.goto(hub.url + '/#/thread/' + plan.id);
-      await page.locator('.thv-call-note', {hasText: 'Set up calls'}).waitFor({timeout: t(15000)});
+      await page.locator('.thv-title', {hasText: 'Launch plan'}).waitFor({timeout: t(15000)});
       assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
 
-      // The audience shows in the thread's header on either screen.
-      assert.equal(await page.locator('.thv-aud').innerText(), 'Company', `${tag}: the header names the audience`);
+      // A thread on the rail says what it is with its mark (#), as its row does, on either screen; no audience word.
+      assert.match(await page.locator('.thv-title').innerText(), /^#\s*Launch plan$/, `${tag}: the header's mark`);
+      assert.equal(await page.locator('.thv-aud').count(), 0, `${tag}: no audience word beside a # thread`);
 
-      // Who can read: one title, a one-line team row, and neither Slack nor another company with neither set up here.
+      // Who can read in Thread settings: its row label is its only title, a one-line team row, and no Slack with Slack off.
       await page.goto(hub.url + '/#/thread/' + secret.id);
       await page.locator('[data-thv-menu]').click();
-      await page.locator('.thv-pop').getByText('Who can read').click();
-      const share = page.locator('#thread-share[open]');
+      const share = page.locator('#thread-settings[open]');
       await share.locator('.thd-aud-word').waitFor({timeout: t(15000)});
       await page.waitForLoadState('networkidle');
-      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the title is the only Who can read`);
+      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the row label is the only Who can read`);
       const word = await share.locator('.thd-aud-word').boundingBox();
       assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
-      assert.equal(await share.getByText('Connect a company').count(), 0, `${tag}: no company without the Gateway`);
       await share.locator('[data-close]').first().click();
-
-      // Make task twice: the refusal links to the task it repeats, and the button keeps its one line.
-      await page.goto(hub.url + '/#/thread/' + plan.id);
-      const makeTask = async () => {
-        const row = page.locator('[data-message]', {hasText: KICKOFF}).first();
-        await row.hover();
-        await row.locator('[data-th-more]').click();
-        await page.locator('.thv-pop').getByText('Make task').click();
-        await page.locator('#thread-task[open] [type=submit]').click();
-      };
-      if (!isPhone) {
-        await makeTask();
-        await page.waitForFunction(() => !document.querySelector('#thread-task')?.open, null, {timeout: t(15000)});
-      }
-      await makeTask();
-      const twin = page.locator('#thread-task [data-status] a[href^="#/task/"]');
-      await twin.waitFor({timeout: t(15000)});
-      const buttons = page.locator('#thread-task .dash-form-foot');
-      const [cancel, make] = [await buttons.locator('button[data-close]').boundingBox(), await buttons.locator('[type=submit]').boundingBox()];
-      assert.ok(Math.abs(cancel.height - make.height) < 2, `${tag}: Make task is one line beside Cancel`);
-      await twin.click();
-      await page.waitForURL(/#\/task\//, {timeout: t(15000)});
-      assert.equal(await page.locator('#thread-task[open]').count(), 0, `${tag}: following the link closes the dialog`);
 
       // A group's Home sits in the same gutters as its cards.
       await page.goto(hub.url + '/#/team/' + encodeURIComponent(eng.id));

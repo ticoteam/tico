@@ -14,6 +14,11 @@ const bot = (name, display_name, org_parent, over) => ({name, display_name, org_
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
+// What waits is one line on Goals; Review opens its cards in a sheet.
+async function review(page) {
+  await page.locator('#goal-needs-line [data-needs-review]').click();
+  await page.locator('#goal-needs-sheet[open] #goal-needs').waitFor();
+}
 async function open(browser, {role = 'owner', strategy = null, needs = []} = {}) {
   const server = {};
   const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
@@ -70,6 +75,7 @@ async function open(browser, {role = 'owner', strategy = null, needs = []} = {})
   });
   await page.goto('http://tico-ui.test/#/goals');
   await page.locator('#goal-tree .gt-row').first().waitFor();
+  if (needs.length) await review(page);
   return {page, errors, posted, state, server};
 }
 // The Strategy Bot proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py
@@ -195,6 +201,7 @@ const panelFor = async (page, owner) => {
       await rows.nth(0).click();
       await page.waitForFunction(() => location.hash === '#/strategy');
       await page.evaluate(() => { location.hash = '#/goals'; });
+      await review(page);
       await page.locator('#goal-needs li').nth(1).waitFor();
       await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').click();
       await page.locator('#goal-panel[open] .gp-body').waitFor();

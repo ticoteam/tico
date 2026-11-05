@@ -350,27 +350,26 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
     s = store(tmp_path)
     now = H.now()
     day = lambda n: H.shift(now, days=-n)
-    # (created, finished, turn row as (finished, input_tokens, usage_reason), job state): what the run's totals are kept on
+    # (created, finished, the run's record as (settled_at, input_tokens, usage_reason), job state): what the run's
+    # totals are kept on
     runs = {
         "a-old": (day(10), day(9), (day(9), 100, None), None),          # finished nine days ago, totals written
         "b-recent": (day(9), day(3), (day(3), 100, None), None),        # finished three days ago: a week has not passed
         "c-open": (day(9), None, None, None),                           # still running
-        "d-no-turn": (day(10), day(9), None, None),                     # no turn row: nothing records its totals
-        "e-no-usage": (day(10), day(9), (day(9), None, "no_result"), None),   # a run with no usage still has a turn row
+        "d-no-turn": (day(10), day(9), None, None),                     # no record: nothing records its totals
+        "e-no-usage": (day(10), day(9), (day(9), None, "no_result"), None),   # a run with no usage still has a record
         "f-uncertain": (day(10), day(9), (day(9), 100, None), "uncertain"),   # held for review: auto_reconcile reads it
-        "g-turn-open": (day(10), day(9), (None, None, None), None),     # the turn was never finished
+        "g-turn-open": (day(10), day(9), (None, None, None), None),     # the record was never settled
     }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created_at TEXT, finished_at TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created_at TEXT, finished_at TEXT, settled_at TEXT, "
+                  "input_tokens INTEGER, usage_reason TEXT)")
         c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
-        c.execute("CREATE TABLE turns(id TEXT PRIMARY KEY, finished_at TEXT, input_tokens INTEGER, usage_reason TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
                   "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for aid, (created, finished, turn, job) in runs.items():
-            c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
-            if turn:
-                c.execute("INSERT INTO turns VALUES(?,?,?,?)", (aid, turn[0], turn[1], turn[2]))
+            c.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?)", (aid, created, finished, *(turn or (None,) * 3)))
             if job:
                 c.execute("INSERT INTO jobs VALUES(?,?,?)", ("job-" + aid, aid, job))
             events = [(1, "delta", '{"text":"Hel"}'), (2, "tokens", '{"input":900,"output":12}'),
@@ -379,11 +378,11 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
                 c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
     with s.read() as c:
-        totals = c.execute("SELECT id,finished_at,input_tokens,usage_reason FROM turns ORDER BY id").fetchall()
+        totals = c.execute("SELECT id,settled_at,input_tokens,usage_reason FROM attempts ORDER BY id").fetchall()
     assert sweep_tokens(s, now, batch=1) == 4          # a-old and e-no-usage lose their two token rows each
     with s.read() as c:
         left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
-        assert c.execute("SELECT id,finished_at,input_tokens,usage_reason FROM turns ORDER BY id").fetchall() == totals
+        assert c.execute("SELECT id,settled_at,input_tokens,usage_reason FROM attempts ORDER BY id").fetchall() == totals
     everything = {(a, n) for a in runs for n in range(1, 5)}
     assert left == everything - {("a-old", 2), ("a-old", 4), ("e-no-usage", 2), ("e-no-usage", 4)}
     assert sweep_tokens(s, now) == 0, "the mark moved past what was swept"

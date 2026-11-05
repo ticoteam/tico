@@ -268,13 +268,13 @@ The Owner can still delete a learning there.
 ## Connections
 
 **Library → Connections** (`#/library/connections`) lists every way the outside world reaches the company: Slack, the
-GitHub App, the mail bots' mailboxes, Email & Phone inboxes, meeting importers, incoming and outgoing webhooks, physical
+GitHub App, the mail bots' mailboxes, Tico addresses and numbers, meeting importers, incoming and outgoing webhooks, physical
 mail and Listening. Each row shows its status, whose it is (company, a team or a person), who reads what it brings in,
 the bots on it, and **Configure**, which opens the card that changes it (Slack and GitHub under Tools, the others in
 Settings, Meetings or Strategy).
 
 The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
-they may read: Slack and GitHub once connected, Email & Phone inboxes in their audience, meeting importers if they read
+they may read: Slack and GitHub once connected, Tico addresses and numbers in their audience, meeting importers if they read
 meetings, incoming webhooks except Finance's, physical mail, and Listening when they receive or read a destination. Bots
 named are only those you may see.
 

@@ -63,7 +63,7 @@ def _watch_results(run, w):
     with no free turn, only delays it; the claim holding it back is what the check counts."""
     from backend import execution as E
     with w.store.read() as c:
-        runner = c.execute("SELECT * FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (w.runner["runner_id"],)).fetchone()
         ready = E.readiness_document(runner["readiness"])
         rows = c.execute("SELECT j.*, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.state='queued' AND json_extract(m.refs,'$.subtask') IS NOT NULL "
@@ -93,8 +93,8 @@ def _watch_settled(run, w):
             continue
         if step.check.passed == MERGE and judged[-1]["verdict"] in ("approve", "pass"):
             continue
-        since = w.sql("SELECT max(created_at) created_at FROM (SELECT max(created_at) created_at FROM task_events WHERE task_id=? AND field='step' "
-                      "UNION ALL SELECT max(created_at) FROM task_events WHERE task_id=? AND field='status' AND new='done')",
+        since = w.sql("SELECT max(created_at) created_at FROM (SELECT max(created_at) created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
+                      "UNION ALL SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done')",
                       (t["id"], judged[-1]["id"]))[0]["created_at"]
         if since and w.H.parse_ts(since) < now - w.tick:
             run.violations["verdict_sat"].append((now, f"{t['title']} @ {step.name}"))
@@ -115,12 +115,12 @@ def held_with_verdicts(run):
     least one while it waited."""
     during_wait = []
     for ticket in run.asked:
-        holds = run.w.sql("SELECT created_at, new FROM task_events WHERE task_id=? AND field='blocked_since' ORDER BY created_at, rowid",
+        holds = run.w.sql("SELECT created_at, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='blocked_since' ORDER BY created_at, rowid",
                           (ticket,))
         for c in run.w.checks(ticket):
             if not (str(c["owner_id"]).startswith("bot:") and c["verdict"]):
                 continue
-            given = run.w.sql("SELECT created_at FROM task_events WHERE task_id=? AND field='verdict' ORDER BY created_at LIMIT 1",
+            given = run.w.sql("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict' ORDER BY created_at LIMIT 1",
                               (c["id"],))
             if given and _held_at(holds, given[0]["created_at"]):
                 during_wait.append(run.w.title(ticket))
