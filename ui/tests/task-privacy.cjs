@@ -217,7 +217,12 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/readers', body: {remove: ['human:ben']}});
     await seen.locator('[data-prop="readers"]').click();
     const pick = page.locator('#task-modal .prop-pop [data-prop-pick="bot:coo"]');
-    await pick.waitFor();
+    await pick.waitFor({timeout: 5000}).catch(async () => {
+      const seenNow = await page.evaluate(() => ({pops: [...document.querySelectorAll('.prop-pop, [popover]')].map(p => p.outerHTML.slice(0, 600)),
+        row: document.querySelector('#task-modal [data-prop-row="readers"]')?.outerHTML, emps: (S.emps || []).length,
+        people: (S.people || []).length, err: document.querySelector('#task-modal [data-props-msg]')?.textContent}));
+      throw new Error('no bot:coo to add: ' + JSON.stringify(seenNow));
+    });
     assert.equal(await page.locator('#task-modal .prop-pop [data-prop-pick="bot:cmo"]').count(), 0, 'the owner is not offered');
     await pick.click();
     await seen.locator('[data-prop-clear-reader="bot:coo"]').waitFor();
