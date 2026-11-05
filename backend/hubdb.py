@@ -5958,6 +5958,9 @@ def task_comments(conn, task_id, *, actor=None):
         if message_task_id(m, conv) == task_id and m.get("kind") in ("say", "ask", "answer"):
             if actor is not None and not privacy.message_readable(conn, actor, m, current=True):
                 continue
+            if m["kind"] == "ask" and m["refs"].get("rerouted_from"):
+                from . import ask_routing
+                m["rerouted"] = ask_routing.notice(conn, m)
             if m["kind"] == "ask" and m["refs"].get("questions"):
                 m["ask"] = {**{k: m["refs"].get(k) for k in ("questions", "who")}, "by": m["sender_id"]}
                 m["answers"] = review_answers(conn, m["id"], actor=actor)
