@@ -756,9 +756,10 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
         source_tables = set(tables) | {"pages", "page_identities", "mail_items", "postal_mail_grants", "rule_reads", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
                                        "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
-                                       "live_meeting_turns"}
+                                       "live_meeting_turns", "letters", "letter_proofs", "letter_outbox_grants", "agents"}
         class Source:
             def __init__(self):
                 self.statements = {}
