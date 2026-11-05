@@ -99,8 +99,7 @@ def test_gpt_6_1_terra_is_priced_at_the_approved_rate_and_held_from_every_pick(a
     assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("openai", current=False)]
     with pytest.raises(P.ProviderError):
         P.complete_choice(["openai"], model="gpt-6.1-terra")
-    with pytest.raises(P.ProviderError):
-        P.complete_choice(["openai"], model="gpt-6.1-terra", kept="gpt-6.1-terra")
+    assert P.complete_choice(["openai"], model="gpt-6.1-terra", kept="gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
     with pytest.raises(P.ProviderError):
         P.meeting_choice(P._record({"enabled": ["openai"]}), "gpt-6.1-terra")
     with pytest.raises(Problem):

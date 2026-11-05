@@ -409,7 +409,9 @@ def complete_choice(enabled, runtime="", model="", kept=""):
         return "", ""
     if model:
         row = MODEL_BY_ID.get(model)
-        if not row or not row["provider"] or row.get("held"):
+        # A held row stays refused for a fresh pick only: the saved default may stay, so a save about something else
+        # never fails on it (the same exemption a retired row gets below).
+        if not row or not row["provider"] or (row.get("held") and model != kept):
             raise ProviderError("model", f"Unknown default model {model!r}", 422)
         if runtime and runtime != row["runtime"]:
             raise ProviderError("model", f"{model} runs on {row['runtime']}, not {runtime}", 422)
