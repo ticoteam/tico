@@ -9,9 +9,11 @@ Older computers and other harnesses report `supported: false`. Goals belong to t
 thread, including a branch; the Assistant is outside this first version. A bot can also
 work each of its tasks as a goal (`task_goal: on`, see [Sessions](sessions.md#task-goals)).
 
-In a bot's chat, the composer has a **Goal** target button. Turn on **Goal mode** and Send makes the text the goal instead of
-a message. Goal mode stays on for that bot in that browser. A chat whose computer does not support goals says Goal mode is
-not available. The bar above the thread shows the goal and its status, with **Edit**, **Pause** or **Resume**, and **Clear**.
+In a bot's chat, **Set as goal** is in the send menu. Open the menu from the caret beside **Send**, or right-click or
+long-press **Send**, then choose **Set as goal**. The next Send makes its text the goal instead of a message, and then
+Send goes back to your usual way. The option appears when the bot's computer supports goals and no goal is active or
+paused. The bar above the thread shows the goal and its status. Click the bar to show **Edit**, **Pause** or **Resume**,
+and **Clear**. For the send menu's other ways, see [Steer, queue or defer](using-tico.md#steer-queue-or-defer).
 
 Use `/goal <objective>` to set a goal, or `/goal edit <objective>`, `/goal pause`,
 `/goal resume` and `/goal clear`. An objective is 1–4,000 characters. Pause retains its text;
