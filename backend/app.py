@@ -1616,10 +1616,14 @@ def create_app(settings=None):
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
             from . import threads
-            if conv.get("audience") == "home":
-                # A bot's Home is read by its readers, not by its participant list (which names the bot alone).
+            if conv.get("audience") == "home" or conv.get("task_id"):
+                # Homes and task rooms include their current readers, including a task party's manager.
                 if not threads.readable(c, threads.actor_viewer(c, to), conv["id"]):
                     raise Problem("forbidden", "Recipient is not a conversation participant", 403)
+                if conv.get("task_id"):
+                    from .auth import actor_reads_task
+                    if not actor_reads_task(c, to, H.task(c, conv["task_id"])):
+                        raise Problem("forbidden", "Recipient cannot read this task", 403)
             elif to not in threads.legacy_participants(c, conv):
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:

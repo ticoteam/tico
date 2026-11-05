@@ -204,6 +204,7 @@ def test_only_the_docs_task_tells_its_reader_to_skip_private_tickets(api):
     secret = _ticket(api, dev, "Acme payroll export", 413)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+        c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         tickets = RF.pending(c)
         release = RF.request(c, "human:ana", source="release_now")
         body = H.task(c, release["task"])["body"]

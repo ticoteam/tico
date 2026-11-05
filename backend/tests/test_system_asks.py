@@ -290,6 +290,7 @@ def test_each_failed_repair_rolls_back_and_leaves_the_hold_for_health(api, monke
 
 
 def test_migrated_file_review_answers_the_replacement_and_keeps_attachments(api):
+    from backend.models import ReviewAsk
     from backend.tests.test_task_review import ask
     token = bot_token(api)
     with api.app.state.store.transaction() as c:
@@ -297,7 +298,8 @@ def test_migrated_file_review_answers_the_replacement_and_keeps_attachments(api)
     made = post(api, f"tasks/{task['id']}/files", {"name": "release.md", "text": "# Release"}, token=token)
     with api.app.state.store.transaction() as c:
         old = legacy_ask(c, task)
-        refs = {**old["refs"], **ask(), "target": {"file": made["file_id"], "version": 1}}
+        refs = {**old["refs"], **ReviewAsk.model_validate(ask()).model_dump(),
+                "target": {"file": made["file_id"], "version": 1}}
         c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), old["id"]))
         c.execute("INSERT INTO task_file_reviews(file_id,version,ask_message_id,comment_id) VALUES(?,1,?,?) "
                   "ON CONFLICT(file_id,version) DO UPDATE SET ask_message_id=excluded.ask_message_id,comment_id=excluded.comment_id",

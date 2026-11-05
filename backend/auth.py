@@ -1080,7 +1080,9 @@ def actor_reads_task(c, actor, row):
     if opened:
         c.execute("SAVEPOINT actor_reads_task")
     try:
-        policy.bot_admins = set(access.owner_and_admin_emails(c))
+        if H.is_human(actor):
+            policy.bot_admins = read_cache.value(c, ("task_read_admins",),
+                                                lambda: set(access.owner_and_admin_emails(c)))
         if opened and row:
             row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
         who = teammate_access._viewer_for(c, actor)
