@@ -265,7 +265,10 @@ class Letters:
                                     (body.file_id, row["current_version"])).fetchone()
                 if not version:
                     raise Problem("not_found", "This file has no stored PDF", 404)
-                blob = blob_for(c, self.auth, who, version["blob_id"])
+                # The Library authorizes bot-owned files through visible_file, as its download does.
+                blob = c.execute("SELECT * FROM blobs WHERE id=?", (version["blob_id"],)).fetchone()
+                if not blob:
+                    raise Problem("not_found", "File not found", 404)
             else:
                 blob = blob_for(c, self.auth, who, body.file_id)
             if blob["size"] > MAX_PDF:
@@ -600,8 +603,9 @@ def install(app, config, store, auth, mutate):
     def grants(request: Request, outbox_id: Literal["company"]):
         with store.read() as c:
             require_admin(auth, request.state.identity)
-            return {"grants": [dict(r) for r in c.execute("SELECT * FROM letter_outbox_grants WHERE outbox_id=? "
-                "ORDER BY principal_type,principal_id LIMIT 101", (outbox_id,))]}
+            return {"grants": [dict(r) for r in c.execute("SELECT g.*,s.mode,s.monthly_cap_micros FROM letter_outbox_grants g "
+                "LEFT JOIN letter_bot_settings s ON g.principal_type='bot' AND s.bot_id=g.principal_id WHERE g.outbox_id=? "
+                "ORDER BY g.principal_type,g.principal_id LIMIT 101", (outbox_id,))]}
 
     @app.put("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}")
     def grant(request: Request, outbox_id: Literal["company"], principal_type: Literal["bot", "person"],
