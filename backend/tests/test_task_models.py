@@ -254,11 +254,49 @@ def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_
     # A context length sent as null clears it, and the effort the save names stays.
     cleared = set_task_model(api, {"effort": "low", "compact_at": None})
     assert cleared["task_model"] == {**terra, "reasoning_effort": "low"}
+    # A save that names nothing, or sends only a null effort, keeps the held model and its context length.
+    set_task_model(api, {"compact_at": 400000})
+    kept_now = {**terra, "reasoning_effort": "low", "compact_at": 400000}
+    assert set_task_model(api, {}, expected=409)["error"]["code"] == "unchanged"
+    assert set_task_model(api, {"effort": None}, expected=409)["error"]["code"] == "unchanged"
+    assert get(api, "bots/ops")["task_model"] == kept_now
+    # A context length sent as null clears only the context length: the held model stays.
+    assert set_task_model(api, {"compact_at": None})["task_model"] == {**terra, "reasoning_effort": "low"}
     # Another held model is still refused, whether it is named with its harness or alone, and the saved one stays.
     monkeypatch.setitem(providers.MODEL_BY_ID["claude-haiku-5-5"], "held", True)
     set_task_model(api, {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}, expected=422)
     set_task_model(api, {"model": "claude-haiku-5-5"}, expected=422)
     assert get(api, "bots/ops")["task_model"] == {**terra, "reasoning_effort": "low"}
+    # Sending the task model as null clears the whole setting, held or not.
+    assert set_task_model(api, None)["task_model"] is None
+
+
+def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_replaced(api):
+    """Undo of a save on the saved held model (Dev 693) restores the record it replaced: the effort, and a context
+    length that was unset as well as one that was set (the undo names every field, so null restores null)."""
+    ops_on_sonnet(api)
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex"}
+        BS.write(c, 'ops', config)
+    terra = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium", "runtime": "codex",
+             "compact_at": None}
+
+    def undo_last():
+        history = [h for h in get(api, "settings/history")["changes"] if h["field"] == "task_model"]
+        post(api, f"settings/history/{history[0]['id']}/undo", {"expected_revision": revision(api)})
+
+    # An effort-only save on the held model, then undone: the effort comes back and the unset context length stays unset.
+    set_task_model(api, {"effort": "high"})
+    assert get(api, "bots/ops")["task_model"]["reasoning_effort"] == "high"
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == terra
+    # A context-length save on the held model, then undone: the unset context length comes back as unset.
+    set_task_model(api, {"compact_at": 400000})
+    assert get(api, "bots/ops")["task_model"] == {**terra, "compact_at": 400000}
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == terra
 
 
 def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(api):

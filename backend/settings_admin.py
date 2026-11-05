@@ -1531,7 +1531,8 @@ class SettingsAdmin:
 
         A saved held model (Dev 693) is the exception: a save with no model, or the same one, keeps it, and a different
         held model is refused. For that model a field the save leaves out (effort, context length) is kept, a context
-        length sent as null clears it, and a harness with no model is refused."""
+        length sent as null clears it, a null effort keeps the held model's effort, and a harness with no model is
+        refused. Sending `task_model` as null clears the whole setting, held or not."""
         CA.gate(c, who.actor, "cost", f"change the model {(H.bot(c, bot) or {}).get('slug', bot)}'s tasks run on")
         self._manager(c, who, bot, report="task_model")
         shared_bots.refuse_copy(c, bot)
@@ -1547,7 +1548,9 @@ class SettingsAdmin:
         held = bool(saved and saved.get("held"))
         if held and chosen is not None and chosen.harness and not chosen.model:
             raise Problem("harness", "Choose a task model to pick a harness for it", 422)
-        if chosen is None or not (chosen.model or chosen.effort or chosen.compact_at):
+        # A null task model clears all of it. A body that names nothing clears a task model that is not held; on the
+        # saved held model it is a save with no model, which keeps it (below).
+        if chosen is None or not (chosen.model or chosen.effort or chosen.compact_at or held):
             target = None
         elif chosen.model:
             choice = self.models.get(chosen.model)
