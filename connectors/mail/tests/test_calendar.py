@@ -99,6 +99,25 @@ class Scheduling(Stage2):
         self.assertIn(p["draft"], self.service.drafts_by_id)
         self.assertEqual(p["gate"], "verb")
 
+    def test_inbox_never_is_checked_before_creating_the_event(self):
+        from connectors.mail import policy
+        with patch.object(policy, "HUB_GET", return_value={"effective": {"mode": "never"}}):
+            rc, answer, err = self.schedule()
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.calendar.created_events, {})
+        self.assertEqual(self.queue_requests, [])
+
+    def test_schedule_creates_a_silent_event_and_freezes_the_invitation_in_the_queue(self):
+        rc, answer, err = self.schedule()
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(answer["queued"], answer)
+        self.assertFalse(answer["sent"])
+        self.assertEqual(self.service.sent, [])
+        self.assertTrue(all(event["sendUpdates"] == "none" for event in self.calendar.created_events.values()))
+        from backend.email_content import snapshot
+        frozen = snapshot(self.queue_requests[0]["raw"], "ana@acme.example")
+        self.assertTrue(any(file["type"] == "text/calendar" for file in frozen["attachments"]))
+
 class E2E(Stage2):
     def test_e2e_refuses_any_mailbox_that_is_not_the_sandbox(self):
         rc, out, err = self.run_cli("doctor", "--e2e", "--mailbox", "ana@acme.example")

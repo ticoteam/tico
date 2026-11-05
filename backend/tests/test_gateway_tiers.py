@@ -400,6 +400,48 @@ def test_the_meeting_tier_is_a_meeting_model_not_a_bots_pick():
     assert "tico-meeting" not in T.view()["tiers"]
 
 
+def _tier_running_a_held_model(current_held=True):
+    """HQ's first department tier with one more version that runs the held Terra model (synthetic; no HQ data)."""
+    doc = json.loads(json.dumps({**T.SNAPSHOT, "schema": 1}))
+    row = next(r for r in doc["models"] if r.get("department"))
+    held = dict(row["versions"][-1], version="2.0", id=f"{row['id']}-2.0", model="GPT-6.1 Terra")
+    row["versions"].append(held)
+    if current_held:
+        row["current"] = "2.0"
+    return T.validate(doc), row
+
+
+def test_a_live_tier_running_the_held_model_is_left_out_of_every_gateway_view():
+    """Dev 693: once HQ publishes a tier on the held model, the picker, the lineup and the resolver never offer it."""
+    cat, row = _tier_running_a_held_model(current_held=True)
+    assert row["id"] not in T.view(cat)["tiers"]
+    assert row["id"] not in [m["id"] for m in T.lineup(cat=cat)["models"]]
+    assert T.resolve(row["id"], cat) is None and T.resolve(f"{row['id']}-2.0", cat) is None
+    assert T.row_for(f"{row['id']}-2.0") is None
+
+
+def test_a_held_pinned_version_is_left_out_but_the_tier_stays_on_its_current_version():
+    cat, row = _tier_running_a_held_model(current_held=False)
+    assert T.resolve(f"{row['id']}-2.0", cat) is None
+    assert T.resolve(row["id"], cat)["version"] == row["current"]
+    assert "2.0" not in [v["version"] for v in T.view(cat)["tiers"][row["id"]]["versions"]]
+    assert [m["pinned"] for m in T.lineup(cat=cat)["models"] if m["id"] == row["id"]] == [f"{row['id']}-{row['current']}"]
+
+
+def test_a_held_pinned_id_is_refused_by_the_model_check(monkeypatch):
+    cat, row = _tier_running_a_held_model(current_held=True)
+    monkeypatch.setattr(T, "catalog", lambda: cat)
+    with pytest.raises(providers.ProviderError):
+        providers.complete_choice(["tico"], model=f"{row['id']}-2.0")
+    assert providers.complete_choice(["tico"], model=f"{row['id']}-{T.FIRST_VERSION}") == ("pi", f"{row['id']}-{T.FIRST_VERSION}")
+
+
+def test_every_held_catalog_model_is_held_by_the_gateway_too():
+    """The Gateway's held list names each held catalog row's model, so a live tier cannot reopen one of them."""
+    held = [row["id"] for row in providers.MODEL_CATALOG if row.get("held")]
+    assert held and all(T._model_key(model) in T.HELD_MODELS for model in held)
+
+
 def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
     """Settings > Gateway shows each service's details (label and value pairs); a row from an older HQ has none."""
     hq = {**T.SNAPSHOT, "services": json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())["services"]}
@@ -443,3 +485,34 @@ def test_the_gateway_page_lists_departments_when_one_runs_a_level_on_another_mod
     assert models["same"] is False and len(models["levels"]) == 30
     assert models["levels"][0]["name"] == "General · Low"
     assert next(row for row in models["levels"] if row["name"] == "Legal · High")["model"]["model"] == "Another Model"
+
+
+def test_settings_gateway_models_leave_out_a_tier_that_runs_the_held_model():
+    from backend import gateway_page
+    cat, _ = _tier_running_a_held_model(current_held=True)
+    assert "GPT-6.1 Terra" not in json.dumps(gateway_page.models(cat))
+
+
+def test_a_held_general_medium_does_not_leave_a_new_bot_without_a_model(monkeypatch):
+    """General Medium is the company's fallback model; if HQ puts a held model on it, the fallback is another live tier."""
+    doc = json.loads(json.dumps({**T.SNAPSHOT, "schema": 1}))
+    general = T.tier_id(T.DEFAULT_DEPARTMENT, T.DEFAULT_LEVEL)
+    row = next(r for r in doc["models"] if r["id"] == general)
+    row["versions"].append(dict(row["versions"][-1], version="2.0", id=f"{general}-2.0", model="GPT-6.1 Terra"))
+    row["current"] = "2.0"
+    cat = T.validate(doc)
+    monkeypatch.setattr(T, "catalog", lambda: cat)
+    fallback = T.default_model()
+    assert fallback != f"{general}-{T.FIRST_VERSION}" and T.resolve(fallback, cat) is not None
+    assert T.resolve(fallback)["tier"] != general
+
+
+def test_a_held_general_high_keeps_the_general_medium_fallback_for_a_new_bot(monkeypatch):
+    """Only a held General Medium moves the fallback; a held General High keeps the company's General Medium default."""
+    doc = json.loads(json.dumps({**T.SNAPSHOT, "schema": 1}))
+    high = next(r for r in doc["models"] if r["id"] == T.tier_id(T.DEFAULT_DEPARTMENT, "high"))
+    high["versions"].append(dict(high["versions"][-1], version="2.0", id=f"{high['id']}-2.0", model="GPT-6.1 Terra"))
+    high["current"] = "2.0"
+    cat = T.validate(doc)
+    monkeypatch.setattr(T, "catalog", lambda: cat)
+    assert T.default_model(T.DEFAULT_DEPARTMENT, "high") == f"{T.tier_id(T.DEFAULT_DEPARTMENT, "medium")}-{T.FIRST_VERSION}"

@@ -458,15 +458,18 @@ function renderSettingsMachines() {
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const {pickers, others} = machineToolColumns(machines);
+  // Share the entry's support read; the rows are drawn again when it comes.
+  if (!CLOUD_SUPPORT.read && machines.some(machine => machine.cloud_machine))
+    void cloudSupportRead().then(view => { if (view) renderSettingsMachines(); });
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
     const dot = machine.revoked_at ? 'failed' : online ? 'ok' : '';
     const presence = machinePresenceWords(machine);
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
     const waiting = machineWaiting(machine) ? `<span class="pill waiting" data-machine-waiting title="Waiting for ${esc(machine.label)}">Waiting</span>` : '';
-    const now = machineNowWords(machine);
+    const now = machineNowWords(machine), support = cloudSupportWords(machine);
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
-      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span></td>
+      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span>${support ? `<span class="settings-cell-note" data-machine-support>${esc(support)}</span>` : ''}</td>
       <td class="num tnum machine-bot-count">${(machine.bots || []).length}</td>
       ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}

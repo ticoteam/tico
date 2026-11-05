@@ -42,9 +42,12 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         monkeypatch.setattr(release_checks, 'Check', Check)
         assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
-        python_command = calls['all-python'][0]
+        wrapper = calls['all-python'][0]
+        assert wrapper == [release_checks.sys.executable, str(release_checks.ROOT / 'scripts/release_checks.py'),
+                           '--python-tests', workers]
+        python_command, alone_command = release_checks.python_test_commands(wrapper[3], wrapper[4:])
         isolation_file = 'runner_support/tests/test_isolation_docker.py'
-        assert f'--ignore={isolation_file}' in python_command
+        assert all(f'--ignore={isolation_file}' in command for command in (python_command, alone_command))
         assert python_command[python_command.index('-n') + 1] == workers
         assert '--maxschedchunk=2' in python_command
         assert calls['all-browser'][1].get('TICO_UI_JOBS') == browser_jobs
@@ -88,6 +91,80 @@ def test_a_test_step_that_passes_nothing_fails(tmp_path):
     assert run('4 skipped in 0.5s', tests=False) == 0   # a non-test step is judged by its exit code alone
 
 
+@pytest.mark.parametrize('codes, parallel_summary, expected', [
+    ((0, 0), '3 passed in 1.0s', 0),
+    ((1,), '1 failed, 2 passed in 1.0s', 1),
+    ((0, 5), '3 passed in 1.0s', 0),
+    ((0, 1), '3 passed in 1.0s', 1),
+    ((0, 0), '3 skipped in 1.0s', 1),
+])
+def test_release_python_passes_run_sequentially_and_keep_the_no_pass_guard(
+        tmp_path, monkeypatch, capsys, codes, parallel_summary, expected):
+    from io import StringIO
+
+    calls, completed = [], []
+
+    def popen(command, **kwargs):
+        index = len(calls)
+        assert completed == list(range(index))   # the next pass starts only after wait()
+        calls.append(command)
+        summary = parallel_summary if index == 0 else '3 skipped in 1.0s'
+        # Empty collections can print enough lines to push the parallel summary out of Check.tail(5).
+        output = '\n'.join(['collection detail'] * 8 + [summary]) + '\n'
+
+        def wait():
+            completed.append(index)
+            return codes[index]
+        return SimpleNamespace(stdout=StringIO(output), wait=wait)
+
+    with monkeypatch.context() as patch:
+        patch.delenv('PYTEST_ADDOPTS', raising=False)
+        patch.setattr(release_checks, 'subprocess', SimpleNamespace(Popen=popen, PIPE=-1, STDOUT=-2))
+        code = release_checks.main(['--python-tests', '4', 'a.py', 'b.py'])
+    assert len(calls) == len(codes)
+    assert calls[0] == [release_checks.sys.executable, '-m', 'pytest', '-q', '-n', '4', '--maxschedchunk=2',
+                        '-m', '(slow or not slow) and not alone',
+                        f'--ignore={release_checks.ISOLATION_FILE}', '--api-database-snapshots', 'a.py', 'b.py']
+    if len(codes) == 2:
+        assert calls[1] == [release_checks.sys.executable, '-m', 'pytest', '-q', '-n', '0', '-m', 'alone',
+                           f'--ignore={release_checks.ISOLATION_FILE}', '--api-database-snapshots', 'a.py', 'b.py']
+    output = capsys.readouterr().out
+    check = release_checks.Check('python', [release_checks.sys.executable, '-c',
+                                         f'import sys; print({output!r}); sys.exit({code})'], tmp_path, {}, tests=True)
+    assert check.join() == expected
+
+
+def test_release_python_junit_and_timings_include_both_passes(tmp_path, monkeypatch):
+    from io import StringIO
+    from xml.etree import ElementTree
+    import json
+
+    report = tmp_path / 'report with spaces.xml'
+    monkeypatch.setenv('PYTEST_ADDOPTS', f'-o junit_family=xunit1 --junitxml="{report}"')
+    calls = []
+
+    def popen(command, **kwargs):
+        calls.append(command)
+        # Explicit command options override PYTEST_ADDOPTS, as pytest does.
+        path = next((arg.split('=', 1)[1] for arg in command if arg.startswith('--junitxml=')), str(report))
+        seconds = 1.5 if len(calls) == 1 else 4
+        release_checks.Path(path).write_text('<testsuites><testsuite><testcase file="a.py" name="test" '
+                                             f'time="{seconds}"/></testsuite></testsuites>')
+        return SimpleNamespace(stdout=StringIO('1 passed in 1.0s\n'), wait=lambda: 0)
+
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(Popen=popen, PIPE=-1, STDOUT=-2))
+    assert release_checks.python_tests('4', []) == 0   # unsharded: both commands cover the whole suite
+    assert len(calls) == 2
+    assert release_checks.junit_seconds(report) == {'a.py': 5.5}
+    assert len(list(ElementTree.parse(report).getroot().iter('testcase'))) == 2
+    assert list(tmp_path.glob('*.xml')) == [report]   # the temporary alone report cannot be counted twice
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    monkeypatch.setattr(release_checks, 'TIMINGS', tmp_path / 'test-timings.json')
+    (tmp_path / 'a.py').touch()
+    assert release_checks.record_shard_timings(tmp_path) == 0
+    assert json.loads(release_checks.TIMINGS.read_text())['release'] == {'a.py': 5.5}
+
+
 def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(release_checks, 'os', SimpleNamespace(
         environ={}, getloadavg=lambda: (0, 0, 0), cpu_count=lambda: 4))
@@ -123,17 +200,20 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         assert edge_checks == ([0] if part == 'product' else [])   # before any stack starts, product only
         edge_checks.clear()
         if part == 'python':   # alone on its VM, the Python slice uses every core
-            command = calls[next(iter(expected))]
-            assert command[command.index('-n') + 1] == '4'
+            wrapper = calls[next(iter(expected))]
+            assert wrapper[2:4] == ['--python-tests', '4']
+            command, alone_command = release_checks.python_test_commands(wrapper[3], wrapper[4:])
             assert '--maxschedchunk=2' in command
             assert ('group2of4.py' in command) == bool(shard)
+            assert ('group2of4.py' in alone_command) == bool(shard)
+            assert alone_command[alone_command.index('-n') + 1] == '0'
         if shard and part == 'browser':   # only its own scripts, not --all
             assert calls['browser-1-of-2'][2:] == ['page1of2']
     calls.clear()
     monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
     assert release_checks.release(SimpleNamespace(previous=None)) == 0
     assert set(calls) == product | {'all-python', 'all-browser'}
-    assert calls['all-python'][calls['all-python'].index('-n') + 1] == '2'
+    assert calls['all-python'][2:] == ['--python-tests', '2']
     # Given the images Release validation built, the product part tests those, pulled by digest, as their own version.
     release_checks.os.environ.update(TICO_RELEASE_VERSION='v1.2.3', TICO_RELEASE_IMAGES=','.join(
         f'{target}=ghcr.io/acme/{target}@sha256:{"b" * 64}' for target in ('server', 'runner', 'updater')))

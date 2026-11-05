@@ -218,15 +218,9 @@ def cmd_e2e(args):
             c.ok("label the draft", lb.DRAFTED)
         except Failure as e:
             c.fail("label the draft", e.msg, e.hint)
-        sent = g.send_draft(draft_id)
-        draft_id = ""
-        c.ok("send to itself", f"message {sent.get('id', '?')}")
-        found = g.list_ids(f'subject:"{subject}"', limit=5)
-        if found:
-            c.ok("search it back", f"{len(found)} hit(s) for subject:\"{subject}\"")
-        else:
-            c.fail("search it back", f"no hit for subject:\"{subject}\"",
-                   "Gmail may not have indexed it yet; run doctor --e2e again in a minute.")
+        queued = pl.queue_send(box, raw, draft_id=draft_id)
+        c.ok("queue test email", f"send {queued['id']}: {queued['state']}")
+        c.ok("delivery", "The shared queue dispatches after approval and the undo window")
         try:
             calendar = cal.Calendar(open_calendar(box), box)
             start = datetime.now(zone(DEFAULT_TZ)) + timedelta(days=2)
@@ -1542,10 +1536,7 @@ def attach_to_task(ctx, task_id, draft_id, attachments):
 
 
 def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None, task_id=""):
-    """An optional Tico send approval request for a draft with files: the existing `send` payload
-    plus this draft's id and each file's name, size and sha256, which the send checks again.
-    `file_ids` ({sha256: Tico file id}) adds a `file_id` to the files that are on the task, so the
-    approval card can open them; the send never compares it."""
+    """A draft summary and command that enters the frozen send queue; metadata alone never requests approval."""
     file_ids = file_ids or {}
     payload = {"to": list(to), "cc": list(cc), "subject": subject,
                "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
@@ -1554,9 +1545,7 @@ def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None,
                                 **({"file_id": file_ids[a["sha256"]]} if a["sha256"] in file_ids
                                    else {})}
                                for a in files]}
-    task = f" --task {task_id}" if task_id else ""
-    command = ("hub approval request --kind send --payload "
-               + shlex.quote(json.dumps(payload, sort_keys=True)) + task)
+    command = ("mail send --as " + shlex.quote(ctx.slug) + " --for " + shlex.quote(ctx.mailbox) + " --draft " + shlex.quote(draft_id))
     lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
              f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
     lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})"
@@ -1926,33 +1915,18 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         ctx.gmail.update_draft(draft_id, compose.with_warning(ctx.gmail.get_draft_raw(draft_id), warning_line),
                                thread_id)
         ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
-    key = compose.send_key(ctx.slug, ctx.issue, draft_id)
-    day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
-    row, claimed = db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
-                                 thread_id, draft_id, day)
-    if not claimed:
-        ctx.audit("send-duplicate", draft_id, {"key": key, "message": row.get("message_id")})
-        return dict(base, sent=True, already_sent=True, message=row.get("message_id", ""),
-                    key=key, note="this exact send was already made; nothing was sent again.")
-    try:
-        res = ctx.gmail.send_draft(draft_id)
-    except Failure:
-        db.drop_send(ctx.conn, key)                     # never sent: let a retry try again
-        raise
-    message_id = res.get("id", "")
-    thread_id = res.get("threadId") or thread_id
-    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
-    db.finish_send(ctx.conn, key, message_id, "sent",
-                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
-    handled = lb.handled(ctx.slug)
-    label_thread(ctx, handled, msgs, [message_id], part_of="send")
-    ctx.audit("send", message_id or draft_id,
-              {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
-               "draft": draft_id, "attachments": names, "review": verdict.get("backend"),
-               "review_result": verdict.get("review"),
-               "owner_instruction": verdict.get("owner_instruction")})
-    return dict(base, sent=True, message=message_id, thread=thread_id, key=key,
-                label=handled, checks=decision["checks"])
+    original = next((m for m in reversed(msgs or []) if m.get("from", "").lower() != ctx.mailbox.lower()), {})
+    queued = pl.queue_send(ctx.mailbox, ctx.gmail.get_draft_raw(draft_id), thread_id,
+                           original.get("id", ""), approval or "", draft_id=draft_id)
+    if queued["state"] in ("pending", "waiting_approval", "sent"):
+        ctx.conn.execute("INSERT OR REPLACE INTO queued_drafts VALUES(?,?,?)", (ctx.mailbox, draft_id, queued["id"]))
+        ctx.conn.commit()
+    ctx.audit("send-queued", queued["id"], {"to": to, "cc": cc, "state": queued["state"],
+                                           "review_result": verdict.get("review"), "owner_instruction": verdict.get("owner_instruction")})
+    return dict(base, sent=queued["state"] == "sent", queued=queued["state"] in ("pending", "waiting_approval"),
+                send_id=queued["id"], state=queued["state"], send_after=queued["send_after"],
+                approval_id=queued["approval_id"], checks=decision["checks"],
+                note="Queued in Tico; pending mail can be canceled before dispatch.")
 
 
 def cmd_send(args):
@@ -2041,7 +2015,7 @@ def cmd_reply(args):
                         body=state["body"])
     payload = dict(payload, sent=sent.get("sent", False))
     for k in ("downgraded", "reason", "gate", "message", "key", "already_sent", "would_send",
-              "note", "checks"):
+              "note", "checks", "queued", "send_id", "state", "send_after", "approval_id"):
         if k in sent:
             payload[k] = sent[k]
     return send_result(ctx, payload)
@@ -2059,6 +2033,12 @@ def cmd_discard(args):
         raise Refused(f"draft {did} in {ctx.mailbox} was not made by {ctx.slug}; "
                       "only a draft this employee wrote with `mail draft` can be discarded.",
                       "Leave it for the person who wrote it, or ask the owner to delete it in Gmail.")
+    queued = ctx.conn.execute("SELECT send_id FROM queued_drafts WHERE mailbox=? AND draft_id=?", (ctx.mailbox, did)).fetchone()
+    if queued:
+        send = (pl.HUB_GET("email/sends/" + queued["send_id"]) or {}).get("send") or {}
+        if send.get("state") not in ("canceled", "failed", "blocked"):
+            raise Refused("This draft has a frozen email in Tico's send queue.",
+                          "Cancel it first with `hub email cancel " + queued["send_id"] + "`.")
     if db.draft_was_sent(ctx.conn, ctx.mailbox, did):
         ctx.audit("discard-refused", did, {"reason": "already sent"})
         raise Refused(f"draft {did} was already sent; sent mail is never deleted.")
@@ -2350,6 +2330,8 @@ def cmd_calendar_hold(args):
     if len(attendees) > 50:
         raise Refused("a calendar hold accepts at most 50 attendees.")
     attendees.sort()
+    if attendees:
+        pl.sending_preflight(ctx.mailbox)
 
     description = ""
     if getattr(args, "description_file", None):
@@ -2381,6 +2363,11 @@ def cmd_calendar_hold(args):
             payload = {"ok": True, "mailbox": ctx.mailbox, "event": ev_id, "event_url": url,
                        "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
                        "attendees": attendees, "duplicate": True, "dry_run": ctx.dry}
+            if attendees and not ctx.dry:
+                raw = compose.build(attendees, summary, description or summary, from_addr=ctx.mailbox)
+                raw = compose.with_invitation(raw, {**ev, "id": ev_id}, ctx.mailbox, attendees, start, end, summary)
+                invitation = pl.queue_send(ctx.mailbox, raw)
+                payload.update(invitation_send_id=invitation["id"], invitation_state=invitation["state"])
             ctx.audit("calendar-hold-duplicate", ev_id, {"summary": summary, "start": start.isoformat(), "end": end.isoformat()})
             return out(args, payload, f"existing event {summary} ({ev_id}) already on {ctx.mailbox}\n")
 
@@ -2399,6 +2386,11 @@ def cmd_calendar_hold(args):
     url = event.get("htmlLink") or f"https://calendar.google.com/calendar/event?eid={real_id}"
     payload["event"] = real_id
     payload["event_url"] = url
+    if attendees:
+        raw = compose.build(attendees, summary, description or summary, from_addr=ctx.mailbox)
+        raw = compose.with_invitation(raw, event, ctx.mailbox, attendees, start, end, summary)
+        invitation = pl.queue_send(ctx.mailbox, raw)
+        payload.update(invitation_send_id=invitation["id"], invitation_state=invitation["state"])
 
     ctx.audit("event-create", real_id, {
         "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
@@ -2411,6 +2403,7 @@ cmd_calendar_add = cmd_calendar_hold
 
 def cmd_schedule(args):
     ctx = Ctx(args, "draft")
+    pl.sending_preflight(ctx.mailbox)
     policy = ctx.policy
     body = body_of(args.body_file)
     start = parse_since(args.slot)
@@ -2439,15 +2432,18 @@ def cmd_schedule(args):
     event = ctx.calendar.create_event(start, end, would["summary"], attendees=[attendee],
                                       description=f"Booked by the hub mail service for "
                                                   f"{ctx.slug}, Issue {ctx.issue or '-'}.",
-                                      send_updates="all")
+                                      send_updates="none")
     ctx.audit("event-create", event.get("id", ""), dict(would, thread=args.thread))
     try:
         payload, state = make_draft(ctx, [attendee], None, body, reply_to=args.thread,
                                     slot=args.slot, minutes=args.minutes)
+        raw = compose.with_invitation(ctx.gmail.get_draft_raw(state["draft_id"]), event, ctx.mailbox,
+                                      [attendee], start, end, would["summary"])
+        ctx.gmail.update_draft(state["draft_id"], raw, state["thread_id"])
         sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
                             state["thread_id"], state["msgs"], state["verdict"],
                             approval=args.approval_issue, body=state["body"])
-        if not sent.get("sent"):
+        if not sent.get("sent") and not sent.get("queued"):
             raise Refused(sent.get("reason", "the confirmation was not sent"),
                           "The event was rolled back; nothing is on the calendar and nothing "
                           "was said. Fix the reason and run it again.")
@@ -2457,7 +2453,9 @@ def cmd_schedule(args):
                   {"why": "the confirmation did not send", "thread": args.thread})
         raise
     payload.update({"scheduled": True, "event": event.get("id", ""), "slot": would,
-                    "sent": True, "message": sent.get("message", ""), "key": sent.get("key")})
+                    "sent": bool(sent.get("sent")), "queued": bool(sent.get("queued")),
+                    "send_id": sent.get("send_id"), "send_after": sent.get("send_after"),
+                    "message": sent.get("message", ""), "key": sent.get("key")})
     return send_result(ctx, payload)
 
 
@@ -2496,15 +2494,28 @@ def cmd_connector_event(args):
         raise Refused("Tico couldn't check the company's mail settings; try again",
                       "Nothing was sent to Google. Schedule it again once Tico answers.")
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
-    event = ctx.calendar.create_hub_event(
-        start, end, str(request["title"]).strip(), attendees, event_id,
-        str(request.get("description") or ""), bool(request.get("add_meet", True)))
+    if attendees:
+        pl.sending_preflight(mailbox, str(request["id"]))
+    try:
+        event = ctx.calendar.create_hub_event(
+            start, end, str(request["title"]).strip(), attendees, event_id,
+            str(request.get("description") or ""), bool(request.get("add_meet", True)))
+    except cal.ConferencePending as exc:
+        out(args, {"ok": False, "kind": "conference_pending", "retryable": True,
+                   "event_id": event_id, "error": str(exc)}, str(exc) + "\n")
+        return 75
     meeting_url = cal._meeting_url(event)  # normalized URL only; descriptions never leave here
     provider_id = str(event.get("id") or event_id)
+    invitation = None
+    if attendees:
+        raw = compose.build(attendees, str(request["title"]), str(request.get("description") or request["title"]), from_addr=mailbox)
+        raw = compose.with_invitation(raw, event, mailbox, attendees, start, end, str(request["title"]))
+        invitation = pl.queue_send(mailbox, raw, calendar_action_id=str(request["id"]))
     ctx.audit("event-create", provider_id,
               {"action": request["id"], "attendees": len(attendees),
                "start": start.isoformat(), "end": end.isoformat()})
-    return out(args, {"ok": True, "event_id": provider_id, "meeting_url": meeting_url},
+    return out(args, {"ok": True, "event_id": provider_id, "meeting_url": meeting_url,
+                      "invitation_send_id": invitation["id"] if invitation else None},
                provider_id + "\n")
 
 

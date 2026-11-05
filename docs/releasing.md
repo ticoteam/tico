@@ -38,6 +38,11 @@ pull request merged in the release repository; prereleases excepted). It wakes e
 tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
 Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
 Private tickets are counted but not named. The writer skips them; their owners handle any docs for changes people see.
+The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
+(Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
+Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
+an existing repo writer when the writer lacks access. Changes and a needed rebase return to the writer.
+Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
 manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
@@ -278,6 +283,8 @@ without `--part`, the command runs the whole gate, with desktop only where the L
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
 (`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
 install the update. It does not cover the macOS or Windows installers.
+Python tests marked `alone` run without workers after their shard's parallel tests pass, so wall-clock budgets do not
+compete with other pytest workers. Both passes share one check and contribute to its JUnit report and shard timings.
 Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.

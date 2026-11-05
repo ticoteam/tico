@@ -45,6 +45,7 @@ from . import step_flow
 from .batch_work import isolated
 from .store import Problem
 from . import bot_settings as BS
+from . import pr_identity as PR
 
 PATH = "/api/v2/github/webhook"   # under /api/v2: the runner hostname routes only that prefix
 PR_LINK = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$", re.IGNORECASE)
@@ -61,11 +62,11 @@ def verify(secret, headers, body):
 
 
 def _links_for(c, url):
-    match = PR_LINK.match(str(url).split("?")[0].rstrip("/"))
-    if not match:
+    identity = PR.identity(url)
+    if not identity:
         return []
-    return H._rows(c.execute("SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=?",
-                            ((match.group(1) + "/" + match.group(2)).lower(), int(match.group(3)))))
+    return [p for p in H._rows(c.execute("SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=?",
+                                        (f"{identity[1]}/{identity[2]}", identity[3]))) if PR.same(p, url)]
 
 
 def _due(c, task, burst):
@@ -317,6 +318,10 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         author = str((pr.get("user") or {}).get("login") or "").lower()
         if author:
             detail["author_login"] = author
+        if pr.get("mergeable_state"):
+            detail["mergeable_state"] = pr["mergeable_state"]
+        elif new_head:
+            detail.pop("mergeable_state", None)
         if action != "refresh":
             detail["tracked"] = True
         if head_sha:

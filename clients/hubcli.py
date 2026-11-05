@@ -156,6 +156,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            (docs/pages.md)
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    hub page access <id> [--audience everyone|ben,group:legal,bot:analyst]
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
     hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
                                            or person:me (My dashboard)
@@ -1058,6 +1059,18 @@ def parser():
     item = connections.add_parser('list'); item.set_defaults(fn='connections list')
     item.add_argument('--cursor'); item.add_argument('--limit', type=int)
 
+    letters = sub.add_parser('letter', help='quote and send physical letters through the Gateway').add_subparsers(dest='sub')
+    item = letters.add_parser('quote', help='quote a PDF or text; never prints until send and approval')
+    item.set_defaults(fn='letter quote')
+    item.add_argument('--file-id'); item.add_argument('--text')
+    item.add_argument('--recipient', required=True, type=json.loads, help='US address as JSON: name, line1, city, state, postal_code')
+    item.add_argument('--mail-class', choices=['first_class', 'certified', 'certified_return_receipt'])
+    item.add_argument('--color', action='store_true'); item.add_argument('--duplex', action='store_true')
+    item.add_argument('--task-id'); item.add_argument('--thread-id')
+    item = letters.add_parser('list'); item.set_defaults(fn='letter list')
+    item.add_argument('--before'); item.add_argument('--limit', type=int)
+    for action in ('send', 'show', 'cancel'):
+        item = letters.add_parser(action); item.set_defaults(fn='letter ' + action); item.add_argument('letter_id')
     mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
     item = mail.add_parser('list'); item.set_defaults(fn='mail list')
     item.add_argument('--status', choices=('new','filed','archived','failed'))
@@ -1065,7 +1078,14 @@ def parser():
     item.add_argument('--after'); item.add_argument('--limit', type=int)
     item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
 
-    email = sub.add_parser('email', help='read email; Whole Workspace mailboxes read live from Gmail').add_subparsers(dest='sub')
+    email = sub.add_parser('email', help='read email, set sending policy, and manage pending sends').add_subparsers(dest='sub')
+    item = email.add_parser('policy'); item.set_defaults(fn='email policy')
+    item.add_argument('--mailbox'); item.add_argument('--bot')
+    item.add_argument('--settings', type=json.loads, help='JSON policy fields; omit to read')
+    item = email.add_parser('sends'); item.set_defaults(fn='email sends')
+    item.add_argument('--mailbox', required=True); item.add_argument('--pending', action='store_true')
+    item.add_argument('--cursor'); item.add_argument('--limit', type=int)
+    item = email.add_parser('cancel'); item.set_defaults(fn='email cancel'); item.add_argument('id')
     for action in ('mailboxes', 'inbox', 'search', 'thread', 'message'):
         item = email.add_parser(action)
         item.set_defaults(fn='email ' + action)
@@ -1469,6 +1489,7 @@ def parser():
     s.add_argument("--task", help="the task it is for; it shows at the top of that task")
     s.add_argument("--replaces", help="the id of an older page this one takes the place of")
     s.add_argument("--scope", choices=["task", "bot"])
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
@@ -1480,6 +1501,10 @@ def parser():
     s = page.add_parser("show", help="one page's status")
     s.add_argument("id")
     s.set_defaults(fn="page show")
+    s = page.add_parser("access", help="show or change who can see a page")
+    s.add_argument("id")
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.set_defaults(fn="page access")
     s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
     s.add_argument("id")
     s.add_argument("--restore", action="store_true", default=None)
@@ -1652,7 +1677,7 @@ def parser():
                         "with no value (put the flag after the parent id), the company's check model, from a provider other "
                         "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
-                   help="with --check-model: what the other model is asked for (default check)")
+                   help="review files a review child; with --check-model, what that model is asked for (default check)")
     s.set_defaults(fn="task child create")
     s = task.add_parser("tree", help="show nested subtasks")
     s.add_argument("id")

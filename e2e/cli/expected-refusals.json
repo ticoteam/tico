@@ -6,7 +6,7 @@
  "approval approve": "not_found",
  "approval decline": "not_found",
  "approval read-back": "forbidden",
- "approval request": "lint",
+ "approval request": "email_send",
  "approval show": "not_found",
  "assistant change restore": "not_found",
  "assistant propose": "operation",
