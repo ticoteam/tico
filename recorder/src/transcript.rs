@@ -10,6 +10,9 @@ use std::collections::BTreeMap;
 const ECHO_MS: u64 = 1000;
 /// Live reference waits never hide speech for more than eight seconds of recording time.
 pub(crate) const REFERENCE_WAIT_MS: u64 = 8000;
+/// After Stop, an unfinished chunk holds live delivery this long past its end (when it was
+/// queued): one full 60 s transcription request plus the first automatic retry's 15 s backoff.
+pub(crate) const PENDING_CHUNK_WAIT_MS: u64 = 90_000;
 /// A pause this long inside one chunk ends an utterance, so the other side can interleave.
 const UTTERANCE_GAP_MS: u64 = 800;
 /// Same-speaker utterances closer than this join one line.
@@ -302,13 +305,33 @@ pub struct LiveTurn {
     pub partial: bool,
 }
 
-/// Where a channel's finished chunks already hold the transcript of record.
-pub fn covered(record: &Recording, channel: &str, at_ms: u64) -> bool {
-    record.chunks.iter().any(|chunk| {
-        chunk.channel == channel
-            && ["done", "silence"].contains(&chunk.status.as_str())
-            && (chunk.start_ms..chunk.end_ms).contains(&at_ms)
-    })
+/// Where a channel's finished chunks already hold the transcript of record: their ranges sorted
+/// and merged once, so each streamed word is a binary search rather than a scan of every chunk.
+pub struct Covered(Vec<(u64, u64)>);
+
+impl Covered {
+    pub fn new(record: &Recording, channel: &str) -> Self {
+        let mut ranges: Vec<_> = record
+            .chunks
+            .iter()
+            .filter(|c| c.channel == channel && ["done", "silence"].contains(&c.status.as_str()))
+            .filter(|c| c.start_ms < c.end_ms)
+            .map(|c| (c.start_ms, c.end_ms))
+            .collect();
+        ranges.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        Self(merged)
+    }
+    pub fn contains(&self, at_ms: u64) -> bool {
+        let after = self.0.partition_point(|(start, _)| *start <= at_ms);
+        after > 0 && at_ms < self.0[after - 1].1
+    }
 }
 
 /// Whether meeting-audio transcription has reached a microphone range. Silence counts as a
@@ -355,11 +378,12 @@ pub(crate) fn recording_ms(record: &Recording) -> Option<u64> {
 /// Compute this before the snapshot hides pending mic words.
 pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> u64 {
     let them = reference_words(record, streamed);
+    let covered = Covered::new(record, "me");
     let pending_stream = streamed
         .get("me")
         .into_iter()
         .flatten()
-        .filter(|w| !covered(record, "me", w.start_ms))
+        .filter(|w| !covered.contains(w.start_ms))
         .filter(|w| !echo_ready(record, w.start_ms, w.end_ms, &them))
         .map(|w| w.start_ms);
     let pending_chunks = record
@@ -370,20 +394,12 @@ pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Wor
         .map(|c| c.words.first().map_or(c.start_ms, |w| w.start_ms));
     let held = pending_stream
         .chain(pending_chunks)
-        .chain(
-            record
-                .chunks
-                .iter()
-                .filter(|c| !["done", "silence", "failed"].contains(&c.status.as_str()))
-                .filter(|c| {
-                    recording_ms(record)
-                        .is_none_or(|now| now < c.start_ms.saturating_add(REFERENCE_WAIT_MS))
-                })
-                .map(|c| c.start_ms),
-        )
         .min()
         .unwrap_or(u64::MAX);
-    if record.state != "recording" || !record.meeting_audio {
+    if record.state != "recording" {
+        return held.min(unfinished_after_stop(record));
+    }
+    if !record.meeting_audio {
         return held;
     }
     // A quiet or delayed channel gets the same bounded grace as the echo reference. This
@@ -420,6 +436,22 @@ pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Wor
         .min()
         .unwrap_or(u64::MAX);
     held.min(progress)
+}
+
+/// After Stop, both channels wait behind any chunk still queued or transcribing. Chunks are
+/// 30-55 s long, so the bound runs from the chunk's end (when it was queued), not its start.
+/// While recording, the per-channel progress grace in `delivery_frontier` applies instead, so
+/// streamed speech is not held behind a whole chunk.
+fn unfinished_after_stop(record: &Recording) -> u64 {
+    let now = recording_ms(record);
+    record
+        .chunks
+        .iter()
+        .filter(|c| ["pending", "running"].contains(&c.status.as_str()))
+        .filter(|c| now.is_none_or(|now| now < c.end_ms.saturating_add(PENDING_CHUNK_WAIT_MS)))
+        .map(|c| c.start_ms)
+        .min()
+        .unwrap_or(u64::MAX)
 }
 
 /// Hold a whole microphone utterance until its reference is ready, before echo decisions or
@@ -543,12 +575,13 @@ fn meeting_reference<'a>(
     record: &'a Recording,
     streamed: impl Iterator<Item = &'a Word>,
 ) -> Vec<Word> {
+    let covered = Covered::new(record, "them");
     record
         .chunks
         .iter()
         .filter(|c| c.channel == "them" && ["done", "silence"].contains(&c.status.as_str()))
         .flat_map(|c| c.words.iter())
-        .chain(streamed.filter(|w| !covered(record, "them", w.start_ms)))
+        .chain(streamed.filter(move |w| !covered.contains(w.start_ms)))
         .cloned()
         .collect()
 }
@@ -560,9 +593,10 @@ fn with_streamed(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> 
     let them = reference_words(record, streamed);
     for (channel, words) in streamed {
         let me = channel == "me";
+        let covered = Covered::new(record, channel);
         let words: Vec<Word> = words
             .iter()
-            .filter(|word| !word.text.trim().is_empty() && !covered(record, channel, word.start_ms))
+            .filter(|word| !word.text.trim().is_empty() && !covered.contains(word.start_ms))
             .cloned()
             .collect();
         let words = if me {
@@ -620,18 +654,24 @@ pub fn live_turns(
         })
         .collect();
     let mut reference = reference_words(record, streamed);
+    let (covered_me, covered_them) = (Covered::new(record, "me"), Covered::new(record, "them"));
+    let covered = |channel: &str, at_ms| match channel {
+        "me" => covered_me.contains(at_ms),
+        "them" => covered_them.contains(at_ms),
+        _ => false,
+    };
     reference.extend(
         partials
             .iter()
             .filter(|p| p.channel == "them")
             .flat_map(|p| p.words.iter())
-            .filter(|w| !covered(record, "them", w.start_ms))
+            .filter(|w| !covered("them", w.start_ms))
             .cloned(),
     );
     let mut tails: Vec<_> = partials
         .iter()
         .filter(|partial| {
-            !partial.text.trim().is_empty() && !covered(record, &partial.channel, partial.start_ms)
+            !partial.text.trim().is_empty() && !covered(&partial.channel, partial.start_ms)
         })
         .collect();
     tails.sort_by_key(|partial| partial.start_ms);
@@ -831,6 +871,38 @@ mod tests {
             "meeting_audio": true, "warning": "", "chunks": chunks, "deliveries": [],
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn covered_ranges_merge_out_of_order_chunks_and_skip_unfinished_ones() {
+        let mut pending = chunk("p", "me", 200_000, &[]);
+        pending.status = "pending".into();
+        let mut silence = chunk("s", "me", 45_000, &[]);
+        silence.status = "silence".into();
+        let record = record(vec![
+            chunk("b", "me", 100_000, &[]),
+            pending,
+            silence,
+            chunk("a", "me", 0, &[]),
+            chunk("t", "them", 300_000, &[]),
+        ]);
+        let me = Covered::new(&record, "me");
+        for (at, inside) in [
+            (0, true),
+            (44_999, true),
+            (45_000, true),
+            (89_999, true),
+            (90_000, false),
+            (99_999, false),
+            (100_000, true),
+            (144_999, true),
+            (145_000, false),
+            (200_000, false),
+            (300_000, false),
+        ] {
+            assert_eq!(me.contains(at), inside, "{at}");
+        }
+        assert!(Covered::new(&record, "them").contains(300_000));
     }
 
     #[test]

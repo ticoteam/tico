@@ -184,7 +184,7 @@ matching runs of at least three words, with punctuation, hyphen, number and smal
 Unmatched words, isolated acknowledgements and names stay. Live mic text waits for the reference
 for at most eight seconds; terminal failure, mic-only capture and Stop also release it. Both
 sharing channels wait at one frontier, including behind unfinished chunks after Stop. Completion,
-terminal failure or the eight-second bound releases those chunks. Late shared turns use the last
+terminal failure or 90 s past the chunk's end (chunks are 30-55 s) releases those chunks. Late shared turns use the last
 shared start time when needed; local word timestamps stay intact. Finished batch references replace
 streamed references in covered ranges, and stream-to-batch voice aliases keep one displayed label.
 Finished service turns are also linked during capture by the existing WeSpeaker path, with an

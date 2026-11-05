@@ -319,15 +319,10 @@ impl Tico {
         queue.corrections(&transaction, &record)?;
         transaction.commit()?;
         if live {
-            let mut repaired = false;
+            let key = format!("{id}\n{}", self.destination.id);
             'delivery: loop {
-                let mut query=db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
-                let pending = query
-                    .query_map([id, &self.destination.id], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                    })?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                drop(query);
+                let pending = unacknowledged(&db, id, &self.destination.id)?;
+                let state = hash(&json!(pending));
                 for batch in pending.chunks(100) {
                     let chunks = batch
                         .iter()
@@ -346,16 +341,22 @@ impl Tico {
                             return Ok(());
                         }
                         // Old queues and uncertain replies can predate the current time frontier.
-                        // Read back once after any validation refusal and durably repair pending
-                        // times before retrying. A transport failure then retries the repaired row.
-                        Err(error) if !repaired && format!("{error:#}").contains("HTTP 422") => {
+                        // Read back after a validation refusal and durably repair pending times
+                        // before retrying, once per outbox state: a refusal the repair cannot fix
+                        // (the repaired rows refused again) retries with the sync's backoff.
+                        Err(error)
+                            if format!("{error:#}").contains("HTTP 422")
+                                && repaired_lock().get(&key) != Some(&state) =>
+                        {
                             let view = self.call(&prefix, None, "")?;
                             note_state(store, id, &view)?;
                             repair_pending(&mut db, id, &self.destination.id, &view)?;
                             if view["state"] != "live" {
                                 return Ok(());
                             }
-                            repaired = true;
+                            let repaired =
+                                hash(&json!(unacknowledged(&db, id, &self.destination.id)?));
+                            repaired_lock().insert(key.clone(), repaired);
                             continue 'delivery;
                         }
                         Err(error) => return Err(error),
@@ -370,6 +371,7 @@ impl Tico {
                         db.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq=?",rusqlite::params![id,self.destination.id,seq])?;
                     }
                 }
+                repaired_lock().remove(&key);
                 break;
             }
         }
@@ -399,9 +401,7 @@ impl Tico {
                 &format!("recorder:{id}:live:{seq}:r{revision}:{}", hash(&payload)),
             ) {
                 Ok(_) => 1,
-                // A validation refusal is terminal for this revision; keep Tico's text and
-                // let later turns/revisions proceed, including on older servers refusing clears.
-                Err(error) if format!("{error:#}").contains("HTTP 422") => 2,
+                Err(error) if correction_refused(&error, &payload) => 2,
                 Err(error) => return Err(error),
             };
             db.execute(
@@ -654,6 +654,40 @@ impl Tico {
     }
 }
 
+/// Tico refuses this correction for good: it would break the transcript's time order
+/// (`sequence_order`, the only timing refusal the corrections route makes), or an older server
+/// refuses clearing a turn's text. Tico then keeps the revision it has and later revisions
+/// proceed. Any other refusal retries with the sync's normal backoff.
+fn correction_refused(error: &anyhow::Error, payload: &Value) -> bool {
+    let error = format!("{error:#}");
+    let clear = payload["text"]
+        .as_str()
+        .is_some_and(|text| text.trim().is_empty());
+    error.contains("HTTP 422 (sequence_order)") || clear && error.contains("HTTP 422 (validation)")
+}
+
+/// The outbox state each meeting's last refused batch was repaired to, so a refusal the repair
+/// cannot fix does not read back and rewrite the outbox on every pass.
+static REPAIRED: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+fn repaired_lock() -> MutexGuard<'static, BTreeMap<String, String>> {
+    REPAIRED.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn unacknowledged(
+    db: &rusqlite::Connection,
+    id: &str,
+    destination: &str,
+) -> Result<Vec<(i64, String)>> {
+    let mut query = db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
+    let rows = query
+        .query_map([id, destination], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Reconcile a refused batch with the server before retrying its remaining turns. Accepted
 /// sequences may include a reply lost in transit; they must never be rewritten or renumbered.
 fn repair_pending(
@@ -674,14 +708,7 @@ fn repair_pending(
         .unwrap_or(0);
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("UPDATE live_outbox SET acknowledged=1 WHERE recording_id=? AND destination_id=? AND seq<=?", rusqlite::params![id, destination, accepted])?;
-    let mut query = tx.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
-    let pending = query
-        .query_map([id, destination], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    drop(query);
-    for (seq, text) in pending {
+    for (seq, text) in unacknowledged(&tx, id, destination)? {
         let mut payload: Value = serde_json::from_str(&text)?;
         start = start.max(payload["start_ms"].as_u64().unwrap_or(0));
         payload["start_ms"] = json!(start);
@@ -1237,11 +1264,12 @@ impl<'a> Queue<'a> {
             };
             let from = self.shared_until(record, channel);
             let captured_until = record.chunks.iter().map(|c| c.end_ms).max().unwrap_or(0);
+            let covered = transcript::Covered::new(record, channel);
             let fresh: Vec<Word> = words
                 .into_iter()
                 .filter(|word| {
                     word.start_ms >= from
-                        && !transcript::covered(record, channel, word.start_ms)
+                        && !covered.contains(word.start_ms)
                         && (record.state == "recording"
                             || captured_until == 0
                             || word.start_ms < captured_until)
