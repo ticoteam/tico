@@ -3,12 +3,105 @@ import fcntl
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import time
 
 import pytest
 
 from runner_support import release_update as ru
+
+
+def test_recovery_file_reads_refuse_fifos_symlinks_devices_and_oversized_files(tmp_path):
+    # A child deadline catches a blocking open/read without hanging pytest's worker shutdown.
+    subprocess.run([sys.executable, "-c", r'''
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from runner_support import regular_file as rf
+root = Path(sys.argv[1])
+path = root / "fifo"
+os.mkfifo(path)
+holder = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+target = root / "target"
+target.write_bytes(b"keep")
+link = root / "link"
+link.symlink_to(target)
+large = root / "large"
+large.write_bytes(b"x" * (rf.SMALL + 1))
+for path in (path, link, Path("/dev/null"), large):
+    try:
+        rf.read(path, rf.SMALL)
+    except OSError:
+        pass
+    else:
+        raise AssertionError(f"accepted unsafe file: {path}")
+    try:
+        with rf.lock(path):
+            pass
+    except OSError:
+        pass
+    else:
+        raise AssertionError(f"accepted unsafe lock file: {path}")
+# A file growing after fstat must still be read with a byte limit.
+info = large.stat()
+rf.os.fstat = lambda fd: SimpleNamespace(st_mode=info.st_mode, st_size=0)
+try:
+    rf.read(large, rf.SMALL)
+except OSError:
+    pass
+else:
+    raise AssertionError("accepted a file growing past the read limit")
+os.close(holder)
+assert target.read_bytes() == b"keep"
+''', str(tmp_path)], check=True, timeout=10)
+
+
+def test_instruction_and_registration_reads_refuse_replaced_fifos(tmp_path):
+    subprocess.run([sys.executable, "-c", r'''
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from runner_support import release_update as ru, git_locks
+root = Path(sys.argv[1]).resolve()
+metadata = root / ".git"
+metadata.mkdir()
+path = root / "AGENTS.md"
+path.write_text("CLAUDE.md")
+target = root / "CLAUDE.md"
+target.write_text("rules")
+def git(*args):
+    stdout = ""
+    if args[0] == "rev-parse": stdout = str(metadata)
+    elif args[0] == "ls-files": stdout = "120000 " + "a" * 40 + " 0\tAGENTS.md\0"
+    elif args[0] == "cat-file": stdout = "CLAUDE.md"
+    return SimpleNamespace(returncode=0, stdout=stdout)
+read = ru.read_regular
+def replace_before_open(file):
+    if file == target:
+        target.unlink()
+        os.mkfifo(target)
+    return read(file)
+ru.read_regular = replace_before_open
+assert not ru.repair_instruction_links(root, git)
+assert path.read_text() == "CLAUDE.md" and not path.is_symlink()
+ru.read_regular = read
+saved = metadata / "tico-instruction-backups"
+saved.mkdir()
+backup = saved / "AGENTS.md.tico-backup-legacy"
+backup.write_text("rules")
+path.unlink()
+path.symlink_to("CLAUDE.md")
+assert backup.name in ru.instruction_backup_note(root, metadata)
+assert backup.read_text() == "rules"
+admin = metadata / "worktrees/task"
+admin.mkdir(parents=True)
+os.mkfifo(admin / "gitdir")
+git_locks.OWNED_ROOTS = (root,)
+assert not git_locks.recover(root, f"fatal: Unable to create '{metadata}/index.lock': File exists")
+''', str(tmp_path)], check=True, timeout=10)
 
 
 def sh(cwd, *args):

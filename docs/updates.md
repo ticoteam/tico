@@ -196,6 +196,9 @@ A checkout with uncommitted changes, or on a branch other than `main`, is refuse
 stashed, reset or discarded. Before checking changes, the updater repairs tracked `AGENTS.md` and
 `CLAUDE.md` symlinks flattened by copy tools, but only if they still contain exactly the committed
 link or its unchanged target's contents. Staged changes and different instruction edits stay intact.
+Instruction content reads are limited to 1 MiB and require regular files opened nonblocking without
+following the final symlink. FIFOs, devices and oversized files stay untouched; unreadable retained
+backups remain for review, without holding up the updater on a file read.
 Retained backups are compared with their accepted content hash, so later releases can change or
 remove the target without blocking updates. A late write to a backup still blocks the update and
 names the saved file in Health.

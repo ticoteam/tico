@@ -195,7 +195,7 @@ fn current_release(root: &Path) -> String {
 }
 
 fn manifest_commit(root: &Path) -> String {
-    let text = std::fs::read_to_string(root.join("release-manifest.json")).unwrap_or_default();
+    let text = crate::regular_file::text(root.join("release-manifest.json"), crate::regular_file::CONTENT).unwrap_or_default();
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     Some(text_of(&value["commit"])).filter(|c| is_commit(c)).unwrap_or_default()
 }

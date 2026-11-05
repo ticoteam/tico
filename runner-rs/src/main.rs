@@ -85,6 +85,7 @@ mod continuity;
 mod readiness;
 mod readiness_extra;
 mod redact;
+mod regular_file;
 mod relays;
 mod repositories;
 mod worktrees;

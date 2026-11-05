@@ -7,12 +7,15 @@ import contextlib
 import fcntl
 import os
 from pathlib import Path
+
 import re
 import stat
 import subprocess
 import sys
 import time
 import uuid
+
+from .regular_file import read as read_regular, SMALL
 
 OLD_S = 30 * 60
 OWNED_ROOTS = ()
@@ -175,14 +178,14 @@ def recover(root, stderr):
         fd = os.open(git_dir / "tico-lock-recovery", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         with os.fdopen(fd, "w") as sidecar:
             sidecar_stat = os.fstat(sidecar.fileno())
-            if not stat.S_ISREG(sidecar_stat.st_mode) or sidecar_stat.st_nlink != 1:
+            if not stat.S_ISREG(sidecar_stat.st_mode) or sidecar_stat.st_nlink != 1 or sidecar_stat.st_size > SMALL:
                 return False
             fcntl.flock(sidecar, fcntl.LOCK_EX | fcntl.LOCK_NB)
             roots = [Path(root).resolve(), git_dir]
             worktrees = git_dir / "worktrees"
             if worktrees.exists():
                 for admin in worktrees.iterdir():
-                    roots.append(Path((admin / "gitdir").read_text().strip()).parent.resolve(strict=True))
+                    roots.append(Path(os.fsdecode(read_regular(admin / "gitdir", SMALL)).strip()).parent.resolve(strict=True))
             for name in names:
                 path = Path(name)
                 if not path.is_absolute():

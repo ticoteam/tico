@@ -1776,7 +1776,7 @@ impl Runner {
                 self.state.repo_rules(&key, Some(""))?;
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
-            let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
+            let agent = crate::regular_file::read(execution_path.join("AGENT.md"), crate::regular_file::CONTENT).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
             // The first turn under a native-threads key (none saved, nothing to adopt, not a Clear): the old `bot` thread
             // is not carried into it, so it is given the conversation's latest messages instead.

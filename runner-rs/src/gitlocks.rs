@@ -28,8 +28,8 @@ pub fn owned(path: &Path) -> bool {
 /// The file is never unlinked: every engine must flock the same inode.
 pub fn recovery_lock(common: &Path) -> Option<std::fs::File> {
     if !owned(common) { return None; }
-    let file = std::fs::OpenOptions::new().write(true).create(true).truncate(false)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).mode(0o600).open(common.join("tico-lock-recovery")).ok()?;
+    let file = crate::regular_file::open(&common.join("tico-lock-recovery"),
+        std::fs::OpenOptions::new().write(true).create(true).truncate(false).mode(0o600), crate::regular_file::SMALL).ok()?;
     let m = file.metadata().ok()?;
     if !m.is_file() || m.nlink() != 1 { return None; }
     (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(file)
@@ -189,11 +189,11 @@ fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, 
     let roots = match git.symlink_metadata() {
         Ok(m) if m.is_dir() => vec![git.canonicalize().ok()?],
         Ok(m) if m.is_file() && m.len() < 4096 => {
-            let text = std::fs::read_to_string(&git).ok()?;
+            let text = crate::regular_file::text(&git, crate::regular_file::SMALL).ok()?;
             let admin = at.join(text.trim().strip_prefix("gitdir: ")?).canonicalize().ok()?;
-            let back = std::fs::read_to_string(admin.join("gitdir")).ok()?;
+            let back = crate::regular_file::text(admin.join("gitdir"), crate::regular_file::SMALL).ok()?;
             if Path::new(back.trim()).canonicalize().ok()? != git.canonicalize().ok()? { return None; }
-            let common = std::fs::read_to_string(admin.join("commondir")).ok()?;
+            let common = crate::regular_file::text(admin.join("commondir"), crate::regular_file::SMALL).ok()?;
             let common = admin.join(common.trim()).canonicalize().ok()?;
             if admin.parent()? != common.join("worktrees").as_path() { return None; }
             vec![admin, common]
@@ -223,7 +223,7 @@ fn process_roots(metadata: &[PathBuf], at: &Path) -> Option<Vec<PathBuf>> {
     match std::fs::read_dir(worktrees) {
         Ok(entries) => for entry in entries {
             let entry = entry.ok()?;
-            let pointer = std::fs::read_to_string(entry.path().join("gitdir")).ok()?;
+            let pointer = crate::regular_file::text(entry.path().join("gitdir"), crate::regular_file::SMALL).ok()?;
             roots.push(Path::new(pointer.trim()).parent()?.canonicalize().ok()?);
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
@@ -290,6 +290,37 @@ pub async fn idle_locked(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn registration_and_recovery_sidecar_access_refuse_special_files() {
+        if !crate::regular_file::in_child("gitlocks::tests::registration_and_recovery_sidecar_access_refuse_special_files").await { return; }
+        let root = std::env::temp_dir().join(format!("tico-git-registration-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let common = root.join("base/.git");
+        let admin = common.join("worktrees/task");
+        let task = root.join("task");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir(&task).unwrap();
+        own(std::slice::from_ref(&root));
+        let pointers = [(task.join(".git"), format!("gitdir: {}\n", admin.display())),
+            (admin.join("gitdir"), format!("{}\n", task.join(".git").display())), (admin.join("commondir"), "../..\n".into())];
+        for (path, content) in &pointers { std::fs::write(path, content).unwrap(); }
+        let (metadata, at) = metadata_roots(&[], Some(&task)).unwrap();
+        assert!(process_roots(&metadata, &at).is_some());
+        for (path, content) in &pointers {
+            std::fs::remove_file(path).unwrap();
+            crate::regular_file::fifo(path);
+            assert!(metadata_roots(&[], Some(&task)).is_none());
+            if path == &admin.join("gitdir") { assert!(process_roots(&metadata, &at).is_none()); }
+            std::fs::remove_file(path).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        let sidecar = common.join("tico-lock-recovery");
+        crate::regular_file::fifo(&sidecar);
+        assert!(recovery_lock(&common).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn age(path: &Path) {
         std::fs::File::open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - OLD * 2)).unwrap();

@@ -15,6 +15,7 @@ use crate::client::Client;
 use crate::env::Env;
 use crate::gitrun::{self, Fault, Out};
 use crate::redact;
+use crate::regular_file::{self, CONTENT, SMALL};
 use crate::util::{epoch_s, iso, text_of};
 
 pub const FETCH_INTERVAL: f64 = 15.0 * 60.0;
@@ -169,7 +170,7 @@ pub fn wait_words(seconds: f64) -> String {
 }
 
 pub fn mirror_warning(mirror: &Path) -> String {
-    let age = std::fs::read_to_string(mirror.join("tico-fetched-at"))
+    let age = regular_file::text(mirror.join("tico-fetched-at"), SMALL)
         .ok()
         .and_then(|t| t.trim().parse::<f64>().ok())
         .map(|at| format!("{} minutes old", ((epoch_s() - at) / 60.0).max(0.0) as i64))
@@ -201,7 +202,7 @@ pub fn trusting(env: &Env, dirs: &[&Path]) -> Env {
     let path = folder.join(format!("{}.gitconfig", &gitrun::sha256_hex(lines.as_bytes())[..20]));
     if !path.exists() {
         let temp = folder.join(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-        if std::fs::write(&temp, format!("[safe]\n{lines}")).is_ok() {
+        if regular_file::write(&temp, format!("[safe]\n{lines}").as_bytes(), CONTENT, true).is_ok() {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o644));
             let _ = std::fs::rename(&temp, &path);
@@ -317,7 +318,7 @@ fn mirror_refs(mirror: &Path) -> Result<std::collections::BTreeMap<String, Strin
     let mut refs = std::collections::BTreeMap::new();
     let oid = |s: &str| [40, 64].contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit());
     if mirror.join("reftable").exists() { return Err(attention("cannot inspect the mirror's reftable refs")); }
-    match std::fs::read_to_string(mirror.join("packed-refs")) {
+    match regular_file::text(mirror.join("packed-refs"), 8 * CONTENT) {
         Ok(text) => for line in text.lines().filter(|s| !s.starts_with(['#', '^']) && !s.is_empty()) {
             let Some((sha, name)) = line.split_once(' ') else { return Err(attention("cannot parse packed refs")) };
             if !oid(sha) || !name.starts_with("refs/") { return Err(attention("cannot parse packed refs")); }
@@ -341,12 +342,12 @@ fn mirror_refs(mirror: &Path) -> Result<std::collections::BTreeMap<String, Strin
             let name = path.strip_prefix(mirror).unwrap().to_str().ok_or_else(|| attention("cannot decode local ref"))?.to_string();
             if name.ends_with(".lock") || name.contains(".lock.stale-") { continue; }
             if !m.is_file() { return Err(attention("local ref is linked or unreadable")); }
-            let sha = std::fs::read_to_string(&path).map_err(|_| attention("cannot read local ref"))?;
+            let sha = regular_file::text(&path, SMALL).map_err(|_| attention("cannot read local ref"))?;
             if !oid(sha.trim()) { return Err(attention(format!("cannot resolve local ref {name}"))); }
             refs.insert(name, sha.trim().into());
         }
     }
-    let head = std::fs::read_to_string(mirror.join("HEAD")).map_err(|_| attention("cannot inspect mirror HEAD"))?;
+    let head = regular_file::text(mirror.join("HEAD"), SMALL).map_err(|_| attention("cannot inspect mirror HEAD"))?;
     if !head.starts_with("ref: refs/") {
         if !oid(head.trim()) { return Err(attention("cannot resolve mirror HEAD")); }
         refs.insert("HEAD".into(), head.trim().into());
@@ -371,7 +372,7 @@ fn no_alternate_users(roots: &[PathBuf], mirror: &Path) -> Result<(), Fail> {
         };
         if dir != mirror && has_alternate {
             if is_symlink(&alternate) { return Err(attention(format!("cannot inspect alternates {}", alternate.display()))); }
-            let text = std::fs::read_to_string(&alternate).map_err(|_| attention("cannot read repository alternates"))?;
+            let text = regular_file::text(&alternate, CONTENT).map_err(|_| attention("cannot read repository alternates"))?;
             for line in text.lines().filter(|s| !s.is_empty()) {
                 if line.contains(['"', '\\']) { return Err(attention("cannot decode repository alternates")); }
                 let target = dir.join("objects").join(line).canonicalize().map_err(|_| attention("cannot resolve repository alternates"))?;
@@ -595,7 +596,7 @@ impl Repositories {
             if !meta.is_file() || meta.len() > 1024 {
                 continue;
             }
-            let Ok(data) = std::fs::read(&marker) else { continue };
+            let Ok(data) = regular_file::read(&marker, 1024) else { continue };
             let stored: Value = if data.is_empty() { json!({}) } else { serde_json::from_slice(&data).unwrap_or(Value::Null) };
             if !stored.is_object() {
                 continue;
@@ -1047,7 +1048,7 @@ impl Repositories {
             return Err(msg("Could not set mirror default branch"));
         }
         mirror_permissions(mirror);
-        std::fs::write(mirror.join("tico-fetched-at"), py_float(now))?;
+        regular_file::write(mirror.join("tico-fetched-at"), py_float(now).as_bytes(), SMALL, false)?;
         Ok(())
     }
 
@@ -1130,7 +1131,11 @@ async fn configure_base(
     if !real_dir(&git) || is_symlink(&config) || !crate::gitlocks::idle(&git).await {
         return Err(msg(format!("{reason}; config left intact because its Git metadata is linked or locked")));
     }
-    let old = std::fs::read(&config).ok();
+    let old = match regular_file::read(&config, CONTENT) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(attention(format!("{reason}; config is not a readable bounded regular file; left intact"))),
+    };
     let readable = run_as_bot(local, &["-C", &path.display().to_string(), "config", "--local", "--no-includes", "--list"], env, 10).await?;
     // Only runner-created bases receive an origin in settings. An adopted base must retain its owner's verified origin.
     if !settings.iter().any(|(key, _)| key == "remote.origin.url") {
@@ -1151,11 +1156,15 @@ async fn configure_base(
     }
     // Valid custom branch/upstream settings survive a permissions repair. Invalid config is retained as a backup.
     if readable.ok() {
-        if let Some(bytes) = &old { std::fs::write(scratch.0.join(".git/config"), bytes)?; }
+        if let Some(bytes) = &old { regular_file::write(scratch.0.join(".git/config"), bytes, CONTENT, false)?; }
     }
     let done = configure(&scratch.0, settings, local, env).await?;
     if !done.ok() { return Err(msg(git_error("Configuring rebuilt base", full, &done, env))); }
-    if std::fs::read(&config).ok() != old || !crate::gitlocks::idle(&git).await {
+    let unchanged = match regular_file::read(&config, CONTENT) {
+        Ok(bytes) => old.as_ref() == Some(&bytes),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound && old.is_none(),
+    };
+    if !unchanged || !crate::gitlocks::idle(&git).await {
         return Err(msg(format!("{reason}; Git metadata changed during repair; left intact for the next retry")));
     }
     let backup = git.join(format!("tico-config-backup-{}", uuid::Uuid::new_v4().simple()));
@@ -1494,7 +1503,7 @@ pub fn was_adopted(path: &Path) -> bool {
         Ok(m) if m.is_file() && m.len() <= 1024 => {}
         _ => return false,
     }
-    std::fs::read_to_string(&marker)
+    regular_file::text(&marker, 1024)
         .ok()
         .map(|t| if t.is_empty() { json!({}) } else { serde_json::from_str::<Value>(&t).unwrap_or(Value::Null) })
         .is_some_and(|v| v["adopted"] == true)
@@ -1523,8 +1532,8 @@ pub async fn repair_instruction_links(root: &Path, env: &Env) -> Option<String> 
         if !link.ok() || link.stdout.is_empty() || link.stdout.contains('\n') { continue; }
         let Ok(target) = path.parent().unwrap().join(&link.stdout).canonicalize() else { continue };
         let Ok(relative) = target.strip_prefix(&root) else { continue };
-        let Ok(content) = std::fs::read(&path) else { continue };
-        let Ok(accepted) = std::fs::read(&target) else { continue };
+        let Ok(content) = regular_file::read(&path, CONTENT) else { continue };
+        let Ok(accepted) = regular_file::read(&target, CONTENT) else { continue };
         if content != link.raw {
             let spec = format!("HEAD:{}", relative.display());
             let original = gitrun::git_as_bot(&root, env, &["cat-file", "blob", &spec], 15).await;
@@ -1538,7 +1547,7 @@ pub async fn repair_instruction_links(root: &Path, env: &Env) -> Option<String> 
         if std::fs::create_dir_all(backup.parent().unwrap()).is_err()
             || backup.parent().and_then(|p| p.canonicalize().ok()).as_deref() != backup.parent() { continue; }
         if !path.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino() && m.mtime() == before.mtime() && m.mtime_nsec() == before.mtime_nsec())
-            || std::fs::read(&path).ok().as_ref() != Some(&content) { continue; }
+            || regular_file::read(&path, CONTENT).ok().as_ref() != Some(&content) { continue; }
         if std::fs::rename(&path, &backup).is_err() { continue; }
         if !backup.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino())
             || std::os::unix::fs::symlink(&link.stdout, &path).is_err() {
@@ -1576,13 +1585,14 @@ async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> 
             let marked = digest.is_some();
             let digest = if let Some(hash) = digest {
                 (hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))).then_some(hash)
-            } else { std::fs::read(root.join(&relative)).ok().map(|b| gitrun::sha256_hex(&b)) };
+            } else { root.join(&relative).canonicalize().ok().filter(|p| p.starts_with(root))
+                .and_then(|p| regular_file::read(p, CONTENT).ok()).map(|b| gitrun::sha256_hex(&b)) };
             let metadata = path.symlink_metadata().ok().filter(|m| m.is_file() && m.nlink() == 1);
             let Some((m, digest)) = metadata.zip(digest) else {
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
                 continue;
             };
-            let unchanged = || std::fs::read(&path).is_ok_and(|b| gitrun::sha256_hex(&b) == digest);
+            let unchanged = || regular_file::read(&path, CONTENT).is_ok_and(|b| gitrun::sha256_hex(&b) == digest);
             if !unchanged() {
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
                 continue;
@@ -1634,7 +1644,7 @@ pub fn mark_managed(path: &Path, name: Option<&str>, adopted: bool) -> Result<()
     if is_symlink(&marker) {
         return Err("Could not mark managed base clone; check permissions".into());
     }
-    std::fs::write(&marker, marker_text).map_err(|_| "Could not mark managed base clone; check permissions".to_string())?;
+    regular_file::write(&marker, marker_text.as_bytes(), 1024, false).map_err(|_| "Could not mark managed base clone; check permissions".to_string())?;
     crate::isolation::chown(&marker);
     Ok(())
 }
@@ -1854,6 +1864,64 @@ mod tests {
         assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
         assert!(!std::fs::read_dir(f.base.join(".git")).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")));
         assert!(!std::fs::read_dir(&f.root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-base-repair-")));
+    }
+
+    #[tokio::test]
+    async fn instruction_repair_and_backup_inspection_refuse_fifos_and_large_files() {
+        if !regular_file::in_child("repositories::tests::instruction_repair_and_backup_inspection_refuse_fifos_and_large_files").await { return; }
+        let f = RepoFixture::new().await;
+        let path = f.base.join("AGENTS.md");
+        let target = f.base.join("CLAUDE.md");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "CLAUDE.md").unwrap();
+        std::fs::remove_file(&target).unwrap();
+        regular_file::fifo(&target);
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), b"CLAUDE.md");
+        assert!(!f.base.join(".git/tico-instruction-backups").exists());
+        std::fs::remove_file(&target).unwrap();
+        std::fs::File::create(&target).unwrap().set_len(CONTENT + 1).unwrap();
+        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
+        assert!(!path.is_symlink());
+        std::fs::remove_file(&path).unwrap();
+        regular_file::fifo(&path);
+        let saved = f.base.join(".git/tico-instruction-backups");
+        std::fs::create_dir(&saved).unwrap();
+        let backup = saved.join("AGENTS.md.tico-backup-legacy");
+        std::fs::write(&backup, "Repository rules\n").unwrap();
+        assert!(instruction_backup_note(&f.base, &f.base.join(".git")).await.unwrap().contains("AGENTS.md.tico-backup-legacy"));
+        std::fs::remove_file(&backup).unwrap();
+        let backup = saved.join(format!("AGENTS.md.tico-backup-marked-sha256-{}", gitrun::sha256_hex(b"Repository rules\n")));
+        regular_file::fifo(&backup);
+        assert!(instruction_backup_note(&f.base, &f.base.join(".git")).await.unwrap().contains(backup.file_name().unwrap().to_str().unwrap()));
+        assert!(backup.exists());
+    }
+
+    #[tokio::test]
+    async fn metadata_inspection_and_managed_marker_writes_refuse_special_files() {
+        if !regular_file::in_child("repositories::tests::metadata_inspection_and_managed_marker_writes_refuse_special_files").await { return; }
+        let f = RepoFixture::new().await;
+        let marker = f.base.join(".git/tico-managed");
+        if marker.exists() { std::fs::remove_file(&marker).unwrap(); }
+        regular_file::fifo(&marker);
+        assert!(!was_adopted(&f.base));
+        assert!(mark_managed(&f.base, Some("acme/repo"), false).is_err());
+        let repos = f.manager();
+        std::fs::create_dir_all(&repos.root).unwrap();
+        std::os::unix::fs::symlink(&f.base, repos.root.join("acme__repo")).unwrap();
+        assert!(repos.markers().is_empty());
+        let alternate = f.base.join(".git/objects/info/alternates");
+        regular_file::fifo(&alternate);
+        assert!(no_alternate_users(&[f.base.clone()], &f.remote).is_err());
+        for name in ["HEAD", "packed-refs"] {
+            let path = f.remote.join(name);
+            let old = std::fs::read(&path).ok();
+            if path.exists() { std::fs::remove_file(&path).unwrap(); }
+            regular_file::fifo(&path);
+            assert!(mirror_refs(&f.remote).is_err());
+            std::fs::remove_file(&path).unwrap();
+            if let Some(old) = old { std::fs::write(&path, old).unwrap(); }
+        }
     }
 
     #[tokio::test]

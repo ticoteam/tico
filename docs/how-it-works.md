@@ -732,6 +732,11 @@ the refusal and asks for manual config and permissions repair. Files, index, bra
 worktree registrations stay in place, including unpublished bot work.
 
 Flattened instruction links are repaired only after checking the index and committed content.
+Supervisor reads of instruction files, targets and backups open nonblocking without following
+the final symlink, verify the opened file is regular, and stop at 1 MiB. Unsafe or oversized files
+stay untouched; unreadable backups stay for review. Legacy backup comparisons resolve the intended
+instruction link within the checkout before opening its target. Recovery metadata reads and writes
+use the same descriptor checks with limits appropriate to markers, config, refs and registrations.
 The regular file is first renamed into the Git admin directory's `tico-instruction-backups/`, with
 its relative path and a `.tico-backup-<timestamp>-*-sha256-<accepted-content-hash>` suffix, before
 creating the symlink. The hash records the accepted target contents at repair time, so a later

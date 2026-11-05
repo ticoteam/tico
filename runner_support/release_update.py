@@ -21,6 +21,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .regular_file import read as read_regular, lock as open_regular_lock
+
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 STATUS_FILE = "update-status.json"
@@ -98,8 +100,8 @@ def repair_instruction_links(root, g):
             if not target.is_relative_to(root) or not target.is_file():
                 continue
             relative = target.relative_to(root).as_posix()
-            content = path.read_bytes()
-            accepted = target.read_bytes()
+            content = read_regular(path)
+            accepted = read_regular(target)
             if content != link.stdout.encode():
                 original = g("show", "HEAD:" + relative)
                 if original.returncode or g("diff", "--quiet", "HEAD", "--", relative).returncode:
@@ -113,7 +115,7 @@ def repair_instruction_links(root, g):
             if backup.parent.resolve() != backup.parent:
                 continue
             after = path.lstat()
-            if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or path.read_bytes() != content:
+            if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or read_regular(path) != content:
                 continue
             path.rename(backup)
             saved = backup.lstat()
@@ -155,15 +157,18 @@ def instruction_backup_note(root, git_dir):
                     names.append(os.path.relpath(backup, root))
                     continue
                 if not marked:
-                    digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
-                if hashlib.sha256(backup.read_bytes()).hexdigest() != digest:
+                    target = (root / name).resolve(strict=True)
+                    if not target.is_relative_to(root):
+                        raise OSError("instruction target is outside checkout")
+                    digest = hashlib.sha256(read_regular(target)).hexdigest()
+                if hashlib.sha256(read_regular(backup)).hexdigest() != digest:
                     names.append(os.path.relpath(backup, root))
                     continue
                 from . import git_locks
                 unused = git_locks.unused(backup, before, strict=True)
                 # A writer may have written and closed while the fd scan was in progress.
                 after = backup.lstat()
-                if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or hashlib.sha256(backup.read_bytes()).hexdigest() != digest:
+                if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or hashlib.sha256(read_regular(backup)).hexdigest() != digest:
                     names.append(os.path.relpath(backup, root))
                 elif unused:
                     backup.unlink()
@@ -434,7 +439,7 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
     if path is None:
         return update(root, version, directory, run=run, clock=clock, **kw)
     target = version.lstrip("v")
-    with open(path, "a") as handle:
+    with open_regular_lock(path) as handle:
         deadline, said = time.time() + lock_wait, False
         while True:
             try:
