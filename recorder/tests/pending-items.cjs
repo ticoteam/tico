@@ -82,7 +82,7 @@ const path = require('node:path');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved before Send');
     assert.match(await page.evaluate(()=>window.pendingFixture.sent.detail.due),/^2026-12-01T.*Z$/);
     assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
-    assert.equal(await page.getByRole('button',{name:'Open',exact:true}).getAttribute('data-url'),'https://app.acme.example/#/task/created-task');
+    assert.equal(await page.locator('[data-shared-row="shared-1"]').getByRole('button',{name:'Open',exact:true}).getAttribute('data-url'),'https://app.acme.example/#/task/created-task');
     await page.evaluate(() => {
       const a=window.pendingFixture.a;
       a.shared.sections.task[0].status='proposed';
