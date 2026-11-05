@@ -3782,9 +3782,15 @@ def task_private_readable(conn, actor, row):
     row = dict(row)
     from . import counsel, teammate_access
     copied = counsel.page_copies(conn).get(row["id"])
-    if (copied and not copied["removed"] and
-            not counsel.page_copy_readable(conn, copied, teammate_access._viewer_for(conn, actor))):
-        return False
+    if copied and not copied["removed"]:
+        # Native hub connections autocommit. A read gate must not leave their later writes in a new transaction.
+        outside = not conn.in_transaction
+        try:
+            if not counsel.page_copy_readable(conn, copied, teammate_access._viewer_for(conn, actor)):
+                return False
+        finally:
+            if outside and conn.in_transaction:
+                conn.rollback()
     if not task_private(conn, row):
         return True
     if "owner_id" not in row or "requester_id" not in row:

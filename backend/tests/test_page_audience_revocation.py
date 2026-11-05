@@ -62,6 +62,25 @@ def test_counsel_copy_is_rechecked_when_group_membership_changes(api):
         assert c.execute("SELECT body FROM tasks WHERE id=?", (task,)).fetchone()[0] == counsel.REMOVED_PAGE
 
 
+def test_native_copy_gate_preserves_autocommit_and_later_writes(api):
+    org(api)
+    counsel_on(api)
+    fid, _ = promoted(api)
+    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
+    c = H.connect(api.app.state.store.settings.db_path)
+    try:
+        for actor, allowed in (("human:cara", True), ("bot:finance", False)):
+            assert not c.in_transaction
+            assert H.task_private_readable(c, actor, H.task(c, tid)) is allowed
+            assert not c.in_transaction
+        c.execute("UPDATE tasks SET note='Native write survives close' WHERE id=?", (tid,))
+    finally:
+        c.close()
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT note FROM tasks WHERE id=?", (tid,)).fetchone()[0] == 'Native write survives close'
+
+
 def test_visual_token_keeps_both_principals_and_legacy_person_tokens(api):
     fid, _ = promoted(api)
     api.app.state.store.settings.visual_origin = "https://visuals.acme.example"

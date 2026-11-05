@@ -225,7 +225,7 @@ def test_counsel_cannot_copy_a_restricted_page_into_its_task_context(api, monkey
 def test_page_audience_migration_keeps_existing_pages_unrestricted():
     import importlib
     import sqlite3
-    migration = importlib.import_module('backend.migrations.20261105004518_page_audience')
+    migration = importlib.import_module('backend.migrations.20261105010233_page_audience')
     with sqlite3.connect(':memory:') as c:
         c.execute('CREATE TABLE pages(file_id TEXT PRIMARY KEY, cadence TEXT)')
         c.execute("INSERT INTO pages VALUES('existing','weekly')")

@@ -459,7 +459,6 @@ def page_copies(c):
             if "no such table" not in str(exc):
                 raise
             return {}                   # standalone hubdb and pre-Counsel migration databases
-    F.privacy.snapshot(c)
     return read_cache.value(c, ("counsel_page_copies",), build, shared=True)
 
 
