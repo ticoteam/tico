@@ -19,6 +19,9 @@ The file is written one entry per line, so a change shows as the lines it touche
 Regenerate after a deliberate change to who reads what, and review the diff:
     TICO_WRITE_READER_GOLDENS=1 python3 -m pytest -q backend/tests/test_threads_migration_e2e.py
 
+Changes to demo row creation also require regeneration: its ids share one deterministic counter, so replacing
+packet tasks with Update turns changes later conversation and message ids without changing their audience rules.
+
 The comparisons run `threads.migrate(c)` and assert `threads.readable` gives the same sets. The freshness test
 fails when the golden no longer matches what today's predicates read, so a golden is never compared against a stale
 baseline.
