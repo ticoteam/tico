@@ -1001,6 +1001,7 @@ class Enrollment(Contract):
     code: str = Field(min_length=32, max_length=200)
     label: str = Field(min_length=1, max_length=100)
     platform: str = Field(default="", max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SlashCommand(Contract):
@@ -1433,6 +1434,7 @@ class Heartbeat(Contract):
     repositories: list[RepositoryStatus] | None = None
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
     capabilities: list[Literal[
@@ -2869,6 +2871,11 @@ class UpdatePost(Contract):
     slides: UpdateSlides | None = None                                 # a week in review
     day: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None   # only a day Tico asked to redo
     replace_draft: bool = False                                        # a person's own words over their Assistant draft
+    # What a bot's turn reports back (a learning or suggestion delivery): how many learnings it kept (at most 15),
+    # the suggestions it acted on, and the delivery this post answers.
+    learnings_saved: Annotated[int, Field(ge=0, le=15)] | None = None
+    suggestions_seen: list[Annotated[str, Field(max_length=300)]] | None = Field(default=None, max_length=10)
+    delivery_batch_id: Annotated[str, Field(max_length=80)] | None = None
 
 
 class UpdateRedo(Contract):
@@ -3136,3 +3143,22 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+MailboxLevel = Literal["read", "read_write"]
+
+
+class MailboxCreate(Contract):
+    address: Annotated[str, Field(min_length=3, max_length=254)]
+    shared: StrictBool = False
+
+
+class MailboxAccessCreate(Contract):
+    grantee_type: Literal["person", "bot"]
+    grantee_id: ID
+    level: MailboxLevel
+
+
+class MailboxAccessUpdate(Contract):
+    level: MailboxLevel

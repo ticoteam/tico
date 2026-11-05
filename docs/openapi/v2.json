@@ -185,6 +185,10 @@
     {
       "name": "Company page",
       "description": "The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo (docs/company-page.md)."
+    },
+    {
+      "name": "Mailboxes",
+      "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
     }
   ],
   "paths": {
@@ -22210,6 +22214,498 @@
         },
         "tags": [
           "Finance"
+        ]
+      }
+    },
+    "/api/v2/mailboxes": {
+      "get": {
+        "summary": "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them",
+        "operationId": "listMailboxes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ]
+      },
+      "post": {
+        "summary": "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person",
+        "operationId": "connectMailbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/mailboxes/{mid}": {
+      "get": {
+        "summary": "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)",
+        "operationId": "getMailbox",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ]
+      },
+      "delete": {
+        "summary": "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)",
+        "operationId": "stopMailbox",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ]
+      }
+    },
+    "/api/v2/mailboxes/{mid}/accesses": {
+      "post": {
+        "summary": "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)",
+        "operationId": "addMailboxAccess",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxAccessCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ]
+      }
+    },
+    "/api/v2/mailboxes/{mid}/accesses/{access_id}": {
+      "patch": {
+        "summary": "Change one access between Read and Read and write",
+        "operationId": "changeMailboxAccess",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          },
+          {
+            "name": "access_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Access Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxAccessUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ]
+      },
+      "delete": {
+        "summary": "Take one person's or bot's access away",
+        "operationId": "removeMailboxAccess",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          },
+          {
+            "name": "access_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Access Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
+        ]
+      }
+    },
+    "/api/v2/mailboxes/{mid}/share": {
+      "post": {
+        "summary": "An admin makes a mailbox that has no person a shared inbox",
+        "operationId": "shareMailbox",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Mailboxes"
         ]
       }
     },
@@ -58115,6 +58611,374 @@
         "required": [
           "locations",
           "next_cursor"
+        ],
+        "additionalProperties": true
+      },
+      "Mailbox": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "personal",
+              "shared"
+            ]
+          },
+          "person_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "person_name": {
+            "type": "string"
+          },
+          "connection": {
+            "enum": [
+              "workspace",
+              "personal"
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "stopped"
+            ]
+          },
+          "state": {
+            "enum": [
+              "connected",
+              "not_connected",
+              "awaiting_person",
+              "stopped"
+            ]
+          },
+          "level": {
+            "enum": [
+              "none",
+              "read",
+              "read_write"
+            ]
+          },
+          "routines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "address",
+          "connection",
+          "id",
+          "kind",
+          "level",
+          "person_id",
+          "person_name",
+          "provider",
+          "routines",
+          "state",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "MailboxAccessCreate": {
+        "properties": {
+          "grantee_type": {
+            "type": "string",
+            "enum": [
+              "person",
+              "bot"
+            ],
+            "title": "Grantee Type"
+          },
+          "grantee_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Grantee Id"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "read",
+              "read_write"
+            ],
+            "title": "Level"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "grantee_type",
+          "grantee_id",
+          "level"
+        ],
+        "title": "MailboxAccessCreate"
+      },
+      "MailboxAccessUpdate": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "read",
+              "read_write"
+            ],
+            "title": "Level"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "level"
+        ],
+        "title": "MailboxAccessUpdate"
+      },
+      "MailboxCreate": {
+        "properties": {
+          "address": {
+            "type": "string",
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Address"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "address"
+        ],
+        "title": "MailboxCreate"
+      },
+      "MailboxDetail": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "$ref": "#/components/schemas/Mailbox"
+          },
+          "can_manage": {
+            "type": "boolean"
+          },
+          "can_stop": {
+            "type": "boolean"
+          },
+          "accesses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "grantee_type": {
+                  "enum": [
+                    "person",
+                    "bot",
+                    "admins"
+                  ]
+                },
+                "grantee_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "level": {
+                  "enum": [
+                    "read",
+                    "read_write"
+                  ]
+                },
+                "implicit": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "grantee_id",
+                "grantee_type",
+                "id",
+                "implicit",
+                "level",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "routines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "can_edit": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "can_edit",
+                "enabled",
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "may": {
+            "$ref": "#/components/schemas/MailboxMay"
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "person",
+                    "bot"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "type"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "accesses",
+          "can_manage",
+          "can_stop",
+          "candidates",
+          "mailbox",
+          "may",
+          "routines"
+        ],
+        "additionalProperties": true
+      },
+      "MailboxList": {
+        "type": "object",
+        "properties": {
+          "admin": {
+            "type": "boolean"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "may": {
+            "$ref": "#/components/schemas/MailboxMay"
+          },
+          "mine": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Mailbox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shared": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mailbox"
+            }
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mailbox"
+            }
+          }
+        },
+        "required": [
+          "admin",
+          "domain",
+          "mailboxes",
+          "may",
+          "mine",
+          "shared"
+        ],
+        "additionalProperties": true
+      },
+      "MailboxMay": {
+        "type": "object",
+        "properties": {
+          "read": {
+            "type": "boolean"
+          },
+          "organize": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
+          },
+          "change_calendar": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "change_calendar",
+          "organize",
+          "read",
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "MailboxResult": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "$ref": "#/components/schemas/Mailbox"
+          }
+        },
+        "required": [
+          "mailbox"
         ],
         "additionalProperties": true
       },

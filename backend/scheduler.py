@@ -1,5 +1,6 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -13,6 +14,8 @@ from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
+
+LOG = logging.getLogger("tico.scheduler")
 
 
 def stamp(at):
@@ -468,7 +471,7 @@ class Scheduler:
                                "hold_ms": round(longest[0] * 1000), "hold_step": longest[2],
                                "wait_ms": round(max((h[1] for h in holds), default=0) * 1000),
                                "transactions": len(holds)})))
-        # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
+        # Updates (backend/updates.py): pump the queue built by Maintenance, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
         # holds the write lock; its row stays out until the thread posts it (or gives up on it).
@@ -487,7 +490,7 @@ class Scheduler:
             settings = self.store.settings
             with self.store.transaction() as c:
                 writer = updates.writer_for(c, settings, self.store)
-                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None)
+                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None, build=False)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
@@ -554,6 +557,12 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import webhooks
                     webhooks.auto_disable(c, stamp(at))           # an endpoint that failed every attempt for five days is off
+                try:
+                    from . import computers
+                    computers.sweep(self.store, stamp(at))       # replaced self-hosted computers retire only when unused
+                except Exception as exc:
+                    LOG.exception("Computer retirement failed")
+                    failures.append({"computer_retirement": type(exc).__name__})
                 from . import support_triage
                 support_triage.sweep(self.store, stamp(at))      # a support ticket waits here at most an hour
                 from . import screening

@@ -2285,7 +2285,7 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
-        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
+        cloud_rows = cloud_machines.visible_rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
             "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
@@ -2622,7 +2622,7 @@ def install_views(app, store, auth, mutate, task_view):
             cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
                                          "shared": r["bot"] == cloud_machines.SHARED,
                                          "size": r["machine_size"] or r["size"], "state": r["state"]}
-                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
+                        for r in cloud_machines.visible_rows(c).values() if r["runner_id"]}
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)

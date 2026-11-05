@@ -3162,6 +3162,84 @@ export type Locations = {
   next_cursor: string | null;
 };
 
+export type Mailbox = {
+  address: string;
+  connection: "workspace" | "personal";
+  id: string;
+  kind: "personal" | "shared";
+  level: "none" | "read" | "read_write";
+  person_id: string | null;
+  person_name: string;
+  provider: string;
+  routines: Array<{
+  id: string;
+  name: string;
+}>;
+  state: "connected" | "not_connected" | "awaiting_person" | "stopped";
+  status: "active" | "stopped";
+};
+
+export type MailboxAccessCreate = {
+  grantee_id: string;
+  grantee_type: "person" | "bot";
+  level: "read" | "read_write";
+};
+
+export type MailboxAccessUpdate = {
+  level: "read" | "read_write";
+};
+
+export type MailboxCreate = {
+  address: string;
+  shared?: boolean;
+};
+
+export type MailboxDetail = {
+  accesses: Array<{
+  grantee_id: string;
+  grantee_type: "person" | "bot" | "admins";
+  id: string | null;
+  implicit: boolean;
+  level: "read" | "read_write";
+  name: string;
+}>;
+  can_manage: boolean;
+  can_stop: boolean;
+  candidates: Array<{
+  id: string;
+  name: string;
+  type: "person" | "bot";
+}>;
+  mailbox: Mailbox;
+  may: MailboxMay;
+  routines: Array<{
+  can_edit: boolean;
+  enabled: boolean;
+  id: string;
+  name: string;
+}>;
+};
+
+export type MailboxList = {
+  admin: boolean;
+  domain: string;
+  mailboxes: Array<Mailbox>;
+  may: MailboxMay;
+  mine: Mailbox | null;
+  shared: Array<Mailbox>;
+};
+
+export type MailboxMay = {
+  change_calendar: boolean;
+  organize: boolean;
+  read: boolean;
+  send: boolean;
+};
+
+export type MailboxResult = {
+  mailbox: Mailbox;
+};
+
 export type MaintenanceRunRequest = {
   step?: "collect" | "clean_up" | "check_health" | "find_stuck" | "learn" | "suggest" | "update" | "dream" | null;
 };
@@ -6041,6 +6119,14 @@ export type AddLinkedDocParams = {
 export type AddLinkedDocBody = LinkCreate;
 export type AddLinkedDocResponse = LinkedDocResult;
 
+/** POST /api/v2/mailboxes/{mid}/accesses */
+export type AddMailboxAccessParams = {
+  "Idempotency-Key": string;
+  mid: string;
+};
+export type AddMailboxAccessBody = MailboxAccessCreate;
+export type AddMailboxAccessResponse = MailboxDetail;
+
 /** POST /api/v2/model-subscriptions */
 export type AddModelSubscriptionParams = {
   "Idempotency-Key": string;
@@ -6269,6 +6355,15 @@ export type CatchUpThreadParams = {
 export type CatchUpThreadBody = CatchUp;
 export type CatchUpThreadResponse = CatchUpResult;
 
+/** PATCH /api/v2/mailboxes/{mid}/accesses/{access_id} */
+export type ChangeMailboxAccessParams = {
+  "Idempotency-Key": string;
+  access_id: string;
+  mid: string;
+};
+export type ChangeMailboxAccessBody = MailboxAccessUpdate;
+export type ChangeMailboxAccessResponse = MailboxDetail;
+
 /** POST /api/v2/model-subscriptions/{sid} */
 export type ChangeModelSubscriptionParams = {
   "Idempotency-Key": string;
@@ -6354,6 +6449,13 @@ export type ConnectInboundCompanyBody = {
   code: string;
 };
 export type ConnectInboundCompanyResponse = InboundCompanyConnection;
+
+/** POST /api/v2/mailboxes */
+export type ConnectMailboxParams = {
+  "Idempotency-Key": string;
+};
+export type ConnectMailboxBody = MailboxCreate;
+export type ConnectMailboxResponse = MailboxResult;
 
 /** POST /api/v2/editions/{edition_id}/correct */
 export type CorrectEditionParams = {
@@ -7431,6 +7533,13 @@ export type GetLocationParams = {
 };
 export type GetLocationBody = never;
 export type GetLocationResponse = LocationOne;
+
+/** GET /api/v2/mailboxes/{mid} */
+export type GetMailboxParams = {
+  mid: string;
+};
+export type GetMailboxBody = never;
+export type GetMailboxResponse = MailboxDetail;
 
 /** GET /api/v2/maintenance */
 export type GetMaintenanceParams = Record<string, never>;
@@ -8542,6 +8651,11 @@ export type ListLocationsParams = {
 export type ListLocationsBody = never;
 export type ListLocationsResponse = Locations;
 
+/** GET /api/v2/mailboxes */
+export type ListMailboxesParams = Record<string, never>;
+export type ListMailboxesBody = never;
+export type ListMailboxesResponse = MailboxList;
+
 /** GET /api/v2/maintenance/runs */
 export type ListMaintenanceRunsParams = {
   before?: string | null;
@@ -9413,6 +9527,15 @@ export type RemoveFeedbackParams = {
 export type RemoveFeedbackBody = never;
 export type RemoveFeedbackResponse = FeedbackRemoved;
 
+/** DELETE /api/v2/mailboxes/{mid}/accesses/{access_id} */
+export type RemoveMailboxAccessParams = {
+  "Idempotency-Key": string;
+  access_id: string;
+  mid: string;
+};
+export type RemoveMailboxAccessBody = never;
+export type RemoveMailboxAccessResponse = MailboxDetail;
+
 /** DELETE /api/v2/meetings/{rid}/tasks/{tid} */
 export type RemoveMeetingTaskParams = {
   "Idempotency-Key": string;
@@ -10267,6 +10390,14 @@ export type SetWebhookWakeUrlParams = Record<string, never>;
 export type SetWebhookWakeUrlBody = WakeUrl;
 export type SetWebhookWakeUrlResponse = WebhookWakeUrlSet;
 
+/** POST /api/v2/mailboxes/{mid}/share */
+export type ShareMailboxParams = {
+  "Idempotency-Key": string;
+  mid: string;
+};
+export type ShareMailboxBody = never;
+export type ShareMailboxResponse = MailboxDetail;
+
 /** POST /api/v2/triggers/{trigger_id}/signing */
 export type SignTriggerParams = {
   "Idempotency-Key": string;
@@ -10324,6 +10455,14 @@ export type StartSignInParams = {
 };
 export type StartSignInBody = never;
 export type StartSignInResponse = void;
+
+/** DELETE /api/v2/mailboxes/{mid} */
+export type StopMailboxParams = {
+  "Idempotency-Key": string;
+  mid: string;
+};
+export type StopMailboxBody = never;
+export type StopMailboxResponse = MailboxResult;
 
 /** GET /api/v2/events */
 export type StreamEventsParams = {

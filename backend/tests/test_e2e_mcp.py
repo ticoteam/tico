@@ -160,7 +160,11 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
     stale = sorted(set(EXPECTED) - {t["name"] for t in tools})
     if stale:
         problems.append(f"expected-refusals.json names tools that no longer exist: {', '.join(stale)}")
-    assert not problems, "\n".join(problems)
+    assert not problems, "\n".join(problems) + (
+        "\nFix unexpected tool failures first. For intended refusal changes, edit e2e/mcp/expected-refusals.json; "
+        "remove entries for deleted tools. To regenerate for review: "
+        "TICO_E2E_RECORD_REFUSALS=/tmp/mcp-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_mcp.py. "
+        "Review the diff before copying it over e2e/mcp/expected-refusals.json.")
 
 
 def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):

@@ -4,6 +4,13 @@ A computer runs your bots. **Settings → Computers** lists every computer: its 
 Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
 [Install](install.md#add-computers-to-run-your-bots).
 
+Re-enrolling the same physical computer can leave an older registration behind. The hourly cleanup removes that
+registration after more than 24 hours offline only when a newer, active registration has the same reported device
+identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
+The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
+keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
+
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
