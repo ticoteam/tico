@@ -181,9 +181,9 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     start(api, r, attempt)
     token = attempt["token"]
     if case == "bookkeeping_only":
-        # Its status line, a look in hub sql and a conversation read: nobody else sees anything change.
+        # Its status line, a task read and a conversation read leave other people's work unchanged.
         post(api, "bots/ops/status", {"state": "running", "focus": "Checking the bank feed"}, token)
-        post(api, "sql", {"sql": "SELECT count(*) FROM tasks"}, token)
+        get(api, "tasks/" + task["id"], token)
         get(api, f"conversations/{task['conversation_id']}/messages", token)
     elif case == "task_update":
         version = get(api, "tasks/" + task["id"], token)["task"]["version"]
