@@ -270,6 +270,9 @@ def shared_meeting(record, who):
 
 
 def authorized(c, who, rid, *, include_deleted=False, write=False):
+    if who.role == "bot" and not write:
+        from .context_search import readable
+        return readable(c, who, rid)
     record = MS.get(rid, c)
     if not record:
         raise Problem("not_found", "Note or meeting not found", 404)
@@ -460,6 +463,13 @@ def blob_for(c, auth, who, bid):
     # object below, using the same authorization as its conversation or task.
     allowed = who.role in ("owner", "human") and row["owner"] == who.actor
     if not allowed and who.role in ("owner", "human", "bot"):
+        for linked in c.execute("SELECT meeting_id FROM media_assets WHERE blob_id=?", (bid,)):
+            try:
+                authorized(c, who, linked[0])
+                allowed = True
+                break
+            except Problem:
+                pass
         for linked in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)):
             try:
                 auth.conversation(c, who, linked["conversation_id"])

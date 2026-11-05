@@ -2,6 +2,10 @@
 
 
 def seed(b):
+    live = b.call('POST', 'live-meetings', {'title': 'Launch planning', 'visibility': 'private'})['id']
+    b.call('POST', f'live-meetings/{live}/access', {'add': ['ben']})
+    b.call('POST', f'live-meetings/{live}/access', {'add': ['cara']}, token='demo-ben')
+    b.call('POST', f'live-meetings/{live}/bots', {'bots': ['ops-manager']}, token='demo-ben')
     with b.store.read() as c:
         meeting = c.execute("SELECT id FROM meetings WHERE review_state='live' ORDER BY created_at DESC LIMIT 1").fetchone()
     if meeting and b.tasks:

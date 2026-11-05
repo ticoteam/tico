@@ -81,8 +81,10 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
   `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
-  person it is filed for and the people added to or joined in the live meeting it came from; the company
-  owner is held to that too. `"audience": "team"` opens it to the Team. The import route takes
+  person it is filed for, people added to or joined in the live meeting it came from, and attached bots;
+  the company owner is held to that too. Attached bots can read filed notes, transcripts, versions and
+  attachments regardless of who added them or the filed audience, once shared and until deleted or discarded.
+  Pending and dismissed meetings remain unavailable to bots. `"audience": "team"` opens it to the Team. The import route takes
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
 - `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
   removes its transcript, chat and events from Tico; the recording stays on their computer.

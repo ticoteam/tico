@@ -8,7 +8,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
 // A bot made since bots got ids: its id is a UUID, its slug only a label. The picker and the meeting's bots use the id.
 const FINANCE = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
-const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_id: 'human:ana', seq: 2, event_id: 5,
+const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', visibility: 'team', access: [], seq: 2, event_id: 5,
   window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops', name: 'Operations'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
@@ -60,7 +60,7 @@ async function main() {
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
-      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
+      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}, {id: 'cara', name: 'Cara'}]});
       // The viewer's roster lacks the attached UUID bot, so its teammate name can only come from the meeting's `bots`.
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Operations'}]);
       if (p === '/api/issues') return json([]);
@@ -111,7 +111,8 @@ async function main() {
           return route.fulfill({status: 400, contentType: 'application/json', body: JSON.stringify({error: {detail: 'Chat rejected'}})});
         }
         if (operation === 'join') world.detail.humans.push({actor: 'human:ben', name: 'Ben'});
-        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance'});
+        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance', joined_by: 'human:ana'});
+        if (operation === 'access') world.detail.access.push(...body.add.map(id => ({actor: 'human:' + id, name: id === 'cara' ? 'Cara' : 'Ben'})));
         if (operation === 'control') world.detail.state = body.action === 'end' ? 'ended' : body.action === 'resume' ? 'live' : 'paused';
         if (operation === 'finalize') world.detail.imported_meeting_id = 'meeting-imported';
         if (operation === 'chat') world.detail.chat.push({actor: 'human:ana', role: 'human', text: body.text});
@@ -145,10 +146,30 @@ async function main() {
     assert.equal(calls[0][1].reply_cap, 2);
     assert.equal(calls[0][1].cooldown_seconds, 90);
     world.detail.owner_actor = 'human:ben';
+    world.detail.visibility = 'private';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('[data-live-control=pause]').waitFor({state: 'detached'});
     await page.locator('#live-bot-picker').waitFor();
     assert.equal(await page.locator('[data-live-control=pause]').count(), 0, 'joined participant can attach without controlling the meeting');
+    assert.equal(await page.locator('[data-live-bot-remove=ops]').count(), 0, 'only the connector or adder can remove a bot');
+    await page.locator('#live-people-picker select').selectOption('cara');
+    await page.locator('#live-people-picker button').click();
+    await page.locator('.live-members').getByText(/Cara/).waitFor();
+    assert(calls.some(([op, body]) => op === 'access' && body.add.includes('cara')), 'a private participant can add a person');
+    world.detail.humans = [];
+    world.detail.access.push({actor: 'human:ana', name: 'Ana'});
+    await page.locator('[data-live-id=live-1]').click();
+    await page.locator('[data-live-join]').waitFor();
+    for (const width of [390, 1280]) {
+      await page.setViewportSize({width, height: 900});
+      for (const id of ['live-people-picker', 'live-bot-picker']) {
+        await page.locator('#' + id).waitFor();
+        assert(await page.locator('#' + id).evaluate(form => {
+          const box = form.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth;
+        }), 'added participants have sharing controls at phone and desktop widths');
+      }
+    }
+    world.detail.humans = [{actor: 'human:ana', name: 'Ana'}];
     world.detail.owner_actor = 'human:ana';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('[data-live-control=pause]').waitFor();
@@ -239,7 +260,7 @@ async function main() {
     assert.match(await page.locator('.live-members').innerText(), /Teammates: Operations Remove Finance Remove/, 'teammates by name, not id');
     await page.locator(`[data-live-bot-remove="${FINANCE}"]`).click();
     await page.locator(`[data-live-bot-remove="${FINANCE}"]`).waitFor({state: 'detached'});
-    assert(calls.some(([op]) => op === FINANCE), 'a joined person can revoke meeting-only bot access');
+    assert(calls.some(([op]) => op === FINANCE), 'the connector can revoke meeting-only bot access');
     await page.locator('[data-live-control=pause]').click();
     await page.locator('[data-live-control=resume]').waitFor();
     assert(calls.some(([op, body]) => op === 'control' && body.action === 'pause'));

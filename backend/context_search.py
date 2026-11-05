@@ -33,8 +33,15 @@ def readable(c, who, rid):
         return row
     row = meetings.get(rid, c)
     deleted = c.execute("SELECT deleted_at FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
-    if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0]) or row["metadata"].get("kind") != "meeting"
-            or media.effective_audience(row["metadata"]) != "team" or row["metadata"].get("private") is not False):
+    if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0])
+            or row["metadata"].get("kind") != "meeting"):
+        raise Problem("not_found", "Meeting not found or unavailable", 404)
+    team = media.effective_audience(row["metadata"]) == "team" and row["metadata"].get("private") is False
+    attached = c.execute(
+        "SELECT 1 FROM live_meetings m JOIN live_meeting_bots b ON b.meeting_id=m.id "
+        "WHERE m.imported_meeting_id=? AND m.discarded_at IS NULL AND b.bot=?",
+        (rid, who.actor.removeprefix("bot:"))).fetchone()
+    if not team and not attached:
         raise Problem("not_found", "Meeting not found or unavailable", 404)
     return row
 
