@@ -220,7 +220,7 @@ pub fn transcribe_next_with(
     #[cfg(feature = "diarize")]
     if chunk.channel == "them"
         && error.is_empty()
-        && store.get(&chunk.recording_id)?.state == "recording"
+        && store.peek(&chunk.recording_id)?.state == "recording"
     {
         // Capture and transcription stay usable if the local model is unavailable. Stream labels
         // remain provisional; the full voiceprint/diarization pass after Stop is still authoritative.

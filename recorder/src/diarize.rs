@@ -156,7 +156,7 @@ pub fn label_segments(
 /// Link finished service turns during capture without running full-meeting diarization. This
 /// also covers batch-only meetings; streaming labels are not required for voice continuity.
 pub fn label_provisional(store: &Store, id: &str) -> Result<usize> {
-    let record = store.get(id)?;
+    let record = store.peek(id)?;
     if !record
         .chunks
         .iter()
@@ -177,7 +177,7 @@ fn label_from(
     link: Option<f32>,
 ) -> Result<usize> {
     let provisional = config.is_none() && segments.is_empty();
-    let record = store.get(id)?;
+    let record = store.peek(id)?;
     let chunks: Vec<_> = record
         .chunks
         .iter()
@@ -583,6 +583,14 @@ mod tests {
                 labels,
                 ["Speaker 1", "Speaker 1", "Speaker 2"][..=index as usize]
             );
+            assert_eq!(
+                crate::transcript::utterances(&current)
+                    .iter()
+                    .map(|line| line.speaker.as_str())
+                    .collect::<Vec<_>>(),
+                labels,
+                "the displayed identities must follow linked voices too"
+            );
             label_segments(
                 &store,
                 &record.id,
@@ -595,6 +603,13 @@ mod tests {
             )
             .unwrap();
             let finalized = store.get(&record.id).unwrap();
+            assert_eq!(
+                crate::transcript::utterances(&finalized)
+                    .iter()
+                    .map(|line| line.speaker.as_str())
+                    .collect::<Vec<_>>(),
+                labels
+            );
             assert_eq!(
                 finalized
                     .chunks

@@ -267,7 +267,7 @@ fn read_chunk(db: &Connection, id: &str) -> Result<Chunk> {
     Ok(serde_json::from_str(&text)?)
 }
 // Reuse an existing write transaction when transcript edits also reserve displayed identities.
-fn read_record(db: &Connection, id: &str) -> Result<Recording> {
+fn read_record(db: &Connection, id: &str, reserve: bool) -> Result<Recording> {
     let text: String = db
         .query_row("SELECT document FROM recordings WHERE id=?", [id], |r| {
             r.get(0)
@@ -295,6 +295,9 @@ fn read_record(db: &Connection, id: &str) -> Result<Recording> {
         .map(|text| Ok(serde_json::from_str(&text?)?))
         .collect::<Result<_>>()?;
     drop(query);
+    if !reserve {
+        return Ok(value);
+    }
     let before = value.speaker_labels.clone();
     let mut query = db.prepare("SELECT words FROM live_words WHERE recording_id=? AND channel='them' ORDER BY start_ms,rowid")?;
     let mut live = Vec::new();
@@ -604,9 +607,15 @@ impl Store {
         clean_id(id)?;
         let mut connection = self.db()?;
         let db = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let value = read_record(&db, id)?;
+        let value = read_record(&db, id, true)?;
         db.commit()?;
         Ok(value)
+    }
+    /// Analysis can link voices before their first display reserves a fallback label.
+    #[cfg(feature = "diarize")]
+    pub(crate) fn peek(&self, id: &str) -> Result<Recording> {
+        clean_id(id)?;
+        read_record(&self.db()?, id, false)
     }
     pub fn mutate(
         &self,
@@ -968,7 +977,7 @@ impl Store {
     ) -> Result<()> {
         let mut db = self.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let record = read_record(&transaction, id)?;
+        let record = read_record(&transaction, id, true)?;
         ensure!(
             record.state != "recording",
             "Stop recording before editing the transcript"
