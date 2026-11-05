@@ -76,7 +76,7 @@ def test_provenance_keeps_a_bots_fyi_held_and_its_comment_editable(api):
     assert all(sent['refs'][key] == value for key, value in refs.items())
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, 'bot:ops', 'Review QA results', 'Read the report.', 'bot:cpo', lint=False)
-        comment = H.task_comment(c, 'bot:ops', task['id'], 'QA results are available.', extra_refs=refs)
+        comment = H.task_comment(c, 'bot:ops', task['id'], 'QA results are available.', wake=False, extra_refs=refs)
         assert H.is_comment(comment)
         H.task_comment_edit(c, 'bot:ops', task['id'], comment['id'], 'Updated QA results are available.')
         assert H.message(c, comment['id'])['body'] == 'Updated QA results are available.'
