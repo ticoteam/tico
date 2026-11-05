@@ -291,8 +291,8 @@ while a live run of the bot is on the same task (or the same thread, or the same
 when that lane frees. BotOps’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
 in the recovery history and shows its ownership in Stopped runs. Within five minutes of that work ending, the
 scheduler re-evaluates the stopped job and records who owns recovery and why.
-When the computer reports a restart, a run resumes on the next scheduler sweep, including one that used a shell or
-edited files. Its recovery note gives the interruption time and tells it to check what already happened first;
+When the computer reports a restart or a clean stop, a run resumes on the next scheduler sweep, including one that used a shell or
+edited files. A clean stop is the computer's own note that it stopped the turn. Its recovery note gives the interruption time and tells it to check what already happened first;
 the same computer continues the same provider session. A consumed approval or a named irreversible outside action
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
 is dismissed and BotOps is told. A stopped run is counted once however many requests were folded into it.
@@ -340,7 +340,7 @@ send or payment) instead holds it for review, so lifting the quarantine never re
 An answer the run finished as the quarantine began is kept on the run,
 never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
-Other runs stay *owner review needed*, because Tico cannot see what a
+Runs held this way stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
 BotOps resumes or dismisses it after checking what already happened. Nothing is lost or re-sent.
