@@ -58,9 +58,8 @@ def test_participant_permission_is_never_reused_for_another_tasks_content(api, m
         a, b = H.task(c, allowed), H.task(c, denied)
         assert [a[k] for k in ('owner_id','requester_id','guest','private')] == [b[k] for k in ('owner_id','requester_id','guest','private')]
         room = H.open_conversation(c, 'human:ana', ['human:ben','bot:ops'], kind='chat', subject='Provenance probes')
-        root = H.say(c, 'human:ana', 'bot:ops', 'Public run root', conversation_id=room['id'])
-        c.execute('UPDATE jobs SET message_id=? WHERE id=?', (root['id'], attempt['job_id']))
-        c.execute('UPDATE attempts SET message_id=? WHERE id=?', (root['id'], attempt['id']))
+        c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)',
+                  (room['id'], attempt['job_id']))
         for tid in (allowed, denied):
             payload = {'nested':{'source':'task:' + tid}}
             msg = H.say(c, 'human:ana', 'bot:ops', 'Provenance probe', conversation_id=room['id'])
