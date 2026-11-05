@@ -105,6 +105,22 @@ def test_an_existing_cloud_machine_gains_the_pending_start_marker_without_losing
     assert snapshot(path) == first
 
 
+def test_pending_machine_deletions_upgrade_without_losing_their_claim_fence(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DROP TABLE cloud_machine_deletions")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105120026_cloud_machine_deletions'")
+        c.execute("INSERT INTO cloud_machines(bot,machine_id,runner_id,problem,mode,placement) "
+                  "VALUES('ops','m1','r1','delete_unknown','computer','shared')")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT machine_id,bot,runner_id,failures FROM cloud_machine_deletions").fetchall() == [
+            ('m1', 'ops', 'r1', 0)]
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
     known = migrations.files()
     # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.

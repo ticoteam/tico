@@ -79,15 +79,20 @@ start or stop that machine. The final write revokes the runner on the row at tha
 during the request, and invalidates all of the machine's enrollment codes. A code cannot enroll another runner after
 the disk is deleted.
 
-An unanswered delete, a 5xx, or another uncertain reply keeps claims paused and asks for HQ's list at the next look.
-The stored hold survives a server restart and stays while the list cannot be read. If the list says the machine is
-deleted, the server finishes the same local deletion and revokes its current runner and all codes under the write
-lock. Every other state keeps the deletion hold, even past two minutes: HQ can still report running while boat
-deletion is pending or retrying. HQ's machine response has no pending-deletion field, so each successful list is
-followed by another idempotent DELETE for that exact machine id until deletion settles, even if the machine is absent
-from the list. An accepted retry keeps the hold until HQ reports deleted. A clear 4xx refusal says the delete was not
-accepted and releases the hold at once; 404 finishes deletion because the machine is already gone. Out of credit
-(402) and already stopping (409 `sandbox_stopping`) remain uncertain, as for a scheduled stop.
+Before sending any DELETE, the server stores intent for that exact machine id in `cloud_machine_deletions`.
+Only HQ's own state releases this hold: the machine is deleted or 404, or HQ reports it with `pending` other than
+`delete`. A DELETE reply alone never releases it, including a first or retry 4xx such as 429 `starts_full`.
+The hold survives restarts, unreadable lists, and lists that omit the machine or its `pending` field. A deleted
+machine's current runner and codes are revoked under the write lock. A report that clears `pending` ends retries
+without revoking a machine kept after an unanswered deletion.
+
+Retries use the stored machine id and back off on errors, including 429 and 5xx, up to 15 minutes. Accepted retries
+wait at least a minute; out of credit waits ten minutes. Extra lists, restarts, and repeated requests cannot rush
+that clock. This rule also covers the manager's deletion of a machine that never enrolled.
+
+Changing mode or placement never clears deletion intent. A bot can move to a shared machine or another computer
+while its old own machine is being deleted. If it returns to own, the old computer gets no turn and is not bound
+again. Once HQ confirms deletion, its next work makes a fresh machine with a new id.
 
 ## How a machine becomes the bot's runner
 
