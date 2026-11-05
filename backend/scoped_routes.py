@@ -6,7 +6,7 @@ Runner machine credentials use their separate enrollment/lease API, never this t
 """
 import re
 
-from .store import Problem
+from .store import H, Problem
 
 # (methods, path pattern, offered to Make page). No prefix or arbitrary action wildcards.
 ALLOWLIST = (
@@ -54,6 +54,16 @@ ALLOWLIST = (
     ("GET", r"/api/v2/postal/items(?:/[^/]+)?", False),
     # Counsel's task workflow writes its reviewed rules through its own additional route gate.
     ("POST", r"/api/v2/rules", False),
+    # Core messaging keeps its task-write and thread membership guards, including private replies.
+    ("POST", r"/api/v2/(?:messages|messages/[^/]+/answer|conversations/[^/]+/messages|threads)", False),
+    ("POST", r"/api/v2/threads/[^/]+/messages", False),
+    ("PATCH", r"/api/v2/messages/[^/]+", False),
+    # Status, credential requests and proposals are the turn's own checked bookkeeping/card writes.
+    ("POST", r"/api/v2/(?:bots/[^/]+/status|credential-requests|assistant/actions)", False),
+    ("PUT", r"/api/v2/org/order/[^/]+", False),
+    ("POST", r"/api/v2/market/evidence", False),
+    # These return bounded metadata, never raw saved run output or credential values.
+    ("GET", r"/api/v2/(?:inbox|tico/fleet|bots|bots/[^/]+(?:/(?:turns|access|repositories|tools|automations))?|credentials)", False),
 )
 
 
@@ -63,8 +73,16 @@ def require_route(c, auth, who, method, path, query=None):
     if scoped is None:
         return
     turn_scope.require_read_route(c, who, method, path)
-    if not any(method in methods.split() and (make or not scoped.make_page) and re.fullmatch(pattern, path)
-               for methods, pattern, make in ALLOWLIST):
+    permitted = any(method in methods.split() and (make or not scoped.make_page) and re.fullmatch(pattern, path)
+                    for methods, pattern, make in ALLOWLIST)
+    if not permitted and not scoped.make_page and who.actor == "bot:" + H.FLEET_MAINTAINER:
+        # BotOps' reviewed control writes still pass its requester/card/secret policy below this gate.
+        # Reuse that exact route table; its broad GET classifier cannot admit unreviewed reads here.
+        from . import botops_act
+        routes = botops_act.DO + botops_act.CONFIRM + botops_act.ALWAYS + botops_act.THREADS
+        routes += [(verb, pattern) for verb, pattern, _ in botops_act.PERSON_ONLY]
+        permitted = any(method == verb and pattern.fullmatch(path) for verb, pattern in routes)
+    if not permitted:
         raise Problem("forbidden", "Route unavailable to a scoped turn", 403)
     download = re.fullmatch(r"/api/v2/files/([^/]+)(?:/(?:versions/([0-9]+)|thumb|poster))?", path)
     if download and method in ("GET", "HEAD") and download[1] != "search":
