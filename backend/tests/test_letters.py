@@ -456,6 +456,20 @@ def test_lowered_cap_reconciles_an_uncertain_claim_without_posting_again(api, hq
     assert len([path for path, _ in hq.calls if path == ""]) == count
 
 
+def test_refusal_on_a_retry_cannot_release_an_earlier_uncertain_claim(api, hq):
+    row = send(api, quote(api))
+    hq.timeout = True
+    approve(api, row)
+    quoted = len(hq.quotes)
+    hq.refusal = "quote_changed"
+    due(api, row)
+    api.app.state.letters.drain()
+    after = fetch(api, row)
+    assert after["status"] == "submitted" and after["billing"] == "billed"
+    assert len(hq.quotes) == quoted and hq.provider_submits == 1
+    assert any(path.startswith("/keys/") for path, _ in hq.calls)
+
+
 def test_abandoned_key_is_definitively_not_sent(api, hq):
     row = send(api, quote(api))
     hq.abandoned.add("tico-letter:" + row["id"])
