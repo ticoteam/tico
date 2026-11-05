@@ -92,7 +92,7 @@ def project(c, scoped, payload, *, auth=None):
                 task_ids.add(value["task"])
             if isinstance(value.get("task_id"), str):
                 task_ids.add(value["task_id"])
-                if value.get("field") == "file" and isinstance(value.get("id"), str):
+                if isinstance(value.get("field"), str) and isinstance(value.get("id"), str):
                     event_ids.add(value["id"])
             for _, item in object_refs(value):
                 ref = reference(item)
@@ -109,6 +109,15 @@ def project(c, scoped, payload, *, auth=None):
                         names.add(ref)
                 collect(item, parent)
     collect(payload)
+    # Task history omits its stored data column. Resolve only those event ids, never parse display text.
+    for chunk in H.chunks(sorted(event_ids)):
+        marks = ','.join('?' * len(chunk))
+        for row in c.execute(f"SELECT id,data FROM history_events WHERE id IN ({marks})", chunk):
+            data = H._json(row['data'], {})
+            source = data.get('body_sources') or data.get('source') or body_sources(data)
+            if source:
+                event_sources[row['id']] = source
+                collect(source)
     stored_text, checked_text = {}, set()
     while pending := (names | task_ids) - checked_text:
         checked_text.update(pending)
@@ -119,15 +128,6 @@ def project(c, scoped, payload, *, auth=None):
                 refs = H._json(row['refs'], {})
                 stored_text.setdefault(row['record_id'], {})[row['field']] = refs
                 collect(refs)
-    # Task history omits its stored data column. Resolve only those event ids, never parse display text.
-    for chunk in H.chunks(sorted(event_ids)):
-        marks = ','.join('?' * len(chunk))
-        for row in c.execute(f"SELECT id,data FROM history_events WHERE id IN ({marks}) AND kind='file'", chunk):
-            data = H._json(row['data'], {})
-            source = data.get('body_sources') or data.get('source') or body_sources(data)
-            if source:
-                event_sources[row['id']] = source
-                collect(source)
     # Legacy choices lost their provenance. Limit the title fallback to sources attached to these tasks.
     legacy_sources = []
     for chunk in H.chunks(sorted(task_ids)):
@@ -335,6 +335,14 @@ def project(c, scoped, payload, *, auth=None):
                                 has_denied(labels.get(label)) or label not in labels and label in legacy_titles)]
             H.clear_sourced_text(value, out, has_denied, hidden=bool(direct_denied))
             record_id = value.get('id') if isinstance(value.get('id'), str) else None
+            if record_id in event_sources:
+                H.clear_sourced_text({'body_sources': event_sources[record_id]}, out, has_denied)
+            elif value.get('field') == 'blocked_since' and value.get('new') and value.get('task_id') in tasks:
+                row = H.task(c, value['task_id'])
+                if row['blocked_kind'] == 'dependency' and value['new'] == row['blocked_since']:
+                    # Legacy history copied this episode's reason without retaining its question's sources.
+                    from . import task_holds
+                    out['note'] = task_holds.words(c, task_holds.holds(c, dict(row), who=scoped.who, auth=auth))
             dependency = value.get('blocked_kind') == 'dependency' or any(
                 hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency' for hold in value.get('holds') or [])
             if dependency and record_id in tasks:

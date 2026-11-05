@@ -140,7 +140,8 @@ def transition(c, row, effective, step_id, note, at, manual=False, stepped=False
             reason = reason[:1000]
             TH.put(c, row['id'], 'blocked', at, reason=reason, cause=kind, from_step_id=row.get('step_id'),
                    from_status=row.get('status') or 'open')
-            H._task_event(c, row['id'], H.KEEPER, 'blocked_since', None, at, reason)
+            reason, provenance = H.sourced_text(reason, TH.text_sources(c, row) if kind == 'dependency' else [])
+            H._task_event(c, row['id'], H.KEEPER, 'blocked_since', None, at, reason, data=provenance or None)
         elif manual and (str(note or '').strip() or row.get('blocked_kind') != 'manual'):
             # A person's move into a waiting step declares the hold even over one Tico found: the old reason, written
             # for the hold it replaces, never stays on a ticket parked by hand.

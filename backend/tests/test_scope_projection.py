@@ -1252,7 +1252,8 @@ def test_stored_task_copies_and_deferred_notes_keep_the_message_sources(api, mon
                 no_sources(turn_scope.project(c, scoped, note, auth=auth), (secret,))
 
 
-def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeypatch):
+@pytest.mark.parametrize('history_sources', [False, True], ids=['legacy-history', 'sourced-history'])
+def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeypatch, history_sources):
     from backend import models, task_review
     from backend.tests.test_task_review import ask as version_ask
     t, attempt = task_turn(api)
@@ -1268,10 +1269,12 @@ def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeyp
                                      models.FileVersionEdit(ask=version_ask('ana')))
         post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
                                      'status': 'waiting', 'waiting_on': 'human:ana'}, attempt['token'])
-    with api.app.state.store.read() as c:
+    with api.app.state.store.transaction() as c:
         row = H.task(c, t['id'])
         assert filename in row['blocked_reason']
         assert row['blocked_kind'] == 'dependency'
+        if not history_sources:
+            c.execute("UPDATE history_events SET data=NULL WHERE subject_id=? AND kind='blocked_since'", (t['id'],))
     response = api.patch('/api/v2/files/' + fid, json={'archived': True}, headers=headers())
     assert response.status_code == 200, response.text
     no_sources(get(api, 'tasks/' + t['id'], attempt['token']), (filename,))
