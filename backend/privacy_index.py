@@ -330,6 +330,8 @@ class ReadIndex:
         data = H._json(refs, {}) or {}
         if not isinstance(data, dict):
             raise ValueError("Unsupported message provenance")
+        if not privacy.page_message_readable(self.c, self.principals, data):
+            return False
         run = data.get("run")
         aid = data.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if any(isinstance(data.get(key), list) and data[key] for key in ("answers", "inputs")):

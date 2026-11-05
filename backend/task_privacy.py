@@ -387,6 +387,8 @@ def message_readable(c, actor, message, current=False):
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
+    if not page_message_readable(c, actor, carried):
+        return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
         source = H.message(c, carried["carries"], include_deleted=True)
@@ -1015,6 +1017,11 @@ def require_batch(c, who, row):
         require_payload(c, who, H._json(row["items"], []) or [])
         if row.get("message_id"):
             require_message(c, who, H.message(c, row["message_id"]))
+
+
+def page_message_readable(c, actor, refs):
+    """Generated file-review messages carry names in prose as well as structured refs."""
+    return page_content_readable(c, actor, [refs.get("target"), refs.get("answer")])
 
 
 def page_content_readable(c, actor, payload):

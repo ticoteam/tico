@@ -565,6 +565,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
         cols = columns.get(table, ()) if columns is not None else [r[1] for r in c.execute(f'PRAGMA table_info("{table}")')]
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
+    rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
+    rules["messages"] += " AND " + function("page_message") + "(refs)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
     rules["bot_file_activity"] += " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
@@ -747,7 +749,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
-        source_tables = set(tables) | {"pages", "rule_reads", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
+        source_tables = set(tables) | {"pages", "page_identities", "rule_reads", "pins", "pin_places", "teammate_accesses", "task_trash_assets", "home_merges", "home_merge_messages",
                                        "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
                                        "live_meeting_turns"}
         class Source:
@@ -802,7 +804,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         def manages_page(fid):
             row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             return bool(row) and page_manager(source, auth, who, row)
-        functions = {"page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
+        functions = {"page_message": (1, lambda refs: privacy.page_message_readable(source, privacy.actor(who), H._json(refs, {}) or {})),
+                     "page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
                      "file": (1, visible_file), "page_manager": (1, manages_page), "message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, lambda target, actor, ts, detail:

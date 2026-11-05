@@ -1096,7 +1096,7 @@ def bot_reads_task(c, bot, row):
     answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
-    policy = Auth.__new__(Auth)
+    policy = Auth.read_policy(c)
     opened = not c.in_transaction
     if opened:
         c.execute("SAVEPOINT bot_reads_task")

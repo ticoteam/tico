@@ -11,6 +11,7 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
 from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
 from backend.tests.test_counsel import counsel_on, source
 from backend.tests.test_files import turn
+from backend.tests.test_events import live  # noqa: F401
 from backend.tests.test_org_rules import org
 from backend.tests.test_page_audience import edit, promoted
 from backend.tests.test_pages import HTML, page
@@ -112,8 +113,8 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
     with api.app.state.store.transaction() as c:
         for number in range(5000):
             hidden = "file-" + format(number, "024x")
-            c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,first_activity_at,last_activity_at) "
-                      "VALUES(?,'ops','bot',?,'Hidden folio','page','text/html','tico_blob',?,?)", (hidden, hidden, stamp, stamp))
+            c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,last_activity_at) "
+                      "VALUES(?,'ops','bot',?,'Hidden folio','page','text/html','tico_blob',1,?,?)", (hidden, hidden, stamp, stamp))
             c.execute("INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
                       (hidden, json.dumps({"people": ["ben"]}), stamp, stamp))
     first = get(api, endpoint, token="cara-test")
@@ -124,3 +125,134 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
     assert fid in json.dumps(second[field]) and not second["has_more"]
     invalid = first["next_cursor"][:-8] + "AAAAAAAA"
     assert api.get("/api/v2/" + endpoint, params={"cursor": invalid}, headers=headers("cara-test")).status_code == 422
+
+
+@pytest.mark.slow
+def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(api, live):
+    """One canary follows every persisted attachment form through both outsider identities and a real SSE socket."""
+    from backend.tests.test_api import assign, claim, ready, runner
+    from backend.tests.test_events import ready as stream_ready
+    from backend.tests.test_assistant import room
+    from backend.task_review import file_added
+
+    org(api)
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('reader','Reader','reader@acme.example')")
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster["people"].append({"id": "reader", "email": "reader@acme.example"})
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+    api.app.state.store.settings.test_identities["reader-test"] = Identity("human:reader", "human", "reader@acme.example")
+    _, attempt = turn(api)
+    tid = post(api, "tasks", {"owner": "finance", "title": "Review folios", "body": "Review", "private": False})["id"]
+    name, title = "canary-folio-private.html", "Canary folio confidential"
+    document = b"<html><body><p>Canary confidential quote.</p>" + b"x" * 81917 + b"</body></html>"
+    made = page(api, attempt, task=tid, name=name, title=title, data=document)
+    assert made.status_code == 200, made.text
+    fid = made.json()["page"]["file_id"]
+    ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"]["file_id"]
+    question = ask("reader")
+    question["questions"][0]["options"][0]["file"] = fid + "@1"
+    comment = post(api, f"tasks/{tid}/comments", {"text": "Review the folio", "attachments": [fid + "@1"], "ask": question})["comment"]
+    patched = api.patch(f"/api/v2/files/{fid}/versions/1", json={"note": "Review", "ask": ask("reader")}, headers=headers(attempt["token"]))
+    assert patched.status_code == 200, patched.text
+    answered = post(api, f"tasks/{tid}/answers", {"target": {"file": fid, "version": 1}, "answers": {"verdict": ["Approve"]}}, token="reader-test")
+    # Keep a separate unanswered ask and its file review: task summaries must scrub its raw refs too.
+    assistant = post(api, "assistant/messages", {"text": "Review folio", "page": {"path": "#/page/" + fid, "title": title}}, token="cara-test")["message"]
+    assistant_room = room(api, "cara-test")["room_id"]
+    post(api, "pins", {"place": "dashboard", "item": "page:" + fid})
+    post(api, "pins", {"place": "person:cara", "item": "page:" + fid}, token="cara-test")
+    read_task = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="reader-test")["task_id"]
+    rule = post(api, "rules", {"kind": "external", "text": "Check the folio before publishing.", "who": {"everyone": True},
+                               "source_id": source(api), "cite": {"file_id": fid, "version": 1, "quote": "Canary confidential quote."}})
+    rid = rule["id"]
+    with api.app.state.store.transaction() as c:
+        version = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone())
+        bid = version["blob_id"]
+        blob = dict(c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone())
+        metadata = {"file_id": fid, "ref": fid + "@1", "title": title, "name": name, "size": version["size"],
+                    "version": 1, "digest": version["digest"], "kind": "page"}
+        c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (tid, bid))
+        file_added(c, Identity("bot:ops", "bot"), tid, blob, 1)
+        for mid in (comment["id"], answered["comment"]["id"], assistant["id"]):
+            refs = H.message(c, mid)["refs"]
+            refs.update({"review": {"files": [metadata]}, "visual": metadata,
+                         "blob_reference": {**metadata, "file_id": bid, "ref": bid + "@1"},
+                         "version_reference": {**metadata, "file_id": fid + "@1"}})
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), mid))
+        H.history_event(c, "task", tid, "bot:ops", "file", new=name, data={"file": bid, "version": 1})
+        H.event(c, "bot:ops", "message.visual", tid, {"visual": metadata})
+        cid = H.task(c, tid)["conversation_id"]
+        secrets = (fid, bid, title, name, str(version["size"]), fid + "@1", version["digest"], version["source_digest"])
+    signed = get(api, "pages/" + fid, token="cara-test")["page"]["src"]
+    assert api.get(signed).status_code == 200
+    # Before restriction all these are ordinary task references, including the no-audience control page.
+    for token in ("cara-test", "finance-test", "reader-test", "ben-test"):
+        assert fid in json.dumps(get(api, "pages/" + fid, token=token))
+        assert ordinary in json.dumps(get(api, "pages/" + ordinary, token=token))
+    edit(api, fid, {"people": ["reader"], "bots": [H.COUNSEL]})
+    for token in ("reader-test", "ben-test", attempt["token"]):
+        assert fid in json.dumps(get(api, "pages/" + fid, token=token))
+    machine = runner(api)
+    assign(api, machine, "finance")
+    ready(api, machine, ["finance"])
+    failures = []
+
+    def clean(label, value):
+        serialized = json.dumps(value, default=str)
+        found = [secret for secret in secrets if secret and secret in serialized]
+        if found:
+            failures.append((label, found))
+
+    def response(label, result):
+        assert result.status_code in (200, 403, 404), (label, result.status_code, result.text)
+        clean(label, {"body": result.text, "headers": dict(result.headers)})
+
+    common = ["pages", "pages?ids=" + fid, "pages?task=" + tid, "pages/" + fid,
+              "files", "files?kind=page", "files?task=" + tid, "files/search?q=Canary", "files/search?q=Canary&kind=page",
+              "bots/ops/files", "tasks", "tasks?owner=finance", "tasks/" + tid, "tasks/" + read_task,
+              "tasks/" + tid + "/files", "tasks/" + tid + "/comments", "tasks/" + tid + "/answers", "tasks/" + tid + "/tree",
+              "tasks/" + tid + "/links", "places/dashboard", "places/task:" + tid, "places/person:cara",
+              "messages/" + comment["id"], "messages/" + answered["comment"]["id"], "messages/" + assistant["id"],
+              "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",
+              "threads", "threads/search?q=Review", "threads/search?q=Canary", "context/search?q=Canary",
+              "threads/" + cid, "threads/" + cid + "/timeline", "threads/" + cid + "/members",
+              "rules?status=any", "rules/" + rid, "inbox", "answers", "status", "live/brief"]
+    for ident in (fid, bid):
+        common.extend("files/" + ident + suffix for suffix in ("", "/meta", "/versions", "/versions/1", "/activity", "/thumb", "/poster"))
+    sql_queries = ["SELECT * FROM " + table for table in ("bot_files", "bot_file_versions", "blobs", "messages", "events", "history_events", "task_assets", "task_file_reviews")]
+    for deleted in (False, True):
+        if deleted:
+            removed = api.delete("/api/v2/files/" + fid, headers=headers())
+            assert removed.status_code == 200, removed.text
+        state = "deleted" if deleted else "restricted"
+        for token, who in (("cara-test", Identity("human:cara", "human", "cara@acme.example")),
+                           ("finance-test", Identity("bot:finance", "bot", agent="test"))):
+            for path in common:
+                response(state + ":" + token + ":" + path, api.get("/api/v2/" + path, headers=headers(token)))
+            for query in sql_queries:
+                response(state + ":" + token + ":" + query, api.post("/api/v2/sql", json={"sql": query}, headers=headers(token)))
+            if token == "cara-test":
+                for path in ("assistant", "assistant/decisions", "threads/" + assistant_room + "/timeline"):
+                    response(state + ":" + path, api.get("/api/v2/" + path, headers=headers(token)))
+            # A new committed message exercises task/list/message hydration on the same event stream as the app.
+            with api.app.state.store.read() as c:
+                before = events.latest(c)
+            marker = post(api, f"tasks/{tid}/comments", {"text": "Visibility marker " + state})["comment"]["id"]
+            wanted = "messages,threads" if who.role == "bot" else "tasks,messages,bots,runs"
+            stream = live(token, "?topics=" + wanted + "&after=" + str(before))
+            assert stream.status == 200
+            stream_ready(stream)
+            stream.until(lambda frame: frame["event"] == "messages" and frame["data"].get("id") == marker)
+            clean(state + ":SSE:" + token, {"frames": stream.seen, "headers": stream.response.getheaders()})
+            stream.close()
+            with api.app.state.store.read() as c:
+                delivered, _, reset, _ = events.read(c, api.app.state.auth, who, before, topics=("tasks", "messages", "bots", "runs"))
+                clean(state + ":events.read:" + token, delivered)
+                for record in c.execute("SELECT * FROM events WHERE target IN (?,?)", (fid, tid)):
+                    if task_privacy.event_readable(c, who.actor, record):
+                        clean(state + ":event guard:" + token, dict(record))
+            assert ordinary in json.dumps(get(api, "pages/" + ordinary, token=token))
+        response(state + ":signed visual", api.get(signed))
+        clean(state + ":runner claim", claim(api, machine, "finance", key="matrix-claim"))
+    assert not failures, failures
