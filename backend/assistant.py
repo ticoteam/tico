@@ -248,6 +248,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
     (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
+    # HQ's cloud-machine support switch grants access just like the support_access team rule.
+    ("PUT", r"/api/v2/cloud-machines/support"),
     (None, r"/api/v2/credential-imports(/.*)?"), (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),
     (None, r"/api/v2/credential-requests/[^/]+/save"),
     (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
@@ -697,6 +699,7 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/settings/turn-levels"), ("POST", r"/api/v2/me/tokens/[^/]+/revoke"),
     ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
     ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
+    ("PUT", r"/api/v2/cloud-machines/support"),
     ("POST", r"/api/v2/postal/orders"),
     ("PUT", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
     ("DELETE", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),

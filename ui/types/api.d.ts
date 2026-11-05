@@ -973,6 +973,23 @@ export type CloudAgentRequest = {
   team?: string;
 };
 
+export type CloudSupportChange = {
+  on: boolean;
+};
+
+export type CloudSupportMachine = {
+  helper: "on" | "off" | "offline" | "none";
+  id: string;
+  key: string;
+  seen: string | null;
+};
+
+export type CloudSupportView = {
+  available: boolean;
+  machines: Array<CloudSupportMachine>;
+  on: boolean | null;
+};
+
 export type CommentDelivery = {
   default: "queue" | "defer" | null;
   default_for: string | null;
@@ -7564,6 +7581,11 @@ export type GetChatGoalParams = {
 export type GetChatGoalBody = never;
 export type GetChatGoalResponse = ChatGoalResult;
 
+/** GET /api/v2/cloud-machines/support */
+export type GetCloudMachineSupportParams = Record<string, never>;
+export type GetCloudMachineSupportBody = never;
+export type GetCloudMachineSupportResponse = CloudSupportView;
+
 /** GET /api/v2/company */
 export type GetCompanyParams = Record<string, never>;
 export type GetCompanyBody = never;
@@ -10757,6 +10779,11 @@ export type SetChatGoalParams = {
 };
 export type SetChatGoalBody = GoalAction;
 export type SetChatGoalResponse = ChatGoalResult;
+
+/** PUT /api/v2/cloud-machines/support */
+export type SetCloudMachineSupportParams = Record<string, never>;
+export type SetCloudMachineSupportBody = CloudSupportChange;
+export type SetCloudMachineSupportResponse = CloudSupportView;
 
 /** POST /api/v2/company-page/logo */
 export type SetCompanyLogoParams = {
