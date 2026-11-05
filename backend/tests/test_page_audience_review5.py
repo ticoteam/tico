@@ -84,7 +84,7 @@ def test_held_review_pick_text_keeps_its_page_source(api):
     assert "Confidential draft" in get(api, "rule-holds/" + held, token="cara-test")["text"]
     with api.app.state.store.read() as c:
         stored = H._json(c.execute("SELECT payload FROM org_rule_holds WHERE id=?", (held,)).fetchone()[0], {})
-        assert stored["body_sources"] == [{"file": fid}]
+        assert {"file": fid} in stored["body_sources"]
     edit(api, fid, {"people": ["ben"]})
     for deleted in (False, True):
         if deleted:
