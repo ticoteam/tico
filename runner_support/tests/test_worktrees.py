@@ -192,7 +192,7 @@ def test_retired_recovery_does_not_treat_remote_failure_as_an_unpublished_branch
     with pytest.raises(ValueError, match='cannot determine remote branch'):
         W.command(client, 'add', 'org/product')
     assert not (workspace / row['path']).exists()
-    assert not client.patch.called
+    assert [call.args[1] for call in client.patch.call_args_list] == [{'state': 'pending'}]
 
 
 @pytest.mark.slow

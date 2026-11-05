@@ -9,6 +9,8 @@ from backend.tests.test_github_app import api, gh, auth  # noqa: F401
 from backend.tests.test_worktrees import prepared, post  # noqa: F401
 from backend.tests.test_repositories import put
 
+READY = {'schema_version': 1, 'bots': {}, 'worktrees': True, 'worktree_waits': True, 'worktree_recovery': True}
+
 
 def leave_on_old_computer(api, tid, *, revoked=True):
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
@@ -27,7 +29,7 @@ def leave_on_old_computer(api, tid, *, revoked=True):
         c.execute("UPDATE task_links SET computer_id='old',state='present',detail=? WHERE id=?",
                   (json.dumps(detail), link['link_id']))
         c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
-                  (json.dumps({'schema_version': 1, 'worktrees': True, 'worktree_waits': True, 'worktree_recovery': True}),))
+                  (json.dumps(READY),))
     return link
 
 
@@ -51,7 +53,6 @@ def test_retired_status_health_recovery_and_old_reports(prepared, revoked):
         assert f'hub task worktree add Acme/product --task {tid}' in notes[0]
         assert W.recovery_prompt(c, H.task(c, tid), 'cpo') == []
     # Health uses the same retirement projection, including the last report's facts.
-    maintenance_health.check(api.app_state.store, api.app_state.auth, api.app_state.store.settings)
     with api.app_state.store.read() as c:
         findings = maintenance_health.findings(c, api.app_state.store.settings)
         assert any('retired computer' in f['detail'] and '2 unpushed' in f['detail'] for f in findings)
@@ -124,9 +125,18 @@ def test_an_old_runner_cannot_silently_recover_from_main(prepared):
     api, tid, _ = prepared
     leave_on_old_computer(api, tid)
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({'worktrees': True}),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({**READY, 'worktree_recovery': False}),))
     response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 409 and response.json()['error']['code'] == 'computer_update'
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps(READY),))
+    moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert moved.status_code == 200, moved.text
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({**READY, 'worktree_recovery': False}),))
+        row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (moved.json()['link_id'],)).fetchone())
+        assert not W.preparable(c, row, json.loads(row['detail']))
+    assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').status_code == 409
 
 
 def test_a_reserved_wait_on_a_retired_computer_is_prepared_again_instead_of_woken(prepared):
