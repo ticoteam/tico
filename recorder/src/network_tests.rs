@@ -4563,3 +4563,31 @@ fn finished_inputs_share_word_turns_in_one_order_with_their_real_times() {
     assert_eq!(sent[1]["end_ms"], 1900);
     assert_eq!(sent[1]["speaker"], "Speaker 1");
 }
+
+#[test]
+fn finished_microphone_reference_timeout_shares_without_any_meeting_chunks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Missing reference capture");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(14)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5000,
+        vec![word(1000, 1200, "My genuine reply", "")],
+    );
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[0].1["chunks"][0]["text"], "My genuine reply");
+    assert_eq!(calls[0].1["chunks"][0]["start_ms"], 1000);
+}

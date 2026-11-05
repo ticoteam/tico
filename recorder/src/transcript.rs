@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 const ECHO_MS: u64 = 1000;
 /// Live reference waits never hide speech for more than eight seconds of recording time.
-const REFERENCE_WAIT_MS: u64 = 8000;
+pub(crate) const REFERENCE_WAIT_MS: u64 = 8000;
 /// A pause this long inside one chunk ends an utterance, so the other side can interleave.
 const UTTERANCE_GAP_MS: u64 = 800;
 /// Same-speaker utterances closer than this join one line.
@@ -344,7 +344,7 @@ pub fn echo_ready(record: &Recording, from: u64, to: u64, them: &[Word]) -> bool
             .all(|c| ["done", "silence", "failed"].contains(&c.status.as_str()))
 }
 
-fn recording_ms(record: &Recording) -> Option<u64> {
+pub(crate) fn recording_ms(record: &Recording) -> Option<u64> {
     let start = chrono::DateTime::parse_from_rfc3339(&record.started_at).ok()?;
     Some(
         chrono::Utc::now()

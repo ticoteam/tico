@@ -1229,6 +1229,8 @@ impl<'a> Queue<'a> {
         record: &Recording,
         frontier: u64,
     ) -> Result<()> {
+        let expired = transcript::recording_ms(record)
+            .map_or(0, |now| now.saturating_sub(transcript::REFERENCE_WAIT_MS));
         let watermark = if record.state != "recording" {
             u64::MAX
         } else {
@@ -1243,6 +1245,7 @@ impl<'a> Queue<'a> {
                         .map(|chunk| chunk.end_ms)
                         .max()
                         .unwrap_or(0)
+                        .max(expired)
                 })
                 .min()
                 .unwrap_or(0)

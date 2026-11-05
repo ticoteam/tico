@@ -18,15 +18,27 @@ static BOOL builtIn(AudioDeviceID device) {
     return readProperty(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal,
                         &transport, sizeof(transport)) && transport == kAudioDeviceTransportTypeBuiltIn;
 }
+static BOOL speakers(AudioDeviceID device) {
+    if (!builtIn(device)) return NO;
+    UInt32 source = 0;
+    if (readProperty(device, kAudioDevicePropertyDataSource, kAudioDevicePropertyScopeOutput,
+                     &source, sizeof(source))) return source == 'ispk';
+    UInt32 connected = 0;
+    if (readProperty(device, kAudioDevicePropertyJackIsConnected, kAudioDevicePropertyScopeOutput,
+                     &connected, sizeof(connected))) return connected == 0;
+    CFStringRef uid = NULL;
+    if (!readProperty(device, kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal,
+                      &uid, sizeof(uid))) return NO;
+    BOOL result = [(__bridge NSString *)uid isEqualToString:@"BuiltInSpeakerDevice"];
+    CFRelease(uid);
+    return result;
+}
 static BOOL eligible(const char *selected) {
     AudioDeviceID input = 0, output = 0;
     if (!readProperty(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultInputDevice,
                       kAudioObjectPropertyScopeGlobal, &input, sizeof(input)) || !builtIn(input) ||
         !readProperty(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultOutputDevice,
-                      kAudioObjectPropertyScopeGlobal, &output, sizeof(output)) || !builtIn(output)) return NO;
-    UInt32 source = 0;
-    if (!readProperty(output, kAudioDevicePropertyDataSource, kAudioDevicePropertyScopeOutput,
-                      &source, sizeof(source)) || source != 'ispk') return NO;
+                      kAudioObjectPropertyScopeGlobal, &output, sizeof(output)) || !speakers(output)) return NO;
     if (selected) {
         CFStringRef name = NULL;
         if (!readProperty(input, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
@@ -57,6 +69,8 @@ static BOOL eligible(const char *selected) {
 @property dispatch_queue_t queue;
 @property NSMutableArray *observers;
 @property BOOL stopped;
+@property AudioDeviceID selectedDevice;
+@property NSString *selectedName;
 @property BOOL testing;
 @property BOOL failVoice;
 @property NSUInteger generation;
@@ -70,6 +84,11 @@ static BOOL eligible(const char *selected) {
         AVAudioEngine *engine = [AVAudioEngine new];
         AVAudioInputNode *input = engine.inputNode;
         NSError *error = nil;
+        if (!processed && self.selectedDevice != 0) {
+            AudioDeviceID device = self.selectedDevice;
+            if (AudioUnitSetProperty(input.audioUnit, kAudioOutputUnitProperty_CurrentDevice,
+                                     kAudioUnitScope_Global, 0, &device, sizeof(device)) != noErr) return nil;
+        }
         if (processed) {
             if (![input setVoiceProcessingEnabled:YES error:&error]) return nil;
             input.voiceProcessingOtherAudioDuckingConfiguration =
@@ -125,8 +144,18 @@ static BOOL eligible(const char *selected) {
         if (!self.failVoice) self.voice = (AVAudioEngine *)[NSObject new];
     } else {
         self.raw = [self engine:NO context:self.rawContext];
-        if (!self.raw) return NO;
-        if (eligible(NULL)) self.voice = [self engine:YES context:self.voiceContext];
+        if (!self.raw) {
+            // A route can announce its new format before its hardware is ready. Keep trying
+            // plain capture rather than removing the last observer and silently losing the mic.
+            __weak TicoVoiceCapture *weak = self;
+            NSUInteger generation = self.generation;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 5), self.queue, ^{
+                TicoVoiceCapture *capture = weak;
+                if (capture && !capture.stopped && capture.generation == generation) [capture restart];
+            });
+            return NO;
+        }
+        if (eligible(self.selectedName.UTF8String)) self.voice = [self engine:YES context:self.voiceContext];
     }
     self.rawContext.state(self.rawContext.pointer, self.voice != nil);
     [self observe:self.raw];
@@ -163,6 +192,13 @@ void *tico_voice_start(const char *selected, void *raw, void *voice, TicoVoiceRe
         capture.voiceContext.receive = receive;
         capture.voiceContext.releaseContext = releaseContext;
         if (!testing && !eligible(selected)) return NULL;
+        if (selected && !testing) {
+            capture.selectedName = [NSString stringWithUTF8String:selected];
+            AudioDeviceID device = 0;
+            if (!readProperty(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultInputDevice,
+                              kAudioObjectPropertyScopeGlobal, &device, sizeof(device))) return NULL;
+            capture.selectedDevice = device;
+        }
         __block BOOL started = NO;
         dispatch_sync(capture.queue, ^{ started = [capture restart]; });
         if (!started) return NULL;
