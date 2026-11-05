@@ -117,6 +117,7 @@ struct Inner {
 }
 
 struct Shared<W> {
+    allocation: super::Allocation,
     bot: String,
     cmd: Vec<String>,
     tx: Events,
@@ -134,7 +135,7 @@ impl<W: Wire> Clone for OneShot<W> {
 
 impl<W: Wire> OneShot<W> {
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events) -> Self {
-        OneShot(Arc::new(Shared { bot: bot.into(), cmd, tx, inner: Mutex::new(Inner::default()), _wire: Default::default() }))
+        OneShot(Arc::new(Shared { allocation: super::Allocation::default(), bot: bot.into(), cmd, tx, inner: Mutex::new(Inner::default()), _wire: Default::default() }))
     }
 
     pub fn cmd(&self) -> &[String] {
@@ -168,6 +169,14 @@ impl<W: Wire> OneShot<W> {
         if let Some(r) = reader {
             let _ = tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(1), r).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
+    }
+
+    pub(super) fn process_allocated(&self) {
+        self.0.allocation.mark();
     }
 
     pub fn alive(&self) -> bool {
@@ -206,6 +215,7 @@ impl<W: Wire> OneShot<W> {
             .envs(&env);
         super::new_group(&mut command);
         let mut child = command.spawn()?;
+        self.process_allocated();
         let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
         Ok((child, stderr))
     }

@@ -26,7 +26,7 @@ async function renderSettingsCompany() {
     button.onclick = async () => {
       if (!await settingsConfirm({title: `Disconnect from ${v.company.name}?`, ok: 'Disconnect', text: 'This server stops being linked to its company on app.tico.dev until it is connected again.'})) return;
       button.disabled = true; status.textContent = 'Disconnecting…';
-      try { await writeRequest('DELETE', '/v2/company/server-connection'); await renderSettingsCompany(); }
+      try { await writeRequest('DELETE', '/v2/company/server-connection'); await refreshConfig(); await renderSettingsCompany(); }
       catch (e) { status.textContent = e.message; button.disabled = false; }
     };
     return;
@@ -55,7 +55,7 @@ async function renderSettingsCompany() {
         shown = result.company;
         form.querySelector('[data-company-preview-name]').textContent = shown.name;
         preview.hidden = false; status.textContent = '';
-      } else { input.value = ''; await renderSettingsCompany(); }
+      } else { input.value = ''; await refreshConfig(); await renderSettingsCompany(); }
     } catch (e) { status.textContent = e.message; if (!isPreview) clear(); }
     finally { busy = submit.disabled = connect.disabled = false; }
   };
