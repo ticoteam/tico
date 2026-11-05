@@ -2019,7 +2019,7 @@ def cmd_reply(args):
                         body=state["body"])
     payload = dict(payload, sent=sent.get("sent", False))
     for k in ("downgraded", "reason", "gate", "message", "key", "already_sent", "would_send",
-              "note", "checks"):
+              "note", "checks", "queued", "send_id", "state", "send_after", "approval_id"):
         if k in sent:
             payload[k] = sent[k]
     return send_result(ctx, payload)
@@ -2431,7 +2431,7 @@ def cmd_schedule(args):
         sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
                             state["thread_id"], state["msgs"], state["verdict"],
                             approval=args.approval_issue, body=state["body"])
-        if not sent.get("sent"):
+        if not sent.get("sent") and not sent.get("queued"):
             raise Refused(sent.get("reason", "the confirmation was not sent"),
                           "The event was rolled back; nothing is on the calendar and nothing "
                           "was said. Fix the reason and run it again.")
@@ -2441,7 +2441,9 @@ def cmd_schedule(args):
                   {"why": "the confirmation did not send", "thread": args.thread})
         raise
     payload.update({"scheduled": True, "event": event.get("id", ""), "slot": would,
-                    "sent": True, "message": sent.get("message", ""), "key": sent.get("key")})
+                    "sent": bool(sent.get("sent")), "queued": bool(sent.get("queued")),
+                    "send_id": sent.get("send_id"), "send_after": sent.get("send_after"),
+                    "message": sent.get("message", ""), "key": sent.get("key")})
     return send_result(ctx, payload)
 
 

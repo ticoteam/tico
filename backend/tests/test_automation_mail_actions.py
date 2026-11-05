@@ -162,7 +162,10 @@ def approve_and_dispatch(api, computer, send_id=None):
     post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
     assert computer.worker.email_send_tick() == 0  # approval starts the undo window
     with later(3):
-        assert computer.worker.email_send_tick() == 1
+        count = computer.worker.email_send_tick()
+        with api.app.state.store.read() as c:
+            state = c.execute("SELECT state,decision,detail,send_after FROM email_sends WHERE id=?", (row["id"],)).fetchone()
+        assert count == 1, dict(state)
     return row["id"]
 
 
@@ -311,7 +314,10 @@ def test_a_send_whose_answer_was_lost_inside_the_cli_is_not_sent_again(api, comp
         real(self, draft_id)
         raise gm.Failure("connection reset after the send", status=503)
     with later(3), mock.patch.object(gm.Gmail, "send_draft", sent_then_crash):
-        assert computer.worker.email_send_tick() == 1
+        count = computer.worker.email_send_tick()
+        with api.app.state.store.read() as c:
+            state = c.execute("SELECT state,decision,detail,send_after FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        assert count == 1, dict(state)
     assert len(computer.gmail.sent) == 1
     repeated = computer.action({"id": queued["id"], "mailbox": BOX, "action": "dispatch_send"})
     assert repeated["status"] == "unknown" and repeated["retry"] is False

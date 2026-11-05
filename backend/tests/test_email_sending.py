@@ -147,9 +147,9 @@ def test_due_send_is_dispatched_once_with_a_receipt_and_audit(inbox):
     machine = runner(inbox)
     assert claim(inbox, machine["token"])["id"] == queued["id"]
     path = "connectors/email/sends/" + queued["id"]
-    permitted = post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"])
+    permitted = post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"], key="one-permit")
     assert S.snapshot(permitted["send"]["raw"], BOX)["content_sha256"] == queued["content_sha256"]
-    assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"] is None
+    assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"], key="one-permit")["send"] is None
     receipt = post(inbox, path + "/result", {"status": "sent", "message": "provider-123"}, token=machine["token"])
     assert receipt["send"]["provider_message_id"] == "provider-123"
     assert receipt["send"]["attachments"] == [{"name": "proof.pdf", "sha256": S.digest(b"proof")}]
@@ -237,6 +237,17 @@ def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(in
     assert claim(inbox, machine["token"]) is None
     with inbox.app.state.store.read() as c:
         assert c.execute("SELECT state FROM automation_mail_actions WHERE id='action'").fetchone()[0] == "failed"
+
+
+def test_assistant_acting_for_a_person_queues_as_that_person_and_cannot_change_policy(inbox):
+    from backend.auth import Identity
+    inbox.app.state.store.settings.test_identities["assistant-test"] = Identity(
+        "human:ana", "owner", BOX, via="assistant", task_actor="bot:coo")
+    queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime()}, token="assistant-test")["send"]
+    assert queued["actor"] == "human:ana" and queued["via"] == "assistant"
+    assert queued["state"] == "waiting_approval"
+    response = inbox.put("/api/v2/email/sending-policy", json={"mode": "on_their_own"}, headers=headers("assistant-test"))
+    assert response.status_code == 403
 
 
 def test_migration_snapshots_existing_authorizations_without_granting_new_ones():

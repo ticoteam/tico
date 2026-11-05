@@ -102,7 +102,7 @@ class OwnerInstruction(Stage2):
         self.order()
         self.answer.update(ok=True, problems=[])
         out = self.send(draft["draft"], "--approval-issue", ORDER)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertFalse(out["review_reused"])
         self.assertEqual(len(self.prompts), 2)
         prompt = self.prompts[-1]
@@ -124,7 +124,7 @@ class OwnerInstruction(Stage2):
                                      "--body-file", self.body_file(GOOD_BODY), "--issue", "42",
                                      "--approval-issue", ORDER, "--json")
         self.assertEqual(rc, 0, err)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
 
     def test_a_server_authorized_senders_instruction_reaches_the_reviewer_without_a_local_owner(self):
@@ -132,7 +132,7 @@ class OwnerInstruction(Stage2):
         self.order(sender_id="human:ana", sender_can_approve_send=True)
         with mock.patch.object(pl, "OWNER", "owner"):
             out = self.send(draft["draft"], "--approval-issue", ORDER)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
         self.assertIn(f"verified: human:ana, in Tico message; approval {ORDER}", self.prompts[-1])
 
@@ -142,7 +142,7 @@ class OwnerInstruction(Stage2):
         pl.RUN = gh_answer(title=title, body=body)
         draft = self.draft()
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertEqual(instruction_in(self.prompts[-1]), title + "\n" + body)
         self.assertIn(f"verified: owner:{access.OWNER}, in GitHub Issue; approval 77", self.prompts[-1])
 
@@ -185,7 +185,7 @@ class OwnerInstruction(Stage2):
             "owner_instruction": INSTRUCTION}}
         pl.HUB_GET = lambda path: row if path == f"approvals/{APPROVAL}" else None
         out = self.send(draft["draft"], "--approval-issue", APPROVAL)
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertIsNone(instruction_in(self.prompts[-1]))
         self.assertNotIn("The bot claims", self.prompts[-1])
 
@@ -195,7 +195,7 @@ class OwnerInstruction(Stage2):
         draft = self.draft("--attach", "answer.pdf")
         pl.RUN = gh_answer(body=f"Send to: {AVA}\nSend different.pdf, sha256 {'a' * 64}")
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertIn("different.pdf", instruction_in(self.prompts[-1]))
 
     def test_owner_permission_does_not_override_unsupported_claims_or_commitments(self):
@@ -248,7 +248,7 @@ class OwnerInstruction(Stage2):
     def test_a_plain_send_keeps_reusing_its_fresh_review(self):
         draft = self.draft()
         out = self.send(draft["draft"])
-        self.assertTrue(out["sent"], out)
+        self.assertTrue(out["queued"], out)
         self.assertTrue(out["review_reused"])
         self.assertEqual(len(self.prompts), 1)
 

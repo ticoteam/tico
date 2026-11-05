@@ -366,7 +366,9 @@ def decision(c, auth, row, *, dispatch=False):
         found = c.execute("SELECT a.*,m.owner_id,m.enabled,m.deleted_at,m.flow FROM automation_mail_actions a "
                           "JOIN automations m ON m.id=a.automation_id WHERE a.id=?", (row["automation_action_id"],)).fetchone()
         from .automation_actions import acts_as, send_on
-        if (not found or found["deleted_at"] or acts_as(c, {"flow": json.loads(found["flow"])}) != row["actor"]
+        if (not found or found["deleted_at"] or not found["enabled"]
+                or found["state"] not in ("claimed", "waiting_send")
+                or acts_as(c, {"flow": json.loads(found["flow"])}) != row["actor"]
                 or not send_on(c, row["mailbox"])):
             blocked.append("automation_revoked")
     if c.execute("SELECT 1 FROM email_suppressed_recipients WHERE mailbox=? AND address IN ("
@@ -577,7 +579,7 @@ def install(app, store, auth, mutate):
     @app.put("/api/v2/email/sending-policy")
     def write_company(request: Request, body: PolicyUpdate):
         company(request.state.identity, write=True)
-        return mutate(request, body, lambda c: (update_policy(c, request.state.identity, "company", body), policy_view(c))[1])
+        return mutate(request, body, lambda c: (update_policy(c, request.state.identity, "company", body), policy_view(c))[1], durable=True)
 
     @app.get("/api/v2/email/inboxes/{mailbox}/sending-policy")
     def read_inbox(request: Request, mailbox: str):
@@ -590,7 +592,7 @@ def install(app, store, auth, mutate):
             address = inbox(c, mailbox, request.state.identity, manage=True)
             update_policy(c, request.state.identity, "inbox:" + address, body)
             return policy_view(c, address)
-        return mutate(request, body, work)
+        return mutate(request, body, work, durable=True)
 
     @app.get("/api/v2/bots/{bot}/email-sending-policy")
     def read_bot(request: Request, bot: str, mailbox: str = ""):
@@ -606,7 +608,7 @@ def install(app, store, auth, mutate):
             ref = bot_ref(c, request.state.identity, bot, write=True)
             update_policy(c, request.state.identity, "bot:" + ref, body)
             return policy_view(c, bot=ref)
-        return mutate(request, body, work)
+        return mutate(request, body, work, durable=True)
 
     @app.post("/api/v2/email/sends")
     def queue(request: Request, body: Enqueue):
@@ -628,7 +630,7 @@ def install(app, store, auth, mutate):
             policy = effective(c, body.mailbox.strip().lower(), H.actor_id(actor) if actor.startswith("bot:") else "")
         snap = snapshot(body.raw, body.mailbox.strip().lower())
         classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": False, "status": "off"}
-        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=who.via)})
+        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=who.via)}, durable=True)
 
     @app.get("/api/v2/email/sends")
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
@@ -683,7 +685,7 @@ def install(app, store, auth, mutate):
             c.execute("DELETE FROM email_suppressed_recipients WHERE mailbox=? AND address=?", (box, address.lower()))
             H.event(c, request.state.identity.actor, "email.unsuppressed", box, {"address": address.lower()})
             return {"ok": True}
-        return mutate(request, Empty(), work)
+        return mutate(request, Empty(), work, durable=True)
 
     @app.post("/api/v2/email/sends/{sid}/approve")
     def bind_approval(request: Request, sid: str, body: SendApproval):
@@ -695,7 +697,7 @@ def install(app, store, auth, mutate):
                 raise Problem("state", "This email is not waiting for approval", 409)
             c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (body.approval_id, sid))
             return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
-        return mutate(request, body, work)
+        return mutate(request, body, work, durable=True)
 
     @app.post("/api/v2/email/sends/{sid}/cancel")
     def cancel(request: Request, sid: str):
@@ -711,7 +713,7 @@ def install(app, store, auth, mutate):
             settle_automation(c, row, "canceled")
             H.event(c, request.state.identity.actor, "email.canceled", sid, {})
             return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
-        return mutate(request, Empty(), work)
+        return mutate(request, Empty(), work, durable=True)
 
     @app.post("/api/v2/connectors/email/sends/claim")
     def claim(request: Request, body: Claim):
@@ -754,9 +756,9 @@ def install(app, store, auth, mutate):
                     continue
                 c.execute("UPDATE email_sends SET state='dispatching',decision=?,runner_id=?,claimed_at=? WHERE id=?",
                           (dump(found), runner["id"], now, row["id"]))
-                return {"send": {"id": row["id"], "mailbox": mailbox, "raw": row["raw"], "thread_id": row["thread_id"]}}
+                return {"send": {"id": row["id"], "mailbox": mailbox, "thread_id": row["thread_id"]}}
             return {"send": None}
-        return mutate(request, body, work)
+        return mutate(request, body, work, durable=True)
 
     @app.post("/api/v2/connectors/email/sends/{sid}/dispatch")
     def dispatch(request: Request, sid: str, body: Claim):
@@ -773,10 +775,13 @@ def install(app, store, auth, mutate):
                           (dump(found), ", ".join(found["reasons"]), H.now(), sid))
                 settle_automation(c, row, "blocked", ", ".join(found["reasons"]))
                 return {"send": None}
-            c.execute("UPDATE email_sends SET provider_attempted_at=? WHERE id=?", (H.now(), sid))
+            c.execute("UPDATE email_sends SET provider_attempted_at=?,decision=? WHERE id=?", (H.now(), dump(found), sid))
+            H.event(c, row["actor"], "email.dispatch", sid, {"mailbox": row["mailbox"]})
             return {"send": {"id": sid, "raw": row["raw"], "thread_id": row["thread_id"], "actor": row["actor"],
                              "recipients": json.loads(row["recipients"]), "subject": row["subject"], "draft_id": row["draft_id"]}}
-        return mutate(request, body, work)
+        # A permit is never cached as an idempotency response: even the same request key cannot replay it.
+        with store.transaction(durable=True) as c:
+            return work(c)
 
     @app.post("/api/v2/connectors/email/sends/{sid}/result")
     def receipt(request: Request, sid: str, body: Receipt):
@@ -797,4 +802,4 @@ def install(app, store, auth, mutate):
             H.event(c, row["actor"], "email." + body.status, sid, {"mailbox": row["mailbox"], "provider_message_id": body.message})
             settle_automation(c, row, body.status, body.detail, body.message)
             return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
-        return mutate(request, body, work)
+        return mutate(request, body, work, durable=True)

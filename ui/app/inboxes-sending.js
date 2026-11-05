@@ -36,7 +36,13 @@ function ibSendBind(host, path, ctx) {
     const button = form.querySelector('button[type="submit"]'), error = form.querySelector('[data-send-error]');
     button.disabled = true;
     error.textContent = '';
-    try { await put(path, body); if (ctx.live()) { toast('Sending policy saved'); ctx.refresh(); } }
+    try {
+      await put(path, body);
+      if (ctx.live()) {
+        form.querySelectorAll('input, textarea').forEach(field => { field.defaultValue = field.value; field.blur(); });
+        toast('Sending policy saved'); ctx.refresh();
+      }
+    }
     catch (e) { if (ctx.live()) error.textContent = e.message; }
     finally { if (button.isConnected) button.disabled = false; }
   };
