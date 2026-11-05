@@ -29,7 +29,7 @@ body. The page lists them grouped by folder.
   seconds or when it needs more than 1 GiB of memory. The file is refused, and nothing is saved. A server converts two
   files at once. An import that starts while two are converting is refused at once: "Imports are busy right now. Try again
   in a minute." A file that converts to over 1,000,000 characters is refused. If you close the page while a file
-  converts, the conversion stops and nothing is saved.
+  converts, the server tries to stop the conversion. A file that finishes converting before the server stops it is still saved.
 - **Every change is a version.** **History** lists them (who, when, the note; "by Ops" for a bot), shows any old
   version, and **Restore** saves it as a new version. Nothing is rewritten or lost.
 - **Editing together.** Saving sends the version you opened. If someone (or a bot) saved first you get "Ben saved
