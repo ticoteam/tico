@@ -283,6 +283,8 @@ without `--part`, the command runs the whole gate, with desktop only where the L
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
 (`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
 install the update. It does not cover the macOS or Windows installers.
+Python tests marked `alone` run without workers after their shard's parallel tests pass, so wall-clock budgets do not
+compete with other pytest workers. Both passes share one check and contribute to its JUnit report and shard timings.
 Beside the gate, eight `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into eight
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
