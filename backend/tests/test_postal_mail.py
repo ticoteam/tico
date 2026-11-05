@@ -5,6 +5,7 @@ email-in adapter turns an attachment into a letter, and a failure marks the lett
 task."""
 import base64
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -13,8 +14,9 @@ from backend import hubdb as H
 from backend import postal_mail as P
 from backend.tests.test_api import api, get, post, put  # noqa: F401
 from backend.tests.test_api import headers
+from backend.tests.test_api import setup_attempt
 from backend.tests.test_hook_relay import hq, service  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.test_mcp import call, rpc
 from backend import bot_settings as BS
 
 SYSTEM = "hr_00000000000000a1"        # the install's `_tico` system relay
@@ -100,8 +102,8 @@ def letter(api, ident, kind, decided=None, deadline=None, summary=None):
     svc.engine.answers[summary] = decided or (kind, 0.95)
 
 
-def deliver(hq, ident, relay=MAIL, seq=None, checks=False):
-    body = json.dumps({"item_id": ident, "box": "DE-1", "state": "DE", "num_pages": 2,
+def deliver(hq, ident, relay=MAIL, seq=None, checks=False, address="DE-1", assignment_id=None):
+    body = json.dumps({"item_id": ident, "box": address, "assignment_id": assignment_id, "state": "DE", "num_pages": 2,
                        "received_at": "2026-10-30T09:00:00Z", "flags": {"containsChecks": checks}}).encode()
     hq.queue.append({"hq_seq": seq or len(hq.queue) + 1, "relay_id": relay, "trigger_id": "_mail",
                      "delivery_id": "mail:" + ident, "received_at": "2026-10-30T09:00:00Z", "headers": {},
@@ -160,6 +162,157 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
         assert scan(api, row, token) == 404
     assert call(api, "hub_mail_read", {"item_id": row["id"]}, token="ben-test")[0] is True
     assert call(api, "hub_mail_read", {"item_id": row["id"]})[1]["item"]["kind"] == "legal"
+
+
+def test_read_grants_open_private_letters_and_scans_through_api_and_mcp_and_revoke(api, hq, mail):
+    token = setup_attempt(api, "ops")[2]["token"]
+    letter(api, "111", "legal", summary="Court papers")
+    deliver(hq, "111", assignment_id="as_de")
+    service(api).tick()
+    drain(api)
+    row = items(api)["111"]
+    assert get(api, "postal/items", token)["items"] == []
+    get(api, "postal/items/" + row["id"], token, expected=404)
+    assert scan(api, row, token) == 404
+    assert call(api, "hub_mail_list", {}, token=token)[1]["items"] == []
+    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[0] is True
+    offered = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
+    assert {"hub_mail_list", "hub_mail_read"} <= offered
+
+    path = "postal/addresses/all/grants/bot/ops"
+    grant = put(api, path, {"level": "read"})["grant"]
+    assert (grant["grantee_id"], grant["level"], grant["granted_by_id"]) == ("ops", "read", "human:ana")
+    assert put(api, path, {"level": "read"})["grant"] == grant  # repeat does not rewrite attribution
+    assert get(api, "postal/items", token)["items"][0]["id"] == row["id"]
+    assert get(api, "postal/items/" + row["id"], token)["item"]["summary"] == "Court papers"
+    assert scan(api, row, token) == 200
+    assert call(api, "hub_mail_list", {}, token=token)[1]["items"][0]["summary"] == "Court papers"
+    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["file_url"]
+    # A Read grant on letters gives no right to change or read the private task itself.
+    get(api, "tasks/" + row["task_id"], token, expected=404)
+    response = api.delete("/api/v2/" + path, headers=headers())
+    assert response.status_code == 200
+    assert get(api, "postal/items", token)["items"] == []
+    assert scan(api, row, token) == 404
+    with api.app.state.store.read() as c:
+        events = c.execute("SELECT actor,action FROM events WHERE action IN ('mail.access_granted','mail.access_revoked') "
+                           "ORDER BY rowid").fetchall()
+        assert [tuple(r) for r in events] == [("human:ana", "mail.access_granted"), ("human:ana", "mail.access_revoked")]
+
+
+def test_address_grants_do_not_leak_other_assignments(api, hq, mail):
+    token = setup_attempt(api, "ops")[2]["token"]
+    for ident, assignment in (("121", "as_de"), ("122", "as_ca")):
+        letter(api, ident, "legal")
+        # Two recipients may share one postal street address; their assignments stay separate.
+        deliver(hq, ident, address="1 Main St", assignment_id=assignment)
+    service(api).tick()
+    drain(api)
+    put(api, "postal/addresses/as_de/grants/bot/ops", {"level": "read"})
+    got = items(api)
+    assert [r["external_id"] for r in get(api, "postal/items", token)["items"]] == ["121"]
+    assert scan(api, got["121"], token) == 200
+    get(api, "postal/items/" + got["122"]["id"], token, expected=404)
+    assert scan(api, got["122"], token) == 404
+    assert get(api, "postal/items/" + got["121"]["id"], token)["item"]["address_id"] == "as_de"
+
+    put(api, "postal/addresses/as_ca/grants/person/cara", {"level": "read"})
+    assert [r["external_id"] for r in get(api, "postal/items", "cara-test")["items"]] == ["122"]
+    assert scan(api, got["122"], "cara-test") == 200
+    assert scan(api, got["121"], "cara-test") == 404
+
+
+def test_only_owners_or_admins_manage_mail_grants_and_routing(api):
+    token = setup_attempt(api, "ops")[2]["token"]
+    path = "postal/addresses/all/grants/bot/ops"
+    for denied in ("cara-test", token):
+        get(api, "postal/addresses/all/grants", denied, expected=403)
+        put(api, path, {"level": "read"}, denied, expected=403)
+        assert api.delete("/api/v2/" + path, headers=headers(denied)).status_code == 403
+        put(api, "postal/settings", {"legal_bot_id": "ops"}, denied, expected=403)
+    put(api, path, {"level": "write"}, expected=422)
+    put(api, "postal/addresses/all/grants/bot/missing", {"level": "read"}, expected=404)
+    put(api, "postal/addresses/all/grants/person/missing", {"level": "read"}, expected=404)
+    put(api, path, {"level": "read"}, "ben-test")
+    assert get(api, "postal/addresses/all/grants")["grants"][0]["granted_by_id"] == "human:ben"
+    put(api, "postal/settings", {"legal_bot_id": "ops"}, "ben-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='archived' WHERE id='ops'")
+    assert api.delete("/api/v2/" + path, headers=headers("ben-test")).status_code == 200
+    assert get(api, "postal/addresses/all/grants")["grants"] == []
+
+
+def test_legal_mail_routes_to_chosen_bot_privately_and_notifies_owner_then_resets(api, hq, mail):
+    put(api, "postal/settings", {"legal_bot_id": "ops"})
+    token = setup_attempt(api, "ops")[2]["token"]
+    # Identical summaries are separate letters, never duplicate tasks or lost legal papers.
+    for ident in ("131", "132"):
+        letter(api, ident, "legal", summary="A summons", deadline="2026-11-20")
+        deliver(hq, ident)
+    service(api).tick()
+    drain(api)
+    got = items(api)
+    assert got["131"]["task_id"] != got["132"]["task_id"]
+    for row in got.values():
+        made = task(api, row["task_id"])
+        assert (made["owner_id"], made["requester_id"], made["private"], made["due_at"]) == (
+            "bot:ops", "human:ana", 1, "2026-11-20")
+        get(api, "postal/items/" + row["id"], "cara-test", expected=404)
+        assert scan(api, row) == scan(api, row, token) == 200
+        with api.app.state.store.read() as c:
+            assert H.task_private_readable(c, "human:ana", made)
+            notice = c.execute("SELECT body FROM messages WHERE recipient_id='human:ana' "
+                               "AND json_extract(refs,'$.task')=? AND body LIKE 'Legal mail:%'", (row["task_id"],)).fetchone()
+            assert notice and "2026-11-20" in notice[0]
+    put(api, "postal/settings", {"legal_bot_id": None})
+    letter(api, "133", "legal")
+    deliver(hq, "133")
+    service(api).tick()
+    drain(api)
+    assert task(api, items(api)["133"]["task_id"])["owner_id"] == "human:ana"
+    assert task(api, got["131"]["task_id"])["owner_id"] == "bot:ops"
+
+
+def test_a_paused_legal_bot_falls_back_to_owner(api, hq, mail):
+    put(api, "postal/settings", {"legal_bot_id": "ops"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE id='ops'")
+    put(api, "postal/settings", {"legal_bot_id": "ops"}, expected=422)
+    letter(api, "141", "legal")
+    deliver(hq, "141")
+    service(api).tick()
+    drain(api)
+    assert task(api, items(api)["141"]["task_id"])["owner_id"] == "human:ana"
+
+
+def test_mail_grants_upgrade_preserves_existing_letters_and_owner_routing(api, hq, mail):
+    letter(api, "151", "legal")
+    deliver(hq, "151")
+    service(api).tick()
+    drain(api)
+    before = items(api)
+    migration = Path(__file__).resolve().parents[1] / "migrations/20261105040742_postal_mail_grants_and_routing.sql"
+    with api.app.state.store.transaction() as c:
+        c.execute("DROP TABLE postal_mail_grants")
+        c.execute("DROP TABLE postal_mail_settings")
+        H._apply(c, migration.read_text())
+        assert c.execute("SELECT count(*) FROM postal_mail_grants").fetchone()[0] == 0
+    assert items(api) == before
+    assert get(api, "postal/settings")["settings"]["legal_bot_id"] is None
+    letter(api, "152", "legal")
+    deliver(hq, "152")
+    service(api).tick()
+    drain(api)
+    assert task(api, items(api)["152"]["task_id"])["owner_id"] == "human:ana"
+
+
+def test_mail_grants_are_paged(api):
+    put(api, "postal/addresses/all/grants/bot/ops", {})
+    put(api, "postal/addresses/all/grants/person/cara", {})
+    first = get(api, "postal/addresses/all/grants?limit=1")
+    second = get(api, "postal/addresses/all/grants?limit=1&after=" + first["next"])
+    assert len(first["grants"]) == len(second["grants"]) == 1
+    assert first["grants"][0]["id"] != second["grants"][0]["id"] and second["next"] is None
 
 
 def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):

@@ -120,6 +120,7 @@ def _derived(label, size=40):
 def seed(b):
     _inboxes(b)
     _letters(b)
+    b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
     _gateway(b)
     _runners(b)
     _move_gateway_bots(b)

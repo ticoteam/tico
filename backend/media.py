@@ -427,16 +427,16 @@ def blob_for(c, auth, who, bid):
     row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
-    from . import task_privacy as privacy
-    if not privacy.blob_readable(c, privacy.actor(who), bid):
-        raise Problem("not_found", "File not found", 404)
-    # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
+    # Explicit letter grants cover scans independently of the private task that stores them.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)
     if scan is not None:
         if not scan:
             raise Problem("not_found", "File not found", 404)
         return row
+    from . import task_privacy as privacy
+    if not privacy.blob_readable(c, privacy.actor(who), bid):
+        raise Problem("not_found", "File not found", 404)
     # Ownership of the company account is not ordinary access to another person's
     # private Tico attachment. Shared-room and task access is derived from the linked
     # object below, using the same authorization as its conversation or task.
