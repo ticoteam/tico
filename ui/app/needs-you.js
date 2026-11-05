@@ -102,16 +102,9 @@ function needRowHTML(it, ctx = {}) {
 // thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
+const NEEDS_TASK_KINDS = ['task', 'question', 'waiting', 'declined'];
 const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
-const needsExtras = () => (S.v2?.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && !decideGone(decideItemKey(it)));
-// The Tasks count includes these on unread pages too, less cards just answered here. The whole attention count also
-// includes Inbox's items and other task types; switching to it while paging makes the number depend on scrolling.
-function needsExtrasCount() {
-  const counts = S.v2?.needsByKind;
-  if (!counts) return needsExtras().length;
-  const gone = (S.v2.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && decideGone(decideItemKey(it))).length;
-  return Math.max(0, NEEDS_EXTRA_KINDS.reduce((n, kind) => n + (counts[kind] || 0), 0) - gone);
-}
+const needsExtras = () => needsQueueItems().filter(it => NEEDS_EXTRA_KINDS.includes(it.kind));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
@@ -391,8 +384,6 @@ async function staleDecide(button, path, body) {
     }
   }
 }
-// The Tasks page still calls this loader; keep its entry point inert until that caller is retired.
-async function askFilteredLoad() {}
 
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.

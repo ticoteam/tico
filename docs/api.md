@@ -86,6 +86,14 @@ The operation groups below are generated from the committed spec's tags. After r
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
 
+`GET /api/v2/needs-you` returns `plate_count` in every response: count-only (`count=1`), unchanged,
+selected ids, full list and pages. It counts unique task, question, waiting, approval, ask, stale and
+memory_tidy items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
+Thread and update attention are excluded. `count` retains the broader attention total used by the
+desktop poll. Both counts describe the whole list, including unread pages. Live `needs` events also
+carry `plate_count`; a client subtracts any plate items it still holds that were just answered locally.
+Use `ids=` to mend changed rows after a live event, and `limit`/`cursor` to load more rows as needed.
+
 ## Stable and internal
 
 Tico's own app uses more of the API than the spec lists. The line:

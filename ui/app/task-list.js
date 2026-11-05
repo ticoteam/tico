@@ -190,6 +190,15 @@ function taskPassesFilters(t, f) {
 // One render asks for these a few times; state.memo keeps the answer until the next render or load.
 function taskItems(state, view = state.view) {
   if (state.memo?.has(view)) return state.memo.get(view);
+  // Needs you holds the person's whole plate across boards. A remembered board, chip or search must not hide a
+  // counted item. Use the full task when held (relations and properties), with the queue's current ask and status.
+  if (tasksNeedsQueue(state, view)) {
+    const held = new Map((state.tasks || []).map(t => [String(t.id), t]));
+    const out = needsQueueItems().filter(it => NEEDS_TASK_KINDS.includes(it.kind))
+      .map(it => taskItem({...held.get(String(it.id)), ...it}));
+    state.memo?.set(view, out);
+    return out;
+  }
   const out = (state.tasks || []).map(taskItem).filter(it => {
     if (it.lane !== 'company') return false;
     if (!taskPassesFilters(it.task, state.filters || {})) return false;
@@ -205,19 +214,18 @@ function taskItems(state, view = state.view) {
   state.memo?.set(view, out);
   return out;
 }
-// Your Needs you count: the filtered tasks and the whole list's approvals, questions and stale checks outside any
-// task, less what was just answered on a card. Every width uses this same scope, however many pages are held.
-const tasksMyCount = active => active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtrasCount();
+// Your Needs you count covers the whole plate, independent of the selected board and task filters.
+const tasksMyCount = () => decideCount();
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
-  return {foryou: tasksNeedsQueue(state, 'foryou') ? tasksMyCount(active) : taskItems(state, 'foryou').length, list: active.length,
+  return {foryou: tasksNeedsQueue(state, 'foryou') ? tasksMyCount() : taskItems(state, 'foryou').length, list: active.length,
     snoozed: taskItems(state, 'snoozed').length};
 }
 
 // ---- whose tasks the first tab shows: Me (Needs you, in the server's queue with its asks and approvals), Everyone
 // (no person), or one teammate's: what is on their plate now, or what they asked of someone else. Another person's
-// plate is worked out here from the loaded tasks. The Owner and Asked by chips still narrow whatever it shows.
+// plate is worked out here from the loaded tasks. The Owner and Asked by chips narrow those other plates.
 function tasksWhoKnown(who) {
   if (who === 'me' || who === 'all') return true;
   const pid = actorPerson(who), slug = actorSlug(who);
@@ -304,7 +312,7 @@ function tasksWhoMenu(state, anchor, toggle = true) {
       `<button type="button" data-who-side="${k}" aria-pressed="${(k === 'asked') === asked}">${esc(label)}</button>`).join('')}</div>
     <input type="search" class="tl-menu-q" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false">
     <div class="tl-menu-list">
-      ${opt('me', actorFace(me, 16), 'Me', asked ? count(me) : tasksMyCount(active), `me you ${S.me?.name || ''}`)}
+      ${opt('me', actorFace(me, 16), 'Me', asked ? count(me) : tasksMyCount(), `me you ${S.me?.name || ''}`)}
       ${asked ? '' : opt('all', `<span class="tl-gglyph">${TL_ICON.team}</span>`, 'Everyone', active.length, 'everyone all')}
       ${order.map(team => `<div class="tl-who-team"><div class="tl-menu-h" aria-hidden="true">${esc(taskTeamLabel(team))}</div>
         ${teams.get(team).sort((a, b) => name(a).localeCompare(name(b))).map(p => opt('human:' + p.id, actorFace('human:' + p.id, 16), name(p), count('human:' + p.id), `${name(p)} ${p.email || ''} ${taskTeamLabel(team)}`)).join('')}</div>`).join('')}
@@ -382,7 +390,12 @@ function tasksGroupBy(state) {
 }
 const tagHue = key => [...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const tasksById = state => {
-  if (state.byIdFor !== state.tasks) { state.byId = new Map((state.tasks || []).map(t => [String(t.id), t])); state.byIdFor = state.tasks; }
+  if (state.byIdFor !== state.tasks || state.byIdNeeds !== S.v2?.needs) {
+    // A counted card can arrive before its task's page. Its own task data keeps its properties and selection usable.
+    const needs = (S.v2?.needs || []).filter(it => NEEDS_TASK_KINDS.includes(it.kind));
+    state.byId = new Map([...needs, ...(state.tasks || [])].map(t => [String(t.id), t]));
+    state.byIdFor = state.tasks; state.byIdNeeds = S.v2?.needs;
+  }
   return state.byId;
 };
 // A group heading for whoever asked: a bot's says "Chat" and opens that bot's chat (where its requests are worked through).
@@ -552,20 +565,21 @@ async function tasksRowStatusSave(state, id, bodyFor) {
   if (TASKS_ST === state) await tasksLoad(state);
 }
 function tasksEmptyHTML(state, what) {
-  const filtered = tasksActiveFilterCount(state) || state.q;
+  const filtered = !tasksNeedsQueue(state) && (tasksActiveFilterCount(state) || state.q);
   return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}</div>`;
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
-  // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
+  // Approvals and questions outside tasks lead the personal queue, regardless of remembered task filters.
   const queue = tasksNeedsQueue(state);
   // A card just answered leaves Needs you at once (decide.js), and comes back on Undo.
   if (queue) items = items.filter(it => !decideGone('task:' + it.id));
-  const cards = queue && !state.q && !tasksActiveFilterCount(state);
+  const cards = queue;
   // Grouped by what it takes, approvals and questions go in their groups, in the server's order with the tasks.
   const byNeed = by === 'need' && queue;
   const lead = cards ? needsExtras() : [];
-  const asks = lead.length && !byNeed ? `<section class="tl-group" data-group="asks"><header class="tl-ghead"><span class="tl-gname">Approvals and questions</span><span class="tl-gcount tnum">${lead.length}</span></header>
+  const asks = lead.length && !byNeed ? `<section class="tl-group" data-group="asks">
+    <header class="tl-ghead"><span class="tl-gname">Approvals and questions</span><span class="tl-gcount tnum">${lead.length}</span></header>
     <div class="tl-rows" role="list" aria-label="Approvals and questions">${lead.map(it => needRowHTML(it, {by, select: tasksCanSelect()})).join('')}</div></section>` : '';
   const extra = new Map();
   if (byNeed) for (const it of lead) {
@@ -636,7 +650,7 @@ function tasksTabsHTML(state) {
   return TASK_VIEWS.filter(([k]) => k !== 'snoozed' || counts.snoozed || state.view === 'snoozed').map(([k]) => {
     const on = k === state.view, n = counts[k], label = tasksViewLabel(state, k);
     return `<button type="button" role="tab" id="task-tab-${k}" data-view="${k}" aria-selected="${on}" aria-controls="task-body" tabindex="${on ? 0 : -1}"${n != null ? ` aria-label="${esc(label)}, ${n}"` : ''}>${esc(label)}${n != null ? `<span class="cnt tnum${k === 'foryou' && n && tasksNeedsQueue(state, k) ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}</button>`;
-  }).join('') + (pipelineSelectedType(state)?.role === 'product-roadmap' ? '<a class="tl-ranked" href="#/roadmap">Ranked</a>' : '');
+  }).join('') + (!tasksNeedsQueue(state) && pipelineSelectedType(state)?.role === 'product-roadmap' ? '<a class="tl-ranked" href="#/roadmap">Ranked</a>' : '');
 }
 function tasksPaint(el, html) {
   if (!el || el.dataset.html === html) return false;
@@ -656,6 +670,10 @@ function tasksTools(state) {
     state.who = 'me'; state.memo = new Map(); tasksURLWrite(state);
   }
   tasksPaint(tabs, tasksTabsHTML(state));
+  // Board tools keep their state for Open and Board; the personal queue always shows the whole plate.
+  const queue = tasksNeedsQueue(state);
+  $('.tl-type-search')?.toggleAttribute('hidden', queue);
+  $('.tl-filters')?.toggleAttribute('hidden', queue);
   const who = $('#task-who-wrap');
   if (who) {
     who.hidden = state.view !== 'foryou';
@@ -1232,7 +1250,7 @@ function tasksKeys(state, ev) {
     }
     return;
   }
-  if (key === '/') { ev.preventDefault(); $('#task-q')?.focus(); $('#task-q')?.select(); return; }
+  if (key === '/' && !tasksNeedsQueue(state)) { ev.preventDefault(); $('#task-q')?.focus(); $('#task-q')?.select(); return; }
   if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); return; }
   if (key === 'x' && listy && state.cursor?.startsWith('t') && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
   if (key === 'Enter' && listy && state.cursor && (!el || el === document.body || el.closest?.('.tl-row,.bcard') && !el.matches('button,a,input'))) {

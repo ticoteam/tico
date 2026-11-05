@@ -543,6 +543,13 @@ def task_meetings(api, args):
     return _as_person(api).get(f"tasks/{args['id']}/meetings", **{k: args[k] for k in ('limit', 'cursor') if k in args})
 
 
+@tool("hub_task_context", "Task context: up to 10 pages and 10 meetings as metadata only. Read content with "
+      "hub file read or hub meeting read. Each source is checked against your own read access.",
+      {"id": TASK_ID}, required=("id",))
+def task_context(api, args):
+    return api.get(f"tasks/{args['id']}/context")
+
+
 @tool("hub_meeting_pending", "List your own Pending meetings, before sharing with the Team.", {})
 def meeting_pending(api, args):
     return _as_person(api).get("meetings", review="pending")
@@ -595,7 +602,8 @@ def meetings_search(api, args):
 
 @tool("hub_meeting_read", "Read a meeting transcript. Follow next_offset to read the complete text; access matches meetings search.",
       {"id": _s("Meeting id"), "offset": {"type": "integer", "minimum": 0},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 50000}}, required=("id",))
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50000},
+       "notes": {"type": "boolean", "description": "Read only the meeting's notes"}}, required=("id",))
 def meetings_transcript(api, args):
     return api.get("meetings/transcript", **args)
 
