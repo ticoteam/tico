@@ -84,6 +84,9 @@ That appends `Signed-off-by: Your Name <you@example.com>`, using your git `user.
 have already made: `git rebase --signoff main` (then `git push --force-with-lease`). A pull request
 with unsigned commits will be asked to sign them before it is merged.
 
+This applies to outside contributors. Tico team members and the company's own bots commit work the
+company already owns, so their commits need no sign-off, and their pull requests are never held for one.
+
 ## Pull requests
 
 - Make the smallest change that fixes the problem, against `main`.
