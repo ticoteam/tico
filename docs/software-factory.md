@@ -80,6 +80,7 @@ gets the merge task. This grants no new access and does not change the repo's me
 
 Forwarded review and QA notes keep the source check's readers, even when a later public check sends them.
 A wake or saved result stays limited by both the source check and the task it reaches.
+Merge tasks hold the work instructions; their approval notice keeps the checks' readers too.
 
 The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at most three new checks per reviewer
 per hour and within each pool's open-check limit. Conflicting PRs and branches reported behind main go back to the

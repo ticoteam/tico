@@ -221,6 +221,43 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
         assert response.status_code == (404 if private else 200), response.text
 
 
+@pytest.mark.parametrize("private", [True, False], ids=["private-approval", "public-approval"])
+@pytest.mark.parametrize("other_merger", [False, True], ids=["parent-wake", "merge-task"])
+def test_delayed_merge_notice_keeps_its_approval_sources(api, private, other_merger):
+    from backend import task_privacy
+    from backend.tests.test_api import unrelated_task_managers
+
+    typ = setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        if other_merger:
+            c.execute("UPDATE bot_config SET repo='' WHERE bot='cpo'")
+            c.execute("UPDATE bot_config SET repo='Acme/atlas' WHERE bot='cmo'")
+            c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (typ["id"],))
+        c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (task["id"],))
+        review = H.task_create(c, "bot:cpo", "Review 1: PR #12", f"Check head {HEAD}", "bot:rev-a",
+                               parent_id=task["id"], private=private, lint=False)
+    finish(api, review)
+    with api.app.state.store.transaction() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.handoff')='merge'").fetchone()
+        c.execute("UPDATE task_links SET checks='passing' WHERE task_id=?", (task["id"],))
+        assert V.merge_wake(c, H.task(c, task["id"]))
+        [notice] = [H.message(c, r[0]) for r in c.execute(
+            "SELECT id FROM messages WHERE json_extract(refs,'$.handoff')='merge'")]
+        assert notice["refs"]["source_tasks"] == [review["id"]]
+        assert notice["refs"]["trigger_source"] == review["id"]
+        assert "Approved at" in notice["body"]
+        assert task_privacy.message_readable(c, "bot:rev-c", notice) is not private
+        assert task_privacy.message_readable(c, "bot:cpo", notice)
+        if other_merger:
+            merge_task = H.task(c, notice["refs"]["task"])
+            assert merge_task["owner_id"] == "bot:cmo" and merge_task["id"] != task["id"]
+            assert "Approved" not in merge_task["body"] and "--match-head-commit" in merge_task["body"]
+        else:
+            assert notice["refs"]["task"] == task["id"]
+
+
 def test_backfill_is_oldest_first_and_limited_per_reviewer_per_hour(api, monkeypatch):
     setup(api)
     monkeypatch.setattr(P, "PR_REVIEWS_PER_HOUR", 1)

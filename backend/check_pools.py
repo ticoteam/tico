@@ -672,8 +672,8 @@ def _unboard(c, ticket, snapshots=None):
             if not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='pr_rebase' AND new=?",
                              (ticket["id"], key)).fetchone():
                 H._task_event(c, ticket["id"], H.KEEPER, "pr_rebase", None, key, "")
-                H._wake(c, ticket, ticket["owner_id"], f"PR #{pr['number']}: rebase on main and push.",
-                        {V.HANDOFF: "merge_conflict", "pr_head": head})
+                V.forward(c, ticket, ticket["owner_id"], f"PR #{pr['number']}: rebase on main and push.",
+                          {V.HANDOFF: "merge_conflict", "pr_head": head}, sources=[ticket["id"]])
             continue
         # An old open request cannot approve the new head or occupy its review slot.
         for child in V.review_checks(c, ticket):

@@ -329,6 +329,7 @@ def _passed(c, ticket, step, why, *, sources=()):
             if ready:
                 _merge_woken(c, ticket, ready[1])
             return {"moved": None, "handoff": "merge" if ready else None, "quiet": not ready,
+                    "source_tasks": merge_sources(c, ticket, ready[1]) if ready else list(sources),
                     "say": merge_text(c, ticket, *ready) if ready else
                     f"{why}. Tico wakes you to merge once CI is green on it."}
     target = F.step(c, target) if target and not isinstance(target, dict) else target
@@ -463,9 +464,16 @@ def _judged_by(c, row, step, *, evidence=None):
     return str(found.get("verdict_head") or found["judged_head"] or "").lower() if found else None
 
 
-def merge_text(c, row, pr, head):
+def merge_sources(c, row, head, pr=None):
+    """The checks whose approvals a merge notice summarizes, including when CI turned green later."""
+    return [t["id"] for t in review_checks(c, row) if (pr is None or for_pr(t, pr))
+            and verdict_at([t], head) in GOOD]
+
+
+def merge_text(c, row, pr, head, *, announce=True):
     if F.pr_checks(c, row):
-        return (f"Approved at {head}, checks green: merge PR #{pr['number']} under the repo's merge rules. "
+        prefix = f"Approved at {head}, checks green: " if announce else f"At {head}: "
+        return (prefix + f"merge PR #{pr['number']} under the repo's merge rules. "
                 f"Use --match-head-commit {head}. {pr['url']}")
     name = step_of(c, row) or "The last check"
     number = pr.get("number") or "?"
@@ -508,20 +516,24 @@ def merge_wake(c, row, snapshots=None):
                                         (row["id"], f"{pr['url']}@{ready[1]}")).fetchone()), None)
     else:
         ready = row and merge_ready(c, row)
+    sources = (merge_sources(c, row, ready[1], pr=ready[0]) or [row["id"]]) if ready else []
     if ready and F.pr_checks(c, row):
         recipient = merge_recipient(c, row, ready[0])
         if not recipient:
             return False
         if recipient != row["owner_id"]:
             actor = row["owner_id"] if H.task_private(c, row) else H.KEEPER
-            H.task_create(c, actor, f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
-                          merge_text(c, row, *ready), recipient, parent_id=row["id"],
-                          wake_refs={HANDOFF: "merge", "pr_head": ready[1]})
+            # The task's body is work to do; the review summary keeps its sources on a separate notice.
+            merge_task = H.task_create(c, actor, f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
+                                       merge_text(c, row, *ready, announce=False), recipient, parent_id=row["id"],
+                                       quiet_notice=True)
+            forward(c, merge_task, recipient, merge_text(c, row, *ready),
+                    {HANDOFF: "merge", "pr_head": ready[1]}, sources=sources, trigger="pr_checks")
             _merge_woken(c, row, ready[1], ready[0])
             return True
     if ready and _merge_woken(c, row, ready[1], ready[0] if F.pr_checks(c, row) else None):
-        H._wake(c, row, row["owner_id"], merge_text(c, row, *ready), {HANDOFF: "merge", "pr_head": ready[1]},
-                trigger="pr_checks")
+        forward(c, row, row["owner_id"], merge_text(c, row, *ready), {HANDOFF: "merge", "pr_head": ready[1]},
+                sources=sources, trigger="pr_checks")
         return True
     return False
 
@@ -613,7 +625,8 @@ def skip(c, row):
     H._task_event(c, row["id"], H.KEEPER, "step_skipped", None, step["name"], f"tagged {tag}")
     out = _passed(c, row, step, f"{step['name']} skipped: the ticket is tagged {tag}")
     if out.get("handoff"):
-        H._wake(c, row, row["owner_id"], out["say"], at_step(c, row["id"], {HANDOFF: out["handoff"]}))
+        forward(c, row, row["owner_id"], out["say"], at_step(c, row["id"], {HANDOFF: out["handoff"]}),
+                sources=out.get("source_tasks") or [row["id"]])
     return out
 
 
