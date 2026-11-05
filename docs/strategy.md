@@ -37,7 +37,7 @@ removes a thing.
   run context. `hub brand check` runs the cheap checks on a draft (avoided words, naming, `claims.never` phrases) and runs
   no model, so a bot checks claims missing from the allowed list itself.
 - **Growth.** A place of cards (`#/growth`, under Strategy in the sidebar): each channel's spend, customers and
-  retention by month, the economics, and **Sources** behind a link. Marketing tasks are on the Tasks page, type Marketing.
+  retention by month, the economics, and **Sources**, where each number comes from, linked from the page. Marketing tasks are on the Tasks page, type Marketing.
   The KPI views (Tree, Loops, Journey) are on the Goals tab. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
