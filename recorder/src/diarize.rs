@@ -111,8 +111,8 @@ pub fn diarize_file(
         .collect())
 }
 
-/// Labels meeting-audio words with "Speaker 1", "Speaker 2", … in order of first speech, or
-/// clears the labels when only one voice is heard. Returns the number of voices.
+/// Labels meeting-audio words with "Speaker 1", "Speaker 2", … in order of first speech.
+/// A single remote voice keeps Speaker 1 across live linking and final diarization.
 pub fn label(store: &Store, id: &str) -> Result<usize> {
     // A looser threshold than pyannote's 0.7045 merges the stray extra voices the benchmark
     // found (`bench/README.md`) without merging real people.
@@ -268,7 +268,6 @@ fn label_from(
             .entry(*voice)
             .or_insert_with(|| format!("Speaker {next}"));
     }
-    let single = names.len() <= 1;
     let mut voices = voices.into_iter();
     let labels: Vec<(String, Vec<Word>)> = chunks
         .iter()
@@ -279,7 +278,7 @@ fn label_from(
                 .iter()
                 .map(|word| Word {
                     speaker: match voices.next().flatten() {
-                        Some(voice) if !single || provisional => names[&voice].clone(),
+                        Some(voice) => names[&voice].clone(),
                         _ if provisional => word.speaker.clone(),
                         _ => String::new(),
                     },
@@ -583,6 +582,27 @@ mod tests {
             assert_eq!(
                 labels,
                 ["Speaker 1", "Speaker 1", "Speaker 2"][..=index as usize]
+            );
+            label_segments(
+                &store,
+                &record.id,
+                vec![SpeakerSegment {
+                    start: 0.,
+                    end: (at + 2000) as f64 / 1000.,
+                    speaker: 0,
+                }],
+                Some(LINK_DISTANCE),
+            )
+            .unwrap();
+            let finalized = store.get(&record.id).unwrap();
+            assert_eq!(
+                finalized
+                    .chunks
+                    .iter()
+                    .flat_map(|c| c.words.iter().map(|w| w.speaker.as_str()))
+                    .collect::<Vec<_>>(),
+                labels,
+                "the final pass must not clear a single voice and restart chunk-local names"
             );
         }
     }
