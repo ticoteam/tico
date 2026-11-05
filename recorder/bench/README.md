@@ -202,8 +202,9 @@ python3 recorder/bench/meeting_bench.py --bleed-check --cli recorder/target/debu
 This replays four synthetic remote-only utterances with a 20 ms microphone offset, followed by
 four independent local replies. `before` reproduces the former exact per-word filter; `after`
 uses the production utterance filter. It reports all words left in known remote-only spans,
-including fragments that exact duplicate counting would miss. This replay measures transcript
-rules, not recognition quality or acoustic cancellation. Run it on RunsOn after building the CLI.
+including fragments that exact duplicate counting would miss. Measured on RunsOn: 36 input bleed words; the former exact filter leaves 12, the utterance
+filter leaves **0**. All **20/20** independent local words survive both. This replay measures
+transcript rules, not recognition quality or acoustic cancellation. Run it on RunsOn after building the CLI.
 
 VoiceProcessingIO requires a real audio device and realtime hardware rendering; it does not run
 on Linux or in AVAudioEngine's offline rendering mode. AEC attenuation and playback/ducking need

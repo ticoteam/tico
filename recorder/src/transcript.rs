@@ -614,12 +614,15 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
         .chunks
         .iter()
         .filter(|c| c.channel != "me")
-        .flat_map(|c| {
-            c.words
+        .flat_map(|c| c.words.iter().map(move |w| (w.start_ms, identity(c, w))))
+        .chain(
+            record
+                .chunks
                 .iter()
-                .filter(|w| !w.speaker.is_empty() || !w.turn.is_empty())
-                .map(move |w| (w.start_ms, identity(c, w)))
-        })
+                .filter(|c| c.channel != "me" && c.words.is_empty())
+                .map(|c| (c.start_ms, identity(c, &Word::default()))),
+        )
+        .filter(|(_, label)| !label.is_empty())
         .collect();
     labelled.sort_by_key(|w| w.0);
     let mut next = labelled
@@ -680,6 +683,8 @@ fn identity(chunk: &Chunk, word: &Word) -> String {
         word.speaker.clone()
     } else if !word.turn.is_empty() {
         format!("{}:{}", chunk.id, word.turn)
+    } else if !["Meeting audio", "Me"].contains(&chunk.speaker.as_str()) {
+        chunk.speaker.clone()
     } else {
         String::new()
     }
@@ -1118,6 +1123,32 @@ mod tests {
             live_lines(&record, &live)
                 .iter()
                 .all(|l| l.speaker == "Speaker 2")
+        );
+    }
+
+    #[test]
+    fn untimed_service_chunk_labels_never_reach_the_view_raw() {
+        let mut chunk = chunk("remote", "them", 0, &[(1000, "Hello", "")]);
+        chunk.words.clear();
+        chunk.speaker = "S4".into();
+        assert_eq!(lines(&record(vec![chunk]))[0].speaker, "Speaker 1");
+    }
+
+    #[test]
+    fn different_capture_start_and_stop_times_do_not_hold_finished_mic_forever() {
+        let mut mic = chunk(
+            "m",
+            "me",
+            0,
+            &[(100, "Opening", ""), (44_800, "Closing", "")],
+        );
+        mic.end_ms = 45_000;
+        let mut remote = chunk("t", "them", 2000, &[]);
+        remote.end_ms = 44_900;
+        remote.status = "silence".into();
+        assert_eq!(
+            chunk_texts(&record(vec![mic, remote]))["m"],
+            "Opening Closing"
         );
     }
 }
