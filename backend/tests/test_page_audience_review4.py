@@ -122,8 +122,12 @@ def test_migration_links_both_old_and_new_history_values(api):
             assert json.loads(c.execute("SELECT data FROM history_events WHERE id=?", (event_id,)).fetchone()[0])["page_files"] == [fid]
 
 
-def test_legacy_exact_title_labels_are_task_local_and_survive_title_purge(api):
+@pytest.mark.parametrize("pinned", [False, True])
+def test_legacy_exact_title_labels_are_task_local_and_survive_title_purge(api, pinned):
     tid, _, fid = public_page(api)
+    if pinned:
+        tid = post(api, "tasks", {"owner": "ops", "title": "Pinned draft", "body": "Review", "private": False})["id"]
+        post(api, "pins", {"place": "task:" + tid, "item": "page:" + fid})
     question = ask("ben")
     question["questions"][0]["options"][0]["label"] = "Confidential draft"
     comment = post(api, f"tasks/{tid}/comments", {"text": "Pick one", "ask": question})["comment"]

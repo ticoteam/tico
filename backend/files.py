@@ -429,7 +429,16 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         if not isinstance(tid, str) or not tid:
             return set()
         def build():
-            return {row["title"] for row in page_rows(c).values() if row["task_id"] == tid
+            rows = page_rows(c)
+            if not rows:
+                return set()
+            attached = {r[0] for r in c.execute("SELECT v.file_id FROM task_assets a JOIN bot_file_versions v "
+                                              "ON v.blob_id=a.blob_id WHERE a.task_id=?", (tid,))}
+            if file_library.has_pins(c):
+                attached.update(r[0] for r in c.execute("SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%'",
+                                                       ("task:" + tid,)))
+            return {row["title"] for row in rows.values()
+                    if (row["task_id"] == tid or row["scope"] == "task:" + tid or row["id"] in attached)
                     and row["state"] != "deleted" and page_ref_denials(c, auth, who, row["id"])}
         return read_cache.value(c, ("hidden_page_titles", who.actor, who.role, getattr(who, "task_actor", ""),
                                     tid, auth is not None), build)
@@ -485,9 +494,15 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
 
 def retain_page_label_sources(c, row):
     """Before deletion erases a title, link legacy exact-title labels on this page's task to its identity."""
-    if not row["task_id"]:
+    task_ids = {r[0] for r in c.execute("SELECT a.task_id FROM task_assets a JOIN bot_file_versions v "
+                                      "ON v.blob_id=a.blob_id WHERE v.file_id=?", (row["id"],))}
+    if file_library.has_pins(c):
+        task_ids.update(r[0] for r in c.execute("SELECT substr(place,6) FROM pins WHERE item=? AND place LIKE 'task:%'",
+                                               ("page:" + row["id"],)))
+    if row["task_id"]:
+        task_ids.add(row["task_id"])
+    if not task_ids:
         return
-    task = H.task(c, row["task_id"])
     source = {"file": row["id"]}
     def annotate(value):
         changed = False
@@ -507,8 +522,10 @@ def retain_page_label_sources(c, row):
             for child in value:
                 changed = annotate(child) or changed
         return changed
-    for message in c.execute("SELECT id,refs FROM messages WHERE conversation_id=? OR json_extract(refs,'$.task')=?",
-                             (task["conversation_id"], task["id"])).fetchall():
+    for message in c.execute("SELECT id,refs FROM messages WHERE conversation_id IN "
+                             "(SELECT conversation_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))) "
+                             "OR json_extract(refs,'$.task') IN (SELECT value FROM json_each(?))",
+                             (encode(sorted(task_ids)), encode(sorted(task_ids)))).fetchall():
         refs = H._json(message["refs"], {}) or {}
         if annotate(refs):
             if refs.get("answer"):
