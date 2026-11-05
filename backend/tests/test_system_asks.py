@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from backend import ask_routing, health, migrations, task_holds
+from backend import ask_routing, bot_settings as BS, health, migrations, task_holds
+from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_ask_delivery import Api
@@ -126,7 +127,8 @@ def test_migration_resends_dead_letters_once_and_the_answer_clears_the_hold(api,
                                  f"AND m.kind='ask' AND {H.OPEN_ASK_SQL}", (task["id"],)))
         assert len(asks) == 1
         msg = H.message(c, asks[0]["id"])
-        assert (msg["body"], msg["sender_id"], msg["refs"]["task"]) == (old["body"], old["sender_id"], task["id"])
+        assert (msg["sender_id"], msg["refs"]["task"]) == (old["sender_id"], task["id"])
+        assert (msg["body"] == old["body"]) is (not direct)
         assert msg["recipient_id"] == recipient and msg["refs"]["resent_from"] == old["id"]
         assert H.ask_clock(msg) > H.message(c, old["id"])["created_at"]
         original = H.message(c, old["id"])
@@ -252,6 +254,124 @@ def test_migrated_direct_task_ask_stays_in_the_managers_decision_queue(api):
     with api.app.state.store.read() as c:
         assert not H.open_task_asks(c, H.task(c, task["id"]))
         assert H.task(c, task["id"])["status"] == "open"
+
+
+@pytest.mark.parametrize("direct,manager", [(True, "human:ben"), (True, "human:cara"), (False, "human:ben")])
+def test_repair_keeps_meeting_questions_private_and_only_sends_safe_notices_to_other_rooms(api, direct, manager):
+    from backend import task_privacy
+    from backend.blobs import register
+    from backend.tests.test_sql import query
+
+    meeting = post(api, "live-meetings", {"title": "Restricted planning", "visibility": "private"}, token="ben-test")
+    post(api, f"live-meetings/{meeting['id']}/bots", {"bots": ["ops"]}, token="ben-test")
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, manager)
+        old = legacy_ask(c, task, direct=direct)
+        c.execute("UPDATE conversations SET room_key=? WHERE id=?", ("live-meeting:" + meeting["id"], old["conversation_id"]))
+        c.execute("UPDATE messages SET body='Private meeting figures' WHERE id=?", (old["id"],))
+        digest = api.app.state.blobs.put(b"Private meeting attachment", "text/plain")
+        blob = register(c, Identity("bot:ops", "bot"), digest, 26, "figures.txt", "text/plain")
+        c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (old["id"], blob["id"]))
+        assert not task_privacy.message_readable(c, "human:ana", H.message(c, old["id"]))
+        run_migration(c)
+        msg, = H.open_task_asks(c, H.task(c, task["id"]))
+        assert msg["recipient_id"] == manager
+        original = H.message(c, old["id"])
+        assert original["conversation_id"] == old["conversation_id"]
+        assert original["body"] == "Private meeting figures"
+        assert original["refs"]["live_meetings"] == [meeting["id"]]
+        assert not task_privacy.message_readable(c, "human:ana", original)
+        if direct:
+            assert msg["body"] and "Private meeting" not in msg["body"]
+            assert set(msg["refs"]) == {"task", "rerouted_from", "resent_from", "asked_again_at"}
+            assert not c.execute("SELECT 1 FROM message_assets WHERE message_id=?", (msg["id"],)).fetchone()
+        else:
+            assert msg["body"] == original["body"]
+            assert msg["refs"]["live_meetings"] == [meeting["id"]]
+            assert not task_privacy.message_readable(c, "human:ana", msg)
+            assert c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (msg["id"],)).fetchone()[0] == blob["id"]
+        assert ask_routing.repair(c) == []
+    assert api.get(f"/api/v2/messages/{old['id']}", headers=headers()).status_code == 404
+    hidden = [old["id"]] + ([] if direct else [msg["id"]])
+    for mid in hidden:
+        assert query(api, "SELECT body,refs FROM messages WHERE id=?", params=[mid])["rows"] == []
+    if direct:
+        assert api.get(f"/api/v2/messages/{msg['id']}", headers=headers()).json()["body"] == msg["body"]
+
+
+@pytest.mark.parametrize("harness", ["grokbot", "dots", "muse"])
+def test_synced_managers_without_ask_delivery_are_skipped_and_health_flags_their_old_questions(api, monkeypatch, harness):
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "cpo")
+        BS.write(c, "cpo", {"harness": harness, "runtime": harness})
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
+        dead = H._write_message(c, "bot:ops", "bot:cpo", "Should this cover the beta?",
+                                H.conversation(c, task["conversation_id"]), "ask", {"task": task["id"]}, None, None)
+        H.task_update(c, "bot:ops", task["id"], status="waiting")
+        assert not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (dead["id"],)).fetchone()
+        assert [(r["id"], r["recipient"]) for r in health.unreadable_waits(c)] == [(task["id"], "bot:cpo")]
+        second = system_task(c, "cpo")
+        msg = H.task_ask(c, "bot:ops", second["id"], "Should this cover the beta?")
+        assert msg["recipient_id"] == "human:ben"
+
+
+@pytest.mark.parametrize("harness", ["hermes", "openclaw"])
+def test_independent_external_managers_receive_questions_in_their_inbox(api, harness):
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "cpo")
+        BS.write(c, "cpo", {"harness": harness, "runtime": harness})
+        msg = H.task_ask(c, "bot:ops", task["id"], "Should this cover the beta?")
+        assert msg["recipient_id"] == "bot:cpo"
+        assert msg["id"] in {m["id"] for m in H.inbox(c, "bot:cpo")["messages"]}
+        assert not health.unreadable_waits(c)
+
+
+def test_synced_manager_counts_while_its_ask_is_delivered_through_its_desktop_queue(api, monkeypatch):
+    from backend.tests.test_api import claim
+    from backend.tests.test_external_sync import bot_id, deliver, designer, inbox, mac, sync
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    sync(api, designer(), token="cara-test")
+    computer = mac(api, bots=["grok-designer"])
+    assert deliver(api, computer["runner_id"]).status_code == 200
+    recipient = "bot:" + bot_id(api)
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, recipient)
+        msg = H.task_ask(c, "bot:ops", task["id"], "Should this cover the beta?")
+        assert msg["recipient_id"] == recipient
+        assert c.execute("SELECT bot_id,state FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()["state"] == "queued"
+        assert not health.unreadable_waits(c)
+    assert inbox(api) == []
+    attempt = claim(api, computer)
+    assert attempt["message"]["id"] == msg["id"]
+    assert deliver(api, None).status_code == 200
+    with api.app.state.store.read() as c:
+        assert [(r["id"], r["recipient"]) for r in health.unreadable_waits(c)] == [(task["id"], recipient)]
+
+
+def test_legacy_roomless_message_receipt_replays_without_rerouting_or_accepting_other_content(api):
+    from backend import models as M
+    from backend.store import digest, encode
+
+    token = bot_token(api)
+    body = {"to": "human:ben", "text": "Please review the release scope."}
+    first = post(api, "messages", body, token=token, key="before-upgrade")
+    with api.app.state.store.transaction() as c:
+        # Main's checks mutated the request before Store hashed it. Reproduce its
+        # persisted receipt, rather than generating it with the upgraded handler.
+        legacy = M.MessageCreate.model_validate(body).model_copy(update={"conversation_id": first["conversation_id"]})
+        c.execute("UPDATE idempotency SET request_hash=? WHERE operation='/api/v2/messages' AND key='before-upgrade'",
+                  (digest(encode(legacy.model_dump())),))
+        before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+        # Today's Home can differ; retry still belongs to the saved destination.
+        c.execute("UPDATE conversations SET closed_at=? WHERE id=?", (H.now(), first["conversation_id"]))
+    assert post(api, "messages", body, token=token, key="before-upgrade") == first
+    for changed in ({**body, "text": "Different question"}, {**body, "to": "human:cara"},
+                    {**body, "conversation_id": "another-room"}):
+        refused = post(api, "messages", changed, token=token, key="before-upgrade", expected=409)
+        assert refused["error"]["code"] == "idempotency_conflict"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
 
 
 def test_quarantined_senders_dead_letter_cannot_abort_the_migration(api):

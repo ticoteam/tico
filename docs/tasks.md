@@ -620,11 +620,14 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 ### When nobody answers a bot's ask
 
 `keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
-asker's first reachable person who can sign in or active bot up its manager chain, else the company owner.
+asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
+Synced bots qualify only with desktop delivery; their sync inbox takes only their person's chat messages.
 The recipient must be able to read the task and every source, including bot activity; Nearby reach still applies.
-The send says who received it. Existing open system asks are re-sent once with
-their text, sender, attachments and file reviews kept in the task conversation; the old ask links to the new one
-and the hold names the new recipient. A failed repair leaves that ask for Health and continues with the others.
+The send says who received it. An existing open system ask already in its task room is re-sent there once,
+keeping its text, files, reviews and meeting limits. An ask in another room stays there with its meeting limits
+and files. The task gets a fresh notice asking the recipient to have the owner restate the question there.
+The old ask links to its replacement, and the hold names the new recipient.
+A failed repair leaves that ask for Health and continues with the others.
 Health names a task waiting on a recipient who cannot read or answer.
 
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"

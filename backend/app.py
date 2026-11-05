@@ -1226,7 +1226,7 @@ def create_app(settings=None):
             raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
         return app.state.timing.summary()
 
-    def mutate(request, body, fn, check=None, durable=False):
+    def mutate(request, body, fn, check=None, durable=False, retry_body=None):
         def current_access(c):
             # Privacy can narrow after middleware preflight, including before a cached retry.
             source = getattr(request.state, "privacy_source", request.state.identity)
@@ -1258,6 +1258,8 @@ def create_app(settings=None):
                 H.PRIVATE_WRITE.reset(token)
         # Money writes and approval decisions pass `durable`; every other keyed write keeps the call it always made.
         money = {"durable": True} if durable else {}
+        if retry_body:
+            money["retry_body"] = retry_body
         result = store.mutate(request.state.identity, request.url.path,
                               request.headers.get("idempotency-key"), body.model_dump(), protected_write,
                               check=current_access, **money)
@@ -3388,8 +3390,20 @@ def create_app(settings=None):
     def say(request: Request, body: M.MessageCreate):
         who = request.state.identity
         rc, ingest = message_checks(who, body, retry=saved_retry(request, who))
+
+        def legacy_body(c, receipt):
+            # Older checks hashed a bot's resolved Home. Use its saved destination:
+            # a retry must not create a Home or follow today's recipient routing.
+            if ((H.is_human(who.actor) and not body.conversation_id) or not isinstance(receipt, dict)
+                    or receipt.get("sender_id") != who.actor or not receipt.get("conversation_id")):
+                return None
+            cid = receipt["conversation_id"]
+            if body.conversation_id and named_destination(c, who, body, create=False) != cid:
+                return None
+            return {**body.model_dump(), "conversation_id": cid}
+
         return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: message_write(
-            c, who, body, rc, ingest)))
+            c, who, body, rc, ingest), retry_body=legacy_body))
 
     def rule_prepare_message(store_, bot, replay):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))

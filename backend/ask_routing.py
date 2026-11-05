@@ -8,11 +8,19 @@ from .store import Problem
 
 
 def readable(c, target):
-    """A person still on the chart, or a bot that can run."""
+    """A person still on the chart, or a bot with a queue that accepts questions."""
     if H.is_human(target):
         from .auth import standing
         return bool(H.human(c, target)) and not standing(c, H.actor_id(target))
-    return H.is_bot(target) and (H.bot(c, target) or {}).get("state") == "active"
+    if not H.is_bot(target) or (H.bot(c, target) or {}).get("state") != "active":
+        return False
+    from .enqueue import external_bot_sql
+    from .harnesses import SYNCED_SQL
+    # Synced inboxes take only their person's chat messages. Independent external
+    # agents read asks themselves; a synced bot needs its desktop delivery queue.
+    return not c.execute(
+        "SELECT EXISTS(SELECT 1 FROM bot_settings WHERE bot_id=? AND harness IN (" + SYNCED_SQL + ")) AND "
+        + external_bot_sql("?"), (H.actor_id(target), target)).fetchone()[0]
 
 
 def can_answer(c, target, refs=None, conversation_id=None, in_reply_to=None, source=None):
@@ -86,7 +94,7 @@ def _carry_links(c, old, new):
 
 
 def _repair_one(c, row):
-    from . import task_holds, threads
+    from . import task_holds
     old = dict(row)
     refs = H._json(old["refs"], {}) or {}
     old["refs"] = refs
@@ -95,23 +103,36 @@ def _repair_one(c, row):
     task = H.task(c, tid) if tid else None
     if task and task["status"] in H.TASK_ENDED:
         return None
-    if tid and not H.refs_task_id(refs):
-        refs["task"] = tid
-    target, refs = resolve(c, old["sender_id"], old["recipient_id"], refs,
-                           old["conversation_id"], old["in_reply_to"], source=old)
-    if target == old["recipient_id"]:
-        return None
-    # Task asks belong to the task's history: Needs you and its holds read that history.
+    meetings = task_privacy.meeting_sources(c).message(old)
+    if meetings:
+        old["refs"] = {**refs, "live_meetings": sorted(meetings)}
+    # Only the same room preserves its audience, including Home and meeting gates.
+    # A different room gets a fresh notice, with no old words, sources or files.
     if task:
         conv = H.conversation(c, task["conversation_id"])
-    elif not threads.readable(c, threads.actor_viewer(c, target), conv["id"]):
+    copy = bool(task and conv["id"] == old["conversation_id"] and not conv.get("closed_at")
+                and not old.get("legacy_audience"))
+    if copy:
+        refs = dict(old["refs"])
+        refs.setdefault("task", tid)
+        body, reply = old["body"], old["in_reply_to"]
+    else:
+        refs = {"task": tid} if task else {}
+        body = ("Please ask the owner to restate their question here." if task else
+                "Please ask the sender to restate their question here.")
+        reply = None
+    target, refs = resolve(c, old["sender_id"], old["recipient_id"], refs,
+                           conv["id"] if task else None, reply, source=old if copy else None)
+    if target == old["recipient_id"]:
+        return None
+    if not task:
         conv = H._pair_conversation(c, old["sender_id"], target, "ask", allow_held=True)
     at = H.now()
     refs.update(resent_from=old["id"], asked_again_at=at)
     c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (at, old["id"]))
-    new = H._write_message(c, old["sender_id"], target, old["body"], conv, "ask", refs,
-                           old["in_reply_to"], old["wait_s"])
-    _carry_links(c, old["id"], new["id"])
+    new = H._write_message(c, old["sender_id"], target, body, conv, "ask", refs, reply, old["wait_s"])
+    if copy:
+        _carry_links(c, old["id"], new["id"])
     c.execute("UPDATE messages SET refs=? WHERE id=?",
               (H._dump({**old["refs"], "resent_as": new["id"]}), old["id"]))
     if task:

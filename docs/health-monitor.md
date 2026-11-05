@@ -25,7 +25,8 @@ start, and a fix or a command to inspect its runs. Work held on purpose never ma
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
 **Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
-can no longer read the task or any source, including bot activity. It checks saved asks and explicit waits.
+can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
+take asks and is flagged too. It checks saved asks and explicit waits.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
