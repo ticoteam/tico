@@ -107,8 +107,8 @@ gets a different page.
 - **A card** shows the page at the card's width, at a small, medium or large size. Tap it to open the page full size at
   `#/page/<id>`, on a computer or a phone. Without a widget view (below) a card shows the top of the page.
 - **Widget view.** In a card, Tico's height script sets `data-tico-view="card"` on the page's `<html>` and
-  `data-tico-size` to `small`, `medium` or `large`. A card has a fixed height: 180 px for `small` (what a sidebar pin
-  draws), 320 px for `medium` and 520 px for `large`, and a taller page fades at the bottom. At full size the script
+  `data-tico-size` to `small`, `medium` or `large`. A card is as tall as the page, up to 180 px for `small` (what a
+  sidebar pin draws), 320 px for `medium` and 520 px for `large`; a taller page fades at the bottom. At full size the script
   sets `data-tico-view="full"` and `data-tico-size="full"`. Design for the card's width and the small height first: a
   headline and one or two numbers. Use `[data-tico-size=medium]` or `[data-tico-size=large]` to show more, such as a
   chart or a list. A page's own CSS can give a card its own layout and keep the full report for `full`:
@@ -118,7 +118,7 @@ gets a different page.
       [data-tico-view=card] .card-only { display: block; }
       [data-tico-view=card] body { height: 100vh; overflow: hidden; }
 
-  The `100vh` rule applies only in the card view: the page fills the fixed card and does not scroll. A page with no
+  The `100vh` rule applies only in the card view: the page fills the card at its full size and does not scroll. A page with no
   such CSS looks as it always did. The bot's guide (`AGENT.md`, "Widget view") has the short form.
 - **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
   **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).

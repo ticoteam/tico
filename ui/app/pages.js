@@ -62,8 +62,8 @@ function pageFrame(p, src, height, size) {
   return f;
 }
 // pageCard(page, {size}): one card holding the page's status line and the framed page (or an Open card, the status
-// under its title, when there is no address). A card is a widget: the page's top at a fixed height, faded at the
-// bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
+// under its title, when there is no address). A card is a widget: the page at its own height up to the card's size,
+// faded at the bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
 // `full` is that full size, where the status line sits under the view's own title. `page` is GET
 // /api/v2/pages/{id}'s page.
 window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
@@ -86,7 +86,9 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   el.innerHTML = pageStatusHTML(page);
   const box = document.createElement('div');
   box.className = 'pg-box';
-  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : cap, named);
+  // A page measures at least its frame, so a card's frame starts at 1px and the page says its own height; the box
+  // keeps the card's size until it does (pg-sized).
+  const frame = pageFrame(page, src, full ? PAGE_FULL_MIN : 1, named);
   frame.pageCap = full ? 0 : cap;
   box.append(frame);
   el.append(box);
@@ -103,15 +105,22 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
   }
   return el;
 };
-// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only. A card keeps its fixed
-// height and fades its bottom when the page is taller; the full view takes the height whole.
+// The height a page reports (backend/visuals.py REPORTER), from a page frame's own window only. A card takes the page's
+// height up to its size and fades its bottom when the page is taller; the full view takes the height whole.
 window.addEventListener('message', ev => {
   const n = ev.data && typeof ev.data === 'object' ? ev.data.ticoVisualHeight : undefined;
   if (typeof n !== 'number' || !Number.isFinite(n) || !ev.source) return;
   const frame = [...document.querySelectorAll('iframe.page-frame')].find(x => x.contentWindow === ev.source);
   if (!frame) return;
   const h = frame.pageHeight = Math.max(24, Math.min(Math.ceil(n), VISUAL_PAGE_MAX));
-  if (frame.pageCap) frame.parentElement?.classList.toggle('pg-cut', h > frame.pageCap);
+  if (frame.pageCap) {
+    const box = frame.parentElement;
+    // A page sized by the screen (100vh) says next to nothing from its 1px frame: it fills the card.
+    const fills = !box.classList.contains('pg-sized') && Math.ceil(n) < 24;
+    frame.style.height = (fills ? frame.pageCap : Math.min(h, frame.pageCap)) + 'px';
+    box.classList.add('pg-sized');
+    box.classList.toggle('pg-cut', !fills && h > frame.pageCap);
+  }
   else frame.style.height = Math.max(h, PAGE_FULL_MIN) + 'px';
 });
 
