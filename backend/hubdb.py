@@ -1108,6 +1108,22 @@ def _dump(value):
     return json.dumps(value, sort_keys=True, default=str) if value is not None else None
 
 
+def sourced_text(text, sources=(), refs=None):
+    """Pair generated text with the identities it copies, for message refs or event/history data.
+
+    Keep the pair together when forwarding text to another store: its readers use readable_page_refs before
+    projecting away metadata. Existing refs survive, and repeated copies keep only one of each source.
+    """
+    refs = dict(refs or {})
+    kept = list(refs.get("body_sources") or [])
+    for source in sources:
+        if source and source not in kept:
+            kept.append(source)
+    if kept:
+        refs["body_sources"] = kept
+    return text, refs
+
+
 def payload_hash(payload):
     """The exact-payload hash rule 6 matches duplicates on."""
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -8925,7 +8941,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
     return approval(conn, row["id"])
 
 
-def approval_decide(conn, actor, approval_id, decision, note=""):
+def approval_decide(conn, actor, approval_id, decision, note="", *, note_sources=()):
     """Rule 6. Only a human decides, and only once."""
     _writer(conn, actor)
     if not is_human(actor):
@@ -8944,7 +8960,8 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
     conn.execute("UPDATE approvals SET decision=?, decided_by_id=?, decided_at=?, decided_via=?, decided_for=? "
                  "WHERE id=?", (decision, actor, ts, "assistant" if delegated else None,
                                 _dump(delegated) if delegated else None, approval_id))
-    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note})
+    note, provenance = sourced_text(note, note_sources)
+    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note, **provenance})
     after = approval(conn, approval_id)
     if row.get("task_id"):
         from . import task_holds
@@ -8952,9 +8969,10 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
     if conv:
+        text, refs = sourced_text(f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
+                                  note_sources, {"approval": approval_id})
         _write_message(conn, KEEPER, row["requested_by_id"],
-                       f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
-                       conv, "notice", {"approval": approval_id}, None, None)
+                       text, conv, "notice", refs, None, None)
     _recount(conn, row["requested_by_id"])
     hook(conn, "approval.decided", approval_id, lambda: {**_approval_facts(row), "decision": decision, "decided_by_id": actor},
          actor, revision=decision)

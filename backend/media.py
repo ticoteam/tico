@@ -741,8 +741,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
                 c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
-                H._task_event(c, tid, who.actor, "file", None, blob["name"], "",
-                              data={"source": {"file": fid, "version": number}})
+                name, data = H.sourced_text(blob["name"], [{"file": fid, "version": number}])
+                H._task_event(c, tid, who.actor, "file", None, name, "", data=data)
                 choice["file"] = f"{fid}@{number}"
             choices.append(choice)
         from .task_review import check_ask
@@ -772,6 +772,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
         if spend:
+            sources = [o["source"] for q in ask["questions"] for o in q["options"]
+                       if o["label"] == spend["label"] and o.get("source")]
+            if sources:
+                spend["source"] = sources
             ask["spend"] = spend
         gate = None
         if found:

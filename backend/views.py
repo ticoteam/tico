@@ -1388,7 +1388,7 @@ def take_recommendation(c, auth, who, asked, version=None):
         raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
     if not c.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}", (asked["id"],)).fetchone():
         raise Problem("answered", "This question was already answered", 409)
-    text = "Yes, do what you recommend: " + rec["do"]
+    text, text_refs = H.sourced_text("Yes, do what you recommend: " + rec["do"], [rec.get("source")])
     state_text = "Accepted the recommendation." if rec.get("source") else text
     task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
     task = H.task(c, task_id) if task_id else None
@@ -1402,7 +1402,7 @@ def take_recommendation(c, auth, who, asked, version=None):
         answer_task(c, auth, who, task_id, M.TaskAnswer(target=target,
                                                         answers={question["id"]: [rec["option"]]}), wake=True)
     else:
-        H.answer(c, who.actor, asked["id"], text)
+        H.answer(c, who.actor, asked["id"], text, comment_refs=text_refs)
     task = H.task(c, task_id) if task_id else None
     if task and task["status"] in H.ACTIVE_STATUSES:
         if finish:

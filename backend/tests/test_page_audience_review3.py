@@ -177,6 +177,12 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid, private=False, pick=True)
     picked_label = pick["question"]["refs"]["questions"][0]["options"][0]["label"]
     picked_answer = review_answer(api, pick, [picked_label], token="reader-test")
+    spend_pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="cara", parent=tid,
+                           topic="canary-spend", private=False, pick=True,
+                           spend={"label": picked_label, "amount": "12.50", "what": "Render the folio"})
+    spend_answer = review_answer(api, spend_pick, [picked_label], token="cara-test")
+    approval_id = spend_answer["answer"]["spend_approval"]
+    assert picked_label in json.dumps(get(api, "approvals/" + approval_id, token="cara-test"))
     sibling_ask = ask("reader")
     sibling_ask["questions"][0]["options"][0].update(label=title, file=fid + "@1")
     sibling = post(api, f"tasks/{tid}/files", {"name": "public-notes.txt", "text": "Public notes", "ask": sibling_ask})
@@ -185,6 +191,15 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     post(api, f"tasks/{tid}/files", {"name": "other-notes.txt", "text": "Other notes", "ask": sibling_ask})
     recipient_ask = {**sibling_ask, "who": "cara", "if_no_answer": {"do": title, "kind": "reversible"}}
     post(api, f"tasks/{tid}/files", {"name": "recipient-notes.txt", "text": "Public notes", "ask": recipient_ask}, token="ops-test")
+    recommendation_ask = {**recipient_ask, "questions": [{**recipient_ask["questions"][0], "multi": True,
+                           "options": [{**o, "recommended": True} for o in recipient_ask["questions"][0]["options"]]}]}
+    recommended = post(api, f"tasks/{tid}/files", {"name": "recommendation-notes.txt", "text": "Public notes",
+                       "ask": recommendation_ask}, token="ops-test")
+    with api.app.state.store.read() as c:
+        recommended_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?",
+                                   (recommended["file_id"],)).fetchone()[0]
+    post(api, "needs-you/recommended", {"ask": recommended_id}, token="cara-test")
+    assert title in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
     # Version uploads and blob archives use the same production writers as the task's Files panel.
     uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
     assert uploaded["file_id"] == fid and uploaded["version"] == 2
@@ -259,6 +274,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "tasks/" + tid + "/files", "tasks/" + tid + "/comments", "tasks/" + tid + "/answers", "tasks/" + tid + "/tree",
               "tasks/" + pick["task"]["id"], "tasks/" + pick["task"]["id"] + "/comments",
               "messages/" + picked_answer["comment"]["id"],
+              "tasks/" + spend_pick["task"]["id"], "tasks/" + spend_pick["task"]["id"] + "/comments",
+              "approvals/" + approval_id,
               "tasks/" + tid + "/links", "places/dashboard", "places/task:" + tid, "places/person:cara",
               "messages/" + comment["id"], "messages/" + answered["comment"]["id"], "messages/" + assistant["id"],
               "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",

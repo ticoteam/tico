@@ -92,8 +92,9 @@ def new_id():
 def removed_event(c, task_id, actor, fid, title):
     """The task's activity says which file was taken off it, by its newest name."""
     row = c.execute("SELECT name FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (fid,)).fetchone()
-    H._task_event(c, task_id, actor, "file", row["name"] if row else title, None, "",
-                  data=file_provenance(c, fid))
+    provenance = file_provenance(c, fid)
+    name, data = H.sourced_text(row["name"] if row else title, [provenance], provenance)
+    H._task_event(c, task_id, actor, "file", name, None, "", data=data)
 
 
 def file_provenance(c, fid, version=None):
@@ -492,9 +493,10 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
             answer = carried.get("answer", {})
             shown_refs = H._json(shown.get("refs"), {}) or {}
             shown_answer = shown_refs.get("answer", {}) if isinstance(shown_refs, dict) else {}
-            if (rejected(carried.get("body_sources")) or answer.get("answers") != shown_answer.get("answers") or
+            if (rejected(value.get("body_sources")) or rejected(carried.get("body_sources")) or
+                    answer.get("answers") != shown_answer.get("answers") or
                     answer.get("not") != shown_answer.get("not")):
-                for key in ("body", "text"):
+                for key in ("body", "text", "note", "old", "new", "title", "name"):
                     if key in shown:
                         shown[key] = "A page you can't open"
             return shown
@@ -550,7 +552,7 @@ def retain_page_label_sources(c, row):
         refs = H._json(message["refs"], {}) or {}
         if annotate(refs):
             if refs.get("answer"):
-                refs.setdefault("body_sources", []).append(source)
+                _, refs = H.sourced_text(None, [source], refs)
             c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
 
 
@@ -1020,8 +1022,9 @@ class Files:
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
                 blob = c.execute("SELECT name FROM blobs WHERE id=?", (fid,)).fetchone()
                 for task in linked:
-                    H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "",
-                                  data=file_provenance(c, fid))
+                    provenance = file_provenance(c, fid)
+                    name, data = H.sourced_text(blob["name"] if blob else fid, [provenance], provenance)
+                    H._task_event(c, task["task_id"], who.actor, "file", name, None, "", data=data)
                     c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["task_id"]))
                     for published in c.execute("SELECT f.id FROM bot_files f JOIN bot_file_versions v "
                                                "ON v.file_id=f.id "

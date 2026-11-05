@@ -97,9 +97,9 @@ def file_added(c, who, task_id, item, number, poster=None):
     provenance = {"file": item["id"], "version": number}
     if pages := page_references(item["id"], c):
         provenance["page_files"] = sorted(pages)
-    H._task_event(c, task_id, who.actor, "file", None, item["name"], "" if number == 1 else f"version {number}",
-                  data=provenance)
-    H.event(c, who.actor, "task.file", task_id, {**provenance, "name": item["name"], "size": item["size"]})
+    name, data = H.sourced_text(item["name"], [provenance], provenance)
+    H._task_event(c, task_id, who.actor, "file", None, name, "" if number == 1 else f"version {number}", data=data)
+    H.event(c, who.actor, "task.file", task_id, {**data, "name": name, "size": item["size"]})
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
 
@@ -229,9 +229,10 @@ def edit_version(c, auth, who, task_id, fid, number, body):
                       (encode(refs), recipient, existing))
             return version_review(c, fid, number, actor=privacy.actor(who))
         if value:
-            msg = H.task_comment(c, who.actor, task_id, body.note or f'Review "{version["name"]}" v{number}.',
-                                 ask=value, extra_refs={"target": {"file": fid, "version": number},
-                                     **({"body_sources": [{"file": fid, "version": number}]} if not body.note else {})})
+            text, refs = H.sourced_text(body.note or f'Review "{version["name"]}" v{number}.',
+                                       [] if body.note else [{"file": fid, "version": number}],
+                                       {"target": {"file": fid, "version": number}})
+            msg = H.task_comment(c, who.actor, task_id, text, ask=value, extra_refs=refs)
             c.execute("UPDATE task_file_reviews SET ask_message_id=? WHERE file_id=? AND version=?",
                       (msg["id"], fid, number))
     return version_review(c, fid, number, actor=privacy.actor(who))
@@ -381,8 +382,8 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
-    msg = H.task_comment(c, who.actor, task_id, text, wake=wake,
-                         extra_refs={"answer": value, **({"body_sources": body_sources} if body_sources else {})},
+    text, refs = H.sourced_text(text, body_sources, {"answer": value})
+    msg = H.task_comment(c, who.actor, task_id, text, wake=wake, extra_refs=refs,
                          answer_to=asked["id"], answer_text=body.other or "")
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, asked["id"], msg["id"], value["reviewed"])
