@@ -415,8 +415,9 @@ class SleepIdle:
                 pass
             if stop.is_set():
                 return
+            from . import system_routines as SR    # each look is one run of Sleep when idle (Settings > Routines)
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "sleep_idle", self.tick)
             except Exception:
                 pass                                # the next look tries again; the failure is in the state row
 

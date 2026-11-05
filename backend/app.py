@@ -336,7 +336,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
-                    app.state.personal_alerts.tick()
+                    app.state.personal_alerts.tick()           # its pass records on its own thread (personal_alerts)
                     await asyncio.to_thread(scheduler.tick)
                     await asyncio.to_thread(recorded, "release_check", release_check)
                     await asyncio.to_thread(recorded, "repository_waits", repository_waits)
@@ -344,20 +344,27 @@ def create_app(settings=None):
                     telemetry.capture("scheduler", exc)
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
+                def call_sweeps():
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
+                    # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
+                    failed = None
+                    for name, sweep in (("live_meeting_sweep", app.state.live_meeting_routing.sweep),
+                                        ("calls_sweep", app.state.calls.sweep)):
+                        try:
+                            sweep()
+                        except Exception as exc:
+                            telemetry.capture(name, exc)
+                            failed = failed or exc
+                    if failed:
+                        raise failed
                 try:
-                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
-                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
-                except Exception as exc:
-                    telemetry.capture("live_meeting_sweep", exc)
-                try:
-                    # Calls keep to their threads: people and bots whose access ended, and a LiveKit that restarted.
-                    await asyncio.to_thread(app.state.calls.sweep)
-                except Exception as exc:
-                    telemetry.capture("calls_sweep", exc)
+                    await asyncio.to_thread(system_routines.pass_of, store, "call_sweeps", call_sweeps)
+                except Exception:                              # noqa: S110 - captured above, and the run says it failed
+                    pass
                 try:
                     # Settings > Inboxes' pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
-                    await asyncio.to_thread(workspace_checks.tick, store)
+                    await asyncio.to_thread(system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store)
                 except Exception as exc:
                     telemetry.capture("google_workspace", exc)
                 try:

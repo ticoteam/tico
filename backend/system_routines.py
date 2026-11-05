@@ -79,10 +79,14 @@ class Job:
     ai: bool = False            # asks Tico Decide
     control: bool = False       # a job a person will switch and reschedule
     labels: tuple = ()          # Decide question sets whose spend is this job's
-    records: bool = True        # False: each connection keeps its own last run
+    records: bool = True        # False: it writes no run, so its next run cannot be told
     then: tuple = ()            # ACTIONS keys: what it does
     when: str = "schedule"      # a TRIGGERS key; "schedule" reads the job's schedule
     department: str = DEPARTMENT
+    # (c, settings) -> whether the job can do anything on this install (a feature it needs is set up). Cheap and
+    # read-only: a setting or a one-row check. None: it always applies. A job that does not apply is left out of the
+    # lists (`applies`), never deleted, so it shows again by itself once the feature is set up.
+    applies: object = None
 
 
 # ----------------------------------------------------------------------------- the trigger/action catalog
@@ -175,19 +179,142 @@ ACTIONS = {
     "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
     "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
     "rank_threads": ("rank each thread with new messages from 1 to 10", ("threads", "rank", "important", "decide")),
+    "mark_silent_runs": ("mark a silent run and end a run past this server's time limit", ("stall", "silent", "runs", "limit")),
+    "end_lapsed_runs": ("end runs whose lease ran out", ("lease", "expire", "runs")),
+    "settle_runs": ("settle interrupted runs, lift usage limits and cooled holds, and give an active bot a computer",
+                    ("runs", "interrupted", "limits", "quarantine", "placement", "computer", "notes")),
+    "mark_shipped": ("mark a merged pull request shipped once the running release has it", ("github", "merge", "shipped", "deploy")),
+    "tell_task_loop": ("tell a looping task's owner and requester once a day", ("tasks", "loop", "status", "notice")),
+    "note_queue_refusals": ("note why a bot's queued work is not starting", ("queue", "refused", "bots", "health")),
+    "wake_milestone_waits": ("wake a task waiting for a merge or release that already happened", ("merge", "release", "wait", "wake")),
+    "send_release_task": ("send the Release Manager one task for what is at Pending Release", ("release", "manager", "pending")),
+    "start_editions": ("start the Company page editions that came due and send waiting reader notices",
+                       ("company", "page", "edition", "readers")),
+    "screen_waiting": ("screen outside text a restart left waiting", ("screening", "outside", "text")),
+    "finance_upkeep": ("post Finance's waiting events, usage and prepaids, end holds and finished approvals, open the next period",
+                       ("finance", "events", "usage", "holds", "period", "approvals")),
+    "deadline_sweeps": ("turn off failing webhooks, retire replaced computers, hand on support tickets and screened items",
+                        ("webhooks", "computers", "support", "screening", "deadline")),
+    "start_strategy_note": ("start or pause the Strategy Bot's Monday note to match its level", ("strategy", "note", "monday")),
+    "read_cloud_access": ("read Tico Cloud access from HQ and renew file hosting keys", ("cloud", "access", "storage", "hq")),
+    "send_alerts": ("send people's opt-in alerts through HQ paging", ("alerts", "paging", "sms")),
+    "check_workspace_key": ("check a pending or failing Google Workspace key again", ("google", "workspace", "key")),
+    "sweep_calls": ("route missed live-meeting windows and end call access that ended", ("calls", "meetings", "live")),
+    "fetch_mail": ("bring in mail and bills from HQ", ("mail", "inbound", "bills")),
+    "purge_mail": ("delete inbound mail older than 90 days", ("mail", "retention", "delete")),
+    "pull_webhooks": ("bring in webhooks waiting at Tico Gateway", ("webhooks", "gateway", "relay", "notices")),
+    "route_letters": ("read and route physical mail", ("mail", "letters", "physical")),
+    "send_letters": ("send approved letters and follow them until delivered", ("letters", "mail", "send")),
+    "ask_sleep": ("ask HQ to put this server to sleep while nobody uses it", ("sleep", "idle", "hosting")),
+    "manage_machines": ("start bots' cloud machines for work and stop them when idle", ("cloud", "machines", "computers")),
     "triage_quiet": ("not run any more: Decide no longer reads a quiet task (it used to set the wait it names, close it if finished, or let one wake through)",
                      ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
 
 
+# ----------------------------------------------------------------------------- whether a job applies here
+# Each is cheap and read-only, and says yes when it cannot tell: a job is hidden only when it surely has nothing to do.
+def _row_exists(c, sql, args=()):
+    return c.execute(sql, args).fetchone() is not None
+
+
+def _directory_connected(c, settings):
+    return directory_minutes(c) is not None
+
+
+def _granola_connected(c, settings):
+    return _row_exists(c, "SELECT 1 FROM granola_connections LIMIT 1")
+
+
+def _documents_linked(c, settings):
+    # The sources the document worker refreshes (backend/doc_sources.py `claim`).
+    return _row_exists(c, "SELECT 1 FROM doc_sources s JOIN linked_docs l ON l.id=s.source_id "
+                          "WHERE l.archived=0 AND s.repo!='' LIMIT 1")
+
+
+def _hosted(c, settings):
+    from . import hosted_updates
+    return settings is None or hosted_updates.on(settings)
+
+
+def _billing_key(c, settings):
+    from . import billing_check
+    return settings is None or bool(billing_check.env_key(settings))
+
+
+def _gateway_key(c, settings):
+    from . import gateway_connection
+    return settings is None or gateway_connection.connected(c, settings) or gateway_connection.maintained(c, settings)
+
+
+def _company_linked(c, settings):
+    from . import company_server
+    return settings is None or company_server.linked(c, settings)
+
+
+def _gateway_connected(c, settings):
+    from . import gateway_connection
+    return settings is None or gateway_connection.connected(c, settings)
+
+
+def _bookkeeper(c, settings):
+    row = H.bot(c, "bookkeeper")
+    return bool(row) and row["state"] != "archived"
+
+
+def _pages_watched(c, settings):
+    return _row_exists(c, "SELECT 1 FROM market_watches WHERE active=1 LIMIT 1")
+
+
+def _strategy_bot(c, settings):
+    from . import strategy_bot
+    row = H.bot(c, strategy_bot.SLUG)
+    return bool(row) and row["state"] != "archived"
+
+
+def _release_hour_on(c, settings):
+    from . import release_flow
+    return not getattr(settings, "rehearsal", False) and release_flow.load(c)["on"]
+
+
+def _company_page_open(c, settings):
+    from .company_page import schedule
+    return schedule.transparency(c) != "closed"
+
+
+def _cloud_company(c, settings):
+    from . import cloud_machines
+    return cloud_machines.cloud_company(c, settings)
+
+
+def _sleep_set(c, settings):
+    # Sleep when idle only looks on a cell, or once the owner set its hours (backend/sleep_idle.py `effective`).
+    from . import cloud_access, sleep_idle
+    current = sleep_idle.state(c)
+    return cloud_access.strict_cell() or bool(current["changed_at"] is not None and current["hours"])
+
+
+def _alerts_on(c, settings):
+    return _row_exists(c, "SELECT 1 FROM alert_preferences LIMIT 1")
+
+
+def _workspace_key(c, settings):
+    return _row_exists(c, "SELECT 1 FROM google_workspaces LIMIT 1")
+
+
+def _physical_mail(c, settings):
+    return _row_exists(c, "SELECT 1 FROM mail_items LIMIT 1")
+
+
+def _letters(c, settings):
+    return _row_exists(c, "SELECT 1 FROM letters LIMIT 1")
+
+
 JOBS = [
     Job("assigned_tasks", "Start assigned tasks",
-        "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity.",
-        HOUSEKEEPING, "When a turn is free", records=False, then=("start_task",), when="free_turn"),
-    Job("assignment_recovery", "Recover unstarted assignments",
-        "One roundup line after an hour without an attempt, for managers and doers; waits and snoozes stay parked. "
-        "Still unstarted two hours later appears in Health and the manager's Needs you. Execution gates still apply.",
-        HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("recover_assignment",)),
+        "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity. "
+        "Each start is one run.",
+        HOUSEKEEPING, "When a turn is free", then=("start_task",), when="free_turn"),
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
         CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",), then=("check_stale", "suggest_owner")),
@@ -201,15 +328,17 @@ JOBS = [
     Job("bookkeeper_check", "Books check",
         "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
         "something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper"), department=FINANCE),
+        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper"), department=FINANCE,
+        applies=_bookkeeper),
     Job("bookkeeper_watch", "Books watch",
         "Reads runway, unusual spend, duplicate charges and price increases in plain code, and opens one Watch task for "
         "the Bookkeeper only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch"), department=FINANCE),
+        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch"), department=FINANCE, applies=_bookkeeper),
     Job("bookkeeper_rules_digest", "Rules digest",
         "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
         "rules is a quiet run.",
-        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE),
+        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE,
+        applies=_bookkeeper),
     Job("memory_tidy", "Nightly memory tidy",
         "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
         LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
@@ -235,7 +364,7 @@ JOBS = [
     Job("thread_routing", "Thread routing",
         "Reads a person's message that names nobody in a thread with several bots and wakes the ones it is for, three "
         "at most. Below the confidence bar, or with Decide off, it wakes none.",
-        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), records=False, then=("route_message",)),
+        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), then=("route_message",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
         "task roundup, never as a wake.",
@@ -257,7 +386,7 @@ JOBS = [
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
     Job("thread_loop_guard", "Paused bot replies",
         "Lets bot replies the loop guard paused in a thread go, as many as its hour has room for, with no one having to post.",
-        HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("resume_capped_wakes",)),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("resume_capped_wakes",)),
     Job("thread_retention", "Thread retention",
         "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
         "code: nothing past its time is a quiet run.",
@@ -272,18 +401,18 @@ JOBS = [
         HOUSEKEEPING, "Hourly", 3600, then=("goal_colours",)),
     Job("gateway_check", "Gateway key check",
         "Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used.",
-        HOUSEKEEPING, "Hourly", 3600, then=("check_gateway",)),
+        HOUSEKEEPING, "Hourly", 3600, then=("check_gateway",), applies=_gateway_key),
     Job("billing_check", "Billing check", "Reads HQ's nightly billing check for the owner's Health page.",
-        HOUSEKEEPING, "Hourly", 3600, then=("read_billing",)),
+        HOUSEKEEPING, "Hourly", 3600, then=("read_billing",), applies=_billing_key),
     Job("company_heartbeat", "Tico company heartbeat",
         "Tells app.tico.dev this server's version once a day while it is linked to a Tico company.",
-        HOUSEKEEPING, "Daily", 86400, then=("send_heartbeat",)),
+        HOUSEKEEPING, "Daily", 86400, then=("send_heartbeat",), applies=_company_linked),
     Job("hosted_update", "Scheduled update",
         "On a hosted server: updates to the release Tico support scheduled, once no bot turn runs.",
-        HOUSEKEEPING, "Every minute", 60, then=("check_update",)),
+        HOUSEKEEPING, "Every minute", 60, then=("check_update",), applies=_hosted),
     Job("market_watch", "Page monitors",
         "Reads each watched competitor page once a day and files an insight for the Librarian when one changed.",
-        CHECKS, "Daily", 86400, then=("check_pages",)),
+        CHECKS, "Daily", 86400, then=("check_pages",), applies=_pages_watched),
     Job("updates", "Updates", "Asks people and bots for today's updates, one at a time.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("ask_updates",)),
     Job("github_sync", "GitHub sync",
@@ -295,19 +424,99 @@ JOBS = [
     Job("release_check", "Release and feed check", "Checks for a new Tico release and fetches subscribed updates.",
         HOUSEKEEPING, "Every 10 seconds; a new release is looked for every 6 hours", 10, then=("check_release", "fetch_feeds")),
     Job("directory_sync", "Directory sync", "Brings people in from the company directory.",
-        HOUSEKEEPING, "Hourly", then=("sync_directory",)),
+        HOUSEKEEPING, "Hourly", then=("sync_directory",), applies=_directory_connected),
     Job("meeting_sync", "Meeting notes sync", "Brings in meeting notes from each person's connected Granola.",
-        HOUSEKEEPING, "Every 30 seconds", 30, records=False, then=("sync_meetings",)),
+        HOUSEKEEPING, "Every 30 seconds", 30, then=("sync_meetings",), applies=_granola_connected),
     Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
-        HOUSEKEEPING, "Every few seconds", 5, records=False, then=("sync_docs",)),
+        HOUSEKEEPING, "Every 5 seconds", 5, then=("sync_docs",), applies=_documents_linked),
     Job("topic_fresh", "Start fresh when the topic changes",
         "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
-        CHAT, "When it happens", records=False, when="topic_changed", then=("start_fresh",)),
+        CHAT, "When it happens", when="topic_changed", then=("start_fresh",)),
     Job("thread_rank", "Thread ranking",
         "Ranks threads with new messages from 1 to 10 for the Important view in Threads, each at most once an hour.",
         CHAT, "Every 5 minutes", 300, ai=True, labels=("thread-rank",), then=("rank_threads",)),
+    # The scheduler's other timed work (backend/scheduler.py `tick`), each one row.
+    Job("stall_marks", "Silent run check",
+        "Marks a run that has gone silent and ends a run past this server's time limit, before plain expiry looks at it.",
+        HOUSEKEEPING, "Every minute", 60, then=("mark_silent_runs",)),
+    Job("run_housekeeping", "Run housekeeping",
+        "Ends runs whose lease ran out, settles interrupted runs, lifts usage limits and cooled holds, gives an active "
+        "bot with no computer one, and settles run notes a result missed.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("end_lapsed_runs", "settle_runs")),
+    Job("ship_deployed", "Shipped merges",
+        "Marks a merged pull request shipped once the running release has it, when its push record came after the deploy.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("mark_shipped",)),
+    Job("task_loops", "Task loop alerts",
+        "Tells a task's owner and requester once a day when the task's status keeps changing back and forth.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("tell_task_loop",)),
+    Job("queue_check", "Queue check",
+        "Notes why a bot's queued work is not starting, for the bot's row and Health.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("note_queue_refusals",)),
+    Job("milestone_waits", "Merge and release waits",
+        "Wakes a task waiting for a merge or a release that already happened, once.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("wake_milestone_waits",)),
+    Job("release_hour", "Daily release",
+        "At the team's release hour, sends the Release Manager one task for what is at Pending Release.",
+        HOUSEKEEPING, "At the release hour", then=("send_release_task",), applies=_release_hour_on),
+    Job("company_page", "Company page editions",
+        "Starts the Company page editions that came due and sends reader notices left waiting.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("start_editions",), applies=_company_page_open),
+    Job("screening", "Outside text check", "Screens outside text a restart left waiting.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("screen_waiting",)),
+    Job("finance_upkeep", "Finance upkeep",
+        "Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, "
+        "watches documents, and opens next month's period.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("finance_upkeep",), department=FINANCE),
+    Job("hourly_deadlines", "Hourly deadlines",
+        "Turns off a webhook that failed for five days, retires replaced computers, and hands a person a support ticket "
+        "or screened item that waited an hour.",
+        HOUSEKEEPING, "Hourly", 3600, then=("deadline_sweeps",)),
+    Job("strategy_note", "Strategy note check",
+        "Starts the Strategy Bot's Monday note once its level is above Passive, and pauses it at Passive.",
+        CHECKS, "Hourly", 3600, then=("start_strategy_note",), applies=_strategy_bot),
+    Job("cloud_access", "Tico Cloud check",
+        "Reads this company's Tico Cloud access from HQ and renews its file hosting keys.",
+        HOUSEKEEPING, "Every minute on Tico Cloud, else hourly", then=("read_cloud_access",), applies=_gateway_connected),
+    # The server's background loops (backend/app.py `lifespan`), each one row.
+    Job("personal_alerts", "Personal alerts",
+        "Sends people's opt-in alerts through HQ paging, within their quiet hours and the monthly caps.",
+        REMINDERS, "Every 10 seconds", 10, then=("send_alerts",), applies=_alerts_on),
+    Job("workspace_check", "Workspace key check",
+        "Checks a pending or failing Google Workspace key again until it works or its hour is up.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("check_workspace_key",), applies=_workspace_key),
+    Job("call_sweeps", "Calls and live meetings",
+        "Routes live-meeting windows a restart left behind, and ends call access for people and bots who lost it.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("sweep_calls",)),
+    Job("inbound_mail", "Inbound mail",
+        "Brings in mail and bills from HQ, and deletes inbound mail older than 90 days.",
+        HOUSEKEEPING, "Every 15 seconds", 15, then=("fetch_mail", "purge_mail")),
+    Job("gateway_webhooks", "Gateway webhooks", "Brings in webhooks and Tico notices waiting at Tico Gateway.",
+        HOUSEKEEPING, "Every 15 seconds with a relay, else every minute", then=("pull_webhooks",), applies=_gateway_key),
+    Job("physical_mail", "Physical mail", "Reads and routes letters the mail relay and the mail-intake inbox kept.",
+        HOUSEKEEPING, "Every minute", 60, then=("route_letters",), applies=_physical_mail),
+    Job("letters", "Letters sync", "Sends approved letters and follows each one until it is delivered.",
+        HOUSEKEEPING, "Every 30 seconds", 30, then=("send_letters",), applies=_letters),
+    Job("sleep_idle", "Sleep when idle", "Asks HQ to put this server to sleep once nobody has used it for the set time.",
+        HOUSEKEEPING, "Every 5 minutes; every minute on a cell", then=("ask_sleep",), applies=_sleep_set),
+    Job("cloud_machines", "Cloud machines", "Starts bots' cloud machines for work and stops them when idle.",
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("manage_machines",), applies=_cloud_company),
 ]
 BY_KEY = {job.key: job for job in JOBS}
+
+
+def applies(c, settings, job):
+    """Whether `job` can do anything on this install (`Job.applies`); yes when it cannot be told."""
+    if job.applies is None:
+        return True
+    try:
+        return bool(job.applies(c, settings))
+    except Exception:  # noqa: BLE001 - a table an older file lacks, a setting not read: the job stays listed
+        return True
+
+
+def not_applying(c, settings):
+    """The keys of the jobs that cannot do anything on this install: the lists leave them out."""
+    return {job.key for job in JOBS if not applies(c, settings, job)}
 
 
 # ----------------------------------------------------------------------------- what a person may change
@@ -582,7 +791,7 @@ def count_words(n, one, many=None):
     return f"{n} {one if n == 1 else many}"
 
 
-def words_of(found, one="change", none="Nothing to do"):
+def words_of(found, one="change", none="Nothing to do", many=None):
     """A job's return in words: a count of a list or a number, or the counts of a dict of lists/numbers."""
     if isinstance(found, dict):
         parts = [f"{len(v) if isinstance(v, (list, tuple, set, dict)) else int(v or 0)} {k.replace('_', ' ')}"
@@ -590,7 +799,7 @@ def words_of(found, one="change", none="Nothing to do"):
         parts = [p for p in parts if not p.startswith("0 ")]
         return ", ".join(parts) or none
     n = len(found) if isinstance(found, (list, tuple, set)) else int(found or 0) if isinstance(found, int) else 0
-    return count_words(n, one) if n else none
+    return count_words(n, one, many) if n else none
 
 
 def _repeat(c, run, finished):
@@ -662,6 +871,16 @@ def recording(store, key, failures=None, name=None, c=None):
             keep(c, run)
         else:
             write(store, run)
+
+
+def pass_of(store, key, work, *args, words=None):
+    """One pass of a background loop (backend/app.py) as one run of `key`, and `work`'s return. `words(found)` puts what
+    it did in words, or None for nothing (a quiet run that folds); without it every pass is a quiet "Done"."""
+    with recording(store, key) as run:
+        found = work(*args)
+        said = words(found) if words else None
+        run.did(said or "Done", quiet=not said)
+    return found
 
 
 def prune(c):
@@ -760,16 +979,19 @@ def search_words(job, when, then, department):
     return " ".join([job.name, job.what, when, *then, department, GROUP_WORDS[job.group], *extra]).lower()
 
 
-def listing(c, settings, now=None, who=None, auth=None):
-    """Every job in one flat list (no headings): WHEN <trigger> THEN <actions>, its department tag, schedule, last and
-    next run, on/off and, for a Decide job, its route and this month's spend; what this viewer may change, and the words
-    search matches."""
+def listing(c, settings, now=None, who=None, auth=None, everything=False):
+    """Every job that applies here (`not_applying`; `everything`: all of them) in one flat list (no headings): WHEN
+    <trigger> THEN <actions>, its department tag, schedule, last and next run, on/off and, for a Decide job, its route
+    and this month's spend; what this viewer may change, and the words search matches."""
     now = now or datetime.now(timezone.utc)
     last, ai_last, cfgs = last_runs(c), last_ai_runs(c), config(c)
     from . import task_rules
     chart = {d["name"].lower(): d["name"] for d in task_rules.departments(settings)}
+    hidden = set() if everything else not_applying(c, settings)
     rows = []
     for job in JOBS:
+        if job.key in hidden:
+            continue                    # nothing to do on this install until its feature is set up
         row, cfg, ctl = last.get(job.key), cfgs.get(job.key), CONTROLS.get(job.key)
         schedule = schedule_words(job.key, cfg) if ctl and ctl.presets else job.schedule
         when = job.when
@@ -824,7 +1046,7 @@ def listing(c, settings, now=None, who=None, auth=None):
 
 
 def row_of(c, settings, key, who=None, auth=None):
-    return next(job for job in listing(c, settings, who=who, auth=auth)["jobs"] if job["key"] == key)
+    return next(job for job in listing(c, settings, who=who, auth=auth, everything=True)["jobs"] if job["key"] == key)
 
 
 def install(app, store, auth, mutate):

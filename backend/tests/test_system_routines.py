@@ -22,10 +22,15 @@ def rows(api, token="ana-test"):
 def test_every_built_in_job_is_listed_with_its_group_word_and_control_availability(api):
     jobs, data = rows(api, token="ben-test")     # a member, not only the owner, sees the list
     assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
-    assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
+    store = api.app.state.store
+    with store.read() as c:
+        hidden = SR.not_applying(c, store.settings)     # a job that cannot run here is left out (Job.applies)
+    assert "directory_sync" in hidden and "topic_fresh" not in hidden
+    assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS if job.key not in hidden] + [
+        "task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
-        "bookkeeper_check", "memory_tidy"}
+        "bookkeeper_check", "memory_tidy"} - hidden
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_routing", "thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
@@ -37,7 +42,8 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
         assert jobs[key]["group"] == "reminders"
     for key in ("stall_checks", "snooze_ends", "gateway_check", "billing_check", "directory_sync"):
-        assert jobs[key]["group"] == "housekeeping"
+        assert SR.BY_KEY[key].group == "housekeeping"
+    assert all(j.get("records", True) for j in jobs.values()), "every job writes its runs"
 
 
 def test_a_scheduler_tick_records_each_run_with_its_result_and_next_run(api):
@@ -159,6 +165,10 @@ def test_a_failed_directory_sync_shows_members_fixed_words_never_the_vendors_tex
     store = api.app.state.store
     directory = api.app.state.directory
     monkeypatch.setattr(type(directory), "due", lambda self, c: True)
+    # With no directory connected the list leaves the job out (Job.applies); here it is listed to show its failure.
+    import dataclasses
+    jobs = [dataclasses.replace(job, applies=None) if job.key == "directory_sync" else job for job in SR.JOBS]
+    monkeypatch.setattr(SR, "JOBS", jobs)
 
     def refused(self, *a, **k):
         raise Problem("directory_entra", "Entra refused the request (403). AADSTS65001 tenant acme-secret app 1234", 502)

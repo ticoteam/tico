@@ -24,12 +24,21 @@ def rows(api, token="ana-test"):
     return {job["key"]: job for job in get(api, "system-routines", token=token)["jobs"]}
 
 
+def hidden(api):
+    """The jobs that cannot run on this install, which the list leaves out (Job.applies): with no Bookkeeper,
+    Books check."""
+    store = api.app.state.store
+    with store.read() as c:
+        return SR.not_applying(c, store.settings)
+
+
 def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_has_none(api):
     jobs = rows(api, "ben-test")
+    here = TIMED - hidden(api)
     timed = {k for k, j in jobs.items() if j["presets"]}
-    assert timed == TIMED | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "task-rule-close-after-done"}
-    for key in TIMED:
+    assert timed == here | {"task-rule-close-after-done"}
+    assert {k for k, j in jobs.items() if j["switch"]} == here | {"topic_fresh", "task-rule-close-after-done"}
+    for key in here:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
         if job["needed"]:
@@ -50,7 +59,7 @@ def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(ap
 
 def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_them(api):
     jobs = rows(api, "cara-test")
-    assert len(jobs) == len(SR.JOBS) + 1
+    assert len(jobs) == len(SR.JOBS) - len(hidden(api)) + 1
     assert not any(j["can_change"] for j in jobs.values())
     put(api, "system-routines/stale_review", {"on": True}, token="cara-test", expected=403)
     put(api, "system-routines/kpi_asks", {"preset": "4h"}, token="cara-test", expected=403)
@@ -274,7 +283,7 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"
     for job in data["jobs"]:
         assert job["when"] and job["then"], job["key"]
-        books = job["key"].startswith("bookkeeper_")
+        books = getattr(SR.BY_KEY.get(job["key"]), "department", "") == SR.FINANCE
         assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], job["key"]
     jobs = {j["key"]: j for j in data["jobs"]}
     assert jobs["stale_review"]["when"] == ["every hour"]
