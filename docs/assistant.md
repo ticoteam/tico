@@ -4,7 +4,7 @@ Every human has one private DM with the team's assistant (the `coo` bot; you may
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page except its own page, setup and the signed-out screens. On those screens the row is not shown and ⌘J does nothing; Search's icon becomes a row of its own. On a
 computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J)
 opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
-middle of the tab bar opens it as a sheet, and that tab does nothing on those screens. The panel names the page it sees, and a message sent from it carries that
+middle of the tab bar opens it as a sheet. On the Assistant page and the signed-out screens a tap on that tab does not open the sheet at once; it can come up later, on a page change. During setup the tab bar is not shown. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a

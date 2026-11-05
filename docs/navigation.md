@@ -37,7 +37,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
-| Find a bot, human or page | ⌘K, or Search in the sidebar: its icon at the end of the **Ask Tico** row, or its own row on the Assistant page, during setup and when signed out (phone: the Search tab) |
+| Find a bot, human or page | ⌘K, or Search in the sidebar: its icon at the end of the **Ask Tico** row, or its own row on the Assistant page, during setup and when signed out (phone: the Search tab while Threads is off, else in More) |
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | See every connection, who reads it and its bots | Library → Connections (`#/library/connections`) ([Connect tools](connect-tools.md#connections)) |
 | Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
