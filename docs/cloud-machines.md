@@ -60,8 +60,6 @@ HQ or the server gives.
 
 The other problems clear once the machine can start again.
 
-Saving the same choice again keeps the problem and any wait. A real change to the choice clears the problem, but a wait already running still has to end. The exception is a machine that never connected: any save lets Tico make it again.
-
 ## A stop never lands under a turn
 
 The server decides an idle stop on a read of the hub, and a runner can claim work between that read and HQ's stop.
