@@ -44,9 +44,9 @@ def listing(c, auth, who, tid):
     for row in c.execute("SELECT f.*,p.audience,coalesce(v.created_at,f.last_activity_at) AS context_updated_at "
                          "FROM pages p JOIN bot_files f ON f.id=p.file_id LEFT JOIN bot_file_versions v "
                          "ON v.file_id=f.id AND v.version=f.current_version WHERE p.archived=0 "
-                         "AND f.archived=0 AND f.state<>'deleted' AND (f.scope=? OR EXISTS "
+                         "AND f.archived=0 AND f.state<>'deleted' AND (f.task_id=? OR f.scope=? OR EXISTS "
                          "(SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id)) "
-                         "ORDER BY context_updated_at DESC,f.id DESC", ("task:" + task["id"], "task:" + task["id"])):
+                         "ORDER BY context_updated_at DESC,f.id DESC", (task["id"], "task:" + task["id"], "task:" + task["id"])):
         if file_visible(c, auth, who, row, cache):
             pages.append({"id": row["id"], "title": row["title"][:200], "version": row["current_version"],
                           "updated_at": row["context_updated_at"], "limited": page_limited(c, row)})

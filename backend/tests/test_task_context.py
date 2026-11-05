@@ -86,6 +86,9 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
         c.execute('UPDATE bot_files SET scope=?,conversation_id=? WHERE id=?',
                   ('conversation:' + home['id'], home['id'], shared_home))
     pin(api, t['id'], shared_home)
+    linked = seed_page(api, 'ops')
+    response = api.patch('/api/v2/files/' + linked, json={'task': t['id']}, headers=headers())
+    assert response.status_code == 200, response.text
     pinned = seed_page(api, 'ops')
     private_task = task(api, title='Review the private budget', owner='bot:ops', private=True)
     private_page = seed_page(api, 'ops', task=private_task['id'])
@@ -96,7 +99,7 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
             c.execute('UPDATE pages SET audience=? WHERE file_id=?', (encode({'bots': bots}), fid))
     before = get(api, 'tasks/' + t['id'] + '/context', token)
     shown = {p['id']: p for p in before['pages']}
-    assert set(shown) == {filed, limited, personal, shared_home, pinned, private_page}
+    assert set(shown) == {filed, limited, personal, shared_home, linked, pinned, private_page}
     assert {fid for fid, p in shown.items() if p['limited']} == {limited, personal, private_page}
     pin(api, private_task['id'], pinned)
     private_context = get(api, 'tasks/' + private_task['id'] + '/context', token)
@@ -119,7 +122,7 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
         c.execute('UPDATE pages SET audience=? WHERE file_id=?', (encode({'bots': ['finance']}), limited))
         c.execute('UPDATE pages SET archived=1 WHERE file_id=?', (pinned,))
     after = get(api, 'tasks/' + t['id'] + '/context', token)
-    assert {p['id'] for p in after['pages']} == {filed, personal, shared_home, private_page}
+    assert {p['id'] for p in after['pages']} == {filed, personal, shared_home, linked, private_page}
     get(api, 'pages/' + limited, token, expected=404)
     with api.app.state.store.transaction() as c:
         restrict(c, 'ops', people=['ana'])
