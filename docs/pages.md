@@ -79,15 +79,20 @@ the one person or bot viewing it. The page itself stays static: no script runs a
 - `<tico-kpi bot="SLUG" name="KPI" [period="7d|30d"]></tico-kpi>`: one of the bot's automatic KPIs
   ([KPIs](goals-and-kpis.md)), its current value and its change on the previous period. `name` is the KPI's key:
   `tasks_done_7d`, `first_response_min`, `approval_rate_30d`, `failed_runs_7d` or `cost_7d`, or its name. `period` is
-  optional and must be the KPI's own window.
+  optional. Set it only to the KPI's own window; any other value makes the tag show nothing.
 - `<tico-kpi id="KPI_ID"></tico-kpi>`: a stored KPI, such as "Booked demos" ([KPIs](goals-and-kpis.md)). The id is in
   `hub kpi list`. It shows the latest reading's value and unit, and its change on the reading closest to one cadence
   period before (the previous reading when the KPI has no cadence), such as `▲ 3 demos vs previous week`. `period`
-  does not apply to `id`. Readings marked partial, and readings a correction replaced, are not used.
+  does not apply to `id`. Readings marked partial, and readings a correction replaced, are not used. For a KPI with a
+  cadence, the change is left out when that reading is more than two periods older than the latest. The value still
+  shows.
 
 A KPI tag shows nothing when the viewer may not read its owner, when the name or id is not a KPI, when a stored KPI is
-archived, or when there is no reading yet. A stored KPI owned by a bot is hidden from a viewer who may not read that
-bot, as its API route hides it. A KPI never shows a zero for a missing value.
+archived, or when there is no reading yet. An automatic KPI tag also shows nothing when the bot's history includes
+private work, even for its manager. Private work is a private task the bot owned, requested or carried into its next
+run. It also includes a private task that a chat message to the bot was about. This rule does not apply to stored KPIs.
+A stored KPI owned by a bot is hidden from a viewer who may not read that bot, as its API route hides it. A KPI never
+shows a zero for a missing value.
 
 `limit` defaults to 10 and is at most 50. Links open the task in the app in a new tab. A list uses the same rules as
 Needs you, the task page and the Library, so a viewer never sees a title, a count or a name they could not open.
