@@ -220,7 +220,7 @@ page sees the list (name, kind, status, computers, usage), never a value.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
 computers. Every bot on that computer then runs that tool on it. A bot with no fallback of its own can use it too when
-that tool is installed and **Fall back when a plan runs out** is on in **Settings > Models**. On an updated runner, an unused automatic
+that tool is installed, the company has that tool's provider turned on in **Settings > Models**, and **Fall back when a plan runs out** is on there. On an updated runner, an unused automatic
 candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
 still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
 runners fetch fallback logins up front and restart those turns when a login changes.
