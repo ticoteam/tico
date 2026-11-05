@@ -557,6 +557,8 @@ def purge_rows(c, actor, row):
               (fid, actor, len(versions), now))
     blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
     if c.execute("SELECT 1 FROM pages WHERE file_id=?", (fid,)).fetchone():
+        from .files import retain_page_label_sources
+        retain_page_label_sources(c, row)
         for v in versions:
             for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
                 if v[key]:

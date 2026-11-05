@@ -49,7 +49,9 @@ output, including queued work. Counsel rechecks the asker and its run on later r
 the person and any bot acting for them; old five-field addresses expire immediately and reloading gets a new one.
 Archived bots match no audience. Messages and runner context keep only “A page you can't open” for a page outside
 the reader's audience, or “A deleted page” after deletion. Deletion purges the content and keeps its audience and
-identity provenance; saved citations also show only the deleted-page placeholder. Group membership changes refresh open pages;
+identity provenance; saved citations also show only the deleted-page placeholder. Copied review labels, answers and
+file history follow the same restriction. Recreating identical content creates a live identity whose review can be
+answered; the old page stays deleted. Group membership changes refresh open pages;
 deleting a group or person, or archiving a bot, removes their explicit page grants. An empty audience leaves access
 to the page's managers.
 

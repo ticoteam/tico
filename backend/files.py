@@ -92,7 +92,14 @@ def new_id():
 def removed_event(c, task_id, actor, fid, title):
     """The task's activity says which file was taken off it, by its newest name."""
     row = c.execute("SELECT name FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (fid,)).fetchone()
-    H._task_event(c, task_id, actor, "file", row["name"] if row else title, None, "")
+    H._task_event(c, task_id, actor, "file", row["name"] if row else title, None, "",
+                  data=file_provenance(c, fid))
+
+
+def file_provenance(c, fid, version=None):
+    """History keeps canonical page identities alongside either an old or a new display name."""
+    return {"file": fid, **({"version": version} if version is not None else {}),
+            "page_files": sorted(page_references(fid, c))}
 
 
 def is_file_id(value):
@@ -275,6 +282,28 @@ def page_identities(c):
                     add(r[key], r["file_id"])
             for r in c.execute("SELECT identity,file_id FROM page_identities"):
                 add(r[0], r[1])
+            # A digest describes bytes, not a deleted identity. A live file in the same context wins.
+            live = {}
+            digests = [identity for identity, ids in found.items() if re.fullmatch(r"[0-9a-f]{64}", identity)
+                       and any(page_rows(c).get(fid, {}).get("state") == "deleted" for fid in ids)]
+            rows = []
+            for chunk in H.chunks(digests):
+                marks = ",".join("?" * len(chunk))
+                rows.extend(c.execute("SELECT f.*,v.digest,v.source_digest FROM bot_file_versions v "
+                                      "JOIN bot_files f ON f.id=v.file_id WHERE f.state<>'deleted' "
+                                      f"AND (v.digest IN ({marks}) OR v.source_digest IN ({marks}))", (*chunk, *chunk)))
+            for r in rows:
+                context = ("task", r["task_id"]) if r["task_id"] else (r["bot_id"], r["scope"], r["conversation_id"])
+                for key in ("digest", "source_digest"):
+                    if r[key]:
+                        live.setdefault(r[key], set()).add(context)
+            for identity, contexts in live.items():
+                for fid in list(found.get(identity, ())):
+                    row = page_rows(c).get(fid)
+                    if row and row["state"] == "deleted":
+                        context = ("task", row["task_id"]) if row["task_id"] else (row["bot_id"], row["scope"], row["conversation_id"])
+                        if context in contexts:
+                            found[identity].discard(fid)
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc):
                 raise
@@ -378,32 +407,106 @@ def page_ref_denials(c, auth, who, refs):
                 page_audience_visible(c, auth, who, pages[fid], cache)))}
 
 
-def readable_page_refs(c, auth, who, refs):
+def readable_page_refs(c, auth, who, refs, *, task_id=None):
     """Remove the entire metadata object of a denied page, even on undecorated message transports."""
     original = refs
     refs = H._json(refs, {}) if isinstance(refs, str) else refs
     denied = page_ref_denials(c, auth, who, refs)
-    if not denied:
+    def legacy_labels(value):
+        if isinstance(value, dict):
+            return (isinstance(value.get("answers"), dict) or
+                    any(not option.get("source") and not option.get("file") for option in value.get("options") or []
+                        if isinstance(option, dict)) or any(legacy_labels(v) for v in value.values()))
+        return isinstance(value, list) and any(legacy_labels(v) for v in value)
+    if not denied and not legacy_labels(refs):
         return original
+    def hidden_titles(tid):
+        if not isinstance(tid, str) or not tid:
+            return set()
+        def build():
+            return {row["title"] for row in page_rows(c).values() if row["task_id"] == tid
+                    and row["state"] != "deleted" and page_ref_denials(c, auth, who, row["id"])}
+        return read_cache.value(c, ("hidden_page_titles", who.actor, tid, auth is not None), build)
 
-    def clean(value):
+    def rejected(value):
+        return bool(page_references(value, c) & denied.keys())
+
+    def clean(value, parent="", tid=task_id):
         direct = page_references(value, c) & denied.keys() if isinstance(value, str) else set()
         if isinstance(value, dict):
+            carried = value.get("refs") if isinstance(value.get("refs"), dict) else {}
+            tid = H.refs_task_id(carried) or H.refs_task_id(value) or value.get("task_id") or tid
+            if "owner_id" in value and "title" in value:
+                tid = value.get("id") or tid
+            if parent == "options" and (rejected(value.get("source")) or
+                    not value.get("source") and not value.get("file") and value.get("label") in hidden_titles(tid)):
+                return {"removed": True, "label": "A page you can't open"}
             direct = {fid for v in value.values() if isinstance(v, str) and not v.startswith(("{", "["))
                       for fid in page_references(v, c) if fid in denied}
             if direct:
                 return {"removed": True, "label": denied[sorted(direct)[0]]}
-            return {k: clean(v) for k, v in value.items()}
+            shown = {k: clean(v, k, tid) for k, v in value.items()}
+            if isinstance(value.get("label_sources"), dict):
+                shown["label_sources"] = {qid: {label: source for label, source in sources.items() if not rejected(source)}
+                                          for qid, sources in value["label_sources"].items()}
+            if isinstance(value.get("answers"), dict):
+                sources = value.get("label_sources", {})
+                for key in ("answers", "not"):
+                    if isinstance(value.get(key), dict):
+                        shown[key] = {qid: [label for label in picks if not (
+                            rejected(sources.get(qid, {}).get(label)) or
+                            label not in sources.get(qid, {}) and label in hidden_titles(tid))]
+                                      for qid, picks in value[key].items()}
+            answer = carried.get("answer", {})
+            shown_answer = shown.get("refs", {}).get("answer", {})
+            if (rejected(carried.get("body_sources")) or answer.get("answers") != shown_answer.get("answers") or
+                    answer.get("not") != shown_answer.get("not")):
+                for key in ("body", "text"):
+                    if key in shown:
+                        shown[key] = "A page you can't open"
+            return shown
         if isinstance(value, list):
-            return [clean(v) for v in value]
+            return [clean(v, parent, tid) for v in value]
         if isinstance(value, str) and value.startswith(("{", "[")):
-            return readable_page_refs(c, auth, who, value)
+            return readable_page_refs(c, auth, who, value, task_id=tid)
         if direct:
             return {"removed": True, "label": denied[sorted(direct)[0]]}
         return value
 
     shown = clean(refs)
     return encode(shown) if isinstance(original, str) else shown
+
+
+def retain_page_label_sources(c, row):
+    """Before deletion erases a title, link legacy exact-title labels on this page's task to its identity."""
+    if not row["task_id"]:
+        return
+    task = H.task(c, row["task_id"])
+    source = {"file": row["id"]}
+    def annotate(value):
+        changed = False
+        if isinstance(value, dict):
+            for option in value.get("options", []):
+                if option.get("label") == row["title"] and not option.get("source"):
+                    option["source"] = source
+                    changed = True
+            if isinstance(value.get("answers"), dict):
+                for qid, picks in value["answers"].items():
+                    if row["title"] in picks or row["title"] in value.get("not", {}).get(qid, []):
+                        value.setdefault("label_sources", {}).setdefault(qid, {})[row["title"]] = source
+                        changed = True
+            for child in list(value.values()):
+                changed = annotate(child) or changed
+        elif isinstance(value, list):
+            changed = any([annotate(child) for child in value])
+        return changed
+    for message in c.execute("SELECT id,refs FROM messages WHERE conversation_id=? OR json_extract(refs,'$.task')=?",
+                             (task["conversation_id"], task["id"])).fetchall():
+        refs = H._json(message["refs"], {}) or {}
+        if annotate(refs):
+            if refs.get("answer"):
+                refs.setdefault("body_sources", []).append(source)
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
 
 
 class Files:
@@ -872,7 +975,8 @@ class Files:
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
                 blob = c.execute("SELECT name FROM blobs WHERE id=?", (fid,)).fetchone()
                 for task in linked:
-                    H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "")
+                    H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "",
+                                  data=file_provenance(c, fid))
                     c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["task_id"]))
                     for published in c.execute("SELECT f.id FROM bot_files f JOIN bot_file_versions v "
                                                "ON v.file_id=f.id "

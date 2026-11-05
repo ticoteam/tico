@@ -134,12 +134,13 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
 
 
 @pytest.mark.slow
-def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(api, live):
+@pytest.mark.parametrize("disabled_guard", [None, "scrubber", "history", "recognizer", "audience"])
+def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(api, live, monkeypatch, disabled_guard):
     """One canary follows every persisted attachment form through both outsider identities and a real SSE socket."""
     from backend.tests.test_api import assign, ready, runner
     from backend.tests.test_events import ready as stream_ready
     from backend.tests.test_assistant import room
-    from backend.task_review import file_added
+    from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
 
     org(api)
     counsel_on(api)
@@ -152,7 +153,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     _, attempt = turn(api)
     tid = post(api, "tasks", {"owner": "finance", "title": "Review folios", "body": "Review", "private": False}, token="ops-test")["id"]
     name, title = "canary-folio-private.html", "Canary folio confidential"
-    document = b"<html><body><p>Canary confidential quote.</p>" + b"x" * 81917 + b"</body></html>"
+    document = b"<html><body><p>Canary confidential quote.</p></body></html>"
     made = page(api, attempt, task=tid, name=name, title=title, data=document)
     assert made.status_code == 200, made.text
     fid = made.json()["page"]["file_id"]
@@ -172,24 +173,29 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     rule = post(api, "rules", {"kind": "external", "text": "Check the folio before publishing.", "who": {"everyone": True},
                                "source_id": source(api), "cite": {"file_id": fid, "version": 1, "quote": "Canary confidential quote."}})
     rid = rule["id"]
-    with api.app.state.store.transaction() as c:
-        version = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone())
+    # The copy is company-visible so its task boundary cannot mask the page audience guard.
+    read_version = get(api, "tasks/" + read_task, token="reader-test")["task"]["version"]
+    post(api, "tasks/" + read_task, {"version": read_version, "private": False}, token="reader-test")
+    assert "Canary confidential quote." in json.dumps(get(api, "tasks/" + read_task, token="cara-test"))
+    pick = review_ask(api, "ops-test", [{"file": fid}], on="reader", parent=tid, private=False, pick=True)
+    picked_label = pick["question"]["refs"]["questions"][0]["options"][0]["label"]
+    picked_answer = review_answer(api, pick, [picked_label], token="reader-test")
+    sibling_ask = ask("reader")
+    sibling_ask["questions"][0]["options"][0].update(label=title, file=fid + "@1")
+    sibling = post(api, f"tasks/{tid}/files", {"name": "public-notes.txt", "text": "Public notes", "ask": sibling_ask})
+    post(api, f"tasks/{tid}/answers", {"target": {"file": sibling["file_id"], "version": 1},
+         "answers": {"verdict": [title]}}, token="reader-test")
+    post(api, f"tasks/{tid}/files", {"name": "other-notes.txt", "text": "Other notes", "ask": sibling_ask})
+    # Version uploads and blob archives use the same production writers as the task's Files panel.
+    uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
+    assert uploaded["file_id"] == fid and uploaded["version"] == 2
+    with api.app.state.store.read() as c:
+        version = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=1", (fid,)).fetchone())
+        second_blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=2", (fid,)).fetchone()[0]
         bid = version["blob_id"]
-        blob = dict(c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone())
-        metadata = {"file_id": fid, "ref": fid + "@1", "title": title, "name": name, "size": version["size"],
-                    "version": 1, "digest": version["digest"], "kind": "page"}
-        c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (tid, bid))
-        file_added(c, Identity("bot:ops", "bot"), tid, blob, 1)
-        for mid in (comment["id"], answered["comment"]["id"], assistant["id"]):
-            refs = H.message(c, mid)["refs"]
-            refs.update({"review": {"files": [metadata]}, "visual": metadata,
-                         "blob_reference": {**metadata, "file_id": bid, "ref": bid + "@1"},
-                         "version_reference": {**metadata, "file_id": fid + "@1"}})
-            c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps(refs), mid))
-        H.history_event(c, "task", tid, "bot:ops", "file", new=name, data={"file": bid, "version": 1})
-        H.event(c, "bot:ops", "message.visual", tid, {"visual": metadata})
         cid = H.task(c, tid)["conversation_id"]
-        secrets = (fid, bid, title, name, str(version["size"]), fid + "@1", version["digest"], version["source_digest"], "Canary confidential quote.")
+        secrets = (fid, bid, second_blob, title, picked_label, name, str(version["size"]), fid + "@1",
+                   version["digest"], version["source_digest"], "Canary confidential quote.")
     api.app.state.store.settings.visual_origin = "https://visuals.acme.example"
     signed = get(api, "pages/" + fid, token="cara-test")["page"]["src"]
     assert api.get(signed).status_code == 200
@@ -200,10 +206,24 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     edit(api, fid, {"people": ["reader"], "bots": [H.COUNSEL]})
     for token in ("reader-test", "ben-test", attempt["token"]):
         assert fid in json.dumps(get(api, "pages/" + fid, token=token))
+    archived = api.patch("/api/v2/files/" + second_blob, json={"archived": True}, headers=headers())
+    assert archived.status_code == 200, archived.text
     machine = runner(api)
     assign(api, machine, "finance")
     ready(api, machine, ["finance"])
     failures = []
+    claimed_ids = []
+    if disabled_guard == "scrubber":
+        monkeypatch.setattr(files, "readable_page_refs", lambda c, auth, who, refs, **kw: refs)
+    elif disabled_guard == "history":
+        original = task_privacy.content_readable
+        monkeypatch.setattr(task_privacy, "content_readable", lambda c, actor, payload:
+                            True if isinstance(payload, dict) and payload.get("field") == "file"
+                            else original(c, actor, payload))
+    elif disabled_guard == "recognizer":
+        monkeypatch.setattr(files, "page_references", lambda value, c=None: set())
+    elif disabled_guard == "audience":
+        monkeypatch.setattr(files, "page_audience_visible", lambda *args, **kwargs: True)
 
     def clean(label, value):
         serialized = json.dumps(value, default=str)
@@ -220,6 +240,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "files", "files?kind=page", "files?task=" + tid, "files/search?q=Canary", "files/search?q=Canary&kind=page",
               "bots/ops/files", "tasks", "tasks?owner=finance", "tasks/" + tid, "tasks/" + read_task,
               "tasks/" + tid + "/files", "tasks/" + tid + "/comments", "tasks/" + tid + "/answers", "tasks/" + tid + "/tree",
+              "tasks/" + pick["task"]["id"], "tasks/" + pick["task"]["id"] + "/comments",
+              "messages/" + picked_answer["comment"]["id"],
               "tasks/" + tid + "/links", "places/dashboard", "places/task:" + tid, "places/person:cara",
               "messages/" + comment["id"], "messages/" + answered["comment"]["id"], "messages/" + assistant["id"],
               "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",
@@ -271,9 +293,37 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
                         clean(state + ":event guard:" + token, dict(record))
             assert ordinary in json.dumps(get(api, "pages/" + ordinary, token=token))
         response(state + ":signed visual", api.get(signed))
-        response(state + ":runner claim", api.post("/api/v2/jobs/claim",
-                 json={"bot": "finance", "start_places": True}, headers=headers(machine["token"], "matrix-claim")))
-    assert not failures, json.dumps(failures, indent=2)
+        claimed = api.post("/api/v2/jobs/claim", json={"bot": "finance", "start_places": True},
+                           headers=headers(machine["token"], "matrix-claim-" + state))
+        response(state + ":runner claim", claimed)
+        active = claimed.json().get("attempt")
+        assert active and active["id"] not in claimed_ids, claimed.text
+        aid = active["id"]
+        claimed_ids.append(aid)
+        post(api, f"attempts/{aid}/started", {"thread_id": "matrix-" + state}, token=machine["token"])
+        post(api, f"tasks/{tid}/comments", {"text": "Check remaining attachments",
+             "attachments": [(ordinary if deleted else fid) + "@1"]})
+        response(state + ":attempt inputs", api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(machine["token"])))
+        post(api, f"attempts/{aid}/complete", {"outcome": "succeeded", "text": "Checked", "last_seq": 0}, token=machine["token"])
+        if not deleted:
+            post(api, f"tasks/{tid}/comments", {"text": "Continue review after deletion", "wake": True})
+    if disabled_guard:
+        assert failures, "The matrix did not detect removal of " + disabled_guard
+        if disabled_guard == "history":
+            assert any(name in found for _, found, *rest in failures), failures
+        if disabled_guard == "audience":
+            assert any("tasks/" + read_task in label and "Canary confidential quote." in found
+                       for label, found, *rest in failures), failures
+    else:
+        assert not failures, json.dumps(failures, indent=2)
+    # Recreate exactly the original bytes in the same task: its live review stays answerable.
+    monkeypatch.undo()
+    recreated = page(api, attempt, task=tid, name=name, title="Replacement folio", data=document)
+    assert recreated.status_code == 200, recreated.text
+    replacement = recreated.json()["page"]["file_id"]
+    assert replacement != fid
+    remake = review_ask(api, "ops-test", [{"file": replacement}], on="ana", parent=tid, private=False)
+    assert review_answer(api, remake, ["Approve"])["answer"]["reviewed"][0]["file"] == replacement
 
 
 def test_migration_links_name_only_history_before_page_content_is_purged(api):

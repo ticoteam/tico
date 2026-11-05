@@ -474,7 +474,7 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
         from .files import readable_page_refs
-        message["refs"] = readable_page_refs(c, None, who, H._json(stored["refs"], {}) or {})
+        message["refs"] = readable_page_refs(c, None, who, H._json(stored["refs"], {}) or {}, task_id=task_id)
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -1021,7 +1021,8 @@ def require_batch(c, who, row):
 
 def page_message_readable(c, actor, refs):
     """Generated file-review messages carry names in prose as well as structured refs."""
-    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get("target"), refs.get("answer")])
+    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get("target"), refs.get("answer"),
+                                                                    refs.get("review"), refs.get("body_sources")])
 
 
 def page_content_readable(c, actor, payload):
