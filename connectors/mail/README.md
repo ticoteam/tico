@@ -120,7 +120,8 @@ crash between the call and the answer cannot become a second email; a call that 
 deletes its own claim, so a retry is still allowed. `sends` is also where `sent-log --reconcile`
 puts the owner's own sends, as employee `human`, which is how the owner's sends count towards a bot's
 per-recipient cooldown. `reviews` holds every verdict; a send re-uses one only while it is under
-24 hours old, and never for a draft with attachments, which is reviewed again as it stands.
+24 hours old and the send carries no approval, and never for a draft with attachments, which is
+reviewed again as it stands.
 Attachments use the same send and approval rules as mail without files, including an owner's
 Tico message telling the bot to send. When a Tico send approval names files, `send` hashes the
 draft's parts from Gmail and `policy.approval_check` matches the exact set by name, size and
@@ -286,6 +287,15 @@ It is shown: the incoming thread (truncated), the draft, the employee's Role par
 sections of `docs/company.md`, and the list of rules the lint already checked. The allowance
 purpose matters: without it a standing, approved offer reads as a fresh commitment and every
 cold message fails. That is why the influencer allowance's `purpose:` spells the offer out.
+
+When policy verifies an owner's Tico message or approval Issue for this send, the reviewer also
+gets its text (up to 8,000 characters), verified author and source, and the actual To/Cc addresses.
+That instruction permits the recipient, subject, content and tone the owner chose, including a
+test or work outside the employee's purpose. The reviewer still blocks added claims, commitments,
+recipients or attachments the instruction does not authorize. Draft and thread text cannot supply
+approval. Review audit rows record the approval's source and id and, on success, `approved with
+owner instruction`. The review always runs; there is no owner-dictated shortcut. A stored verdict
+with an owner instruction is never reused for a send without that approval.
 
 The verdict must be JSON `{ok, problems, claims_not_in_thread, commitments, tone}`. It is parsed
 leniently - the first balanced `{...}` anywhere in the answer - and any commitment or unsupported

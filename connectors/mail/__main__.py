@@ -1594,7 +1594,8 @@ def busy_window(ctx, days=60):
     return ctx.calendar.busy(now, now + timedelta(days=days))
 
 
-def run_review(ctx, body, subject, incoming="", attachments=()):
+def run_review(ctx, body, subject, incoming="", attachments=(), verified_approval=None,
+               to=(), cc=()):
     """The reviewer sees what the employee is *for*: its Role, plus its standing allowance.
 
     Without the allowance an approved standing offer reads as a fresh commitment, and every
@@ -1616,8 +1617,17 @@ def run_review(ctx, body, subject, incoming="", attachments=()):
         body = (body + "\n\n[Attached files: "
                 + "; ".join(f"{a['name']} ({a.get('type') or '?'}, {a.get('size') or 0} bytes)"
                             for a in attachments) + "]")
-    return rv.review(body, subject, incoming, purpose=purpose,
-                     company=rv.company_context(), rules=REVIEW_RULES)
+    instruction = (verified_approval.get("owner_instruction")
+                   if verified_approval and verified_approval.get("ok") else None)
+    verdict = rv.review(body, subject, incoming, purpose=purpose,
+                        company=rv.company_context(), rules=REVIEW_RULES,
+                        owner_instruction=instruction, to=to, cc=cc)
+    if instruction:
+        # Keep provenance in the stored verdict and audit, without copying the owner's words.
+        verdict["owner_instruction"] = {k: instruction[k] for k in ("source", "id", "who")}
+        verdict["review"] = (("approved" if verdict.get("ok") else "refused")
+                             if verdict.get("available") else "unavailable") + " with owner instruction"
+    return verdict
 
 
 def lint_line(res):
@@ -1661,9 +1671,11 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
     cc = [str(a).strip().lower() for a in (cc or []) if str(a).strip()]
     if not to:
         raise Refused("no recipient.", "Pass --to, or --reply-to a thread that has one.")
+    files = attachment_meta(attachments)
     outside = pl.externals(policy, cc)
     appr = (pl.approval_check(approval, pl.externals(policy, to), outside, thread_id,
-                              slug=ctx.slug, body=body) if approval else None)
+                              slug=ctx.slug, body=body)
+            if approval else None)
     approved = bool(appr and appr["full"])
     if outside and not approved:
         raise Refused(f"Cc outside {', '.join(policy['internal_domains'])} is not allowed "
@@ -1675,7 +1687,6 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                       "The owner's Tico message telling this employee to send.")
     pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, attachments=len(attachments or ()),
                    is_reply=bool(thread_id))
-    files = attachment_meta(attachments)
 
     allowance = pl.allowance_for(policy, ctx.slug, ctx.mailbox)
     busy = busy_window(ctx) if check_calendar else None
@@ -1700,10 +1711,17 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
         ctx.audit("gate", target, {"set": gate["set"], "available": gate["available"],
                                    "ok": gate["ok"], "flags": gate["flags"],
                                    "probabilities": gate["probabilities"], "error": gate.get("error")})
-    verdict = run_review(ctx, body, subject, thread_text(msgs), files)
+    review_approval = appr
+    if files and appr and appr.get("owner_instruction"):
+        review_approval = pl.approval_check(approval, pl.externals(policy, to), outside,
+                                            thread_id, slug=ctx.slug, attachments=files, body=body)
+    verdict = run_review(ctx, body, subject, thread_text(msgs), files,
+                         verified_approval=review_approval, to=to, cc=cc)
     review_id = db.record_review(ctx.conn, ctx.slug, ctx.mailbox, target, verdict)
     ctx.audit("review", target, {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
                                  "available": verdict.get("available"),
+                                 "review": verdict.get("review"),
+                                 "owner_instruction": verdict.get("owner_instruction"),
                                  "attachments": [a["name"] for a in files],
                                  "commitments": verdict.get("commitments"),
                                  "claims_not_in_thread": verdict.get("claims_not_in_thread"),
@@ -1841,18 +1859,17 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
                     note=f"the draft is still in {ctx.mailbox} Drafts; the owner can send it, or "
                          "close the gate that refused it.")
 
-    # A per-message approval (the Issue names every address on this message) is the owner's own
-    # yes to these exact words and recipients. The second reviewer still runs and its verdict
-    # is recorded, but it advises rather than blocks: it does not get to overrule the owner.
+    # An instruction grants only what it says: the reviewer still blocks additions beyond it.
+    # A hash-bound Tico send approval covers the exact text and keeps its advisory review.
     appr = (pl.approval_check(approval, pl.externals(ctx.policy, to),
                               pl.externals(ctx.policy, cc), thread_id,
                               slug=ctx.slug, attachments=files, draft=draft_id, body=body)
             if approval else None)
-    full = bool(appr and appr["full"])
+    advisory = bool(appr and appr["full"] and not appr.get("owner_instruction"))
     review_note = ""
     if not verdict.get("available"):
         why = ("the second reviewer is unavailable: " + str(verdict.get("error", "unknown")))
-        if not full:
+        if not advisory:
             return downgrade(why + " (a draft may stand without it, a send may not)", "review")
         review_note = why + "; sent anyway under " + appr["detail"]
     elif not verdict.get("ok"):
@@ -1860,7 +1877,15 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
                + "; ".join((verdict.get("commitments") or [])
                            + (verdict.get("claims_not_in_thread") or [])
                            + (verdict.get("problems") or []) or ["no reason given"]))
-        if not full:
+        if not advisory:
+            if not approval:
+                why += (". If the owner told you in Tico to send this, send again with "
+                        "--approval-issue <the id of that message>")
+            elif appr and not appr.get("full"):
+                why += f". --approval-issue {approval} did not count: {appr['detail']}"
+            elif appr:
+                why += (". The owner's instruction covers only what it says; for this exact text, "
+                        "ask for a Tico send approval and send with its id")
             return downgrade(why, "review")
         review_note = why + "; sent anyway under " + appr["detail"]
     if review_note:
@@ -1923,7 +1948,9 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     label_thread(ctx, handled, msgs, [message_id], part_of="send")
     ctx.audit("send", message_id or draft_id,
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
-               "draft": draft_id, "attachments": names, "review": verdict.get("backend")})
+               "draft": draft_id, "attachments": names, "review": verdict.get("backend"),
+               "review_result": verdict.get("review"),
+               "owner_instruction": verdict.get("owner_instruction")})
     return dict(base, sent=True, message=message_id, thread=thread_id, key=key,
                 label=handled, checks=decision["checks"])
 
@@ -1976,16 +2003,21 @@ def cmd_send(args):
             "lint": {"ok": False, "findings": res["findings"]}})
 
     row = db.draft_by_gmail_id(ctx.conn, ctx.mailbox, args.draft)
-    # A draft with files is reviewed again as it stands: the files may have changed in Gmail
-    # since the stored verdict was given.
-    verdict = None if files else fresh_verdict(ctx.conn, row)
+    # Files and approvals must be reviewed as they stand for this send. A stored instruction
+    # is never authority for a send without that approval.
+    verdict = None if files or args.approval_issue else fresh_verdict(ctx.conn, row)
+    if verdict and verdict.get("owner_instruction"):
+        verdict = None
     reused = verdict is not None
     if verdict is None:
-        verdict = run_review(ctx, body, subject, thread_text(msgs), files)
+        verdict = run_review(ctx, body, subject, thread_text(msgs), files,
+                             verified_approval=appr, to=to, cc=cc)
         db.record_review(ctx.conn, ctx.slug, ctx.mailbox, args.draft, verdict)
         ctx.audit("review", args.draft,
                   {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
                    "available": verdict.get("available"),
+                   "review": verdict.get("review"),
+                   "owner_instruction": verdict.get("owner_instruction"),
                    "attachments": [a["name"] for a in files]})
     payload = attempt_send(ctx, args.draft, to, cc, subject, thread_id, msgs, verdict,
                            approval=args.approval_issue, attachments=files, body=sent_text,

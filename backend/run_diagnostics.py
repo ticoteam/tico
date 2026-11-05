@@ -16,6 +16,7 @@ CAP_EVENT = 'attempt.max-run-cap'
 # as a diagnostic event, read by clean_stop_reported. Both relax generic tool uncertainty (execution.restart_reported).
 RESTART_TEXT = 'Runner restarted during execution'
 CLEAN_STOP = 'Runner stopped during execution'
+HANDED_BACK = 'Its computer handed the run back before starting it'
 
 
 def clean_stop_reported(c, attempt_id):
@@ -70,26 +71,38 @@ def keep_stderr(c, row: AttemptRow, text):
     return {'kept': True, 'bytes': len(value.encode())}
 
 
+def stop_supersedes(stop_requested_at, outcome):
+    """A Stop wins over an interrupted or failed turn, while an already completed turn stays finished."""
+    return bool(stop_requested_at) and outcome != 'completed'
+
+
 def reason(c, row: AttemptRow, outcome, summary=''):
-    if row['stop_requested_at'] and outcome != 'completed':
+    if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
-        return stopped_by(c, row) or 'Canceled by ' + row['stop_requested_at']
+        return stopped_by(c, row) or f"Canceled by {row['stop_requested_at']}"
     if outcome in ('completed', 'ok'):
         return 'Finished'
     # The computer said it stopped the turn itself (its clean stop), even when its completion never reached the hub.
     stopped = clean_stop_reported(c, row['id'])
     if stopped:
         return stopped
+    result = json.loads(row['result'] or '{}')
+    if result.get('text') == RESTART_TEXT:
+        return RESTART_TEXT
+    # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
+    from .login_waits import paused
+    yielded = paused(c, row['id'], row['state'], row['result'], row['stop_requested_at'])
+    if yielded:
+        return scrub(yielded)[:500]
     if row['state'] == 'expired':
         capped = c.execute("SELECT detail FROM events WHERE target=? AND action=? LIMIT 1",
                            (row['id'], CAP_EVENT)).fetchone()
         if capped:
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
+        if not row['started_at'] and row['final_text'] == HANDED_BACK + '.':
+            return HANDED_BACK
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
-    result = json.loads(row['result'] or '{}')
-    if result.get('text') == RESTART_TEXT:
-        return RESTART_TEXT
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()

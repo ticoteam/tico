@@ -13,9 +13,9 @@
       out:
         tasks:
           - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
           - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
           - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
           - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
