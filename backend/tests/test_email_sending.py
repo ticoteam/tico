@@ -165,11 +165,12 @@ def test_a_tico_approval_without_bcc_releases_the_frozen_send_and_is_consumed(in
         assert H.approval(c, queued["approval_id"])["consumed_at"]
 
 
-def test_a_github_issue_number_asks_for_a_normal_tico_approval(inbox):
-    autonomous(inbox)
-    queued = queue(inbox, approval_id="77")
-    assert queued["state"] == "waiting_approval"
-    assert queued["approval_id"] and queued["approval_id"] != "77" and not queued["decision"]["approved"]
+def test_an_approval_id_tico_does_not_know_neither_approves_nor_blocks(inbox):
+    # A GitHub issue number, say: under Ask first the email waits for a Tico approval of its own.
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    queued = queue(inbox, actor="bot:ops", approval_id="77")
+    assert queued["state"] == "waiting_approval" and not queued["decision"]["approved"]
+    assert queued["approval_id"] and queued["approval_id"] != "77"
 
 
 def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
@@ -445,7 +446,8 @@ def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch
     calls = workspace(monkeypatch, answer)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    assert claim(inbox, machine["token"]) is None                   # no computer leases a Workspace inbox's mail
+    # No computer leases a Workspace inbox's mail (the computer that syncs it gets None, any other is refused).
+    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == int(state == "sent")
     [call] = calls

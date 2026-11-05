@@ -20,7 +20,7 @@ connectors/mail/
   db.py             SQLite at <projects>/runtime/mail/mail.db, WAL
   access.py         employee -> mailboxes -> verbs, from employee.yaml. Refusals are exit 2.
   policy.py         the one send door (POST /api/v2/email/sends) and what a run reads from Tico around it
-  lint.py           the deterministic rules, L010..L071. Pure. Tico runs the same lint on every send.
+  lint.py           the deterministic rules, L001..L071. Pure. Tico runs the same lint on every send.
   compose.py        MIME building and the two idempotency keys. Pure.
   rules.py          the deterministic inbox rules engine
   labels.py         the hub/* label set
@@ -211,7 +211,7 @@ gets a draft and `gate: "verb"`.
 
 ## The lint
 
-`lint.py`'s docstring is the rule table: L010-L011 URLs, L020
+`lint.py`'s docstring is the rule table: L001 forbidden phrases, L010-L011 URLs, L020
 placeholders, L030 secret shapes, L040 and L041 internal leakage, L050-L055 structure,
 L060-L067 scheduling, L070 and L071 replies. Ids are stable, because playbooks and Issues quote
 them. Everything is an error except L041 (something that looks like a hub Issue number, which is

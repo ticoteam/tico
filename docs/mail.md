@@ -113,7 +113,7 @@ And the record:
 
 ```bash
 $HUB_DIR/scripts/mail.sh whoami                       # your mailboxes and verbs
-$HUB_DIR/scripts/mail.sh policy show                  # what you may send, to whom, how often
+$HUB_DIR/scripts/mail.sh policy show                  # your sending policy, as Tico answers it
 $HUB_DIR/scripts/mail.sh audit --since 24h            # everything mail did
 $HUB_DIR/scripts/mail.sh sent-log --since 7d          # what actually went out
 $HUB_DIR/scripts/mail.sh doctor                       # is mail set up at all
@@ -131,9 +131,12 @@ command does not hold a Tico token or push to the server.
 
 ## Writing: draft, reply, send
 
-Every write goes through the same five gates, in order: **policy**, **lint**, **a second model**,
-execution, audit. A gate that says no never throws the words away - it leaves a draft in Gmail
-with the reason. Read the reason. Do not retry the same text, and do not look for another route.
+`mail draft` lints the text and writes a Gmail draft. `send`, `reply` and `schedule` hand the frozen message to
+Tico's send queue, and Tico decides every send: your sending policy (**On their own**, **Ask first** or **Never**),
+blocked recipients, the people the owner handles personally, outside Cc and many outside recipients, the lint and a
+second reviewer on the text, the org rules, bounces and approvals. An allowed send waits out the undo window before it
+goes. A send Tico blocks never throws the words away - the draft stays in Gmail with Tico's reason. Read the reason.
+Do not retry the same text, and do not look for another route.
 
 ### Draft
 
@@ -147,7 +150,7 @@ $HUB_DIR/scripts/mail.sh draft discard r-882... --issue 128
 
 `--reply-to <thread>` fills in the recipient and the subject from the thread and keeps
 `In-Reply-To` and `References`, so the message lands in the conversation instead of starting a
-new one. `--cc` takes internal addresses only. `--dry-run` lints and reviews and writes nothing.
+new one. `--cc` adds copies; Tico decides whether an outside Cc needs a person. `--dry-run` lints and writes nothing.
 
 The draft is keyed on (you, the task, the recipient, the subject, the body, and the hashes of any
 attached files): running the same
@@ -155,26 +158,18 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments use the shared sending policy, whose attachment prompt is on by default. Legacy `allow_attachments` keys
-in `registry/mail-policy.yaml` are accepted but do nothing. A file must be inside your own folder
+from the file sizes before anything is read). Attachments use the shared sending policy, whose attachment prompt is on by default. A file must be inside your own folder
 (`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
 there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
 `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
 `credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
-`.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
-reviewer read the text, and the reviewer is told each file's name, type and size, not its
-contents. Attaching lifts no permission. The server freezes and hashes every attachment, including unnamed inline parts. An approval binds that exact snapshot; changed files need a new send and approval.
+`.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Attaching lifts no permission. The server freezes and hashes every attachment, including unnamed inline parts. An approval binds that exact snapshot; changed files need a new send and approval.
 
-If a Tico send approval names files, that binding still applies: its payload carries `draft` and
-`attachments: [{name, size, sha256}]`. At send time the connector hashes the files as they stand
-in the Gmail draft and requires the exact approved set and draft id; changed, added, removed or
-swapped files need a new approval. `mail draft --attach --json` returns an optional
-`approval_request` summary and a `mail send` command that freezes the draft through the shared queue. The generic approvals endpoint does not accept a new email approval. When the draft
-belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
-each file to it and adds its `file_id` to the request, so the approver can open the file from the
-approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
-file only to the version on the task whose stored sha256 and size are the approved ones. Attached
-files become readable by everyone who can read the task.
+`mail draft --attach --json` returns an `approval_request` summary (`attachments: [{name, size, sha256}]`) and the
+`mail send` command that freezes the draft through the shared queue. When the draft belongs to a Tico task
+(`--issue <task id>`, or the task the run is for), `mail draft` first attaches each file to it and adds its `file_id`
+to the summary, so a person can open the file from the task. Attached files become readable by everyone who can read
+the task.
 
 `draft discard <draft-id>` (or `discard <draft-id>`) deletes an unsent draft you made with `mail draft`, and nothing else: a
 draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
@@ -184,52 +179,50 @@ the `draft` verb and is audited.
 { "ok": true, "draft": "r-882...", "thread": "18f2c9a3b4d5e6f7", "to": ["ava@creator.example"],
   "subject": "Ava, 6 months of Acme on us", "created": true, "updated": false,
   "lint": { "ok": true, "findings": [], "summary": "clean" },
-  "review": "ok", "label": "hub/drafted" }
+  "label": "hub/drafted" }
 ```
 
 ### Send
 
 ```bash
-$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue <tico-approval-id>] [--dry-run]
+$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval <tico-approval-or-message-id>] [--dry-run]
 ```
 
-**Once a person has turned sending on for the bot in Tico (see "Turning sending on"), the bot follows its rules without
-asking for each message, to three kinds of recipient:**
+`send` freezes the draft and queues it with Tico. Your sending policy is set in Tico, never in `bot.yaml`: **Settings >
+Bots > <bot> > Email sending**, or the company or inbox sending policy (see [Turning sending on](#turning-sending-on)).
 
-1. **Anyone in the team's own domain** (`@acme.example` here).
-2. **The sender of the thread it is replying to**: `reply --thread <id>`, to that one person, with nobody added. A
-   message that also copies someone outside, or goes to a second outside address, is not covered.
-3. **The forward addresses a person approved in Tico**, usually the owner's other email. An address that is only in
-   `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
+- **On their own**: the send waits out the undo window (two minutes by default), then goes.
+- **Ask first**: the send waits for a person to approve it in Tico. It goes once they do.
+- **Never**: nothing is sent; the draft stays.
 
-Grandfathered recipient scopes keep their existing registry allowances. New sends use the shared company/inbox/bot
-policy below. A Tico approval or an authorized person's in-chat “send it” can approve a specific message; the effective
-**Who can OK** rule decides whose instruction counts. A numbered GitHub issue does not prove a Tico approver identity
-and no longer authorizes a send. Use a Tico send approval instead. The person's verified message still reaches the
-reviewer as their instruction. See docs/mail-service.md, “Per-message approval”.
-New email approvals are created by the frozen send queue. Use `mail send --draft <id>` or
-`POST /api/v2/email/sends`; a generic `POST /api/v2/approvals` with `kind=send` is refused.
-The card binds the complete MIME and exact To, Cc and Bcc, and approval requires loading its authorized preview.
-Only old-format approvals created before the queue migration retain their original text-bound recipient scope.
-Finance also queues its exact invoice email for this preview; approving the finance action does not approve unseen MIME.
-The daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
-to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
-Tico holds, what bot.yaml asks, and which policy it is reading.
+Some sends always ask a person whatever the mode, for example a new correspondent, attachments, an outside Cc or many
+outside recipients, legal or money matters; the effective **Who can OK** rule decides whose yes counts. A Tico
+approval or an authorized person's in-chat “send it” can approve a specific message: pass its id with `--approval`
+and Tico checks it. A numbered GitHub issue does not prove a Tico approver identity and authorizes nothing. New email
+approvals are created by the frozen send queue; a generic `POST /api/v2/approvals` with `kind=send` is refused. The
+card binds the complete MIME and exact To, Cc and Bcc, and approval requires loading its authorized preview. Finance
+also queues its exact invoice email for this preview; approving the finance action does not approve unseen MIME.
+`mail policy show` prints the mode and limits Tico applies to you.
 
-`send` always answers in JSON and always exits 0 for a policy refusal. A refusal is a
-**downgrade**, not an error:
+`send` always answers in JSON and exits 0 whatever Tico decided. A queued send:
 
 ```json
-{ "ok": true, "sent": false, "downgraded": "draft", "gate": "outbound_send",
-  "reason": "outbound_send is false for influencer: no person has turned sending on for influencer in Tico yet; ...",
+{ "ok": true, "sent": false, "queued": true, "state": "pending", "send_id": "…", "send_after": "…",
   "draft": "r-882...", "to": ["ava@creator.example"],
-  "note": "the draft is still in ana@acme.example Drafts; Ana can send it, or close the gate
-           that refused it." }
+  "note": "Queued in Tico; it goes out after the undo window unless someone cancels it." }
 ```
 
-A successful send looks like `{"ok": true, "sent": true, "message": "18f3...",
-"label": "hub/handled/<slug>"}` and writes a row to `sent-log`. Sending the same draft twice
-sends nothing the second time.
+`state` is `pending` (the undo window runs) or `waiting_approval` (a person approves it in Tico; `approval_id` names
+the card). A send Tico blocks is a **downgrade**, not an error:
+
+```json
+{ "ok": true, "sent": false, "downgraded": "draft", "state": "blocked",
+  "reason": "Sending is Never for this bot.", "reasons": ["…"], "draft": "r-882...",
+  "note": "the draft is still in ana@acme.example Drafts; Tico's sending policy blocked the send." }
+```
+
+A bot whose `bot.yaml` grants no `send` verb on the mailbox gets the draft and `"gate": "verb"`; nothing is queued.
+Queuing the same draft twice queues nothing the second time.
 
 ### Reply
 
@@ -237,16 +230,14 @@ sends nothing the second time.
 $HUB_DIR/scripts/mail.sh reply --thread 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128
 ```
 
-Drafts, then sends if every gate allows it. If not, you get the draft and the reason in one
-JSON object with `"sent": false`. This is the command to use on a thread; `draft` plus `send` is
-the same thing in two steps.
+Drafts, then queues the send with Tico, with the same answer as `send` in one JSON object. `--approval <id>`
+works the same way. This is the command to use on a thread; `draft` plus `send` is the same thing in two steps.
 
-## Lint and the reviewer, on their own
+## Lint on its own
 
 ```bash
 $HUB_DIR/scripts/mail.sh lint --body-file out/ava.txt --subject "Ava, ..." [--to addr] \
   [--reply-to <thread>] [--check-calendar] [--slot 2026-09-08T13:00:00-07:00]
-$HUB_DIR/scripts/mail.sh review --body-file out/reply.txt --thread 18f2c9a3b4d5e6f7
 ```
 
 `lint` exits 0 when clean and 2 when a rule blocks. Every finding has a stable id, a severity
@@ -260,18 +251,14 @@ and a fix, and the ids are stable enough to quote on a task:
                           'we will look into it', ..." } ] }
 ```
 
-The rules, in short: no forbidden phrases (for example `we guarantee`, `AI Agent`,
-`outsource`, `is locked`, `our crew`; the list is yours to set in the policy); acme.example links only, and if you have a
-required CTA every link must be it; no placeholders, key-shaped strings, `s3://`, `emp-`, `bot-<slug>/` or Tico
+The rules, in short: no forbidden phrases (for example `we guarantee`); links on the team's own domains only; no placeholders, key-shaped strings, `s3://`, `emp-`, `bot-<slug>/` or Tico
 task numbers; a subject under 120 characters, a body of 20-2500, at most three exclamation
-marks, a signature naming Ana, one external recipient; and for times offered: at least two, in
+marks, a signature naming Ana; and for times offered: at least two, in
 order, in the future, on a weekday, in business hours, with the zone spelled out. Confirmation
 language without `--slot` is an error - **never confirm a time before the invite exists.**
 
-`review` asks a second model (Grok, a different vendor from the one that wrote the draft) to
-check the draft against the incoming thread. Any commitment - money, a date, a discount, a legal
-position, a guarantee - fails it. If the reviewer is unreachable, a draft still goes through
-flagged `"review": "unavailable"`, and a send is downgraded to a draft.
+Tico runs the same lint, and a second reviewer, on every send of a bot's own writing; `lint` here is the quick
+check before you queue it.
 
 ## Calendar
 
@@ -323,9 +310,9 @@ A mail-local calendar command on a computer needs the setting in that computer's
 lines you can paste straight into a draft - `Tue Sep 8, 1:00–1:20pm PT` - and
 `{"slots": [{"start": "...", "end": "...", "human": "Tue Sep 8, 1:00–1:20pm PT"}]}` with `--json`.
 
-`schedule` creates the event and sends the confirmation, or does neither: if the send fails the
-event is deleted again. While your sending is off in Tico it puts **nothing** on the calendar
-and answers with the draft plus `"would_schedule": {...}` so Ana can do it in one click.
+`schedule` creates a silent event and queues the confirmation with the invitation attached, or does neither: if Tico
+does not queue the send, the event is deleted again. With the inbox at **Never** it puts **nothing** on the calendar.
+Without the `send` verb it answers with the draft plus `"would_schedule": {...}` so Ana can do it in one click.
 
 ## Verbs, and the one thing that is implied
 
@@ -374,10 +361,10 @@ and decide the way you always did. It changes nothing in Gmail; the JSON carries
 run the call goes through Tico with your credential; outside one it needs
 the decision model API key (`skills/decisions/SKILL.md`), and `MAIL_DECISIONS=none` switches it off (`MAIL_JUDGE` and `--judge` are the deprecated old names and still work).
 
-`draft` runs the same model as a gate before the second reviewer: six yes/no questions
+`draft` runs the same model as a gate: six yes/no questions
 (`questions/mail-draft-gate.json`) about money, dates, a confirmed time, unsupported claims, a
 legal position and tone, printed as `gate: ok` or `gate: flagged commitment_money 0.81`. The
-gate is advisory: a flagged draft is still written, the reviewer still decides, and the audit
+gate is advisory: a flagged draft is still written, Tico still decides the send, and the audit
 keeps both so the thresholds can be tuned from what actually happened. Rewrite a flagged draft
 once before you try again.
 
@@ -431,8 +418,8 @@ delegation is not granted, that is Ana's twenty minutes, not yours: open a task 
 `owner:ana` and `needs-human` quoting the failing line, and stop. Exit codes: 0 fine,
 1 something broke, 2 a Tico policy refused you.
 
-Details of the plan and the reasoning behind every gate: `docs/mail-service.md`. The rule ids,
-the policy schema and the reviewer backends: `connectors/mail/README.md`.
+Details of the plan and the reasoning behind it: `docs/mail-service.md`. The rule ids and how a send reaches Tico:
+`connectors/mail/README.md`.
 
 ## Works on Linux runners
 
@@ -472,8 +459,8 @@ refuses a label, archive or draft with Organize mail off, a send with Send mail 
 calendar off, whichever credential it holds (a server token, a computer's own service-account key, or a standalone
 grant). A draft is the first step of a send, so Send mail on allows one, and Tico's own markers on the thread
 (`hub/drafted`, `hub/handled/<bot>`) go with the draft or send they record. With Send mail off no bot sends mail, whatever
-its own **Mail sending** switch says (and no approval lifts it), and an automation's send becomes a draft. With it on,
-each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
+its own sending policy says (and no approval lifts it), and an automation's send becomes a draft. With it on, each
+bot's sending policy decides (Settings > Bots > <bot> > Email sending; see [Turning sending on](#turning-sending-on)).
 These settings apply to everyone who acts through Tico: bots, automations, the runner's own calendar bookings, people
 and the Assistant. An admin who wants Tico to send turns Send mail on. The connector reads the boxes from Tico for each
 run: a bot's from its mail setting, a person's from their `GET /api/v2/mail/access` answer, and the runner's connector
@@ -497,7 +484,7 @@ BotOps or the Assistant.
 off gives read-only mail, and Change calendar off gives a read-only calendar. Otherwise Tico's mail tool enforces them,
 and the server refuses a calendar booking while Change calendar is off (one already queued fails rather than lands
 later). On a computer where bots run as the runner's own user (a Mac today), a bot that deliberately works around the
-tool is not stopped; each bot's **Mail sending** switch has the same limit.
+tool is not stopped; each bot's sending policy has the same limit.
 
 **Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
 
@@ -715,8 +702,8 @@ the job (and show a sign-in problem in Settings until the key is there).
 | `TICO_MAIL_RUNTIME_DIR` mail.db, audit log | `<projects>/runtime/mail` | same, under `workspace/runtime/mail` |
 | `GOOGLE_SA_KEY` | `<projects>/secrets/google-sa.json` | the runner's state directory (`~/state-<id>/google-sa.json`) |
 | `GOOGLE_OAUTH_GRANTS` connected accounts | `google-oauth.json` beside the key | beside the key, in the runner's state directory |
-| `TICO_REGISTRY_DIR` | `<checkout>/registry` | unset: the sync needs no registry; per-bot mailbox rules do. There is no `mail-policy.yaml` either, so the mail policy is the built-in one (below) |
-| `TICO_INTERNAL_DOMAINS` | the domains the policy file lists | optional, comma separated: the team's own mail domains when there is no policy file. Without it they come from the bot's mailbox and the team roster |
+| `TICO_REGISTRY_DIR` | `<checkout>/registry` | unset: the sync needs no registry; per-bot mailbox rules do. Sending policy lives in Tico either way |
+| `TICO_INTERNAL_DOMAINS` | the bot's mailbox and the roster | optional, comma separated: the team's own mail domains (the lint's internal links, the unsubscribe guard). Without it they come from the bot's mailbox and the team roster, never public providers like gmail.com |
 
 Nothing in the `connectors` job is Mac-only: the key is a file on both (no Keychain), and there is no browser automation
 in it. What stays Mac-only is launchd (`scripts/tico install`; Linux uses the runner's own supervisor) and
@@ -794,15 +781,8 @@ previous authorization, marked **kept from before**. Existing legal inbox approv
 ids and edited automation versions start under the shared default. Saving a company or inbox sending policy applies
 its safeguards to grandfathered paths too. A bot's old registry recipient restrictions remain enforced until a person
 sets its new policy. The older `hub bot mail` / `/bots/{bot}/mail-settings` controls remain compatible; setting their
-switch now sets the bot's new mode. `outbound_send` and `forward_to` in bot.yaml remain requests, never authorization.
-
-**Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
-`mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox
-and the team roster, never gmail.com and other public providers; `TICO_INTERNAL_DOMAINS` names them outright), the usual
-caps (20 sends a day, one outside recipient, no outside Cc), no wait
-between messages to the same person
-(the forward address gets many messages), and an empty blocklist. `mail policy show` prints "built-in defaults". Put a
-`mail-policy.yaml` in the registry and that file is the policy instead. The message bot's template also carries
+switch now sets the bot's new mode. `bot.yaml` carries no sending setting, and the mail tool reads no
+`registry/mail-policy.yaml`: every computer, Mac or Docker, asks Tico. The message bot's template also carries
 `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
 
 **The decision model.** `mail.sh inbox --decisions` and the spam and injection check (`hub classify`) ask the
@@ -842,9 +822,10 @@ Unsubscribe requires choosing unwanted subscription mail; it does not cancel a p
 ## Scoped automatic scheduling (Ana approved September 8)
 
 The message bot uses `mail scheduling offer|book`, not generic `reply`, `send` or `schedule`.
-It has `scheduling_send: true` and separate Gmail/Calendar `schedule` verbs; general
-`outbound_send` stays false. `policy show` reports both. Scope is influencers and BD-confirmed
-non-investor contacts only. An independent reviewer checks relationship and explicit acceptance;
+It has `scheduling_send: true` in `bot.yaml` (with an optional `scheduling: {mailbox, booking_url, meeting_title}`) and
+separate Gmail/Calendar `schedule` verbs; its general sending policy in Tico is unchanged, and every offer and booking
+still goes through Tico's send queue. Scope is influencers and BD-confirmed non-investor contacts only. The decision
+model (`questions/scheduling-review.json`) checks relationship and explicit acceptance, and without it nothing is scheduled;
 only fixed scheduling text can be sent. BD confirmation must be an actual Tico message authored
 by that bot with exact `Scheduling approval: <email>` and `Thread: <thread>` lines.
 
