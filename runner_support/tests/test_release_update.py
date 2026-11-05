@@ -735,6 +735,37 @@ def test_lock_outside_runner_root_is_never_touched(tmp_path, monkeypatch):
     assert not (metadata / "tico-lock-recovery").exists()
 
 
+@pytest.mark.slow
+def test_native_updater_registers_its_checkout_and_reports_an_old_index_lock(repos, monkeypatch):
+    from runner_support import git_locks
+    _, checkout, state = repos
+    projects = state.parent / "projects"
+    projects.mkdir()
+    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (state, projects))
+    assert not git_locks.owned(checkout)
+    lock = checkout / ".git/index.lock"
+    lock.write_text("still owned")
+    old = time.time() - git_locks.OLD_S * 2
+    os.utime(lock, (old, old))
+    inode = lock.stat().st_ino
+    head = sh(checkout, "git", "rev-parse", "HEAD")
+
+    def update(args):
+        result, calls = run_apply(checkout, state)
+        assert result["state"] == "failed"
+        assert str(lock) in result["error"] and "minutes old" in result["error"] and "run: rm --" in result["error"]
+        assert calls.restarts == 0
+        return 1
+
+    monkeypatch.setattr(ru, "run_update", update)
+    assert ru.main(["--root", str(checkout), "--version", "0.2.0", "--state-dir", str(state),
+                    "--owned-root", str(projects), "--pid", "42"]) == 1
+    assert git_locks.owned(checkout) and git_locks.owned(state) and git_locks.owned(projects)
+    assert str(lock) in ru.read_status(state)["error"]
+    assert lock.stat().st_ino == inode and lock.read_text() == "still owned"
+    assert sh(checkout, "git", "rev-parse", "HEAD") == head
+
+
 def test_updater_git_holds_the_repository_gate_and_never_retries_a_locked_command(tmp_path, monkeypatch):
     from runner_support import git_locks
     metadata = tmp_path / ".git"

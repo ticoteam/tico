@@ -774,6 +774,18 @@ impl Repositories {
         if format.len() != 1 || format.get("core.repositoryformatversion").map(Vec::as_slice) != Some(&["0".to_string()][..]) {
             return Err(attention(format!("{}: mirror format cannot be kept during rebuild; repair its config manually", mirror.display())));
         }
+        // Ordinary Git writers bypass our gate. A readable mirror can gain users during any await,
+        // without changing its refs or config or leaving a lock, so it must stay at this path.
+        let git_dir = format!("--git-dir={}", mirror.display());
+        let mut probe_env = env.clone();
+        probe_env.insert("LC_ALL".into(), "C".into());
+        let probe = run(prefix, &[&git_dir, "rev-parse", "--is-bare-repository"], &probe_env, 10).await;
+        if !matches!(probe, Ok(ref out) if out.code == 128 && out.stderr.contains("not a git repository")) {
+            return Err(attention(format!(
+                "{}: mirror may still be in use; left in place. Check its users and repair it by hand. Inspect with: git {} fsck --full",
+                mirror.display(), crate::gitcred::shell_quote(&git_dir)
+            )));
+        }
         if mirror_refs(&mirror)? != before || regular_file::read(&config, CONTENT)? != original {
             return Err(attention("mirror changed during inspection"));
         }
@@ -1799,10 +1811,25 @@ mod tests {
 
     impl RepoFixture {
         async fn new() -> Self {
+            Self::with_base_ref_format(None).await.unwrap()
+        }
+        async fn with_base_ref_format(format: Option<&str>) -> Option<Self> {
             let guard = FIXTURES.lock().await;
             let root = std::env::temp_dir().join(format!("tico-repair-{}", uuid::Uuid::new_v4().simple()));
             std::fs::create_dir(&root).unwrap();
             let (remote, seed, base) = (root.join("remote.git"), root.join("seed"), root.join("base"));
+            if let Some(format) = format {
+                let out = std::process::Command::new("git")
+                    .args(["init", "-q", "-b", "main", &format!("--ref-format={format}"), base.to_str().unwrap()])
+                    .current_dir(&root).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+                if !out.status.success() {
+                    let error = String::from_utf8_lossy(&out.stderr);
+                    assert!(error.contains("unknown option") || error.contains("unknown ref storage format") || error.contains("invalid value for --ref-format"), "git init failed: {error}");
+                    eprintln!("SKIP reftable fixture: this Git lacks git init --ref-format={format}: {error}");
+                    std::fs::remove_dir_all(&root).unwrap();
+                    return None;
+                }
+            }
             sh(&root, &["init", "--bare", "-q", "-b", "main", remote.to_str().unwrap()]);
             sh(&root, &["clone", "-q", remote.to_str().unwrap(), seed.to_str().unwrap()]);
             std::fs::create_dir_all(seed.join("templates/employee-repo")).unwrap();
@@ -1814,11 +1841,17 @@ mod tests {
             sh(&seed, &["add", "."]);
             sh(&seed, &["commit", "-qm", "initial"]);
             sh(&seed, &["push", "-q", "origin", "main"]);
-            sh(&root, &["clone", "-q", remote.to_str().unwrap(), base.to_str().unwrap()]);
+            if format.is_some() {
+                sh(&base, &["remote", "add", "origin", remote.to_str().unwrap()]);
+                sh(&base, &["fetch", "-q", "origin"]);
+                sh(&base, &["reset", "-q", "--hard", "origin/main"]);
+            } else {
+                sh(&root, &["clone", "-q", remote.to_str().unwrap(), base.to_str().unwrap()]);
+            }
             let mut env = crate::safegit::clean_environment(&crate::env::process_environment());
             env.extend([("GIT_CONFIG_COUNT".into(), "1".into()), ("GIT_CONFIG_KEY_0".into(), "protocol.file.allow".into()), ("GIT_CONFIG_VALUE_0".into(), "always".into())]);
             crate::gitlocks::own(std::slice::from_ref(&root));
-            Self { root, remote, seed, base, env, _guard: guard }
+            Some(Self { root, remote, seed, base, env, _guard: guard })
         }
         fn manager(&self) -> Repositories {
             Repositories::new(&self.root.join("workspace"), &self.root.join("state"), Client::new("http://localhost", "unused", 1, 0).unwrap())
@@ -1885,12 +1918,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_verified_default_format_mirror_is_preserved_before_rebuild() {
+    async fn only_a_git_unreadable_default_format_mirror_is_preserved_before_rebuild() {
         let f = RepoFixture::new().await;
         let manager = f.manager();
         let mirror = manager.mirror_path("acme/web").ok().unwrap();
         std::fs::create_dir_all(&manager.mirrors).unwrap();
         sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let readable = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
+        assert!(matches!(readable, Err(Fail::Msg(m)) if m.contains("mirror may still be in use") && m.contains(&mirror.display().to_string()) && m.contains("fsck --full")));
+        assert!(mirror.exists());
+        // Bare clone refs are packed. Removing its empty refs tree makes Git reject the repository
+        // while the published refs and default-format config remain verifiable without Git setup.
+        std::fs::remove_dir_all(mirror.join("refs")).unwrap();
         assert!(manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await.is_ok());
         assert!(!mirror.exists());
         let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
@@ -1944,11 +1983,10 @@ mod tests {
 
     #[tokio::test]
     async fn reftable_base_format_is_preserved_or_repair_is_refused() {
-        let f = RepoFixture::new().await;
+        let Some(f) = RepoFixture::with_base_ref_format(Some("reftable")).await else { return };
         sh(&f.base, &["branch", "bot-work"]);
         std::fs::write(f.base.join("CLAUDE.md"), "stashed work\n").unwrap();
         sh(&f.base, &["stash", "-q"]);
-        sh(&f.base, &["refs", "migrate", "--ref-format=reftable"]);
         sh(&f.base, &["config", "extensions.worktreeConfig", "true"]);
         let task = f.root.join("task");
         sh(&f.base, &["worktree", "add", "-q", "-b", "task-work", task.to_str().unwrap()]);
@@ -2235,6 +2273,36 @@ mod tests {
         assert!(!half_clone_of(&path, &[bot]).await);
         std::fs::remove_dir_all(&tmp).unwrap();
     }
+    #[tokio::test]
+    async fn mirror_relocation_refuses_a_git_worktree_added_during_the_remote_query() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        let refs = mirror_refs(&mirror).ok().unwrap();
+        let config = std::fs::read(mirror.join("config")).unwrap();
+        let task = f.root.join("task");
+        let ssh = f.root.join("fixture-ssh");
+        let quote = |p: &Path| crate::gitcred::shell_quote(p.to_str().unwrap());
+        std::fs::write(&ssh, format!(
+            "#!/bin/sh\nset -e\ngit --git-dir={} worktree add -q --detach {} HEAD\nexec git-upload-pack {}\n",
+            quote(&mirror), quote(&task), quote(&f.remote)
+        )).unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let prefix = vec!["-c".into(), format!("core.sshCommand={}", quote(&ssh)), "-c".into(), "protocol.ssh.allow=always".into()];
+        let mut env = f.env.clone();
+        env.insert("GIT_SSH_VARIANT".into(), "ssh".into());
+        let result = manager.preserve_mirror("acme/web", "ssh://fixture/acme/web.git", &prefix, &env, 10).await;
+        let reason = match &result { Err(Fail::Msg(m)) => m.as_str(), _ => "unexpected mirror preservation result" };
+        assert!(matches!(&result, Err(Fail::Msg(m)) if m.contains("mirror may still be in use") && m.contains("fsck --full")), "{reason}");
+        assert_eq!(std::fs::read(mirror.join("config")).unwrap(), config);
+        assert_eq!(mirror_refs(&mirror).ok().unwrap(), refs);
+        assert_eq!(sh(&task, &["rev-parse", "HEAD"]), sh(&f.seed, &["rev-parse", "HEAD"]));
+        assert_eq!(std::fs::read_dir(&manager.mirrors).unwrap().count(), 1);
+    }
+
     #[tokio::test]
     async fn mirror_rebuild_refuses_registered_worktrees() {
         let f = RepoFixture::new().await;

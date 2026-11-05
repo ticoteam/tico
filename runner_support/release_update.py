@@ -605,7 +605,7 @@ def main(argv=None):
     parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
     args = parser.parse_args(argv)
     from . import git_locks
-    git_locks.OWNED_ROOTS = (Path(args.state_dir), *map(Path, args.owned_root))
+    git_locks.OWNED_ROOTS = (Path(args.root), Path(args.state_dir), *map(Path, args.owned_root))
     with updater_lock(args.state_dir) as acquired:
         if not acquired:
             print("Tico update: an updater is already running for this computer", flush=True)

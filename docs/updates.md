@@ -211,7 +211,9 @@ backups remain for review, without holding up the updater on a file read.
 Retained backups are compared with their accepted content hash, so later releases can change or
 remove the target without blocking updates. A late write to a backup still blocks the update and
 names the saved file in Health. Instruction backups stay in place even when unchanged, so an open
-writer can finish safely. Git lock files also stay in place: once a lock is 30 minutes old, the updater
+writer can finish safely. The runner and updater register the native install's own Tico checkout,
+even when it is outside the projects and state folders, so Git lock reports work during release updates.
+Git lock files also stay in place: once a lock is 30 minutes old, the updater
 reports its full path, age and one removal command. Check no Git is running for that repository
 before running that command on the Computer.
 Settings > Health and Computers name the changed files until someone commits or stashes them.
