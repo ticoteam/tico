@@ -47,6 +47,8 @@ EMPTY = (
     "task_milestone_waits", "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects", "google_signin_refusals",
+    # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
+    "quarantine_holds",
     # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
     "memory_tidy_passes", "memory_tidy_packets",
     # routines and watchers
