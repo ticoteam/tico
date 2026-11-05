@@ -960,9 +960,9 @@ to a working step. Deleting a waiting step returns its tickets to the step they 
 when that step is gone, so no ticket is lost to a deleted column.
 
 A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
-Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
-dependency on one of those checks holds it. A Review or QA check that is itself Waiting, or blocked by
-an open task, holds its ticket at its step with the check's reason ("QA blocked: GitHub refused the remote
+Review, QA and Security check children, and a production acceptance run a bot owns under the ticket,
+keep the ticket in its pipeline step; only an explicit dependency on one of those checks holds it.
+A Review or QA check that is itself Waiting, or blocked by an open task, holds its ticket at its step with the check's reason ("QA blocked: GitHub refused the remote
 test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's thread for that
 hold. When the check works again, the ticket returns to its step.
 
