@@ -1678,9 +1678,9 @@ def _review_actors(c, who, auth, tickets):
     events = {}
     ids = set(states) | {t["id"] for state in states.values() for t in state["children"]}
     for part in H.chunks(sorted(ids)):
-        for raw in c.execute("SELECT subject_id,kind,old,new,created_at FROM history_events WHERE subject_type='task' "
+        for raw in c.execute("SELECT subject_id,kind,old,new,created_at,rowid AS event_order FROM history_events WHERE subject_type='task' "
                              f"AND subject_id IN ({','.join('?' * len(part))}) "
-                             "AND kind IN ('step','check_filed','review_head','round_skipped','verdict_move') ORDER BY created_at,rowid", part):
+                             "AND kind IN ('step','check_filed','review_head','round_skipped','verdict_move','verdict','status') ORDER BY created_at,rowid", part):
             events.setdefault(raw["subject_id"], []).append(dict(raw))
     for tid, state in states.items():
         ticket = state["ticket"]
@@ -1727,14 +1727,14 @@ def _review_move(c, link, state, actors, *, reason="review"):
     head = V._head(link)
     children, step = V.review_checks(c, link, evidence=state), state["step"]
     route = V.verdict_route(c, link, head, evidence=state)
-    if route and route["verdict"] not in V.GOOD:
-        return owner, f"{owner}: address review changes on PR #{number}"
     ready = state["complete"] and V.merge_ready(c, link, evidence=state)
-    advance = state["complete"] and route and route["target"] and route["target"] != F.MERGE
+    advance = state["complete"] and route and route["verdict"] in V.GOOD and route["target"] and route["target"] != F.MERGE
     if (ready or advance) and not eligible:
         return owner, f"{owner}: check ticket status for PR #{number}"
     if ready:
         return owner, f"{owner}: merge PR #{number}"
+    if route and route["verdict"] not in V.GOOD:
+        return owner, f"{owner}: address review changes on PR #{number}"
     if advance:
         return owner, f"{owner}: move PR #{number} on"
     # A bot check at this step judges the current head when it runs, including a push since it was filed.

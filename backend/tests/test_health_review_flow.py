@@ -69,7 +69,7 @@ def test_approval_that_satisfies_merge_ready_names_the_builder_to_merge(environm
 
 
 @pytest.mark.parametrize('state', ['held', 'blocked', 'done', 'ready'])
-@pytest.mark.parametrize('action', ['merge', 'advance', 'after_green', 'shared_after_green', 'conflict'])
+@pytest.mark.parametrize('action', ['merge', 'advance', 'after_green', 'shared_after_green', 'waived_failure', 'conflict'])
 def test_health_recommendations_use_the_flows_ticket_eligibility(environment, state, action):
     from backend import step_flow as F, task_holds, verdict_moves as V
     api = setup(environment)
@@ -78,7 +78,13 @@ def test_health_recommendations_use_the_flows_ticket_eligibility(environment, st
     child(api, task, title='Second look: PR #206' if source == 'Second look' else 'QA: PR #206',
           verdict='approve' if source == 'Second look' else 'pass', head=OLD if 'after_green' in action else HEAD)
     with api.app.state.store.transaction() as c:
-        if 'after_green' in action:
+        if action == 'waived_failure':
+            c.execute('UPDATE task_steps SET flow=? WHERE id=?',
+                      (json.dumps({'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA Fixes', 'skip_tag': 'skip-qa'}), task['step_id']))
+            c.execute("UPDATE tasks SET verdict='fail' WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?)",
+                      (task['id'],))
+            H._set_task_tags(c, 'human:morgan', task['id'], ['skip-qa'])
+        elif 'after_green' in action:
             fixes_name = 'Build' if action == 'shared_after_green' else 'QA Fixes'
             fixes = c.execute('SELECT id FROM task_steps WHERE type_id=? AND name=?', (task['type_id'], fixes_name)).fetchone()[0]
             c.execute('UPDATE task_steps SET flow=? WHERE id=?', (json.dumps({'after_green': 'merge'}), fixes))
@@ -96,7 +102,7 @@ def test_health_recommendations_use_the_flows_ticket_eligibility(environment, st
         current = H.task(c, task['id'])
         eligible = V._ticket(c, current)
         assert bool(eligible) == (state == 'ready')
-        if action in ('merge', 'after_green', 'shared_after_green'):
+        if action in ('merge', 'after_green', 'shared_after_green', 'waived_failure'):
             assert V.merge_ready(c, current) is not None
             assert V.merge_wake(c, current) == (state == 'ready')
         elif action == 'advance':

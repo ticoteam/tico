@@ -9,7 +9,8 @@ from backend.tests.test_verdict_moves import HEAD, NEW, builder_jobs, check, ste
 
 
 @pytest.mark.parametrize('reviews,source', [(1, 'Review 1'), (2, 'Review 1'), (2, 'Review 2')])
-@pytest.mark.parametrize('return_kind', ['failed_check', 'verdict_move', 'manual_approval', 'manual_before_verdict'])
+@pytest.mark.parametrize('return_kind', ['failed_check', 'verdict_move', 'manual_approval', 'manual_before_verdict',
+                                       'manual_after_old_failure'])
 def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, source, return_kind):
     store = api.app.state.store
     with store.transaction() as c:
@@ -19,10 +20,18 @@ def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, 
                'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}}
               for n in range(1, reviews + 1)],
         ])
-        task = H.task_create(c, 'human:ana', 'Build messages', '', 'bot:cpo', type=typ['id'], step=source, lint=False)
+        task = H.task_create(c, 'human:ana', 'Build messages', '', 'bot:cpo', type=typ['id'],
+                             step='Review 1' if return_kind == 'manual_after_old_failure' else source, lint=False)
         link = H.task_link(c, 'human:ana', task['id'], PR)
         c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
                   (json.dumps({'head_sha': HEAD}), link['id']))
+    judged = HEAD
+    if return_kind == 'manual_after_old_failure':
+        verdict(api, check(api, task), 'changes')
+        hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+        with store.transaction() as c:
+            H.task_update(c, 'bot:cpo', task['id'], step=source)
+        judged = NEW
     review = check(api, task, title=f'{source}: PR #412')
     if return_kind == 'verdict_move':
         verdict(api, review, 'approve')
@@ -30,8 +39,11 @@ def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, 
         with store.transaction() as c:
             if return_kind != 'manual_before_verdict':
                 H.task_update(c, review['owner_id'], review['id'], status='done', note='Reviewed.',
-                              verdict='changes' if return_kind == 'failed_check' else 'approve', verdict_head=HEAD)
+                              verdict='changes' if return_kind == 'failed_check' else 'approve', verdict_head=judged)
             H.task_update(c, 'bot:cpo', task['id'], step='Build')
+            if return_kind == 'manual_after_old_failure':
+                attempt = c.execute('SELECT id FROM attempts WHERE task_id=?', (review['id'],)).fetchone()[0]
+                assert V.after_capture(c, review['id'], judged, attempt) is None
 
     with store.read_transaction() as c:
         current = H.task(c, task['id'])
@@ -40,22 +52,23 @@ def test_every_return_to_fixes_keeps_the_source_for_a_green_merge(api, reviews, 
         assert F.fixes_for(c, fixes, current)['name'] == source
         moved = c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='verdict_move'",
                           (task['id'],)).fetchone()
-        assert bool(moved) == (return_kind == 'verdict_move')
+        assert bool(moved) == (return_kind in ('verdict_move', 'manual_after_old_failure'))
 
     if return_kind == 'manual_before_verdict':
         # The check finishes after the builder returns; its verdict still belongs to the source step.
         verdict(api, review, 'approve')
     with store.transaction() as c:
         current = H.task(c, task['id'])
-        assert V._judged_by(c, current, F.step(c, current['step_id'])) == HEAD
+        assert V._judged_by(c, current, F.step(c, current['step_id'])) == judged
         c.execute('DELETE FROM jobs')
-    _suite(api, 'github-actions', 'completed', 'success', sha=HEAD)
+    _suite(api, 'github-actions', 'completed', 'success', sha=judged)
     assert not [m for m in builder_jobs(api) if m['refs'].get(V.HANDOFF) == 'merge']
-    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
-    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    pushed = 'e' * 40 if judged == NEW else NEW
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': pushed}))
+    _suite(api, 'github-actions', 'completed', 'success', sha=pushed)
     handoffs = [m for m in builder_jobs(api) if m['refs'].get(V.HANDOFF) == 'merge']
     assert len(handoffs) == 1
-    assert handoffs[0]['refs']['pr_head'] == NEW
+    assert handoffs[0]['refs']['pr_head'] == pushed
     assert step(api, task) == 'Build'
 
 
@@ -109,7 +122,7 @@ def test_fixes_source_blocks_the_failed_head_until_a_new_commit(api, reviews, fe
         c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
                   (json.dumps({'head_sha': HEAD}), link['id']))
 
-    for n, (name, head) in enumerate(feedback):
+    for name, head in feedback:
         with store.transaction() as c:
             H.task_update(c, 'bot:cpo', task['id'], step=name)
         review = check(api, task, title=f'{name}: PR #412')
@@ -123,10 +136,6 @@ def test_fixes_source_blocks_the_failed_head_until_a_new_commit(api, reviews, fe
                 H.task_update(c, 'bot:cpo', task['id'], step='Build')
                 attempt = c.execute('SELECT id FROM attempts WHERE task_id=?', (review['id'],)).fetchone()[0]
                 assert V.after_capture(c, review['id'], head, attempt) is None
-        with store.transaction() as c:
-            # Verdict recency must not depend on request ids or clock resolution.
-            c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (f'2026-01-01T00:00:0{n}Z', review['id']))
-
     with store.read_transaction() as c:
         current = H.task(c, task['id'])
         fixes = F.step(c, current['step_id'])

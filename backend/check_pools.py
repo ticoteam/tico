@@ -533,8 +533,8 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     if heads:
         recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                              "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
-        if not recorded or recorded["new"] != ",".join(heads):
-            # Checks after release also judge merged PRs, which the review gate leaves out.
+        if not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
+            # Add merged PRs for checks after release; never replace the head child admission recorded.
             H._task_event(c, child["id"], ticket["owner_id"], "review_head", None, ",".join(heads), "")
     label = (H.bot(c, slug) or {}).get("slug", slug)
     H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {label} ({why})")
@@ -620,13 +620,18 @@ def _take_plan(c, wait, only=None, snapshots=None):
     if not found:
         return {"drop": "the step has no pool"}
     step, slugs, limit = found
-    # Entry can record a newer head than the webhook cache; only a fresh PR read may replace that head.
-    heads = [h for h in wait["heads"].split(",") if h]
+    # Admission and filing use the same saved links, read again under the writer. A wait can precede a refresh,
+    # or already know a head whose webhook is late; an older saved link cannot consume that newer wait.
+    prs = _prs(c, ticket, step)
+    heads = _heads(prs, None)
+    waited = set(filter(None, wait["heads"].split(",")))
+    head_problem = bool(waited and waited != set(heads) and
+                        any((pr.get("updated_at") or "") <= wait["created_at"] for pr in prs))
     if snapshots is not None:
-        prs = _prs(c, ticket, step)
-        if all((snapshots.get(pr["id"]) or {}).get("head_sha") for pr in prs):
-            heads = _heads(prs, snapshots) or heads
-    if has_open_check(c, ticket, step, heads):
+        head_problem = any((snapshots.get(pr["id"]) or {}).get("error") or
+                           _heads([pr], snapshots) != _heads([pr], None) or
+                           not (snapshots.get(pr["id"]) or {}).get("head_sha") for pr in prs)
+    if not head_problem and has_open_check(c, ticket, step, heads):
         return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
     if only is not None:
@@ -636,7 +641,8 @@ def _take_plan(c, wait, only=None, snapshots=None):
         # The bot that just finished takes the wait, unless a free bot ranks ahead of it by model company: then the
         # best free one does, as `ranked` orders them.
         free = [] if only not in free else [only] if rank(only) <= rank(free[0]) else free
-    return {"ticket": ticket, "step": step, "heads": heads, "free": free, "reason": reason}
+    return {"ticket": ticket, "step": step, "heads": heads, "free": free, "reason": reason,
+            "head_problem": head_problem}
 
 
 def _admission_problem(c, wait, plan, snapshots):
@@ -644,15 +650,8 @@ def _admission_problem(c, wait, plan, snapshots):
     from . import review_gate
     if "drop" in plan or not plan["free"]:
         return None
-    if snapshots is not None:
-        for pr in _prs(c, plan["ticket"], plan["step"]):
-            snapshot = snapshots.get(pr["id"]) or {}
-            if not snapshot.get("head_sha") or snapshot.get("error"):
-                return "the current PR head could not be read"
-            current = (H._json(pr.get("detail"), {}) or {}).get("head_sha") or pr.get("pr_sha") or ""
-            # Admission runs again under the writer: a webhook after collection invalidates every check kind.
-            if str(snapshot["head_sha"]).lower() != str(current).lower():
-                return "the PR head changed before admission"
+    if plan["head_problem"]:
+        return "the current PR head needs fresh evidence"
     if review_gate.is_review(c, plan["ticket"], wait["title"]):
         return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
 

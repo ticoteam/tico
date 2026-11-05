@@ -3,6 +3,8 @@ import importlib
 import json
 import sqlite3
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, local
 
 import pytest
 
@@ -32,27 +34,65 @@ def waiting_ticket(api, number, reviewer, kind='review'):
     return task, wait
 
 
-@pytest.mark.parametrize('kind,ci', [('review', 'success'), ('qa', 'failure'), ('release_qa', 'success')])
-def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeypatch, kind, ci):
+@pytest.mark.parametrize('kind,ci,integration', [
+    ('review', 'success', 'configured'), ('qa', 'failure', 'configured'), ('release_qa', 'success', 'configured'),
+    ('review', 'success', 'unconfigured'), ('qa', 'failure', 'unconfigured'), ('release_qa', 'success', 'unconfigured'),
+    ('review', 'success', 'absent'),
+])
+@pytest.mark.parametrize('refresh', ['before_retry', 'writer'])
+def test_retry_requests_the_fresh_head_after_the_cached_pr_moves_on(api, monkeypatch, kind, ci, integration, refresh):
     from backend import verdict_moves as V
     team(api, seen=H.shift(H.now(), minutes=-10))
     task, wait = waiting_ticket(api, 509, 'rev-a', kind=kind)
     store, service = api.app.state.store, api.app.state.github_app
-    with store.transaction() as c:
+    transaction = store.transaction
+
+    def update_head(c):
         # The wait has H, but a PR refresh records J before a checker comes online.
-        c.execute("UPDATE task_links SET detail=?,state=? WHERE task_id=? AND kind='pr'",
-                  (json.dumps({'head_sha': OLD}), 'merged' if kind == 'release_qa' else 'open', task['id']))
+        c.execute("UPDATE task_links SET detail=?,state=?,updated_at=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'head_sha': OLD}), 'merged' if kind == 'release_qa' else 'open', H.now(), task['id']))
+
+    with transaction() as c:
+        if refresh == 'before_retry':
+            update_head(c)
+        elif kind == 'release_qa':
+            c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (task['id'],))
+        # Cached admission has a passing receipt at either head, just as fresh green CI does.
+        c.execute('UPDATE tasks SET note=? WHERE id=?',
+                  (f'Tests: head {HEAD}: 9 passed, 0 failed\nTests: head {OLD}: 9 passed, 0 failed', task['id']))
         c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
-    reads = github(api, monkeypatch, {'python': ci}, head=OLD)
-    [cid] = P.retry(store, service=service)
-    assert any('/pulls/509' in path for path in reads)
+    reads = github(api, monkeypatch, {'python': ci}, head=OLD if refresh == 'before_retry' else HEAD)
+    if integration == 'unconfigured':
+        monkeypatch.setattr(service, 'row', lambda c: None)
+    raced = False
+
+    @contextmanager
+    def refresh_before_admission(*args, **kwargs):
+        nonlocal raced
+        with transaction(*args, **kwargs) as c:
+            if not raced:
+                raced = True
+                update_head(c)
+            yield c
+
+    if refresh == 'writer':
+        monkeypatch.setattr(store, 'transaction', refresh_before_admission)
+    filed = P.retry(store, service=None if integration == 'absent' else service)
+    if refresh == 'writer':
+        assert raced
+        if integration == 'configured':
+            assert filed == [], 'a snapshot of H cannot admit J after the saved head changes'
+            reads = github(api, monkeypatch, {'python': ci}, head=OLD)
+            filed = P.retry(store, service=service)
+    [cid] = filed
+    assert bool(reads) == (integration == 'configured')
     with store.transaction() as c:
         check = H.task(c, cid)
         assert f'at head {OLD}.' in check['body'] and HEAD not in check['body']
         assert c.execute('SELECT state,child_id,heads FROM check_waits WHERE id=?',
                          (wait['id'],)).fetchone()[:] == ('filed', cid, OLD)
-        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
-                         (cid,)).fetchone()[0] == OLD
+        assert [r[0] for r in c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head' ORDER BY rowid",
+                                        (cid,))] == [OLD]
         attempt = H.new_id()
         c.execute('INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at) VALUES(?,?,?,?,?)',
                   (attempt, 'rev-a', cid, H.now(), H.now()))
@@ -319,29 +359,44 @@ def test_scheduler_files_a_review_admitted_by_fresh_ci_without_a_receipt(api, mo
     from backend.scheduler import Scheduler
     task, wait, reads = ci_only_wait(api, monkeypatch)
     store, service = api.app.state.store, api.app.state.github_app
-    transaction, writers = store.transaction, 0
+    transaction, writers = store.transaction, local()
 
     @contextmanager
     def writing(*args, **kwargs):
-        nonlocal writers
         with transaction(*args, **kwargs) as c:
-            writers += 1
+            # Scheduler jobs may write on other threads while the calling thread reads GitHub.
+            writers.depth = getattr(writers, 'depth', 0) + 1
             try:
                 yield c
             finally:
-                writers -= 1
+                writers.depth -= 1
 
     snapshot = review_gate.snapshot
 
     def fresh(*args):
-        assert writers == 0, 'GitHub reads must not hold the writer'
+        assert getattr(writers, 'depth', 0) == 0, 'GitHub reads must not hold the writer'
+        occupied, release = Event(), Event()
+
+        def other_job():
+            with store.transaction():
+                occupied.set()
+                assert release.wait(5), 'the GitHub read probe did not release the other job'
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            job = pool.submit(other_job)
+            try:
+                assert occupied.wait(5), 'the other job did not enter its writer'
+                assert getattr(writers, 'depth', 0) == 0, 'another job owns this writer, not the GitHub reader'
+            finally:
+                release.set()
+            job.result()
         return snapshot(*args)
 
     monkeypatch.setattr(store, 'transaction', writing)
     monkeypatch.setattr(review_gate, 'snapshot', fresh)
     scheduler = Scheduler(store, api.app.state.execution, github_app=service)
     result = scheduler.tick(H.parse_ts(H.now()))
-    assert not any('check_pool_retry' in failure for failure in result['failures'])
+    assert not any('check_pool_retry' in failure for failure in result['failures']), result['failures']
     [check] = checks(api, task)
     assert check['owner_id'] == 'bot:rev-a'
     assert any('/commits/' + HEAD + '/check-runs' in path for path in reads)

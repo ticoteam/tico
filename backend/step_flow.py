@@ -272,38 +272,53 @@ def fixes_for(c, s, ticket, *, evidence=None):
 
     A shared fixes target needs the recorded move, not board order. Pair each verdict move with its step event:
     step ids survive renames, and later checks that moved nothing cannot replace the source of the feedback.
-    A manual return has no verdict move; standing changes at the current head take priority over old feedback.
-    Without failed feedback, the step the ticket returned from is its source, even before a verdict arrives.
+    Failures and returns compete by event time at the current head. Older-head feedback is only a fallback after
+    a push; it cannot replace a newer return after approval or before capture.
     """
     board = evidence["board"] if evidence is not None else steps(c, s["type_id"])
     sources = {x["id"]: x for x in board if s["id"] in (of(x).get("on_pass"), of(x).get("on_fail"))}
     if not sources:
         return None
     events = (evidence["events"] if evidence is not None else
-              c.execute("SELECT kind,old,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+              c.execute("SELECT kind,old,new,created_at,rowid AS event_order FROM history_events WHERE subject_type='task' AND subject_id=? "
                         "AND kind IN ('step','verdict_move') ORDER BY created_at,rowid", (ticket["id"],)))
-    entered, source, returned_from = None, None, None
+    from . import verdict_moves as V
+    checks = [t for t in V.review_checks(c, ticket, evidence=evidence)
+              if (t["check_step"] or {}).get("id") in sources]
+    heads = [V._head(pr) for pr in V._prs(c, ticket, evidence=evidence) if V._head(pr)]
+    candidates = []
+
+    def add(event, source, judged):
+        current = any(head.startswith(h.lower()) for head in heads for h in str(judged or "").split(",") if h)
+        candidates.append((current, event["created_at"], event["event_order"], source))
+
+    entered = None
     for event in events:
         if event["kind"] == "step":
             entered = event
-            if entered["new"] == s["id"]:
-                source = None
-                returned_from = entered["old"]
-        elif event["kind"] == "verdict_move" and entered and entered["new"] == s["id"]:
-            source = entered["old"]
-    if source in sources:
-        return sources[source]
-    from . import verdict_moves as V
-    failed = [t for t in V.review_checks(c, ticket, evidence=evidence)
-              if (t["check_step"] or {}).get("id") in sources and V._verdict(t) and V._verdict(t) not in V.GOOD]
-    if failed:
-        heads = [V._head(pr) for pr in V._prs(c, ticket, evidence=evidence) if V._head(pr)]
-        latest = max(failed, key=lambda t: (any(V.verdict_at([t], head) for head in heads),
-                                           t.get("updated_at") or t.get("created_at") or "",
-                                           t.get("created_at") or "", t["id"]))
-        return sources[latest["check_step"]["id"]]
-    if returned_from in sources:
-        return sources[returned_from]
+        if event["kind"] not in ("step", "verdict_move") or not entered or entered["new"] != s["id"]:
+            continue
+        source = entered["old"]
+        if source not in sources:
+            continue
+        prior = [t for t in checks if t["check_step"]["id"] == source and t["created_at"] <= event["created_at"]]
+        check = prior[-1] if prior else {}
+        add(event, source, check.get("verdict_head") or check.get("judged_head"))
+    for check in checks:
+        if not V._verdict(check) or V._verdict(check) in V.GOOD:
+            continue
+        if evidence is not None:
+            history = evidence["child_events"].get(check["id"], [])
+        else:
+            history = c.execute("SELECT kind,new,created_at,rowid AS event_order FROM history_events "
+                                "WHERE subject_type='task' AND subject_id=? AND kind IN ('verdict','status') "
+                                "ORDER BY created_at,rowid", (check["id"],)).fetchall()
+        event = next((e for e in reversed(history) if e["kind"] == "verdict" or
+                      (not check.get("verdict") and e["kind"] == "status" and e["new"] == "done")), None)
+        event = event or {"created_at": check.get("updated_at") or check["created_at"], "event_order": 0}
+        add(event, check["check_step"]["id"], check.get("verdict_head") or check.get("judged_head"))
+    if candidates:
+        return sources[max(candidates, key=lambda x: x[:3])[3]]
     return next(iter(sources.values())) if len(sources) == 1 else None
 
 
