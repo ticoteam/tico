@@ -5733,8 +5733,8 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
                 text = shown.get("body") or ""
             # Preserve the review's references and run inputs when readers' access changes later.
             refs["inputs"] = [source]
-            sources = body_sources(shown["refs"])
-            text, refs = sourced_text(text, [sources], refs)
+            sources = shown["refs"].get("body_sources") or [body_sources(shown["refs"])]
+            text, refs = sourced_text(text, sources, refs)
             refs.update({k: v for k, v in shown["refs"].items() if k in ("turn_id", "run")})
     silent = quiet or parent["status"] in ("done", "closed", "declined")
     # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes

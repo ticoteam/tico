@@ -227,7 +227,9 @@ def test_page_audience_and_task_ceiling_intersect_on_real_paths(api, monkeypatch
     data = sources(api, maintainer="finance")
     _, attempt = scoped(api, data, False)
     token, fid, tid = attempt["token"], data["hidden"], data["task"]["id"]
-    assert get(api, "pages/" + fid, token)["page"]["file_id"] == fid
+    api.app.state.store.settings.visual_origin = "https://visuals.acme.example"
+    page = get(api, "pages/" + fid, token)["page"]
+    assert page["file_id"] == fid and api.get(page["src"]).status_code == 200
     # The page remains filed on the public task. Only its audience changes after the real review/answer writes.
     edit(api, fid, {"people": ["cara"]} if excluded == "bot" else {"bots": ["ops"]})
     with api.app.state.store.read() as c:
@@ -247,9 +249,11 @@ def test_page_audience_and_task_ceiling_intersect_on_real_paths(api, monkeypatch
              "messages/" + data["answered"]["comment"]["id"],
              "origins/" + data["answered"]["comment"]["id"],
              "pages", "pages?task=" + tid, "files/search?q=source", "bots/finance/files"]
+    page_secrets = tuple(x for x in secrets(data) if x not in (data["meeting"], "Restricted meeting"))
     for path in paths:
-        no_sources(get(api, path, token), secrets(data))
+        no_sources(get(api, path, token), page_secrets)
     get(api, "pages/" + fid, token, expected=404)
+    assert api.get(page["src"]).status_code == 404
     assert_file_metadata_hidden(api, fid, token)
     for ident in (fid, data["bid"]):
         for suffix in ("", "/thumb", "/poster"):
@@ -267,6 +271,7 @@ def test_page_audience_and_task_ceiling_intersect_on_real_paths(api, monkeypatch
             get(api, "pages/" + fid, token, expected=404)
     edit(api, fid, None)
     assert get(api, "pages/" + fid, token)["page"]["file_id"] == fid
+    assert api.get(page["src"]).status_code == 200
 
 
 def test_origins_projects_the_message_before_copying_its_title(api):

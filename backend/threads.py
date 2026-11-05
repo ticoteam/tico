@@ -1742,8 +1742,6 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     from .turn_scope import message_view
     from .scope_projection import body_sources
     message = message_view(c, message)
-    sources = body_sources(H._json(message.get("refs"), {}) or {})
-    _, refs = H.sourced_text(None, [sources], refs)
     if rule:
         refs["rule"] = rule
     if way == "queue":
@@ -1752,7 +1750,8 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
         refs["quiet"] = True
     author = message.get("sender_id") or ""
     from .files import page_references
-    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    original_refs = H._json(message.get("refs"), {}) or {}
+    sources = original_refs.get("body_sources") or [body_sources(original_refs)]
     body, refs = H.sourced_text(body or f"{author} in this thread: {message.get('body') or ''}",
                                [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))], refs)
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
