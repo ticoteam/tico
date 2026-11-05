@@ -12,6 +12,8 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
     POST   machines/<id>/stop        -> Machine
     POST   machines/<id>/heartbeat   -> {ttl_s}              every minute while this server wants it on
     DELETE machines/<id>             -> {ok}                 deletes the disk
+    GET    machines/support          -> {on, machines: [{id, key, helper, seen}]}
+    PUT    machines/support          {on} -> same             owner's support-helper switch, kept only by HQ
 
     Machine {id, key, size, state: starting|running|stopping|stopped|deleted|failed, started_at, stopped_at,
              cost_month_usd, starts_month, last_error}
@@ -92,6 +94,7 @@ import secrets
 import threading
 import time
 from datetime import timezone
+from typing import Literal
 
 import httpx
 
@@ -274,6 +277,13 @@ class HQ:
 
     def delete(self, machine_id):
         self.call("DELETE", f"/{machine_id}")
+
+    def support(self, on=None):
+        answer = self.call("GET" if on is None else "PUT", "/support", None if on is None else {"on": on})
+        try:
+            return CloudSupportState.model_validate(answer).model_dump()
+        except ValueError:
+            raise Refused("bad_answer") from None
 
 
 def client_of(c, vault, settings):
@@ -1443,12 +1453,75 @@ class SharedChange(BaseModel):
     pause_minutes: int | None = None
 
 
+class CloudSupportChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    on: bool = Field(strict=True)
+
+
+class CloudSupportMachine(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    key: str = Field(min_length=1, max_length=100)
+    helper: Literal["on", "off", "offline", "none"]
+    seen: str | None = Field(max_length=40)
+
+
+class CloudSupportState(BaseModel):
+    on: bool = Field(strict=True)
+    machines: list[CloudSupportMachine] = Field(max_length=1000)
+
+
+class CloudSupportView(BaseModel):
+    available: bool
+    on: bool | None
+    machines: list[CloudSupportMachine] = Field(max_length=1000)
+
+
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
     onboarding = getattr(app.state, "onboarding", None)
     service.on_offered = onboarding.on_cloud_offered if onboarding is not None else None
     app.state.cloud_machines = service
+
+    def support_state(on=None):
+        # Read the current gateway key, and release the database before waiting for HQ. No local switch is kept.
+        with store.read() as c:
+            cloud = cloud_company(c, settings)
+            hq = service.hq(c) if cloud else None
+        if cloud:
+            if hq is None:
+                raise Problem("hq_unreachable", "Didn't reach Tico HQ. Try again.", 502)
+            try:
+                return {"available": True, **hq.support(on)}
+            except Refused as exc:
+                if exc.status != 404 or exc.code != "not_cloud":
+                    raise Problem("hq_unreachable", "Didn't reach Tico HQ. Try again.", 502) from None
+        if on is not None:
+            raise Problem("not_cloud", "Tico support on cloud machines is not available here", 404)
+        return {"available": False, "on": None, "machines": []}
+
+    @app.get("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    def cloud_machine_support(request: Request):
+        """The switch and each machine's helper state, read from HQ every time. Unavailable off Tico Cloud.
+        Signed-in people only; demo and rehearsal never contact HQ."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role not in ("owner", "human"):
+            raise Problem("forbidden", "Only people see Tico support on cloud machines", 403)
+        return support_state()
+
+    @app.put("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    def cloud_machine_support_set(request: Request, body: CloudSupportChange):
+        """Let Tico support reach this company's cloud machines, or stop it, at HQ. Owner only; support sessions
+        cannot change their own access. A failed call saves nothing locally; read HQ again to check the state."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role != "owner" or who.support:
+            raise Problem("forbidden", "Only the owner changes Tico support on cloud machines", 403)
+        answer = support_state(body.on)
+        with store.transaction() as c:
+            H.event(c, who.actor, "access.rules_updated", "", {"after": {"cloud_machine_support": answer["on"]}})
+        return answer
 
     @app.get("/api/v2/cloud-machines")
     def cloud_machine_sizes(request: Request):
