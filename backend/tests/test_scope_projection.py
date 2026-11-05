@@ -927,14 +927,13 @@ def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch
     comment = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Ordinary task comment'})['comment']
     fields = {key: 'Restricted copied text' for key in H.SOURCED_TEXT_FIELDS}
     opaque = {'id': 'unknown-source', 'text': 'Keep literal ' + hidden['id'],
-              'other': json.dumps({'file': hidden['id']})}
+              'other': json.dumps({'file': hidden['id']}), 'refs': {'answer': 'Opaque answer'},
+              'answers': {'draft': 'Keep this string'}}
     with api.app.state.store.transaction() as c:
         refs = H.message(c, comment['id'])['refs']
         refs.update({'file': {'id': hidden['id'], **fields}, 'page': {'id': hidden['id'], **fields},
                      'arbitrary': [{'nested': {'id': hidden['id'], **fields}},
-                                   {'source_identity': hidden['id'], **fields},
-                                   {'id': private['id'], 'title': private['title']},
-                                   {'handle': private_message['id'], 'text': private_message['body']}],
+                                   {'source_identity': hidden['id'], **fields}],
                      'unrelated': opaque})
         c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), comment['id']))
     def check():
@@ -948,6 +947,15 @@ def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch
                       ((key, item) for key, item in value.items() if key in scope_projection.REF_FIELDS))
         with pytest.raises(AssertionError):
             check()
+    # Message routes refuse private task ancestry before serialization. Other response shapes still use the
+    # same source projector, so resolve task/message identities against these real stored private sources too.
+    with api.app.state.store.read() as c:
+        auth = api.app.state.auth
+        who = auth.authenticate({'authorization': 'Bearer ' + attempt['token']})
+        metadata = {'task_copy': {'id': private['id'], 'title': private['title']},
+                    'message_copy': {'handle': private_message['id'], 'text': private_message['body']}}
+        shown = turn_scope.project(c, turn_scope.scope(c, who), metadata, auth=auth)
+        no_sources(shown, (private['title'], private_message['body']))
 
 
 def test_sourced_text_provenance_covers_sibling_and_nested_fields(api, monkeypatch):

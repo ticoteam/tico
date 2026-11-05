@@ -29,9 +29,9 @@ def body_sources(value, parent=""):
     """Keep structured source refs beside generated prose, without duplicating the payload's ordinary text."""
     if isinstance(value, dict):
         out = {}
-        refs = dict(object_refs(value))
+        identities = dict(object_refs(value))
         for key, item in value.items():
-            if key in refs:
+            if key in identities:
                 out[key] = item
             elif isinstance(item, (dict, list)):
                 refs = body_sources(item, key)
@@ -292,16 +292,21 @@ def project(c, scoped, payload, *, auth=None):
             # The answer map holds selected labels as strings, with their provenance next to the map.
             if isinstance(value.get('answers'), dict):
                 sources = value.get('label_sources', {})
+                sources = sources if isinstance(sources, dict) else {}
                 for key in ('answers', 'not'):
-                    if isinstance(value.get(key), dict):
-                        out[key] = {qid: [label for label in picks if not (
-                            has_denied(sources.get(qid, {}).get(label)) or
-                            label not in sources.get(qid, {}) and label in legacy_titles)]
-                                    for qid, picks in value[key].items()}
+                    if isinstance(value.get(key), dict) and isinstance(out.get(key), dict):
+                        for qid, picks in value[key].items():
+                            if qid not in out[key] or not isinstance(picks, list) or not all(isinstance(pick, str) for pick in picks):
+                                continue
+                            labels = sources.get(qid, {})
+                            labels = labels if isinstance(labels, dict) else {}
+                            out[key][qid] = [label for label in picks if not (
+                                has_denied(labels.get(label)) or label not in labels and label in legacy_titles)]
             # Generated prose is removed only on its stored provenance or a rejected legacy answer label.
             refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
-            shown_refs = out.get('refs', {})
-            answer, shown_answer = refs.get('answer', {}), shown_refs.get('answer', {})
+            shown_refs = out.get('refs') if isinstance(out.get('refs'), dict) else {}
+            answer = refs.get('answer') if isinstance(refs.get('answer'), dict) else {}
+            shown_answer = shown_refs.get('answer') if isinstance(shown_refs.get('answer'), dict) else {}
             hidden_body = (bool(direct_denied) or any(has_denied(container.get(key)) for container in (value, refs)
                                for key in ('body_sources', 'sources')) or has_denied(answer.get('target')) or
                            answer.get('answers') != shown_answer.get('answers') or
