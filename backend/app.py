@@ -748,7 +748,7 @@ def create_app(settings=None):
                     from . import support_access
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
-                if who.via == "assistant" and not who.confirmed and not who.task_actor:
+                if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who

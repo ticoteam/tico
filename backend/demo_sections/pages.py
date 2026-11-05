@@ -19,9 +19,9 @@ def seed(b):
                   (aid, job, assignment["runner_id"], assignment["generation"], digest(aid),
                    H.shift(H.now(), seconds=300), H.now()))
         c.execute("UPDATE jobs SET state='running',attempt_id=? WHERE id=?", (aid, job))
-        return aid, job, assignment["runner_id"]
+        return aid, job
 
-    aid, job, runner = b.write(lease)
+    aid, job = b.write(lease)
     token = "demo-make-page"
     settings = b.api.app.state.auth.settings
     with b.store.read() as c:

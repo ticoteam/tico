@@ -103,6 +103,8 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
     assert "company_name" in get(api, "config", token)
     get(api, "meetings/transcript?id=" + mid, token)
     assert status(api, t["id"])["state"] == "making"
+    refused = page(api, {"token": machine["token"]}, task=t["id"], bot="coo", attempt=attempt["id"])
+    assert refused.status_code == 403, refused.text
     made = page(api, attempt, task=t["id"], attempt="forged-attempt", title="Alert flow")
     assert made.status_code == 200, made.text
     shown = made.json()["page"]
@@ -359,3 +361,17 @@ def test_make_page_on_a_private_task_keeps_its_normal_task_audience(api):
     fid = made.json()["page"]["file_id"]
     get(api, "pages/" + fid, "ben-test")
     get(api, "pages/" + fid, "cara-test", expected=404)
+
+
+def test_person_who_makes_a_page_can_unlink_it_from_someone_elses_task(api):
+    t = task(api, private=False)
+    _, attempt, _ = start(api, t["id"], person="cara-test")
+    made = page(api, attempt, task=t["id"])
+    assert made.status_code == 200, made.text
+    fid = made.json()["page"]["file_id"]
+    pins = get(api, "places/task:" + t["id"], "cara-test")["pins"]
+    pin = next(p for p in pins if p.get("page", {}).get("file_id") == fid)
+    assert pin["can_unpin"]
+    removed = api.delete("/api/v2/pins/" + pin["id"], headers=headers("cara-test"))
+    assert removed.status_code == 200, removed.text
+    assert status(api, t["id"], "cara-test")["state"] == "made"

@@ -384,7 +384,8 @@ def make_page_actor(c, actor, message):
     """The Assistant reads its person's own Make page request with that person's rights."""
     message = dict(message or {})
     refs = H._json(message.get("refs"), {}) or {}
-    if (not isinstance(actor, str) or not actor.startswith("bot:") or actor != message.get("recipient_id")
+    if (not isinstance(refs, dict) or not isinstance(actor, str) or not actor.startswith("bot:")
+            or actor != message.get("recipient_id")
             or not isinstance(refs.get("make_page"), dict) or refs.get("assistant") is not True
             or refs.get("via") or message.get("deleted_at")):
         return actor
@@ -603,6 +604,10 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             principal = "bot:" + attempt["bot_id"]
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
+        if aid:
+            origin = read_cache.one(c, "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                                    "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
+            principal = make_page_actor(c, principal, origin)
     if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)
             and isinstance(payload.get("worktree_actions"), list)):
         # A computer is never a task participant, so its heartbeat's worktree actions are each read as the bot
@@ -708,8 +713,8 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
-        origin = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-                           "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,)).fetchone()
+        origin = read_cache.one(c, "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                                "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
         actor = make_page_actor(c, actor, origin)
         return (meeting_sources(c).attempt_readable(actor, aid)
                 and readable(c, actor, attempt_tasks(c, aid, memo)))
