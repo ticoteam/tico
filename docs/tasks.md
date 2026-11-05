@@ -474,14 +474,14 @@ decides from the answers, your settings and your open items (snoozed ones left o
 
 | The item | What happens |
 | --- | --- |
-| Repeats one of your open items | Joins it: the bot keeps its own, and your answer there goes back to it once. |
+| Repeats one of your open items | Joins it when the bot may read that item in full. Otherwise the item is judged as new. The bot keeps its own, and your answer there goes back to it once, if the bot can still read the item. |
 | A progress note | Refused: post it as an update instead. |
 | A hands-only chore (grant access, merge, add a key) | Uses the main budget and appears as an ordinary Needs you item. |
 | Work the bot could do itself, or unclear | Refused, with the reason and what to fix. |
 | Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also meets one of your lines and recommends something. 10B or more: only something that can't wait at all. |
 
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
-note: that is refused however urgent, and a repeat still joins your open item. A refusal fails the bot's write with
+note: that is refused however urgent, and a repeat still joins your open item when the bot may read it in full. A refusal fails the bot's write with
 `422 ask_refused`: the error gives the reason and a plain fix, including the bot's manager where relevant. No task,
 wait, question or message is created. An existing task keeps its owner, status and note. A refusal counts toward no
 quarantine and creates no org-rule hold. A bulk handoff reports each refused item under skipped and continues with
