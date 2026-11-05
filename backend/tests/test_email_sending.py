@@ -91,7 +91,7 @@ def test_resolution_default_opt_in_and_unbreakable_restrictions(inbox):
     ("ask_attachments", mime(files=True), False, "attachments"),
     ("ask_many_recipients", mime(to=[f"person{i}@vendor.example" for i in range(11)]), False, "more_than_10_recipients"),
     ("ask_legal_money", mime(), False, "legal_or_money_or_unclassified"),
-])
+], ids=["new_address", "attachments", "many_recipients", "legal_money"])
 def test_each_always_ask_rule_cannot_be_bypassed_by_autonomy(inbox, rule, raw, reply, reason):
     autonomous(inbox, **{rule: True})
     if rule == "ask_legal_money":
