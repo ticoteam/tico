@@ -1673,7 +1673,7 @@ def _review_move(c, link, state, actors):
     pool = f"{step['name']} pool" if step and F.check_kind(step) else "reviewer (not assigned)"
     if not state["complete"]:
         return pool, f"{pool}: check review status for PR #{number}"
-    old = any(V._verdict(t) for t in children) and not judged
+    old = any(H.is_bot(t["owner_id"]) and V._verdict(t) for t in children) and not judged
     if wait:
         return pool, f"{pool}: {'re-review' if old else 'check'} PR #{number} waiting for a free reviewer; {wait['reason'][:300]}"
     if step and F.check_kind(step):

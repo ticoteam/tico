@@ -180,6 +180,11 @@ def test_a_completed_human_subtask_is_not_review_feedback(environment):
     [item] = items(api)
     assert item['whose_move'] == 'bot:reviewer'
     assert 'address review changes' not in item['fix']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (check['id'],))
+    [item] = items(api)
+    assert item['whose_move'] == 'Second look pool'
+    assert 're-review' not in item['fix']
 
 
 def test_review_flow_keeps_its_clock_after_a_github_review(environment):
