@@ -14,6 +14,7 @@ from contextlib import ExitStack, contextmanager
 import orjson
 import yaml
 
+from . import bot_settings as BS
 from . import goals as G
 from . import hubdb as H
 from . import idempotency_messages
@@ -35,11 +36,12 @@ CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, v
 CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- repo holds a bare name, owner/name, or a full https URL; see store.repo_url.
 CREATE TABLE IF NOT EXISTS bot_config(
- bot TEXT PRIMARY KEY REFERENCES bots(id), config TEXT NOT NULL, team TEXT,
+ bot TEXT PRIMARY KEY REFERENCES bots(id), team TEXT,
  owner_id TEXT NOT NULL, owner_ids TEXT, revision INTEGER NOT NULL DEFAULT 1,
  description TEXT NOT NULL DEFAULT '', reports_to TEXT, repo TEXT NOT NULL DEFAULT '',
  thread_mode TEXT, definition_updated_at TEXT,
  definition_updated_by TEXT, goals TEXT NOT NULL DEFAULT '');
+-- bot_settings (a bot's declared settings) is made by migration 0070, which runs before this schema: backend/bot_settings.py.
 CREATE TABLE IF NOT EXISTS bot_control(bot TEXT PRIMARY KEY REFERENCES bots(id), draining INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS bot_transitions(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
@@ -94,13 +96,7 @@ CREATE TABLE IF NOT EXISTS agent_pairings(
  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT,
  token_key TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS agent_pairings_client ON agent_pairings(client_hash, created_at);
-CREATE TABLE IF NOT EXISTS runners(
- id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
- token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,
- revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
- readiness TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
- awake_since TEXT, checkout TEXT,
- restart_requested_at TEXT, readiness_at TEXT);
+-- runners, runner_states and runners_with_state are migration 0062's (backend/migrations).
 CREATE TABLE IF NOT EXISTS model_logins(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL,
  profile TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
@@ -174,12 +170,25 @@ CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot_id,state,created_at);
 CREATE TABLE IF NOT EXISTS job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
  decision TEXT NOT NULL, note TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);
+-- One row per run (backend/migrations/0060_turns_into_attempts.py). A run a runner leased has its whole lease (job_id,
+-- runner_id, generation, token_hash, state, lease_until); a run recorded with no lease (old history, the demo seed) has
+-- none of it. settled_at is when its record closed (exit, summary, usage); NULL while it is open. trigger is NULL for
+-- an attempt that never had a run record.
 CREATE TABLE IF NOT EXISTS attempts(
- id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), bot_id TEXT NOT NULL,
- runner_id TEXT NOT NULL REFERENCES runners(id), generation INTEGER NOT NULL,
- token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
+ id TEXT PRIMARY KEY, job_id TEXT REFERENCES jobs(id), bot_id TEXT NOT NULL,
+ runner_id TEXT REFERENCES runners(id), generation INTEGER,
+ token_hash TEXT UNIQUE, state TEXT, lease_until TEXT,
  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, thread_id TEXT,
- result TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0);
+ result TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0,
+ stop_requested_at TEXT, gateway_key_id TEXT, handed_runtime TEXT, handed_model TEXT,
+ lane TEXT NOT NULL DEFAULT 'main', wake TEXT, model TEXT,
+ settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
+ trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
+ did_nothing INTEGER, rotated TEXT, session_kind TEXT, session_why TEXT,
+ input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER,
+ usage_model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT, usage_reason TEXT,
+ CHECK (job_id IS NULL OR (runner_id IS NOT NULL AND generation IS NOT NULL AND token_hash IS NOT NULL
+        AND state IS NOT NULL AND lease_until IS NOT NULL)));
 CREATE TABLE IF NOT EXISTS attempt_diagnostics(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
  end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
@@ -255,7 +264,8 @@ CREATE TABLE IF NOT EXISTS calendar_actions(
 CREATE INDEX IF NOT EXISTS calendar_actions_queue ON calendar_actions(status,created_at);
 CREATE TABLE IF NOT EXISTS mail_mailboxes(
  address TEXT PRIMARY KEY, person_id TEXT, runner_id TEXT, synced_at TEXT,
- message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT);
+ message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT,
+ watching_since_at TEXT);
 CREATE TABLE IF NOT EXISTS mail_agent_instructions(
  bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -542,9 +552,9 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     """Delete the `attempt_events` kind 'tokens' rows of runs finished more than TOKEN_RETENTION_DAYS ago, in short
     transactions like `sweep_deltas`; returns the count.
 
-    Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
+    Money and usage never come from these rows: a run's totals are its attempts row (input_tokens, cached_tokens,
     output_tokens, est_cost_usd, written by turn_finish), usage_facts and attempts.result. The rows go only
-    once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
+    once that run is settled with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
     and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
     sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
     at = now or H.now()
@@ -557,8 +567,8 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     while deleted < most:
         with store.read() as c:
             rows = c.execute(
-                "SELECT a.id,a.created_at,a.finished_at,EXISTS(SELECT 1 FROM turns t WHERE t.id=a.id AND t.finished_at IS NOT NULL "
-                "AND (t.input_tokens IS NOT NULL OR t.usage_reason IS NOT NULL)) "
+                "SELECT a.id,a.created_at,a.finished_at,(a.settled_at IS NOT NULL "
+                "AND (a.input_tokens IS NOT NULL OR a.usage_reason IS NOT NULL)) "
                 "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS recorded "
                 "FROM attempts a WHERE a.created_at<? AND (a.created_at,a.id)>(?,?) ORDER BY a.created_at,a.id LIMIT 200",
                 (created_before, *mark)).fetchall()
@@ -912,10 +922,13 @@ def digest(value):
 
 def message_page(c, cid, *, before=None, since=None, limit=200):
     """Newest page, in display order; rowid breaks ties for messages in the same millisecond. A
-    deleted task comment is left out: this page is also what a bot's run is handed."""
-    clauses, args = ["conversation_id=?", "deleted_at IS NULL"], [cid]
+    deleted task comment is left out: this page is also what a bot's run is handed. `cid` may be
+    a list of conversations (a task's history across a merged room and its Home)."""
+    cids = list(cid) if isinstance(cid, (list, tuple)) else [cid]
+    where = "conversation_id IN (%s)" % ",".join("?" * len(cids))
+    clauses, args = [where, "deleted_at IS NULL"], list(cids)
     if before:
-        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
+        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND " + where, (before, *cids)).fetchone()
         if not anchor:
             raise Problem("cursor", "Message cursor does not belong to this conversation", 422)
         clauses.append("rowid<?")
@@ -934,8 +947,12 @@ def message_page(c, cid, *, before=None, since=None, limit=200):
 def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
-    page = message_page(c, task["conversation_id"], **kwargs)
-    conv = H.conversation(c, task["conversation_id"])
+    from . import bot_home_merge
+    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are in the
+    # room, its recorded Home and the Home it is in now. The last one is the room the task's messages belong to.
+    cids = bot_home_merge.history_ids(c, task["conversation_id"])
+    page = message_page(c, cids, **kwargs)
+    conv = H.conversation(c, cids[-1])
     if conv and conv.get("task_id") == task["id"]:
         return page
     page["messages"] = [m for m in page["messages"] if H.message_task_id(m) == task["id"]]
@@ -1123,8 +1140,6 @@ class Store:
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history
             c.executescript(_memory_history.SCHEMA)
-            from . import learnings as _learnings
-            c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
@@ -1203,9 +1218,10 @@ class Store:
             c.executescript(_task_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
             c.executescript(_bookkeeper.SCHEMA)
-            from . import health_monitor as _health_monitor
-            c.executescript(_health_monitor.SCHEMA)
-            # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
+            from . import maintenance_health as _maintenance_health
+            c.executescript(_maintenance_health.SCHEMA)
+            # How bad a finding is (a rise is a change), and whether a noisy check has been seen once and waits for its
+            # confirmation run (backend/maintenance_steps/check_health.py). Only a filed finding is listed or reported.
             H.add_column(c, "health_findings", "last_woke_at", "TEXT NOT NULL DEFAULT ''")
             H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
             # The production checks' last answers and alert tasks (backend/invariants.py).
@@ -1215,7 +1231,7 @@ class Store:
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
-            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
+            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER"), ("top", "TEXT")):
                 H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
@@ -1245,15 +1261,9 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
-                # Memory hold on a computer: its newest sample at 85% or more sets it, below 80% clears it
-                # (backend/performance.py ingest; backend/start_places.py computer_hold).
-                H.add_column(c, "runners", "memory_hold", "INTEGER NOT NULL DEFAULT 0")
-                # The newest sample's time, kept with the computer: sample retention drops old rows, not this mark.
-                H.add_column(c, "runners", "last_sampled_at", "INTEGER")
+                # The memory hold, last sample time and a restart under way are runner_states columns (migration
+                # 0062); a computer that sampled before its last-sample mark existed takes its newest kept sample's.
                 _performance.backfill_last_sampled(c)
-                # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
-                # a heartbeat no longer says so (backend/health.py `restarting`).
-                H.add_column(c, "runners", "restart_since", "TEXT")
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")
@@ -1360,7 +1370,7 @@ class Store:
                         if name not in columns:
                             c.execute(f"ALTER TABLE bot_config ADD COLUMN {name} {declaration}")
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.effort FROM bot_config bc "
+                            f"SELECT bc.bot,{BS.CONFIG} AS config,b.effort FROM bot_config bc {BS.JOIN} "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config = json.loads(row["config"] or "{}")
                         # A model decision moves the previously seeded Grok
@@ -1374,11 +1384,12 @@ class Store:
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
                         mode = str(config.get("thread_mode") or
                                    ("personal" if row["bot"] == "coo" else "shared" if row["bot"] == "cpo" else "personal"))
+                        BS.write(c, row["bot"], config)
                         c.execute(
-                            "UPDATE bot_config SET config=?,description=?,reports_to=?,repo=?,thread_mode=?,"
+                            "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
                             "definition_updated_at=coalesce(definition_updated_at,?),"
                             "definition_updated_by=coalesce(definition_updated_by,?) WHERE bot=?",
-                            (encode(config), str(config.get("description") or ""), config.get("reports_to"),
+                            (str(config.get("description") or ""), config.get("reports_to"),
                              str(config.get("repo") or ("emp-" + row["bot"])), mode,
                              H.now(), H.KEEPER, row["bot"]))
                     c.execute("INSERT INTO cloud_migrations VALUES(6,?)", (H.now(),))
@@ -1446,23 +1457,16 @@ class Store:
                         c.execute("ALTER TABLE schedules ADD COLUMN event_name TEXT")
                     c.execute("INSERT INTO cloud_migrations VALUES(14,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=15").fetchone():
-                    # When a machine returns from a silence it must report in steadily before it
-                    # is given work (`backend/execution.py waking`). NULL means a machine that has
-                    # been here all along, so every enrolled machine keeps working through this
-                    # migration and only a real disappearance starts a new waking period.
-                    columns = {row[1] for row in c.execute("PRAGMA table_info(runners)")}
-                    if "awake_since" not in columns:
-                        c.execute("ALTER TABLE runners ADD COLUMN awake_since TEXT")
+                    # `awake_since` (`backend/execution.py waking`) is a runner_states column now (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(15,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config FROM bot_config bc "
+                            f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config, changed = backfill_config(json.loads(row["config"] or "{}"), slug=row["bot"])
                         if changed:
-                            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                                      (encode(config), row["bot"]))
+                            BS.write(c, row["bot"], config)
                     c.execute("INSERT INTO cloud_migrations VALUES(16,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=17").fetchone():
                     # CREATE TABLE IF NOT EXISTS above installs bot_sessions on fresh and
@@ -1551,11 +1555,11 @@ class Store:
                               "SELECT source,'call',external_id,meeting_id,created_at FROM import_refs")
                     c.execute("INSERT INTO cloud_migrations VALUES(31,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=32").fetchone():
-                    # The market graph (backend/market.py). hubdb's MARKET_SCHEMA creates the
-                    # tables on connect; this marker is the cloud contract. The curator is
-                    # added once a roster exists, so a first import can still load employees.yaml.
-                    from .hubdb import MARKET_SCHEMA
-                    c.executescript(MARKET_SCHEMA)
+                    # The market graph (backend/market.py). hubdb's MARKET_SCHEMA step created the
+                    # tables on connect; this marker is the cloud contract. Running that script
+                    # again here would bring back market_events, which a migration file has since
+                    # moved into history_events (backend/migrations/0064_history_events.py). The
+                    # curator is added once a roster exists, so a first import can still load employees.yaml.
                     c.execute("INSERT INTO cloud_migrations VALUES(32,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=33").fetchone():
                     # Task list pages filter by lane and status, page finished work by its
@@ -1588,11 +1592,7 @@ class Store:
                     # connect; the marker makes the contract visible to release checks.
                     c.execute("INSERT INTO cloud_migrations VALUES(38,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=39").fetchone():
-                    # `runners.checkout`: how a runner's own checkout stands against
-                    # origin/main, from its heartbeat (#492).
-                    columns = {row[1] for row in c.execute("PRAGMA table_info(runners)")}
-                    if "checkout" not in columns:
-                        c.execute("ALTER TABLE runners ADD COLUMN checkout TEXT")
+                    # The runner's checkout against origin/main (#492) is a runner_states column now (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(39,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=40").fetchone():
                     # `runners.restart_requested_at`: a person pressed Restart for that computer; its
@@ -1679,9 +1679,6 @@ class Store:
                 H.add_column(c, "task_types", "bots", "TEXT")
                 # Sign out / Switch account / Use the shared key ride the sign-in relay (backend/model_login.py).
                 H.add_column(c, "model_logins", "kind", "TEXT NOT NULL DEFAULT 'sign_in'")
-                # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
-                # sign-out or switch before it stops looking.
-                H.add_column(c, "runners", "readiness_at", "TEXT")
                 # The owner's "Turns at once" for a computer (NULL: automatic, its own capacity).
                 H.add_column(c, "runners", "turns_at_once", "INTEGER")
                 # Clear key: a computer that missed its job (offline) clears its key copy at its next key fetch.
@@ -1696,7 +1693,7 @@ class Store:
                     H.migrate_task_privacy(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(57,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=58").fetchone():
-                    H.add_column(c, "runners", "capabilities", "TEXT NOT NULL DEFAULT '[]'")
+                    # runner_states.capabilities (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
                     H._apply(c, H.WAITING_ON_SCHEMA)
@@ -1887,27 +1884,11 @@ class Store:
                 # The personal token a key was made with, which it never outlives (backend/service_keys.py); NULL for a
                 # key made signed in, and for every older key. Unversioned like the scope.
                 H.add_column(c, "service_keys", "made_with_token", "TEXT")
-                # Who asked a running turn to stop (backend/execution.py stop); the runner reads it on its next
-                # lease renewal. Unversioned like the key scope: an older release never reads the column.
-                H.add_column(c, "attempts", "stop_requested_at", "TEXT")
-                # Which gateway key the attempt's runner was handed (gateway_connection.run_credentials_for): what its
-                # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
-                # NULL with none handed. Unversioned like stop_requested.
-                H.add_column(c, "attempts", "gateway_key_id", "TEXT")
-                # The runtime and model the claim handed the bot's turn (execution.ran_another_model): a model change
-                # while it is out is told from an effort change. NULL for a turn from before. Unversioned like
-                # stop_requested.
-                H.add_column(c, "attempts", "handed_runtime", "TEXT")
-                H.add_column(c, "attempts", "handed_model", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
-                # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
+                # before the bot's other queued work once the stopped turn ends. Unversioned: an older release never reads it.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
-                # An attempt's lane (clients/sessions.py lane): a task-keyed turn runs in its own lane beside
-                # the bot's other tasks, everything else in `main`. At most one active attempt per bot and lane;
-                # an existing row and an older runner's turn are `main`, so a bot without lanes stays serial.
-                # Unversioned like stop_requested; an older release must be drained before it runs again,
-                # since its per-bot index cannot be built over two active attempts.
-                H.add_column(c, "attempts", "lane", "TEXT NOT NULL DEFAULT 'main'")
+                # At most one active attempt per bot and lane (attempts.lane, clients/sessions.py lane): a task-keyed turn
+                # runs in its own lane beside the bot's other tasks, everything else in `main`.
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot_id,lane) "
                           "WHERE state IN ('leased','running')")
@@ -1915,19 +1896,24 @@ class Store:
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
                 ensure_wake_presets(c)
-                # What a turn in a task's session was handed, the bot's task model or the fallback from it, and why
-                # (backend/task_models.py). Unversioned: an older release never reads it.
-                H.add_column(c, "attempts", "model", "TEXT")
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
+                # Finance's org-chart triggers, on every start (backend/finance/store/tico.py watch_org). Finance's cloud
+                # migrations make them too, but once: migration 0070 dropped fin_view_bot_update (it read bot_config.config)
+                # and the bot_settings triggers only exist from the move on, so an install past the move never got them.
+                # IF NOT EXISTS: a start makes only what is missing.
+                from .finance.store import tico as _finance_tico
+                _finance_tico.watch_org(c)
+                # A new bot's repository access, when its declaration names none: the company's default
+                # (backend/repositories.py). A bot's settings row is made with it (backend/bot_settings.py write).
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
-                    AFTER INSERT ON bot_config
-                    WHEN json_extract(NEW.config,'$.repo_access_mode') IS NULL
+                    AFTER INSERT ON bot_settings
+                    WHEN NEW.repo_access_mode IS NULL AND json_extract(NEW.extra,'$.repo_access_mode') IS NULL
                     BEGIN
-                    UPDATE bot_config SET config=json_set(config,'$.repo_access_mode',
+                    UPDATE bot_settings SET repo_access_mode=
                         coalesce((SELECT json_extract(value,'$.new_bot_default')
-                            FROM registry_metadata WHERE key='repos_new_bot_default'),'own')) WHERE bot=NEW.bot;
+                            FROM registry_metadata WHERE key='repos_new_bot_default'),'own') WHERE bot_id=NEW.bot_id;
                     END""")
                 # Lookups that scanned their whole table (performance pass): a goal's
                 # tasks, a bot's or computer's attempts, a job's attempts, and the events read by
@@ -1970,6 +1956,8 @@ class Store:
                                    ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
                                    ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
                                    ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
+                                   # A requester's consumed approvals, one lookup per stopped run (execution.retry_facts).
+                                   ("approvals_requested_consumed", "approvals(requested_by_id, consumed_at)"),
                                    # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
                                    # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
                                    ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
@@ -1986,10 +1974,17 @@ class Store:
                                    # query's expression word for word.
                                    ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
-                                   ("turns_task", "turns(task_id, started_at)"),
+                                   ("attempts_task", "attempts(task_id, created_at)"),
                                    # A message's runs: task_delete counts them on every delete, and topic_change
                                    # and the run visibility (sql.py) look them up by message.
-                                   ("turns_message", "turns(message_id)"),
+                                   ("attempts_message", "attempts(message_id)"),
+                                   # Runs by when their record closed: bot hours, health, the usage reads.
+                                   ("attempts_settled", "attempts(settled_at)"),
+                                   # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                                   ("attempts_bot_settled",
+                                    "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
+                                   # A bot's runs newest first (the bot's Runs page, H.turns).
+                                   ("attempts_bot_created", "attempts(bot_id, created_at)"),
                                    # A conversation's runs: task_delete counts them, the foreign key check of a
                                    # deleted conversation reads them, and stream_capture looks them up.
                                    ("attempt_conversations_conversation", "attempt_conversations(conversation_id)"),
@@ -2072,6 +2067,13 @@ class Store:
                 # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
                 Redesign.repair_stale_review(c)
+                # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
+                # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
+                # failure here is logged, never raised: the repair is tried again at the next start.
+                try:
+                    Redesign.repair_inbox_prompts(c)
+                except Exception:  # noqa: BLE001 - startup goes on
+                    logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
@@ -2088,8 +2090,7 @@ class Store:
                 # Every task is its own session by default now (clients/sessions.py). Older servers wrote
                 # `session: bot` into every bot as the default, so clear it once; a later explicit `bot` stays.
                 if not c.execute("SELECT 1 FROM registry_metadata WHERE key='task_session_default'").fetchone():
-                    c.execute("UPDATE bot_config SET config=json_remove(config,'$.session') "
-                              "WHERE json_valid(config) AND json_extract(config,'$.session')='bot'")
+                    c.execute("UPDATE bot_settings SET session=NULL WHERE session='bot'")
                     c.execute("INSERT INTO registry_metadata VALUES('task_session_default','true')")
                 _docs.refresh_generated_docs(c)
                 record = c.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
@@ -2291,11 +2292,12 @@ class Store:
                 mode = str(entry.get("thread_mode") or
                            ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal"))
                 c.execute(
-                    "INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to,repo,"
-                    "thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (slug, encode(entry), team, operator, str(entry.get("description") or ""),
+                    "INSERT INTO bot_config(bot,team,owner_id,description,reports_to,repo,"
+                    "thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (slug, team, operator, str(entry.get("description") or ""),
                      entry.get("reports_to"), str(entry.get("repo") or ("emp-" + slug)), mode,
                      H.now(), H.KEEPER))
+                BS.write(c, slug, json.loads(encode(entry)))
             self.seed_goals(c)
             from . import groups as Groups
             Groups.migrate(c, self.settings)

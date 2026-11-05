@@ -1,6 +1,6 @@
-"""A paused task picks back up from its checkpoint, and an idle one gets one "Still wanted?" ask
-that only the person's answer acts on (backend/still_wanted.py)."""
-from backend import still_wanted
+"""A paused task picks back up from its checkpoint. An idle task is a line on its bot's roundup, not a question to a
+person; a "Still wanted?" question put before that change is still answered by its person (backend/still_wanted.py)."""
+from backend import still_wanted, task_roundup
 from backend.store import H
 from backend.tests.test_api import api, post, get, runner, assign, ready, claim  # noqa: F401
 
@@ -50,43 +50,48 @@ def idle(api, title, days=8):
     return task
 
 
-def ask_idle(api):
-    with api.app.state.store.transaction() as c:
-        return still_wanted.ask_idle(c)
-
-
-def asks_on(api, task_id):
+def asks(api, task_id):
     with api.app.state.store.read() as c:
-        return [m for m in H.task_comments(c, task_id) if m["kind"] == "ask" and m["refs"].get("still_wanted")]
+        return [m for m in H.task_comments(c, task_id) if m["kind"] == "ask"]
 
 
-def test_an_idle_task_gets_one_still_wanted_ask_and_an_active_one_none(api):
-    stale = idle(api, "Old idea")
-    fresh = post(api, "tasks", {"owner": "ops", "title": "Current work", "body": "Now."})
-    assert ask_idle(api) == [stale["id"]]
-    [ask] = asks_on(api, stale["id"])
-    assert ask["recipient_id"] == "human:ana" and ask["sender_id"] == H.KEEPER
-    assert asks_on(api, fresh["id"]) == []
-    # Another week passes with nobody answering: still the one ask for this stretch.
+def legacy_ask(api, task):
+    """A "Still wanted?" question as the nudge put it before it was removed: its answer still acts."""
+    ask = {"questions": [{"id": still_wanted.QUESTION_ID, "header": "Still wanted?",
+                          "question": f"Still wanted? {task['title']}",
+                          "options": [{"label": still_wanted.KEEP, "description": "Keep it open"},
+                                      {"label": still_wanted.CLOSE, "description": "Close it"}],
+                          "multi": False, "other": False}], "who": "human:ana"}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated_at=?,stale_asked_at=? WHERE id=?",
-                  (H.shift(H.now(), days=-8), H.shift(H.now(), days=-8), stale["id"]))
-    assert ask_idle(api) == []
-    assert len(asks_on(api, stale["id"])) == 1
+        H.task_comment(c, H.KEEPER, task["id"], "Nothing has happened on this task for 7 days. Still wanted?",
+                       wake=False, ask=ask, extra_refs={"still_wanted": True})
+    return asks(api, task["id"])[-1]
 
 
-def test_keep_restarts_the_clock_and_close_closes(api):
+def test_an_idle_task_is_not_asked_about_and_its_bot_lists_it_on_the_roundup(api):
+    stale = idle(api, "Old idea")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")     # the creation wake ran: nothing is queued
+        conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (stale["id"],)).fetchone()[0]
+        eight = H.shift(H.now(), days=-8)     # its messages and history are as old as the idle date
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (eight, conv))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (eight, stale["id"]))
+    with api.app.state.store.read() as c:
+        text, _, _ = task_roundup._list(c, "ops", H.now(), {})
+    assert "Old idea" in text
+    assert asks(api, stale["id"]) == [], "no question goes to a person about an idle task"
+
+
+def test_keep_and_close_on_a_question_put_before_the_nudge_was_removed_still_act(api):
     kept, closed = idle(api, "Keep me"), idle(api, "Drop me")
-    ask_idle(api)
     for task, label in ((kept, "Keep"), (closed, "Close")):
-        [ask] = asks_on(api, task["id"])
+        ask = legacy_ask(api, task)
         post(api, f"tasks/{task['id']}/answers",
              {"target": {"comment": ask["id"]}, "answers": {"still_wanted": [label]}})
     with api.app.state.store.read() as c:
         kept_row, closed_row = H.task(c, kept["id"]), H.task(c, closed["id"])
-        assert kept_row["status"] == "open" and kept_row["updated_at"] > kept_row["stale_asked_at"]
+        assert kept_row["status"] == "open"
         assert closed_row["status"] == "closed" and closed_row["closed_by_id"] == "human:ana"
-        assert still_wanted.idle_tasks(c) == []
 
 
 def test_only_the_person_asked_decides_still_wanted():

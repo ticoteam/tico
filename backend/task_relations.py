@@ -169,11 +169,26 @@ def live_blocker_sql(count):
 
 def live_blockers(conn, task_id, statuses):
     """Every blocker still in one of `statuses`, as task rows, oldest relation first."""
+    from . import hubdb as H
     marks = ",".join("?" * len(statuses))
     return [dict(r) for r in conn.execute(
-        "SELECT t.* FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+        f"SELECT t.* FROM task_relations r JOIN {H.TASKS} t ON t.id=r.from_task "
         f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
         "ORDER BY r.created_at, r.rowid", (task_id, *statuses))]
+
+
+def live_blockers_many(conn, task_ids, statuses):
+    """live_blockers for many tasks in one read per 500: {task_id: the rows live_blockers returns for it}."""
+    found = {tid: [] for tid in task_ids}
+    marks = ",".join("?" * len(statuses))
+    for part in _parts(sorted(found)):
+        for row in conn.execute(
+                "SELECT r.to_task AS blocked_task, t.* FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                f"WHERE r.to_task IN ({','.join('?' * len(part))}) AND r.kind='blocks' AND t.status IN ({marks}) "
+                "ORDER BY r.created_at, r.rowid", (*part, *statuses)):
+            block = dict(row)
+            found[block.pop("blocked_task")].append(block)
+    return found
 
 
 def is_descendant(conn, task_id, other_id):

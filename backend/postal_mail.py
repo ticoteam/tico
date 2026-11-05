@@ -47,6 +47,7 @@ from . import outbox as O
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None                 # tests' fake HQ, never the live one
@@ -120,8 +121,8 @@ def owner_actor(c, auth):
 def finance_bot(c):
     """The active Finance bot (the first of FINANCE_TEMPLATES that exists), or None."""
     marks = ",".join("?" * len(FINANCE_TEMPLATES))
-    rows = c.execute("SELECT bc.bot, json_extract(bc.config,'$.template') AS template FROM bot_config bc "
-                     f"JOIN bots b ON b.id=bc.bot WHERE json_extract(bc.config,'$.template') IN ({marks}) "
+    rows = c.execute(f"SELECT bc.bot, s.template AS template FROM bot_config bc {BS.JOIN} "
+                     f"JOIN bots b ON b.id=bc.bot WHERE s.template IN ({marks}) "
                      "AND b.state='active' ORDER BY bc.bot", FINANCE_TEMPLATES).fetchall()
     rows = sorted(rows, key=lambda r: FINANCE_TEMPLATES.index(r["template"]))
     return rows[0]["bot"] if rows else None

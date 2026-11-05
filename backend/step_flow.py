@@ -10,9 +10,7 @@ A step's `flow` (all keys optional):
   recorded on the ticket.
 - `timeout_hours`: a check open this long is closed unanswered and the round is skipped (the ticket goes on as if it
   had passed with no comments).
-- `status_hours`, `late_hours`: at a working step, a ticket quiet this long gets its bot owner one status check, and
-  one this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps
-  have 2 and 4 without a setting.
+- `late_hours`: at a working step, a ticket this long at the step gets its manager one notice (backend/step_age.py). An engineering type's working steps have 4 without a setting. `status_hours` is still accepted and wakes no one.
 - `backlog`: {over, per, notify, every_hours}: when more than `over` tickets wait at the step (or for one owner there),
   who to tell (backend/step_backlog.py).
 - `can_hold`: false on steps a ticket is never put on hold from (a merged change is reverted or fixed forward).
@@ -285,7 +283,7 @@ def check_step(c, check, ticket=None):
     ticket_id = (ticket or {}).get("id") or TR.parent_of(c, check["id"])
     if not ticket_id:
         return None
-    found = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='step' AND created_at<=? "
+    found = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at<=? "
                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created_at") or "")).fetchone()
     s = step(c, found[0]) if found else None
     if s is None:
@@ -296,7 +294,8 @@ def check_step(c, check, ticket=None):
     # Ordinary subtasks made during a check are independent work, never checks to expire or consume.
     from .check_pools import is_security
     title = str(check.get("title") or "").strip()
-    filed = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_filed' AND new=? LIMIT 1",
+    filed = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed' "
+                      "AND new=? LIMIT 1",
                       (ticket_id, check["id"])).fetchone()
     return s if (filed or titled(c, s["type_id"], title) or is_security(title)
                  or title.lower() == label(s).lower() or title.lower().startswith(label(s).lower() + ":")) else None

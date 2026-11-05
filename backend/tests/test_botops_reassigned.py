@@ -60,7 +60,7 @@ def test_botops_moving_a_persons_task_to_itself_with_lent_rights_lends_nothing_l
     first = claim(api, botops, "botops")
     _reassign(api, other["id"], first["token"])
     with api.app.state.store.read() as c:
-        moved = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC LIMIT 1",
+        moved = c.execute("SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' ORDER BY created_at DESC LIMIT 1",
                           (other["id"],)).fetchone()
         assert moved["actor"] == "human:ana"         # made with her rights, through BotOps
     finish(api, botops, first)

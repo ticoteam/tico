@@ -16,6 +16,7 @@ NO_TEST = (*FAILING_RECEIPTS, "lint_only")
 
 def setup(run, w, team):
     w.ci_skip = 0.2
+    w.ci_skip_first = True
     tickets(run, w, 10)
 
 
@@ -43,8 +44,8 @@ def entries(run):
     names = gated(run)
     for t in run.final:
         pr = w.pr_of(t["id"])
-        rows = w.sql("SELECT e.created_at, s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                     "AND e.field='step' ORDER BY e.created_at, e.rowid", (t["id"],))
+        rows = w.sql("SELECT e.created_at, s.name FROM history_events e JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? "
+                     "AND e.kind='step' ORDER BY e.created_at, e.rowid", (t["id"],))
         for row in rows:
             if row["name"] in names and pr:
                 when = w.H.parse_ts(row["created_at"])
@@ -104,8 +105,8 @@ def retried_after_receipt(run):
                 continue
             if tid not in rows:
                 rows[tid] = [(run.w.H.parse_ts(r["created_at"]), r["name"]) for r in run.w.sql(
-                    "SELECT e.created_at, s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                    "AND e.field='step' ORDER BY e.created_at, e.rowid", (tid,))]
+                    "SELECT e.created_at, s.name FROM history_events e JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? "
+                    "AND e.kind='step' ORDER BY e.created_at, e.rowid", (tid,))]
             moved = next((at for at, name in rows[tid] if name == step and at >= clean[0]), None)
             done += 1
             if not moved or (moved - clean[0]).total_seconds() > slack:

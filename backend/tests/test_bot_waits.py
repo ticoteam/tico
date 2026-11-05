@@ -41,8 +41,7 @@ def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without
     assert after["status"] == "waiting" and after["note"] == "Needs the review of the receipt gate fix first."
     assert after["waiting_on"] is None                    # people's Needs you and needs_human are untouched
     assert H.wait_detail(c, after) == {"why": "an open blocker", "on": "bot:ops"}
-    # Held while it is open: the stranded sweep leaves it waiting, and nothing starts the builder on it.
-    H.sweep_stranded(c, at=H.shift(H.now(), hours=6))
+    # Held while it is open: nothing starts the builder on it.
     assert H.task(c, task["id"])["status"] == "waiting"
     assert jobs(c, "cpo") == []
 
@@ -137,7 +136,7 @@ def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api, r
             restrict(c, "ops", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
         assert H.task_private_readable(c, "bot:cpo", pre)  # company visibility is only part of read access
         before = dict(H.task(c, task["id"]))
-        events = [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))]
+        events = [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))]
     detail = get(api, "tasks/" + task["id"], token)["task"]
     rows = get(api, "tasks", token)["tasks"]
     listed = next(t for t in rows if t["id"] == task["id"])
@@ -157,4 +156,4 @@ def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api, r
         after = dict(H.task(c, task["id"]))
         assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == {
             k: before[k] for k in ("status", "note", "waiting_on", "version")}
-        assert [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))] == events
+        assert [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY id", (task["id"],))] == events

@@ -24,9 +24,10 @@ from fastapi import Request
 from clients import access_entry, harness_manifests, mcp_servers
 from . import model_subscriptions
 from . import models as M
-from . import providers, read_cache, routines
+from . import google_workspace, providers, read_cache, routines
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
+from . import bot_settings as BS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_tool_requests(
@@ -233,8 +234,9 @@ def granted(c, bot, raw):
     if not missing:
         return raw
     from .credentials import granted
+    from .read_cache import rows
     held = granted(c, "bot:" + bot)
-    have = {row["env"] for row in c.execute("SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
+    have = {row["env"] for row in rows(c, "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
             if row["env"] in missing and row["id"] in held}
     return [dict(e, credential="present", granted=True) if e.get("credential") == "missing" and e.get("env") in have else e
             for e in raw]
@@ -255,26 +257,28 @@ def agent_report(c, bot, tools):
     reconcile(c, {bot: raw}, complete=True)
 
 
-STATE_CONFIG_SQL = "SELECT config,repo FROM bot_config WHERE bot=?"
+STATE_CONFIG_SQL = f"SELECT {BS.CONFIG} AS config,bc.repo FROM bot_config bc {BS.JOIN} WHERE bc.bot=?"
 STATE_RUNNER_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-                    "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+                    "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?")
 REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created_at,id"
 
 
 def prime_state(c, bots):
     """Each bot's configuration, computer and pending tool requests, read together for every bot's listing (per 500
     bots, not three reads per bot). Outside a snapshot nothing is kept."""
+    from .credentials import prime_granted
     from .read_cache import cache, prime, prime_rows
     if cache(c) is None:
         return
+    prime_granted(c, ["bot:" + bot for bot in set(bots)])
     for part in H.chunks(sorted(set(bots))):
         marks = ",".join("?" * len(part))
         configs = {r["bot"]: r for r in c.execute(
-            f"SELECT bot,config,repo FROM bot_config WHERE bot IN ({marks})", part)}
+            f"SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})", part)}
         prime(c, STATE_CONFIG_SQL, {(s,): configs.get(s) for s in part})
         runners = {r["bot"]: r for r in c.execute(
             "SELECT a.bot,r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-            f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
+            f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
         prime(c, STATE_RUNNER_SQL, {(s,): runners.get(s) for s in part})
         # The same computers, for the subscription lookups each Model row may make.
         prime(c, model_subscriptions.RUNNER_READINESS_SQL, {(r["id"],): r for r in runners.values()})
@@ -356,13 +360,20 @@ def listing(c, settings, bot, reads=None):
     # Only the Google key: a computer also holds other credentials for its bots (a vault grant), and
     # those reach the run whoever its message bot is.
     google = lambda entry: entry.get("held") and entry.get("env") == "GOOGLE_SA_KEY"
-    if any(google(entry) for entry in state["raw"]) and not routines.token_mailboxes(c, bot):
+    covered = routines.token_mailboxes(c, bot)
+    if covered and all(google_workspace.authority(c, box) == "workspace" for box in covered):
+        # The server holds the Google Workspace key and mints each run's token (plan v5): this bot needs no key on its
+        # computer, and its mailbox's workspace is the one the server covers.
+        for tool, entry in zip(declared, state["raw"]):
+            if entry.get("env") == "GOOGLE_SA_KEY":
+                tool.update(status="ready", problem="", detail="ready (Google Workspace on the server)")
+    elif any(google(entry) for entry in state["raw"]) and not covered:
         for tool, entry in zip(declared, state["raw"]):
             if google(entry):
                 tool.update(status="problem", held=True, detail="", problem=(
                     f"{label} holds the Google key, but {slug} is nobody's message bot on the server, so its runs get no mail "
                     "token. An owner or admin names it: POST /api/v2/access/people/<person> "
-                    '{"inbox_bot": "' + slug + '", "mailbox": "<address>"}'))
+                    '{"inbox_bot": "' + bot + '", "mailbox": "<address>"}'))
     adding = [_pending_tool(r) for r in requests if r["kind"] == "add"
               and not any(_same(entry, r["entry"]) for entry in state["raw"])]
     if external:
@@ -440,7 +451,7 @@ def _task_text(verb, bot, name, entry, computer, repo=None):
 
 def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=None, title_prefix=""):
     from . import getting_started as G
-    external = resolve_harness(H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
+    external = resolve_harness(H._json(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
     if not external:
         G._botops(c)
     slug = (H.bot(c, bot) or {}).get("slug") or bot
@@ -504,7 +515,7 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
         if not found:
             raise Problem("not_found", "That request is not waiting any more", 404)
         c.execute("UPDATE bot_tool_requests SET state='canceled' WHERE id=?", (found["id"],))
-        H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.")
+        H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.", strict=False)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (found["task_id"],))
         H.event(c, who.actor, "bot.tool_request_canceled", bot, {"service": found["service"], "task": found["task_id"]})
         return {"canceled": True, "task_id": found["task_id"],

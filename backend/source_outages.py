@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from .store import H
+from . import bot_settings as BS
 
 PREFIX = 'source-outage:'
 
@@ -34,8 +35,7 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             f"{int(waiting)} turns waiting. Expected return: {expected}.")
     # A board can name its own Engineering manager. Never assume the company's bot slug.
     managers = {r[0] for r in c.execute("SELECT manager FROM task_types WHERE role='engineering' AND manager IS NOT NULL")}
-    from .health_monitor import SLUG
-    recipients = {H.bot_actor(x) for x in managers if x} | {H.bot_actor(SLUG)}
+    recipients = {H.bot_actor(x) for x in managers if x}
     for target in sorted(recipients):
         bot = H.bot(c, H.actor_id(target))
         if not bot or bot['state'] in ('planned', 'archived'):
@@ -56,8 +56,8 @@ def sync(c, settings):
     from . import execution, login_holds, move_retry, performance
     seen = set()
     queued = [dict(r) for r in c.execute(
-        "SELECT j.bot_id,count(*) n,a.runner_id,b.config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
-        "JOIN bot_config b ON b.bot=j.bot_id WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id,b.config")]
+        f"SELECT j.bot_id,count(*) n,a.runner_id,{BS.CONFIG} AS config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+        f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id")]
     counts = {}
     for row in queued:
         config = H._json(row['config'], {}) or {}
@@ -87,7 +87,8 @@ def sync(c, settings):
     github = {}
     # Read the latest remembered move per ticket; stale moves neither count waiters nor keep an incident open.
     cutoff = H.shift(H.now(), seconds=-int(move_retry.RETRY_FOR.total_seconds()))
-    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND created_at>=?",
+    for (task_id,) in c.execute("SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND kind=? "
+                                "AND created_at>=?",
                                 (move_retry.FIELD, cutoff)).fetchall():
         row = H.task(c, task_id)
         found = move_retry.remembered(c, dict(row), H.parse_ts(H.now()))
@@ -144,7 +145,7 @@ def batch_waiters(c, bot):
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue
-        groups.setdefault((row['conversation_id'], refs.get('task')), []).append(dict(row))
+        groups.setdefault((row['conversation_id'], H._task_ref(refs.get('task'))), []).append(dict(row))
     for jobs in groups.values():
         if len(jobs) > 1:
             wake_presets._release(c, bot, jobs)

@@ -18,7 +18,7 @@ bot after two business days (backend/still_needed.py).
    subtask an ask becomes) closes when the person has not touched it in EXPIRE_DAYS, unless it is due later or waits on
    someone else, and the bot hears why when it closes.
 
-A task with nobody's ask on it is "Still wanted?" (backend/still_wanted.py), which only a person's answer closes.
+Nothing asks a person about a quiet task: a bot's quiet task is a line on its roundup (backend/task_roundup.py).
 """
 
 from . import hubdb as H
@@ -68,7 +68,8 @@ def last_word(conn, person, asked, task):
     clock = H.ask_clock(asked)
     said = conn.execute("SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>?",
                         (asked["conversation_id"], person, clock)).fetchone()[0]
-    did = conn.execute("SELECT max(created_at) FROM task_events WHERE task_id=? AND actor=? AND created_at>?",
+    did = conn.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+                       "AND created_at>?",
                        (task["id"], person, clock)).fetchone()[0] if task else None
     return max(x for x in (clock, said, did) if x)
 
@@ -172,7 +173,7 @@ def sweep(conn, at=None):
         with isolated(conn, "ask_deadlines", task["id"]):
             note = (f"No answer from {_name(conn, task['owner_id'])} in {EXPIRE_DAYS} days, so this ask expired and "
                     f"closed. {_name(conn, task['requester_id'])}: drop the work it was for, or ask again if it still matters.")
-            H.task_close(conn, H.KEEPER, task["id"], note)
+            H.task_close(conn, H.KEEPER, task["id"], note, strict=False)
             H.event(conn, H.KEEPER, "ask.expired", task["id"], {"to": task["owner_id"], "bot": task["requester_id"]})
             done["closed"].append(task["id"])
     return done
@@ -184,7 +185,7 @@ def handed_to_people(conn, expiry, at=None):
     not a due-date routine's occurrence (its day is its deadline, whoever owns it now)."""
     marks = ",".join("?" * len(ASKED_STATUSES))
     rows = H._rows(conn.execute(
-        f"SELECT t.* FROM tasks t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
+        f"SELECT t.* FROM {H.TASKS} t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
         "AND t.owner_id LIKE 'human:%' AND t.requester_id LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
         "AND t.occurrence IS NULL "
         "ORDER BY t.created_at", (*ASKED_STATUSES, expiry)))
@@ -195,7 +196,8 @@ def handed_to_people(conn, expiry, at=None):
             continue
         person = row["owner_id"]
         touched = conn.execute(
-            "SELECT max(created_at) FROM (SELECT max(created_at) AS created_at FROM task_events WHERE task_id=? AND actor=? "
+            "SELECT max(created_at) FROM (SELECT max(created_at) AS created_at FROM history_events WHERE subject_type='task' "
+            "AND subject_id=? AND actor_id=? "
             "UNION ALL SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=?)",
             (row["id"], person, row["conversation_id"], person)).fetchone()[0]
         if not touched or touched < expiry:

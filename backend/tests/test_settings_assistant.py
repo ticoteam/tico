@@ -242,6 +242,10 @@ def outcome(c, auth, who, e, card_direct=False):
     return "run" if "run" in made else "card"
 
 
+# Direct entries that must still come back as a card when the owner's rule is off (botops_act.DO), never refused.
+CARDED = {"computer.label", "computer.turns_at_once"}
+
+
 @pytest.mark.parametrize("person,role", [("ana", "owner"), ("ben", "human"), ("cara", "human")])
 def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(api, person, role):
     as_member(api, "cara@acme.example")
@@ -258,7 +262,7 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
             # Cards for a direct entry (the owner's rule off): a card wherever BotOps can make one, else the link.
             if got == "run" and settings_catalog.kind_for(e, {}) == "direct":
                 carded = outcome(c, auth, assistant, e, card_direct=True)
-                assert carded == "card" or carded[0] in ("unavailable", "forbidden"), (e.key, carded)
+                assert carded == "card" or (e.key not in CARDED and carded[0] in ("unavailable", "forbidden")), (e.key, carded)
     assert {"run", "card", "person_only"} <= seen or role == "human", seen
 
 

@@ -1,14 +1,15 @@
 """Cloud machines (backend/cloud_machines.py): on a Tico Cloud company a bot with no computer runs on a cloud machine,
 the company's shared one or, for a developer or the video producer, its own. A machine is made on first work with a
 one-time enrollment code and bound to the bots set to run there only; it is started for work, kept with a heartbeat,
-stopped after its size's break-even idle time unless Always on (the shared one once every member is idle), never
-started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. A stopped
+paused (stopped) after its Pause after minutes idle (30 unless a person sets another) unless Always on (the shared one
+once every member is idle), never started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. A stopped
 machine whose computer is behind this server's release is started once to update, then stops as usual. Off cloud
 nothing changes. HQ is a fake client and the clock is a fake one."""
 
 import json
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ from backend.tests.test_model_subscriptions import OTHER, TOKEN, add, codex_file
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
+from backend import bot_settings as BS
 
 SIZES = [{"name": name, "cpu": cpu, "memory_gb": cpu * 2, "usd_per_hour": 0.05 * cpu, "start_usd": 0.04,
           "idle_stop_s": idle} for name, cpu, idle in (("small", 1, 600), ("default", 2, 300), ("large", 4, 180),
@@ -106,6 +108,9 @@ def cloud(api, monkeypatch):  # noqa: F811
     monkeypatch.setattr(manager, "on_offered", None)
     at = [time.time()]
     monkeypatch.setattr(CM, "now", lambda: at[0])
+    # These tests time a pause in seconds: 5 minutes (the least a person can set) keeps them at 300 s. The 30-minute
+    # default is tested on its own, in test_the_default_pause_is_30_minutes_of_idle_and_not_before.
+    monkeypatch.setattr(CM, "PAUSE_MINUTES", 5)
 
     class Cloud:
         pass
@@ -169,7 +174,7 @@ def machine_row(**kw):
     return {"bot": "ops", "mode": "cloud", "size": "default", "always_on": 0, "machine_id": "m1", "runner_id": "r1",
             "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try_at": None,
             "failures": 0, "problem": "", "problem_at": None, "wake_key": None, "woke_at": None, "enroll_by": 0,
-            "enroll_fails": 0, **kw}
+            "enroll_fails": 0, "pause_minutes": None, **kw}
 
 
 def test_decide_wakes_for_work_and_creates_on_first_use():
@@ -185,12 +190,12 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
     assert CM.decide(machine_row(state="running"), facts(active=False, turns=True), 1000, 300) == ("heartbeat", None)
 
 
-def test_decide_idle_stop_at_break_even_heartbeat_and_always_on():
+def test_decide_idle_stop_after_the_pause_heartbeat_and_always_on():
     on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
     assert CM.decide(on, facts(), 1059, 300) == (None, None)
     assert CM.decide(on, facts(), 1060, 300) == ("heartbeat", None)
     assert CM.decide(on, facts(), 1299, 300) == ("heartbeat", None)
-    assert CM.decide(on, facts(), 1300, 300) == ("stop", None)            # exactly the size's break-even
+    assert CM.decide(on, facts(), 1300, 300) == ("stop", None)            # exactly the pause
     # Activity since the start moves the idle clock; a turn out never stops it; Always on never idles.
     assert CM.decide(on, facts(activity=1200), 1300, 300) == ("heartbeat", None)
     assert CM.decide(on, facts(activity=1200), 1500, 300) == ("stop", None)
@@ -291,21 +296,29 @@ def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
     assert CM.decide(on, facts(updating=True), 2000, 300) == ("heartbeat", None)
 
 
-def test_idle_for_waits_longer_only_after_a_stop_shorter_than_break_even():
-    """A machine whose last stop was shorter than its idle time stays on SHORT_GAP_FACTOR times longer. A longer stop, a
-    stale one (stopped after it started) or a missing or unreadable time leaves the idle time as it is."""
-    stopped = "2026-11-03T10:00:00.000000Z"
+def test_the_pause_is_pause_minutes_or_30_and_only_whole_minutes_from_5_to_1440_are_stored():
+    assert CM.PAUSE_MINUTES == 30
+    assert CM.pause_after(machine_row()) == 1800
+    assert CM.pause_after(machine_row(pause_minutes=5)) == 300
+    assert CM.pause_after(machine_row(pause_minutes=1440)) == 86400
+    assert CM.machine_view(None)["pause_minutes"] == 30
+    for ok in (5, 30, 1440):
+        assert CM.checked_pause(ok) == ok
+    for bad in (None, 4, 1441, 0, -5, 2.5, "30", True):
+        with pytest.raises(Problem):
+            CM.checked_pause(bad)
 
-    def started(seconds):
-        return H.shift(stopped, seconds=seconds)
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(60)}, 300) == 300 * CM.SHORT_GAP_FACTOR
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(299)}, 300) == 300 * CM.SHORT_GAP_FACTOR
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(300)}, 300) == 300
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(3600)}, 300) == 300
-    assert CM.idle_for({"stopped_at": started(60), "started_at": stopped}, 300) == 300
-    assert CM.idle_for({"stopped_at": None, "started_at": started(60)}, 300) == 300
-    assert CM.idle_for({"stopped_at": stopped}, 300) == 300
-    assert CM.idle_for({"stopped_at": stopped, "started_at": "not a time"}, 300) == 300
+
+def test_a_machine_pauses_after_its_pause_with_no_turn_out_and_always_on_never_does():
+    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    assert CM.decide(on, facts(), 2799, CM.pause_after(on)) == ("heartbeat", None)     # the default: 30 minutes
+    assert CM.decide(on, facts(), 2800, CM.pause_after(on)) == ("stop", None)
+    assert CM.decide(on, facts(turns=True), 9999, CM.pause_after(on)) == ("heartbeat", None)
+    long = {**on, "pause_minutes": 45}
+    assert CM.decide(long, facts(), 3699, CM.pause_after(long)) == ("heartbeat", None)
+    assert CM.decide(long, facts(), 3700, CM.pause_after(long)) == ("stop", None)
+    always = {**on, "always_on": 1}
+    assert CM.decide(always, facts(), 9999, CM.pause_after(always)) == ("heartbeat", None)
 
 
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
@@ -334,7 +347,7 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     # The machine enrolls with that code: a computer named after the bot, closed to others, the bot assigned to it.
     enrolled = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
     with cloud.store.read() as c:
-        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (enrolled["runner_id"],)).fetchone())
+        computer = dict(c.execute("SELECT * FROM runners_with_state WHERE id=?", (enrolled["runner_id"],)).fetchone())
         placed = c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()["runner_id"]
         others = placement.candidates(c, cloud.api.app.state.auth, "cpo")
     assert computer["label"] == "ops (cloud)" and not computer["accepts_member_bots"]
@@ -346,14 +359,34 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     computers = {m["id"]: m for m in get(cloud.api, "operations")["computers"]}
     assert computers[enrolled["runner_id"]]["cloud_machine"]["bot"] == "ops"
     shown = employee(cloud.api)["cloud_machine"]
-    assert shown["mode"] == "cloud" and shown["state"] == "starting"
+    assert shown["mode"] == "cloud" and shown["state"] == "running"
+
+
+@pytest.mark.parametrize("state", ["stopping", "stopped"])
+def test_live_runner_contact_preserves_a_cloud_machines_stop_state(cloud, state):
+    computer = enrolled(cloud)
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", state=state)
+    ready(cloud.api, computer, ["ops"])
+    assert cloud.row()["state"] == state
+    assert employee(cloud.api)["cloud_machine"]["state"] == state
+    shown = next(m for m in get(cloud.api, "operations")["computers"] if m["id"] == computer["runner_id"])
+    assert shown["cloud_machine"]["state"] == state
+
+
+def test_heartbeat_boot_repair_is_one_lookup(api):  # noqa: F811
+    with api.app.state.store.transaction() as c:
+        calls = Mock(wraps=c)
+        CM.checked_in(calls, "self-hosted-computer")
+        # Ordinary computers and machines already running are the common case: one small read on every beat.
+        calls.execute.assert_called_once()
 
 
 def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     enrolled(cloud)
     cloud.hq.calls.clear()
     cloud.manager.synced = None
-    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.tick()                                                # learns the sizes: the pause is 300 s here
     assert cloud.hq.actions() == []
     assert cloud.tick(60) == ["heartbeat"]
     assert cloud.tick(10) == ["heartbeat"]                      # once a minute, not every look
@@ -378,30 +411,30 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     assert cloud.hq.actions() == []                              # running now: no second start
 
 
-def test_a_machine_woken_soon_after_its_break_even_stop_stays_on_longer(cloud):
-    cloud.hq.clock = lambda: stamp(cloud)                       # HQ stamps started_at and stopped_at by the fake clock
+def test_the_default_pause_is_30_minutes_of_idle_and_not_before(cloud, monkeypatch):
+    monkeypatch.setattr(CM, "PAUSE_MINUTES", 30)               # this test is of the real default, not the fixture's
     enrolled(cloud)
     cloud.hq.calls.clear()
     cloud.manager.synced = None
     cloud.tick()
     with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
-    cloud.at[0] = cloud.row()["active_at"] + 299
-    cloud.tick()
-    cloud.tick(1)
-    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"   # its first stop: at break-even
-    stopped = cloud.at[0]
-    # Woken 60 s after that stop, which cost more than staying on would have: this time it stays on four times longer.
-    work(cloud, text="Another thing")
-    cloud.at[0] = stopped + 60
-    cloud.hq.calls.clear()
-    assert cloud.tick() == ["start"]
-    woke = cloud.at[0]
-    cloud.hq.calls.clear()
-    cloud.at[0] = woke + 300                                    # the break-even from before: not this time
+    cloud.at[0] = cloud.row()["active_at"] + 1799
     cloud.tick()
     assert "stop" not in cloud.hq.actions()
-    cloud.at[0] = woke + 1199
+    cloud.tick(1)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"
+
+
+def test_a_custom_pause_is_the_idle_time_the_machine_stops_after(cloud):
+    enrolled(cloud)
+    post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 45})
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    cloud.at[0] = cloud.row()["active_at"] + 2699
     cloud.tick()
     assert "stop" not in cloud.hq.actions()
     cloud.tick(1)
@@ -415,6 +448,31 @@ def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(
     assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
     work(cloud, text="Another thing")
     assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == ""
+
+
+@pytest.mark.parametrize("stop_state", ["stopping", "stopped"])
+def test_a_stop_still_listed_as_running_keeps_its_idle_clock_and_wake_guard(cloud, monkeypatch, stop_state):
+    enrolled(cloud)
+    before = cloud.row()
+    cloud.hq.machines["m1"]["state"] = "running"
+    stop = cloud.hq.stop
+
+    def delayed(machine_id):
+        cloud.hq.calls.append(("stop", machine_id))
+        return {**cloud.hq.machines[machine_id], "state": stop_state}
+
+    monkeypatch.setattr(cloud.hq, "stop", delayed)
+    cloud.hq.calls.clear()
+    cloud.at[0] = before["active_at"] + 400                # past both the start and the queued job's idle window
+    assert cloud.tick() == ["stop"] and cloud.row()["state"] == stop_state
+    monkeypatch.setattr(cloud.hq, "stop", stop)
+    cloud.manager.synced = None                          # HQ's next list still says running while the stop lands
+    assert cloud.tick(10) == ["stop", "stop"] and cloud.row()["state"] == "stopped"
+    after = cloud.row()
+    assert (after["active_at"], after["wake_key"], after["woke_at"]) == (
+        before["active_at"], before["wake_key"], before["woke_at"])
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == []   # its old work has already spent its wake
 
 
 def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
@@ -449,7 +507,7 @@ def test_a_machine_that_never_enrolls_is_made_again_with_a_fresh_code_three_time
         codes.append(cloud.hq.calls[-1][3])
         made = cloud.row()["machine_id"]
         assert cloud.row()["enroll_by"] == cloud.at[0] + deadline
-        # It boots for longer than its size's idle time: never idle-stopped meanwhile.
+        # It boots for longer than its pause: never idle-stopped meanwhile.
         cloud.tick(deadline - 1)
         assert "stop" not in cloud.hq.actions() and "delete" not in cloud.hq.actions()
         cloud.tick(1)
@@ -780,6 +838,20 @@ def test_hq_errors_back_off_with_one_event_and_a_wait_note(cloud):
     assert cloud.row()["failures"] == 0 and cloud.row()["problem"] == ""
 
 
+def test_a_refused_stop_backs_off_after_the_last_bot_is_drained(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    draining(cloud, "ops", 1)
+    cloud.hq.fail["stop"] = [CM.Refused("unreachable"), CM.Refused("unreachable")]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["stop"]
+    assert cloud.tick(10) == ["stop"]                     # inside the first 15-second backoff
+    assert cloud.tick(5) == ["stop", "stop"]
+    assert cloud.tick(29) == ["stop", "stop"]             # the second refusal waits 30 seconds
+    assert cloud.tick(1) == ["stop", "stop", "stop"]
+    assert cloud.row()["state"] == "stopped" and cloud.row()["failures"] == 0
+
+
 def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(cloud):
     enrolled(cloud)
     cloud.tick(400)
@@ -923,6 +995,29 @@ def test_sizes_and_choices_are_checked(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"size": "large"}, token="cara-test", expected=403)
 
 
+def test_pause_after_takes_whole_minutes_from_5_to_1440_and_null_leaves_it(cloud):
+    adopt(cloud)
+    cloud.tick()
+    for bad in (4, 1441, 2.5):
+        post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": bad}, expected=422)
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 1440})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"size": "large"})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": None})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 30})["cloud_machine"]["pause_minutes"] == 30
+    with cloud.store.read() as c:
+        assert CM.row(c, "ops")["pause_minutes"] == 30
+
+
+def test_the_shared_machines_pause_is_the_companys_and_checked(cloud):
+    adopt(cloud, "ops", "shared")
+    post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45}, token="cara-test", expected=403)
+    post(cloud.api, "cloud-machines/shared", {"pause_minutes": 4}, token="ben-test", expected=422)
+    assert post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45}, token="ben-test")["shared"]["pause_minutes"] == 45
+    assert post(cloud.api, "cloud-machines/shared", {"always_on": True}, token="ben-test")["shared"]["pause_minutes"] == 45
+    assert post(cloud.api, "cloud-machines/shared", {"pause_minutes": None}, token="ben-test")["shared"]["pause_minutes"] \
+        == 45
+
+
 # ----------------------------------------------------------------------------- the shared machine
 def stamp(cloud, ago=0):
     """The fake clock's now (less `ago` seconds) as the hub's ISO time."""
@@ -952,12 +1047,13 @@ def idle(cloud):
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
-        # coo is in Engineering on the team chart; finance was made from the video producer's template.
+        # coo is a Builder; ops is in Engineering on the team chart, which alone is no reason for its own machine;
+        # finance was made from the video producer's template.
         c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
-                  "WHERE bot='finance'")
+        BS.update(c, 'ops', {'team': 'engineering'})
+        c.execute("UPDATE bots SET display_name='Builder (Claude)' WHERE id='coo'")
+        BS.update(c, 'finance', {'template': 'video-producer'})
         for bot in ("ops", "coo", "finance"):
             assert placement.auto_place(c, execution, bot) is None
     assert [cloud.row(bot)["placement"] for bot in ("ops", "coo", "finance")] == ["shared", "own", "own"]
@@ -969,6 +1065,47 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"}, token="cara-test", expected=403)
     with cloud.store.read() as c:
         assert CM.members(c) == ["coo"]
+
+
+def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
+    with cloud.store.transaction() as c:
+        for name, want in (("Builder", "own"), ("builder (OpenAI)", "own"), ("Builder (Claude)", "own"),
+                           ("Builders guild", "shared"), ("Reviewer 1", "shared"), ("Engineering Manager", "shared"),
+                           ("", "shared"), (None, "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
+
+
+def _config(c, bot, config):
+    assert c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone(), bot
+    BS.write(c, bot, config)
+
+
+def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_machine(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name=? WHERE id='ops'", ("Ops",))
+        _config(c, "ops", {})
+        assert CM.default_placement(c, "ops") == "shared"
+        _config(c, "ops", {"template": "builder"})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "ops", {"template": "video-producer"})
+        assert CM.default_placement(c, "ops") == "own"
+        # A copy of a Builder is heavy whatever it is called.
+        _config(c, "coo", {"template": "builder"})
+        _config(c, "ops", {"copied_from": {"bot": "coo", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"template": "pr-reviewer"})
+        assert CM.default_placement(c, "ops") == "shared"
+        # A copy of a copy follows the line back to the Builder it started from; a loop of copies ends.
+        _config(c, "finance", {"template": "builder"})
+        _config(c, "coo", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "shared"
+        for name, want in (("Builder 2", "own"), ("builder (Claude)", "own"), ("BUILDER", "own"),
+                           ("Builder 2 Ops", "shared"), ("Rebuilder", "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
 
 
 def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
@@ -983,14 +1120,14 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     # Its computer is the company's, open to members' bots, and every member is assigned to it.
     rid = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})["runner_id"]
     with cloud.store.read() as c:
-        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
+        computer = dict(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
         offered = {r["id"] for r in placement.candidates(c, cloud.api.app.state.auth, "cpo")}
     assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
     assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
-        "bot": None, "shared": True, "size": "default", "state": "starting"}
+        "bot": None, "shared": True, "size": "default", "state": "running"}
     assert employee(cloud.api, "ops")["cloud_machine"] == {**employee(cloud.api, "ops")["cloud_machine"],
-                                                           "mode": "cloud", "placement": "shared", "state": "starting"}
+                                                           "mode": "cloud", "placement": "shared", "state": "running"}
     assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]
     # A bot joining while it is up is assigned there at the next look; nothing is started or made for it.
     adopt(cloud, "coo", "shared")
@@ -1009,7 +1146,7 @@ def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
     rid = shared_enrolled(cloud, "ops", "finance")
     idle(cloud)
     cloud.manager.synced = None
-    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.tick()                                                # learns the sizes: the pause is 300 s here
     start = cloud.row(CM.SHARED)["active_at"]
     cloud.at[0] = start + 200
     with cloud.store.transaction() as c:                        # finance's watcher ran there; ops did nothing
@@ -1022,6 +1159,21 @@ def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
     cloud.tick()
     assert "stop" not in cloud.hq.actions()
     cloud.at[0] = start + 500
+    cloud.tick()
+    assert cloud.hq.actions()[-1] == "stop"
+
+
+def test_the_shared_machine_pauses_after_the_companys_pause(cloud):
+    shared_enrolled(cloud, "ops", "finance")
+    post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45})
+    idle(cloud)
+    cloud.manager.synced = None
+    cloud.tick()                                                # learns the sizes
+    start = cloud.row(CM.SHARED)["active_at"]
+    cloud.at[0] = start + 2699
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.at[0] = start + 2700
     cloud.tick()
     assert cloud.hq.actions()[-1] == "stop"
 
@@ -1247,9 +1399,9 @@ def shared_for(cloud, bot, token="ana-test"):
 def task_on(api, bot, model, harness):
     """The bot's task model: a model on `harness` (its runtime), beside its own model."""
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config["task_model"] = {"model": model, "harness": harness, "runtime": harness}
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def given(cloud, runner_id):
@@ -1465,8 +1617,7 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
         c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',json('true')) "
-                  "WHERE bot='coo'")
+        BS.update(c, 'coo', {'materialize': True})
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()
     with store.read() as c:
@@ -1549,7 +1700,7 @@ def going_idle(cloud, key, computer, bots):
     ready(cloud.api, computer, bots)
     idle(cloud)
     cloud.manager.synced = None
-    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.tick()                                                # learns the sizes: the pause is 300 s here
     cloud.at[0] = cloud.row(key)["active_at"] + 300
     cloud.hq.calls.clear()
 
@@ -1700,7 +1851,7 @@ def reported(cloud, computer, release="", update=None, target=""):
 
 
 def stopped_when_idle(cloud, key="ops"):
-    """Nothing queued for the machine and its clock at the break-even idle time: it is stopped."""
+    """Nothing queued for the machine and its clock at its pause: it is stopped."""
     idle(cloud)
     cloud.hq.calls.clear()
     cloud.at[0] = cloud.row(key)["active_at"] + 300
@@ -1730,6 +1881,68 @@ def test_a_stopped_machine_behind_its_server_starts_once_to_update_then_idles(cl
     assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == ""
     monkeypatch.setenv("TICO_VERSION", "0.5.22")                # a new server release is a new wake
     assert cloud.tick(10) == ["start"]
+
+
+@pytest.mark.parametrize("wake", ["work", "update"])
+def test_a_resume_whose_answer_was_lost_gets_its_idle_window_and_spends_its_wake(cloud, monkeypatch, wake):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20" if wake == "update" else "0.5.21")
+    stopped_when_idle(cloud)
+    if wake == "work":
+        work(cloud, text="More work after the idle stop")
+    start = cloud.hq.start
+
+    def lost(*args):
+        assert cloud.row()["start_asked_at"] == cloud.at[0]  # durable before the call, including a hub restart
+        start(*args)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "start", lost)
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:unreachable"
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["start"]                     # HQ sees the resume: no immediate idle stop
+    current = cloud.row()
+    assert current["active_at"] == cloud.at[0] == current["woke_at"]
+    assert current["wake_key"].startswith("job:" if wake == "work" else "update:")
+    assert current["start_asked_at"] is None
+    assert current["problem"] == "" and current["failures"] == 0 and current["next_try_at"] is None
+    cloud.tick(299)
+    assert "stop" not in cloud.hq.actions()                # later lists do not move the idle clock again
+    assert cloud.tick(1)[-1] == "stop"
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == []   # no start/stop billing loop for the same wake
+
+
+def test_a_lost_update_start_that_finishes_before_the_list_keeps_a_spent_job_wake(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.21")
+    assert cloud.tick(400)[-1] == "stop"                   # the job was never taken: its wake is spent
+    spent = cloud.row()
+    assert spent["wake_key"].startswith("job:")
+    monkeypatch.setenv("TICO_VERSION", "0.5.22")
+    start = cloud.hq.start
+
+    def lost(*args):
+        start(*args)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "start", lost)
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:unreachable"
+    reported(cloud, computer, "0.5.22")                   # the update finished before HQ's next list
+    with cloud.store.read() as c:
+        current = CM.row(c, "ops")
+        assert CM.wake_for(current, CM.facts(c, cloud.store.settings, current, cloud.at[0])) == (None, True)
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["start"]
+    current = cloud.row()
+    assert (current["wake_key"], current["woke_at"]) == (spent["wake_key"], spent["woke_at"])
+    assert current["active_at"] == cloud.at[0] and current["problem"] == ""
+    assert cloud.tick(300)[-1] == "stop"
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
 
 
 @pytest.mark.parametrize("server, release", [("0.5.21", "0.5.21"), ("0.5.21", "0.5.22"), ("0.5.21", "dev"),
@@ -1989,7 +2202,7 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
     hour_ago = H.shift(H.now(), hours=-1)
     with cloud.store.transaction() as c:
         CM.save(c, CM.SHARED, state="stopped")
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (hour_ago, shared["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (hour_ago, shared["runner_id"]))
     work(cloud, "cpo")                                       # work waits for it: it starts for that, it is not silent
     checks = health_of(cloud)
     assert checks["computers"]["status"] == "ok" and "stopped until work comes" in checks["computers"]["summary"]
@@ -2002,6 +2215,57 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
         CM.save(c, CM.SHARED, problem="out_of_credit")
     assert health_of(cloud)["computers"]["summary"] == "Every computer is offline."
     assert "computer_offline" in issue_kinds(cloud)
+
+
+def test_a_cloud_machine_left_empty_is_resting_after_its_bot_moves_to_a_computer(cloud):
+    computer = enrolled(cloud)
+    other = runner(cloud.api, label="Office computer")
+    reported(cloud, other)                                # enrollment alone does not make a computer online
+    idle(cloud)
+    assign(cloud.api, other, "ops", 1)
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["stop"] and cloud.row()["mode"] == "computer"
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                  (H.shift(H.now(), hours=-1), computer["runner_id"]))
+    data = get(cloud.api, "health")
+    old = next(r for r in data["computers"] if r["id"] == computer["runner_id"])
+    assert old["resting"] and not old["online"]
+    assert next(r for r in data["checks"] if r["id"] == "computers")["status"] == "ok"
+    assert "computer_offline" not in issue_kinds(cloud)
+
+
+def test_a_failed_cloud_update_wake_is_on_health_even_without_queued_work(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20")
+    stopped_when_idle(cloud)
+    cloud.hq.fail["start"] = [CM.Refused("http_502", 502)]
+    assert cloud.tick(10) == ["start"]
+    waiting = health_of(cloud)["waiting"]
+    assert waiting["status"] == "warn" and "http_502" in waiting["summary"] and "ops" in waiting["summary"]
+    draining(cloud, "ops", 1)                             # a paused bot no longer wants the failed machine
+    assert health_of(cloud)["waiting"]["status"] == "ok"
+    draining(cloud, "ops", 0)
+    assert cloud.tick(CM.BACKOFF)[-1] == "start"
+    assert health_of(cloud)["waiting"]["status"] == "ok"  # the successful retry clears the warning
+
+
+def test_an_offline_laptop_and_a_failed_cloud_create_are_both_on_health(cloud):
+    laptop = runner(cloud.api, label="Office laptop")
+    ready(cloud.api, laptop, ["cpo"])
+    assign(cloud.api, laptop, "cpo")
+    work(cloud, "cpo")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                  (H.shift(H.now(), hours=-1), laptop["runner_id"]))
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("http_502", 502)]
+    assert cloud.tick(10) == ["create"]
+    check = health_of(cloud)["waiting"]
+    assert check["status"] == "bad"                        # the cloud warning cannot lower the offline outage
+    assert "cpo" in check["summary"] and "ops" in check["summary"] and "http_502" in check["summary"]
 
 
 def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(cloud):

@@ -145,6 +145,29 @@ including what you ask for in your DM. An assistant run's credential works only 
 **Settings > General** on, the Assistant's read-back of exactly what it approves, and your plain yes (see below). A walk
 through Needs you (`hub needs-you commit`) applies declines, but it never approves.
 
+## Routines from chat
+
+Ask for recurring inbox work: “Every new email from a customer, draft a reply; newsletters go to Read later.” Your
+Assistant can fill a Founder, Sales, Support or Blank inbox template, or write a Message flow, and adapt it to your
+request. It saves the routine **off** and puts a Confirm / Cancel card in your chat. The card shows the trigger inbox,
+every destination and **Sort**, **Draft** or **Reply**. The full flow stays under Details. No new page is needed.
+
+Reply-writing steps default to **Draft**. The Assistant chooses **Reply** only if you explicitly ask it to send replies;
+Reply also requires the inbox's send switch and, for email, the company's Send mail permission. Both are checked when
+the card is made and again when confirmed. The Assistant never enables that permission as part of creating a routine.
+Sort-only flows have no reply-writing step.
+
+Only your own **Confirm** turns the routine on. Saying “yes” in chat does not. Cancel, withdrawal or expiry leaves it off.
+An edit gets a card too; the saved flow stays unchanged until you confirm. If someone changes the routine while a card
+waits, that card fails rather than overwriting the newer flow. Stopping a routine is direct; enabling, running or
+restoring it through chat requires a card.
+
+`POST /api/v2/automations` from an Assistant turn, with a Message trigger and `enabled: false` (or omitted), returns
+the saved off routine plus `action`, `message_id` and `needs_confirm: true`. The action is a PATCH of the reviewed flow
+with `enabled: true`. If direct writes are disabled, `hub assistant propose` can instead hold a POST on its card;
+confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
+to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
+
 ## Undo
 
 Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
@@ -171,31 +194,33 @@ too long: the numbers come from the same query as the board.
 
 ## Letting it decide your approvals
 
-Off by default. Turn on **My assistant can decide approvals for me** in **Settings > General** (only you can, signed in
-to the app: not the Assistant, a bot, BotOps or a personal API token). Then your own Assistant approves or declines
-approvals addressed to you (send, spend, publish, merge) when you ask in your Assistant DM, one or many at once
+On by default. Turn **My assistant can decide approvals for me** off in **Settings > General** (only you can, signed in
+to the app: not the Assistant, a bot, BotOps or a personal API token), and it stops at once. The owner can also stop it
+for the whole team (Settings > People). While it is on, your own Assistant approves or declines approvals addressed to
+you (send, spend, publish, merge, a report to the Tico team) when you ask in your Assistant DM, one or many at once
 ("approve all the old Google review batches"), with no card and no click per item. It reads back what it is about to
 approve in one list, which Tico writes from the approvals themselves; your plain "yes" to that list approves exactly what
 it names, and it never asks again per item.
 
 What stays on:
 - **Only your words in your own Assistant DM, bound to the read-back.** The Assistant posts its read-back with
-  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only
-  pending approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per
-  approval, "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so
-  the turn's closing text is not posted after it, and records the ids. An approve then runs only for an approval on
-  that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message from anyone but you before
-  it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked` otherwise). Each line of the
-  list is one line, whatever the requesting bot put in its request, and shows every field of the approval except its
-  hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and sending mailbox, a
-  page's whole address), then the rest, files by name and size. An approval with a field longer than the list can show
-  whole, or a field name that isn't a plain name (`409 approve_too_long`), and a report to the Tico team
-  (`403 approve_support`) are left off the list and stay your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it is put ("approve
-  the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another
-  bot's output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
+  `POST /api/v2/assistant/read-back {"approvals": [ids]}` (`hub approval read-back`): only it, in your DM, only pending
+  approvals addressed to you. Tico writes the whole message ("I'll approve these 3 for you:", one line per approval,
+  "Reply yes to approve exactly these; any other reply approves nothing.") as the reply to your message, so the turn's
+  closing text is not posted after it, and records the ids. The Assistant may add a `--note` (`"note"`) of its own words
+  above the list, such as the one real decision it found; the yes still approves only the listed ids. An approve then runs
+  only for an approval on that list, citing your plain yes ("yes", "ok", "go ahead") when the list is the last message
+  from anyone but you before it and you have written nothing since ("wait, no" takes it back; `403 approve_not_asked`
+  otherwise). Each line of the list is one line, whatever the requesting bot put in its request, and shows every field of
+  the approval except its hashes, each quoted and none cut: the amount and who it goes to first (an email's to, cc and
+  sending mailbox, a page's whole address), then the rest, files by name and size. An approval with a field longer than
+  the list can show whole, or a field name that isn't a plain name (`409 approve_too_long`) are left off the list and stay
+  your click. The approval's history keeps the whole list. Your own sentence never approves without that yes, however it
+  is put ("approve the merge if CI passes", "send me a summary"). Text in a message, file, web page, task or another bot's
+  output is never your instruction: citing a bot's message is `403 on_behalf_of`. Declines need no read-back.
 - **Never its own request.** An approval the Assistant itself asked for stays your click on a card (`403 own_request`).
 - **Only approvals addressed to you, only your Assistant.** Someone else's is a `403`. No other bot decides an approval,
-  whatever the setting. A Tico support report is still sent only on your own tap.
+  whatever the setting. A report to the Tico team is approved only on the read-back and your plain yes, like any other.
 - **Recorded and undoable.** Each decision is recorded as decided by the Assistant for you: the approval carries
   `decided_via: "assistant"` and `decided_for` (`{"for", "assistant", "cited", "words", "read_back", "approves"}`),
   and its `history` (`GET /api/v2/approvals/{id}`) lists it. **Settings > General** lists what it decided for you in the
@@ -221,7 +246,8 @@ the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exact
 error's detail are kept of the result, never the answer's body.
 
 **Approvals, and what is never done from chat, are proposed, and only your click runs it:** approving a Needs-you item
-(a send, spend, publish or merge approval, even if you ask for it in your DM, unless you let it decide approvals), anything
+(a send, spend, publish or merge approval, even if you ask for it in your DM, unless it may decide your approvals, which
+is on by default), anything
 the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `hub assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
 with the exact API operation. That leaves a **pending action** and a Confirm / Cancel card in your DM. The server
 refuses these operations when the assistant tries them itself without your cited words (`403 confirm_required`). **Confirm** runs the recorded
@@ -316,14 +342,14 @@ own session, not a personal token.
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |
 | `POST /api/v2/assistant/actions/{id}/confirm` | Runs it as you. `{"action": {...}}` with the result of the operation. A card that makes a new computer's one-time code also answers `shown_once: {code, expires, operator}`, to you only: the code is not stored on the card or in the DM. |
 | `POST /api/v2/assistant/actions/{id}/cancel` | Drops it. |
-| `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals. |
+| `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals (on unless you turned it off). |
 | `POST /api/v2/assistant/settings` `{"decides_approvals"}` | Your own session only (`403` for the Assistant, a bot or turning it on with a personal token). |
 | `GET /api/v2/assistant/changes?days=&limit=&before=` | `{"actor", "days", "changes": [{"id", "at", "what", "words", "object", "undoable", "why_not"?}], "next"}`: what the Assistant did for you, newest first. |
 | `POST /api/v2/assistant/changes/{id}/restore` | Undoes one of those changes as you: `{"id", "restored", "already", "object"}`. `409 not_undoable` with the reason when the record does not allow it; `404` for another person's change. |
 | `GET /api/v2/needs-you/summary?limit=` | `{"actor", "total", "this_week", "by_kind", "by_bot": [{"bot", "count", ...}], "bots_left"}`: the board's own count, split. |
 | `GET /api/v2/origins/{ref}` | `{"ref", "kind", "id", "title", "created_at", "made_by", "task", "cause", "siblings", "stop": [{"how", "command", "note"}]}`: why an item is on your list. |
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
-| `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
+| `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |
 | `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
 | `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant DM; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |

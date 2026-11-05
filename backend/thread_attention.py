@@ -41,12 +41,40 @@ def items(c, auth, who, skip=(), with_capped=True):
     item keeps `conversation_id` empty, since its card opens the hold; `thread_id` says where it would post, for someone
     who reads that thread."""
     from . import threads
+    from . import read_cache
     viewer = threads.viewer(auth, who)
+    # Home's Needs you and unread cards ask with different skip/capped rules. Build their common list once in this
+    # snapshot, keyed by the whole identity and Auth; writes and returning the connection discard it (read_cache).
+    common = read_cache.value(c, ("thread_attention", viewer.auth, viewer.who), lambda: _items(c, viewer), shared=True)
+    skipped = set(skip)
+    # Thread items hold only scalars; each caller gets its own rows without copying the entire list recursively.
+    out = [dict(it) for it in common if not it.get("message_id") or it["message_id"] not in skipped]
+    for row in _capped(c) if with_capped else ():
+        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
+        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
+            out.append(_item("thread_capped", row["root_id"], row["root_id"],
+                             _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
+    return sorted(out, key=lambda it: str(it["created_at"] or ""))
+
+
+def _items(c, viewer):
+    from . import threads
     me = viewer.actor
     known = viewer.known(c)
-    seen, out = set(skip), []
-    for row in _addressed(c, me):
-        if row["id"] in seen or not threads.readable(c, viewer, row["id"]):
+    seen, out = set(), []
+    addressed = _addressed(c, me)
+    # Each message, its thread and the viewer's standing there are read together (a query a chunk), not once an item:
+    # a person named in a thousand open threads took ~2,300 statements here, on every Home and Needs you read.
+    from . import task_privacy
+    task_privacy.prime_messages(c, H.prime_messages(c, [row["id"] for row in addressed]).values())
+    found, _ = threads.read_threads(c, viewer, [row["conversation_id"] for row in addressed])
+    for thread in found.values():
+        threads.thread_readable(c, viewer, thread)
+    for row in addressed:
+        if row["id"] in seen:
+            continue
+        message = H.message(c, row["id"])
+        if not message or not threads.message_readable(c, viewer, message):
             continue
         seen.add(row["id"])
         kind = "thread_ask" if row["kind"] == "ask" else "thread_mention"
@@ -62,12 +90,7 @@ def items(c, auth, who, skip=(), with_capped=True):
         # A hold has no thread here: the list names its author only to someone who may see them.
         out.append({**_item("thread_held", row["id"], None, title, row["created_at"], known.name(row["author"], None)),
                     "thread_id": _held_thread(c, viewer, row["id"])})
-    for row in _capped(c) if with_capped else ():
-        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
-        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
-            out.append(_item("thread_capped", row["root_id"], row["root_id"],
-                             _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
-    return sorted(out, key=lambda it: str(it["created_at"] or ""))
+    return out
 
 
 def _addressed(c, me):
@@ -75,8 +98,9 @@ def _addressed(c, me):
     have not answered since in the same thread. A bot's plain post, one that names nobody, is not theirs to answer."""
     return [dict(r) for r in c.execute(
         "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
-        # CROSS JOIN keeps this order whatever sqlite_stat1 says: the person's deliveries (message_deliveries_addressed),
-        # then each message and its conversation by key. Stale stats once put messages first, a scan a call.
+        # Pin the partial index so the general recipient index cannot expand this to all of the person's deliveries.
+        # CROSS JOIN keeps deliveries first whatever sqlite_stat1 says, then each message and conversation by key.
+        "INDEXED BY message_deliveries_addressed "
         "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
         "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
@@ -120,11 +144,12 @@ def _unread_dms(c, viewer, me):
     return out
 
 
-def _holds(c, viewer):
+def _holds(c, viewer, limit=None, operations=HELD_OPERATIONS):
     """Writes held for review that this person reads: the ones they review, their own, and the ones held for them (the
-    person their bot reports up to, org_rule_check.represented). The item clears when the hold is decided."""
+    person their bot reports up to, org_rule_check.represented), the oldest `limit`. The item clears when the hold is
+    decided."""
     from . import org_rule_check
-    return org_rule_check.held_for(c, viewer.who, HELD_OPERATIONS) if viewer.is_person else []
+    return org_rule_check.held_for(c, viewer.who, operations, limit) if viewer.is_person else []
 
 
 def _held_thread(c, viewer, hold_id):

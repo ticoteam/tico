@@ -179,7 +179,7 @@ async function liveReply(browser) {
     return {text:el.textContent,tabs:[...el.querySelectorAll('a')].map(a => a.getAttribute('href') + ' ' + a.dataset.gsTab)};
   });
   assert.match(signIn.text,/Its computer is not signed in to its model/);
-  assert.deepEqual(signIn.tabs,['#/settings devices','#/settings health']);
+  assert.deepEqual(signIn.tabs,['#/settings computers','#/settings health']);
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable:true,
     value:{writeText:async text => {window.copiedMessage=text;}}}));
   const liveCopy=page.locator('#v2-live').locator('..').getByRole('button',{name:'Copy message',exact:true});
@@ -641,7 +641,7 @@ async function settingsLinks(browser) {
     return json(unrouted(p));
   });
   for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'models'],
-    ['model_sign_in', 'Sign in on Settings > Computers', 'devices']]) {
+    ['model_sign_in', 'Sign in on Settings > Computers', 'computers']]) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.
     await page.goto('https://tico-ui.test/#/settings');

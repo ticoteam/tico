@@ -15,6 +15,7 @@ import hashlib
 import statistics
 import time
 
+from backend import bot_settings as BS
 from backend.store import H
 from backend.tests import test_api
 from backend.tests.test_api import assign, headers, post, ready, runner
@@ -34,8 +35,8 @@ def seed(api, prefix, count, capabilities, queued):
         H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for s in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (s, '{"name": "%s", "runtime": "fake"}' % s))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
+            BS.write(c, s, {"name": s, "runtime": "fake"})
     machine = runner(api, label=f"Bench {prefix}")
     for s in slugs:
         assign(api, machine, s)

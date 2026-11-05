@@ -41,6 +41,7 @@ import httpx
 from . import hubdb as H
 from . import releases
 from .replication import rehearsal_on
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.update_feeds")
 CATEGORIES = ("templates", "tico")
@@ -426,8 +427,8 @@ def save_walk(c, feed, items, walk):
 def _subscribers(c):
     """{(bot, category): feed} for every bot that is not archived and subscribes to the category."""
     out = {}
-    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                         "WHERE COALESCE(b.state,'active')<>'archived' AND bc.config LIKE '%update_subscriptions%'"):
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                         f"WHERE COALESCE(b.state,'active')<>'archived' AND s.extra LIKE '%update_subscriptions%'"):
         config = H._json(row["config"], {}) or {}
         for category in chosen(config):
             out[(row["bot"], category)] = feed_of(category, str(config.get("template") or ""))

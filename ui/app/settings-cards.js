@@ -10,7 +10,7 @@
 const SETTINGS_CARDS = [
   ['#settings-theme-card', 'Theme', 'How Tico looks for you: dark, light, or the same as your device.'],
   ['#settings-assistant-pane', 'my Assistant', 'Your own Assistant: open its chat and, where the team allows it, choose whether it may decide your approvals for you.'],
-  ['#settings-inbox', 'my Google account', 'Connect your own Google account, read only, so the computer that syncs your mail can read it.'],
+  ['#set-mailboxes-card', 'Mailboxes', 'The mailboxes Tico reads and sends from, who may use each one, and your own Google account for it.'],
   ['#set-people .people-join', 'adding people', 'How people join this team: add them by email, or keep the list in step with your company directory.'],
   ['#set-people .people-list-card:not(#setup-people)', 'People', 'Everyone on the team, the role each has, and whether they can sign in.'],
   ['#setup-people', 'the people from setup', 'People named while this team was set up who are not on the team yet. Add the ones who should be.'],

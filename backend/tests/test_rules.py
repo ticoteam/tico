@@ -86,7 +86,7 @@ def test_a_run_records_the_rule_that_woke_it_and_fail_open_wakes(api, monkeypatc
     attempt = claim(api, r, "cpo")
     finish(api, r, attempt)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT rule_id FROM turns WHERE id=?", (attempt["id"],)).fetchone()[0] == "assignment"
+        assert c.execute("SELECT rule_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "assignment"
     monkeypatch.setattr(R, "_judge", lambda *a, **k: 1 / 0)
     with api.app.state.store.transaction() as c:
         other = plain_task(c, "Other work", clear=False)
@@ -198,7 +198,7 @@ def test_a_tag_rule_assigns_the_task_through_a_reassignment_and_records_the_rule
         assert msg["refs"]["rule"] == row["id"] and msg["refs"]["quiet"] is True
         assert H.task(c, task["id"])["owner_id"] == "bot:ops"
         assert jobs(c, "ops") == 1, "the new owner is woken as on any reassignment"
-        moved = c.execute("SELECT actor, old, new, note FROM task_events WHERE task_id=? AND field='owner'",
+        moved = c.execute("SELECT actor_id AS actor, old, new, note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner'",
                           (task["id"],)).fetchone()
         assert tuple(moved) == (H.KEEPER, "bot:cpo", "bot:ops", f"Rule {row['id']}")
         assert actions(c, row["id"]) == [{"rule": row["id"], "action": "assign", "owner": "bot:ops"}]
@@ -283,7 +283,7 @@ def test_tag_actions_add_and_remove_once_and_cannot_retrigger_their_rule(api):
         second = news(c, task)                      # no triage now: the bot row no longer matches, the team row adds
         assert second["refs"]["rule"] == add["id"] and H.task_labels(H.task(c, task["id"])) == ["urgent"]
         news(c, task)                               # already on: nothing written
-        labels = c.execute("SELECT actor, note FROM task_events WHERE task_id=? AND field='labels' ORDER BY rowid",
+        labels = c.execute("SELECT actor_id AS actor, note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='labels' ORDER BY rowid",
                            (task["id"],)).fetchall()
         assert [tuple(r) for r in labels[1:]] == [(H.KEEPER, f"Rule {drop['id']}"), (H.KEEPER, f"Rule {add['id']}")]
         assert [a["changed"] for a in actions(c, add["id"])] == [True, False]
