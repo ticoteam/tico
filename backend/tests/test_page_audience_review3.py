@@ -191,7 +191,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         second_blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=2", (fid,)).fetchone()[0]
         bid = version["blob_id"]
         cid = H.task(c, tid)["conversation_id"]
-        secrets = (fid, bid, second_blob, title, picked_label, name, str(version["size"]), fid + "@1",
+        canary_size = version["size"]
+        secrets = (fid, bid, second_blob, title, picked_label, name, fid + "@1",
                    version["digest"], version["source_digest"], "Canary confidential quote.")
     api.app.state.store.settings.visual_origin = "https://visuals.acme.example"
     signed = get(api, "pages/" + fid, token="cara-test")["page"]["src"]
@@ -230,6 +231,18 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     def clean(label, value):
         serialized = json.dumps(value, default=str)
         found = [secret for secret in secrets if secret and secret in serialized]
+        # A short document's byte count can occur inside unrelated ids and timestamps.
+        def exposes_size(part):
+            if isinstance(part, dict):
+                return any(str(k).lower() in ("size", "bytes", "content-length") and str(v) == str(canary_size)
+                           or exposes_size(v) for k, v in part.items())
+            if isinstance(part, list):
+                return any(exposes_size(v) for v in part)
+            if isinstance(part, str) and part.startswith(("{", "[")):
+                return exposes_size(H._json(part, None))
+            return False
+        if exposes_size(value):
+            found.append("size=" + str(canary_size))
         if found:
             failures.append((label, found))
 

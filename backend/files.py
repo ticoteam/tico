@@ -431,7 +431,8 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         def build():
             return {row["title"] for row in page_rows(c).values() if row["task_id"] == tid
                     and row["state"] != "deleted" and page_ref_denials(c, auth, who, row["id"])}
-        return read_cache.value(c, ("hidden_page_titles", who.actor, tid, auth is not None), build)
+        return read_cache.value(c, ("hidden_page_titles", who.actor, who.role, getattr(who, "task_actor", ""),
+                                    tid, auth is not None), build)
 
     def rejected(value):
         return removed_page(value) or bool(page_references(value, c) & denied.keys())
