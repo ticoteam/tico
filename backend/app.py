@@ -260,51 +260,14 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
 
-        def start_jobs():
-            """Start work no request depends on, run beside the server once it serves, so a restart answers sooner
-            (store.initialize, the stop_running fixes, grace leases and the company file stay before serving, above).
-            Each is idempotent and does its own transaction, in the order they always ran in; a failure is captured and
-            the next one still runs."""
-            # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
-            # adds them; until this runs, a page shows the company as it was before the update.
-            try:
-                with store.transaction() as c:
-                    onboarding.ensure_librarian(c)
-                    onboarding.ensure_goal_manager(c)
-                    onboarding.ensure_task_manager(c)
-                    onboarding.ensure_counsel(c)
-            except Exception as exc:
-                telemetry.capture("librarian", exc)
-            # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
-            try:
-                from . import listening
-                with store.transaction() as c:
-                    listening.seed_market(c, settings)
-            except Exception as exc:
-                telemetry.capture("listening", exc)
-            # A message bot made before the server linked it to its person is linked now, when there is no doubt whose
-            # it is. A backfill: the bot works unlinked meanwhile, as it did before.
-            try:
-                from . import message_bots
-                with store.transaction() as c:
-                    message_bots.backfill(c)
-            except Exception as exc:
-                telemetry.capture("message_bots", exc)
-            # This release may contain merged pull requests attached to tasks: their links become shipped
-            # (backend/github.py). It reads every pull request link, the slowest of these on a big company; a link
-            # still shows merged until it runs.
-            try:
-                from .github import ship_deployed
-                with store.transaction() as c:
-                    ship_deployed(c, settings)
-            except Exception as exc:
-                telemetry.capture("github", exc)
+        # Work no request depends on runs beside the server; initialization and the restart repairs stay above.
+        from . import start_jobs
         # TICO_START_JOBS=inline (the tests, conftest.py) runs them before serving, as a start did before.
         if os.environ.get("TICO_START_JOBS") == "inline":
-            start_jobs()
+            start_jobs.run(store, onboarding, telemetry)
             start_jobs_task = None
         else:
-            start_jobs_task = asyncio.create_task(asyncio.to_thread(start_jobs))
+            start_jobs_task = asyncio.create_task(asyncio.to_thread(start_jobs.run, store, onboarding, telemetry))
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))

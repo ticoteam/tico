@@ -23,7 +23,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from clients import hubtools
-from clients.tico import STREAM_WAIT, MultipartBody, inbound_wait_timeout
+from clients.tico import STREAM_WAIT, MultipartBody, gmail_read_timeout, inbound_wait_timeout
 from .store import Problem
 
 PATH = "/api/v2/mcp"
@@ -99,6 +99,7 @@ class InProcessApi:
             raise ValueError("Send either a JSON body or opaque bytes, not both")
         path = "/api/v2/" + path.replace("#", "%23")
         timeout = inbound_wait_timeout(method, path, body, INTERNAL_TIMEOUT_S, query=query)
+        timeout = gmail_read_timeout(method, path, timeout)
         content, raw_headers = raw_body(raw) if raw is not None else (None, {})
         if raw is not None and hasattr(raw, "read"):
             timeout = max(timeout, STREAM_WAIT)      # a file streamed from disk: stored after its last block

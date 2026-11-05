@@ -248,7 +248,7 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "connections"):
+    if args.cmd in ("mail", "email", "connections"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
         return via_tool(client, args)
@@ -1361,10 +1361,35 @@ def strategy_section_text(result, key):
     return (current.get("sections") or {}).get(key) or ""
 
 
+def email_text(result, action):
+    if action == "mailboxes":
+        boxes = result.get("mailboxes") or []
+        return "# Email mailboxes\n\n" + ("\n".join("- " + box["address"] for box in boxes) or "No readable mailboxes.")
+    messages = [result] if action == "message" else result.get("messages") or []
+    lines = ["# Email", ""]
+    if not messages:
+        lines.append("No messages.")
+    for message in messages:
+        lines.extend(["## " + (message.get("subject") or "(no subject)"),
+                      f"Mailbox: {message['mailbox']}",
+                      f"Message: {message['msg_id']} · Thread: {message['thread_id']}",
+                      "From: " + (message.get("from_header") or message.get("from_addr") or ""),
+                      "To: " + ", ".join(message.get("to") or []), "Date: " + (message.get("date") or ""),
+                      "Labels: " + ", ".join(message.get("labels") or []), "",
+                      message.get("body", message.get("snippet") or ""), ""])
+        for attachment in message.get("attachments") or []:
+            lines.append(f"Attachment: {attachment['name']} ({attachment['type']}, {attachment['size']} bytes)")
+    if result.get("next_cursor"):
+        lines.extend(["Next cursor: " + result["next_cursor"], ""])
+    return "\n".join(lines)
+
+
 def main(args, who=None):
     try:
         result = run(args, who)
-        if args.cmd == "sql" and not args.json:
+        if args.cmd == "email" and not args.json:
+            print(email_text(result, args.sub))
+        elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))
         elif args.cmd == "db" and not args.json:
             from clients import dbquery
