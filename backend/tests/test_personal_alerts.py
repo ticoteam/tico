@@ -337,3 +337,59 @@ def test_a_refused_gateway_key_does_not_sign_the_person_out_of_tico(api, hq):
     result = post(api, "alerts/me/phone", {"phone": PHONE, "sms_consent": True}, expected=502)
     assert result["error"]["code"] == "gateway_unavailable"
     assert get(api, "me")["actor"] == "human:ana"
+
+
+def test_private_legal_alert_audit_is_recipient_only_and_keeps_task_provenance(api, hq):
+    import json
+    from backend import sql as SQL, task_privacy
+    connect(api, OTHER, "ben-test")
+    put(api, "alerts/me", {"legal_mail": True, "quiet_start": "", "quiet_end": ""}, "ben-test")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Private legal filing", "Private to Ben.", "human:ben",
+                             private=True, lint=False, deduplicate=False)
+        A.legal_mail(c, api.app.state.auth, task["id"], "private-letter")
+        alert = c.execute("SELECT id FROM personal_alerts WHERE person_id='ben'").fetchone()[0]
+    assert api.app.state.personal_alerts.dispatch(alert)["status"] == "accepted"
+    query = "SELECT actor,detail FROM events WHERE action='alerts.accepted'"
+    assert post(api, "sql", {"sql": query})["rows"] == []
+    mine = post(api, "sql", {"sql": query}, "ben-test")["rows"]
+    assert len(mine) == 1 and json.loads(mine[0][1])["task_id"] == task["id"]
+    with api.app.state.store.read() as c:
+        event = c.execute("SELECT * FROM events WHERE action='alerts.accepted'").fetchone()
+        assert not task_privacy.event_readable(c, "human:ana", event)
+        assert task_privacy.event_readable(c, "human:ben", event)
+        delegated = Identity("human:ben", "human", "ben@acme.example", task_actor="human:ana")
+        conn = SQL.connect(api.app.state.store.settings.db_path, c, api.app.state.auth, delegated)
+        try:
+            assert SQL.run(conn, query, [], 500, 5)["rows"] == []
+        finally:
+            conn.close()
+        assert not task_privacy.event_readable(c, ("human:ben", "human:ana"), event)
+    # Even a reader of the task cannot read someone else's alert activity.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET guest='human:ana' WHERE id=?", (task["id"],))
+    assert post(api, "sql", {"sql": query})["rows"] == []
+    assert post(api, "sql", {"sql": "SELECT id FROM events WHERE action='alerts.verified'"})["rows"] == []
+
+
+def test_recent_alerts_filter_all_non_test_states_after_task_access_is_revoked(api, hq):
+    connect(api, OTHER, "ben-test")
+    put(api, "alerts/me", {"legal_mail": True, "quiet_start": "", "quiet_end": ""}, "ben-test")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Private legal filing", "Private to Ana.", "human:ana",
+                             private=True, lint=False, deduplicate=False)
+        c.execute("UPDATE tasks SET guest='human:ben' WHERE id=?", (task["id"],))
+        A.legal_mail(c, api.app.state.auth, task["id"], "private-letter")
+        alert = c.execute("SELECT id FROM personal_alerts WHERE person_id='ben'").fetchone()[0]
+        for state in ("pending", "sending", "accepted", "canceled", "failed"):
+            ident = A.enqueue(c, "ben", "legal_mail", task["id"], "private-letter:" + state)
+            c.execute("UPDATE personal_alerts SET state=? WHERE id=?", (state, ident))
+        test = A.enqueue(c, "ben", "test", "", "test:visible")
+    assert len(get(api, "alerts/me", "ben-test")["recent"]) == 7
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET guest=NULL WHERE id=?", (task["id"],))
+    assert api.app.state.personal_alerts.dispatch(alert)["status"] == "canceled"
+    recent = get(api, "alerts/me", "ben-test")["recent"]
+    assert [row["id"] for row in recent] == [test]
+    # The same current-permission filter also applies to the PUT response.
+    assert [r["id"] for r in put(api, "alerts/me", {"monthly_cap": 5}, "ben-test")["recent"]] == [test]

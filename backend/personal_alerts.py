@@ -102,7 +102,7 @@ def save(c, ident, values):
     return row
 
 
-def update(c, ident, body):
+def update(c, ident, body, auth):
     values = body.model_dump(exclude_none=True)
     if "timezone" in values:
         try:
@@ -120,7 +120,7 @@ def update(c, ident, body):
     save(c, ident, values)
     c.execute("UPDATE personal_alerts SET next_attempt_at=NULL WHERE person_id=? AND state='pending'", (ident,))
     H.event(c, "human:" + ident, "alerts.preferences", ident, {"fields": sorted(values)})
-    return local_view(c, ident)
+    return local_view(c, ident, auth)
 
 
 def overdue(task, at):
@@ -180,8 +180,14 @@ def spend(c, ident=None, month=None):
                      (" AND person_id=?" if ident else ""), (month, ident) if ident else (month,)).fetchone()[0]
 
 
-def local_view(c, ident):
+def local_view(c, ident, auth):
     row = prefs(c, ident)
+    who = auth.identity_for_actor(c, "human:" + ident)
+    visible = auth.task_sql(c, who)
+    recent = [dict(r) for r in c.execute(
+        "SELECT id,kind,state,error,created_at FROM personal_alerts WHERE person_id=? "
+        "AND (kind='test' OR subject_id IN (SELECT id FROM tasks WHERE " + visible + ")) "
+        "ORDER BY created_at DESC,id DESC LIMIT 10", (ident,))]
     return {"phone": row["phone"], "status": "removal_pending" if row["revocation_pending"] else "verified" if row["verified_at"] else "code_sent" if row["phone"] else "none",
             "verified_at": row["verified_at"], "call_consent": bool(row["call_consent"]),
             "preferences": {k: bool(row[k]) if k in (*KINDS, "urgent_calls", "emergency_exception") else row[k]
@@ -189,8 +195,7 @@ def local_view(c, ident):
             "monthly_spend": spend(c, ident), "company_monthly_cap": c.execute(
                 "SELECT monthly_cap FROM alert_company_settings WHERE id=1").fetchone()[0],
             "company_monthly_spend": spend(c), "price_usd": 1, "paid_by": "company",
-            "recent": [dict(r) for r in c.execute("SELECT id,kind,state,error,created_at FROM personal_alerts "
-                                                 "WHERE person_id=? ORDER BY created_at DESC,id DESC LIMIT 10", (ident,))]}
+            "recent": recent}
 
 
 def enqueue(c, ident, kind, subject, incident, emergency=False):
@@ -257,7 +262,7 @@ class Alerts:
 
     def view(self, ident):
         with self.store.read() as c:
-            row, out = prefs(c, ident), local_view(c, ident)
+            row, out = prefs(c, ident), local_view(c, ident, self.auth)
         if row["verified_at"] and not self.settings.demo:
             try:
                 current = self.status(ident, row)
@@ -403,7 +408,9 @@ class Alerts:
                 return {"id": alert_id, "status": "failed" if certain else "sending", "error": exc.code}
             with self.store.transaction() as c:
                 c.execute("UPDATE personal_alerts SET state='accepted',send_id=?,error='' WHERE id=?", (sent["send_id"], alert_id))
-                H.event(c, "human:" + row["person_id"], "alerts.accepted", alert_id, {"kind": alert["kind"], "price_usd": 1})
+                H.event(c, "human:" + row["person_id"], "alerts.accepted", alert_id,
+                        {"kind": alert["kind"], "price_usd": 1,
+                         **({"task_id": alert["subject_id"]} if alert["kind"] != "test" else {})})
             return {"id": alert_id, "status": "accepted", "price_usd": 1, "paid_by": "company"}
 
     def collect(self):
@@ -488,7 +495,7 @@ def install(app, store, settings, auth, mutate):
     def put_me(request: Request, body: Preferences):
         ident = own(request)
         with service.lock:
-            return mutate(request, body, lambda c: update(c, ident, body))
+            return mutate(request, body, lambda c: update(c, ident, body, auth))
 
     @app.post("/api/v2/alerts/me/phone")
     def add_phone(request: Request, body: Phone):
