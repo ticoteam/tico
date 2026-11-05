@@ -43,6 +43,7 @@ const init = () => {
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
    await page.evaluate(async task => taskModalShow(task), task);
    const idle = () => page.waitForFunction(() => !taskModal().taskLive.reading && !taskModal().taskLive.draft.flight);
+   const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'));
    const emit = topic => page.evaluate(topic => {
     for (const source of taskSources) if (!source.closed) source.dispatchEvent(new MessageEvent(topic, {data: JSON.stringify({kinds: ['update']})}));
    }, topic);
@@ -243,6 +244,7 @@ const init = () => {
    expired = false;
    await page.goto('https://tico-ui.test/#/tasks');
    await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ana']));
+   await tasksReady();
    assert.equal(await page.locator('#task-modal[open]').count(), 0, 'the closed task stays closed after sign-in');
    await page.evaluate(async task => taskModalShow(task), task);
    assert.equal(await title.textContent(), 'Closed task title');
@@ -294,6 +296,7 @@ const init = () => {
    const count = writes.length;
    me = {...me, id: 'ben', name: 'Ben'}; offline = false;
    await page.reload(); await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ben']));
+   await tasksReady();
    await page.evaluate(async task => taskModalShow(task), task); await idle();
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.getByRole('textbox', {name: 'Message', exact: true}).inputValue(), '');
