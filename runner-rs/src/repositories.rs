@@ -1049,7 +1049,6 @@ fn py_g(v: f64) -> String {
 pub async fn worktree_base(workspace: &Path, repo: &mut Map<String, Value>, env: &Env) -> Result<(PathBuf, String), String> {
     let machine_git = crate::util::truthy(repo.get("machine_git"));
     let source_env = env.clone();
-    let env = if machine_git { crate::safegit::machine_environment(env) } else { crate::safegit::environment(env) };
     let name = repo.get("full_name").map(text_of).unwrap_or_default();
     if !valid_repository(&name) || (!machine_git && !valid_name(&name)) {
         return Err("Invalid repository name".into());
@@ -1057,6 +1056,7 @@ pub async fn worktree_base(workspace: &Path, repo: &mut Map<String, Value>, env:
     let root = workspace.join("repos");
     let path = root.join(base_folder(&name));
     crate::repo_safety::outside_installation(&path)?;
+    let env = if machine_git { crate::safegit::machine_environment(env) } else { crate::safegit::environment(env) };
     if is_symlink(&root) {
         return Err("Base clone points outside repos".into());
     }

@@ -29,8 +29,10 @@ def safe_path(workspace, relative):
         raise ValueError('Invalid worktree path')
     raw = Path(relative)
     path = root / raw
+    if raw.is_absolute() or '..' in raw.parts or not raw.parts:
+        raise ValueError('Use a worktree inside the team workspace')
     outside_installation(path)
-    if raw.is_absolute() or '..' in raw.parts or not raw.parts or path.is_symlink():
+    if path.is_symlink():
         raise ValueError('Use a worktree inside the team workspace')
     resolved = path.resolve()
     if resolved != path:

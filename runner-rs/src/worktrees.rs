@@ -99,10 +99,13 @@ pub fn safe_path(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
     }
     let raw = Path::new(relative);
     let path = root.join(raw);
-    crate::repo_safety::outside_installation(&path)?;
     let parts: Vec<_> = raw.components().collect();
     let dotdot = parts.iter().any(|c| matches!(c, std::path::Component::ParentDir));
-    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() || is_symlink(&path) {
+    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() {
+        return Err("Use a worktree inside the team workspace".into());
+    }
+    crate::repo_safety::outside_installation(&path)?;
+    if is_symlink(&path) {
         return Err("Use a worktree inside the team workspace".into());
     }
     let resolved = resolve(&path);
