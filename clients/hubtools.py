@@ -543,8 +543,7 @@ def task_meetings(api, args):
     return _as_person(api).get(f"tasks/{args['id']}/meetings", **{k: args[k] for k in ('limit', 'cursor') if k in args})
 
 
-@tool("hub_task_context", "Task context: up to 10 pages and 10 meetings as metadata only. Read content with "
-      "hub file read or hub meeting read. Each source is checked against your own read access.",
+@tool("hub_task_context", "Task page and meeting references, up to 10 each. Fetch content with hub_file_read or hub_meeting_read.",
       {"id": TASK_ID}, required=("id",))
 def task_context(api, args):
     return api.get(f"tasks/{args['id']}/context")
@@ -600,10 +599,10 @@ def meetings_search(api, args):
     return api.get("meetings/search", **args)
 
 
-@tool("hub_meeting_read", "Read a meeting transcript. Follow next_offset to read the complete text; access matches meetings search.",
+@tool("hub_meeting_read", "Read transcript or notes; follow next_offset for the rest.",
       {"id": _s("Meeting id"), "offset": {"type": "integer", "minimum": 0},
        "limit": {"type": "integer", "minimum": 1, "maximum": 50000},
-       "notes": {"type": "boolean", "description": "Read only the meeting's notes"}}, required=("id",))
+       "notes": {"type": "boolean", "description": "Notes only"}}, required=("id",))
 def meetings_transcript(api, args):
     return api.get("meetings/transcript", **args)
 
@@ -2949,8 +2948,7 @@ def files_search(api, args):
     return api.get("files/search", q=args["q"], limit=args.get("limit"), kind=args.get("kind"))
 
 
-@tool("hub_file_read", "Read one version of a file you may read, in full, as text (Markdown, text, HTML, CSV): the "
-      "current version unless a version is given. The whole text comes back, however long it is.",
+@tool("hub_file_read", "Read a file as text, in full. Defaults to its current version.",
       {"id": _s("File id"), "version": {"type": "integer", "minimum": 1}}, required=("id",))
 def files_read(api, args):
     fid, number = args["id"], args.get("version")
@@ -3065,8 +3063,7 @@ def files_publish_path(client, args):
 # ----------------------------------------------------------------------------- pages
 # A page is an HTML file a bot keeps up to date to show people what it did and found (docs/pages.md). Tico draws its
 # status line (updated, by, version, cadence, data date) outside the page; scripts and outside loads are removed.
-CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "How often you mean to update it; past 1.5x "
-           "this the page says it is out of date"}
+CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Update frequency; stale after 1.5 periods"}
 
 
 def _page_fields(args):
@@ -3076,34 +3073,31 @@ def _page_fields(args):
     return fields
 
 
-@tool("hub_page_publish", "Publish a page: one self-contained .html file (inline CSS, SVG charts, no scripts; "
-      "anything that would load from elsewhere is removed). Put the headline and key numbers first: a card shows the "
-      "top. Publishing the same name again adds a version. With `task` it shows at the top of that task.",
-      {"name": _s("File name ending .html, e.g. weekly-review.html"), "text": _s("The page's HTML"),
-       "title": _s("What people see"), "cadence": CADENCE,
-       "audience": _s("everyone, or ben,group:legal,bot:analyst; narrows inherited visibility; omitted keeps it"),
-       "as_of": _s("The date the data is from (YYYY-MM-DD) when it differs from today"),
-       "task": _s("The task it is for; it shows at the top of that task"),
-       "replaces": _s("The id of an older page of yours this one takes the place of"),
-       "scope": {"enum": ["task", "bot"]}, "path": _s("The file's path in your repository")},
+@tool("hub_page_publish", "Publish .html; scripts/external loads are removed. Lead with key facts for cards. "
+      "Reusing a name versions changes; task pins it.",
+      {"name": {"type": "string"}, "text": {"type": "string"},
+       "title": {"type": "string"}, "cadence": CADENCE,
+       "audience": _s("everyone clears; person,group:legal,bot:analyst narrows. Omit to keep."),
+       "as_of": _s("YYYY-MM-DD"), "task": {"type": "string"},
+       "replaces": {"type": "string"},
+       "scope": {"enum": ["task", "bot"]}, "path": _s("Repo-relative path")},
       required=("name", "text"), writes=True)
 def pages_publish(api, args):
     body = {**_page_fields(args), **{k: args[k] for k in ("name", "text", "path") if args.get(k)}}
     return api.post("pages", body, key=_key(args))
 
 
-@tool("hub_page_list", "Pages you may read, newest first: title, bot, version, when updated, cadence, data date, and "
-      "whether one is out of date or replaced.",
-      {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
-       "archived": {"type": "boolean", "description": "Archived pages instead"},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("next_cursor from the previous page")})
+@tool("hub_page_list", "Readable pages, newest first. Follow next_cursor.",
+      {"bot": {"type": "string"}, "task": {"type": "string"},
+       "archived": {"type": "boolean"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}})
 def pages_list(api, args):
     return api.get("pages", bot=args.get("bot"), task=args.get("task"), archived=args.get("archived") or None,
                    limit=args.get("limit"), cursor=args.get("cursor"))
 
 
-@tool("hub_page_show", "One page's status: title, bot, version, updated and by whom, cadence, data date, out of date "
-      "or replaced. Read its HTML with the file's address.", {"id": _s("Page id (its file id)")}, required=("id",))
+@tool("hub_page_show", "Page status and pins. Read HTML with hub_file_read.",
+      {"id": {"type": "string"}}, required=("id",))
 def pages_show(api, args):
     return api.get("pages/" + args["id"])
 
