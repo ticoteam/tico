@@ -9,6 +9,7 @@ from backend.tests.test_api import api, assign, claim, get, headers, post, ready
 from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_file_reviews import ask, answer
 from backend.tests.test_files import turn
+from backend.tests.test_member_bots import botops  # noqa: F401
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
 from backend.tests.test_pages import HTML
@@ -21,7 +22,7 @@ def no_sources(value, secrets):
         assert secret not in wire, (secret, wire[:4000])
 
 
-def sources(api, title="Restricted source"):
+def sources(api, title="Restricted source", *, multi=False):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -31,7 +32,7 @@ def sources(api, title="Restricted source"):
                        data=HTML + b"<p>Restricted unique bytes</p>")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
-               parent=t["id"], private=False)
+               parent=t["id"], private=False, multi=multi)
     label = made["question"]["refs"]["questions"][0]["options"][0]["label"]
     answered = answer(api, made, [label])
     meeting = record(api, {"private": False, "title": "Restricted meeting"})
@@ -253,7 +254,7 @@ def test_unknown_saved_file_ref_survives_the_real_message_writer(api):
     get(api, "files/" + unknown.split("@")[0], attempt["token"], expected=403)
 
 
-def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api):
+def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api, botops):
     _, attempt = task_turn(api, bot="botops")
     token = attempt["token"]
     for path in ("bots/ops/repositories", "automations", "inbox", "tico/fleet", "bots/ops/turns",
@@ -264,3 +265,22 @@ def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api):
         response = api.request(method, "/api/v2/" + path, json={}, headers={
             **headers(token), "X-Tico-On-Behalf-Of": "turn"})
         assert response.status_code == 403, (path, response.text)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_passed_labels_also_remove_the_generated_answer_body(api, legacy):
+    data = sources(api, multi=True)
+    answered = answer(api, data["made"], ["Allowed source"])
+    assert data["source_label"] in answered["comment"]["body"]
+    assert answered["answer"]["not"]["decision"] == [data["source_label"], "Request changes"]
+    if legacy:
+        with api.app.state.store.transaction() as c:
+            refs = H.message(c, answered["comment"]["id"])["refs"]
+            refs.pop("body_sources")
+            refs["answer"].pop("label_sources")
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), answered["comment"]["id"]))
+    _, attempt = scoped(api, data, False)
+    narrow(api, data)
+    shown = get(api, "messages/" + answered["comment"]["id"], attempt["token"])
+    no_sources(shown, secrets(data))
+    assert shown["refs"]["answer"]["answers"]["decision"] == ["Allowed source"]

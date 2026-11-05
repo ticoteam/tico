@@ -239,7 +239,8 @@ def project(c, scoped, payload, *, auth=None):
             shown_refs = out.get('refs', {})
             answer, shown_answer = refs.get('answer', {}), shown_refs.get('answer', {})
             hidden_body = (has_denied(refs.get('body_sources', [])) or has_denied(answer.get('target')) or
-                           answer.get('answers') != shown_answer.get('answers'))
+                           answer.get('answers') != shown_answer.get('answers') or
+                           answer.get('not') != shown_answer.get('not'))
             if hidden_body:
                 for key in ('body', 'text'):
                     if key in out:
