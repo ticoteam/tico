@@ -496,7 +496,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
             if (rejected(value.get("body_sources")) or rejected(carried.get("body_sources")) or
                     answer.get("answers") != shown_answer.get("answers") or
                     answer.get("not") != shown_answer.get("not")):
-                for key in ("body", "text", "note", "old", "new", "title", "name"):
+                for key in ("body", "text", "note", "old", "new", "title", "name", "recommend"):
                     if key in shown:
                         shown[key] = "A page you can't open"
             return shown

@@ -183,6 +183,9 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     spend_answer = review_answer(api, spend_pick, [picked_label], token="cara-test")
     approval_id = spend_answer["answer"]["spend_approval"]
     assert picked_label in json.dumps(get(api, "approvals/" + approval_id, token="cara-test"))
+    with api.app.state.store.read() as c:
+        spend_notice = H.message(c, c.execute("SELECT id FROM messages WHERE json_extract(refs,'$.approval')=? "
+                                             "AND sender_id=?", (approval_id, H.KEEPER)).fetchone()[0])
     sibling_ask = ask("reader")
     sibling_ask["questions"][0]["options"][0].update(label=title, file=fid + "@1")
     sibling = post(api, f"tasks/{tid}/files", {"name": "public-notes.txt", "text": "Public notes", "ask": sibling_ask})
@@ -275,7 +278,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "tasks/" + pick["task"]["id"], "tasks/" + pick["task"]["id"] + "/comments",
               "messages/" + picked_answer["comment"]["id"],
               "tasks/" + spend_pick["task"]["id"], "tasks/" + spend_pick["task"]["id"] + "/comments",
-              "approvals/" + approval_id,
+              "approvals/" + approval_id, "messages/" + spend_notice["id"],
+              "conversations/" + spend_notice["conversation_id"] + "/messages",
               "tasks/" + tid + "/links", "places/dashboard", "places/task:" + tid, "places/person:cara",
               "messages/" + comment["id"], "messages/" + answered["comment"]["id"], "messages/" + assistant["id"],
               "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",

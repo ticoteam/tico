@@ -21,6 +21,8 @@ def test_multi_recommendation_fallback_keeps_its_copied_source(api):
                    token="ops-test")
     with api.app.state.store.read() as c:
         asked = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (sibling["file_id"],)).fetchone()[0]
+    batch = post(api, "batch", {}, token="cara-test")
+    assert batch["item"]["recommend"] == "Confidential draft"
     post(api, "needs-you/recommended", {"ask": asked}, token="cara-test")
     with api.app.state.store.read() as c:
         message = H.message(c, c.execute("SELECT id FROM messages WHERE in_reply_to=?", (asked,)).fetchone()[0])
@@ -31,7 +33,7 @@ def test_multi_recommendation_fallback_keeps_its_copied_source(api):
         if deleted:
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         for token in ("cara-test", "finance-test"):
-            for path in (f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/answers", "inbox"):
+            for path in (f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/answers", "inbox", "batch"):
                 shown = json.dumps(get(api, path, token=token))
                 assert "Confidential draft" not in shown and fid not in shown, (path, shown)
 
