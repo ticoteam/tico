@@ -233,7 +233,10 @@ class Calendar:
             if attempt == 15 or status == "failure":
                 break
             time.sleep(1)
-            event = self._exec(self.service.events().get(calendarId="primary", eventId=event["id"]), "events.get conference")
+            try:
+                event = self._exec(self.service.events().get(calendarId="primary", eventId=event["id"]), "events.get conference")
+            except Failure as exc:
+                raise ConferencePending("Could not read the meeting link; retry this booking before sending its invitation.", status=503) from exc
         raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503)
 
     def get_event(self, event_id, calendar_id="primary"):

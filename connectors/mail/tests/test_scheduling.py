@@ -123,6 +123,16 @@ def test_conference_polling_stops_with_a_retryable_error_and_no_linkless_event()
     assert refused.value.status == 503 and execute.call_count == 15 and sleep.call_count == 15
 
 
+def test_a_failed_conference_read_is_retryable_after_the_silent_event_was_created():
+    from connectors.mail.tests.fake import FakeCalendarService
+    calendar = cal.Calendar(FakeCalendarService(), 'ana@acme.example')
+    pending = {'id': 'event', 'conferenceData': {'createRequest': {'status': {'statusCode': 'pending'}}}}
+    with patch.object(calendar, '_exec', side_effect=Failure('Calendar unavailable', status=503)), patch.object(cal.time, 'sleep'):
+        with pytest.raises(cal.ConferencePending) as refused:
+            calendar.ready_conference(pending)
+    assert refused.value.status == 503 and 'retry' in str(refused.value)
+
+
 def test_rebooking_excludes_only_the_unchanged_canceled_hold_and_keeps_other_busy_events():
     from connectors.mail.tests.fake import FakeCalendarService
     service = FakeCalendarService(calendars=['primary'])
