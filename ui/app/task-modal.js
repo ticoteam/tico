@@ -207,6 +207,7 @@ function taskPropFocus(d) {
 function taskModalBind(d, task, full = false) {
   fbSync();                     // the task's own 👍 / 👎 in the header, when a bot asked for it
   tfAdopt(d, task);
+  taskMeetingsAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
   d.dataset.version = String(task.version ?? '');
@@ -560,6 +561,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     if ((x.field === 'type' || x.field === 'step') && x.old == null
       && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
+    if (x.field === 'closed_with') return '';                       // its close's note already says so
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
     // A note saved with a status change or a comment is already shown there; a note on its own says what it is.
@@ -1081,6 +1083,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
+      <section class="tsec task-meetings" data-task-meetings aria-label="Meetings" hidden></section>
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
       </div>
       </div>

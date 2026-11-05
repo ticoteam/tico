@@ -515,7 +515,7 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
         if not found:
             raise Problem("not_found", "That request is not waiting any more", 404)
         c.execute("UPDATE bot_tool_requests SET state='canceled' WHERE id=?", (found["id"],))
-        H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.")
+        H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.", strict=False)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (found["task_id"],))
         H.event(c, who.actor, "bot.tool_request_canceled", bot, {"service": found["service"], "task": found["task_id"]})
         return {"canceled": True, "task_id": found["task_id"],

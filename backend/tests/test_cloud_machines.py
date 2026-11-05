@@ -9,6 +9,7 @@ nothing changes. HQ is a fake client and the clock is a fake one."""
 import json
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -358,7 +359,27 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     computers = {m["id"]: m for m in get(cloud.api, "operations")["computers"]}
     assert computers[enrolled["runner_id"]]["cloud_machine"]["bot"] == "ops"
     shown = employee(cloud.api)["cloud_machine"]
-    assert shown["mode"] == "cloud" and shown["state"] == "starting"
+    assert shown["mode"] == "cloud" and shown["state"] == "running"
+
+
+@pytest.mark.parametrize("state", ["stopping", "stopped"])
+def test_live_runner_contact_preserves_a_cloud_machines_stop_state(cloud, state):
+    computer = enrolled(cloud)
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", state=state)
+    ready(cloud.api, computer, ["ops"])
+    assert cloud.row()["state"] == state
+    assert employee(cloud.api)["cloud_machine"]["state"] == state
+    shown = next(m for m in get(cloud.api, "operations")["computers"] if m["id"] == computer["runner_id"])
+    assert shown["cloud_machine"]["state"] == state
+
+
+def test_heartbeat_boot_repair_is_one_lookup(api):  # noqa: F811
+    with api.app.state.store.transaction() as c:
+        calls = Mock(wraps=c)
+        CM.checked_in(calls, "self-hosted-computer")
+        # Ordinary computers and machines already running are the common case: one small read on every beat.
+        calls.execute.assert_called_once()
 
 
 def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
@@ -1104,9 +1125,9 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
     assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
-        "bot": None, "shared": True, "size": "default", "state": "starting"}
+        "bot": None, "shared": True, "size": "default", "state": "running"}
     assert employee(cloud.api, "ops")["cloud_machine"] == {**employee(cloud.api, "ops")["cloud_machine"],
-                                                           "mode": "cloud", "placement": "shared", "state": "starting"}
+                                                           "mode": "cloud", "placement": "shared", "state": "running"}
     assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]
     # A bot joining while it is up is assigned there at the next look; nothing is started or made for it.
     adopt(cloud, "coo", "shared")

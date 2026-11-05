@@ -11,6 +11,16 @@ converts the row first (`dict(row)`) or annotates the parameter and lets callers
 from typing import TypedDict
 
 
+class MeetingTaskLinkRow(TypedDict):
+    """A meeting/task pair; its references keep their independent read checks."""
+    id: str
+    meeting_id: str
+    task_id: str
+    kind: str
+    created_by: str
+    created_at: str
+
+
 class TaskRow(TypedDict):
     """One `tasks` row (SELECT *)."""
     id: str
@@ -157,6 +167,7 @@ class RunnerRow(TypedDict):
     screen_default_pending: int
     performance: str
     turns_at_once: int | None
+    device_id: str | None
 
 
 class RunnerStateRow(TypedDict):
