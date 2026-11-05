@@ -1102,9 +1102,14 @@ def test_assistant_action_review_filename_clears_on_every_return(api, monkeypatc
     from backend import assistant, files
     from backend.tests.test_page_audience import edit
     from backend.tests.test_task_review import ask as version_ask
-    t, attempt = task_turn(api, bot='coo')
     _, finance = turn(api, 'finance')
-    post(api, f"tasks/{t['id']}/requesters", {'actor': 'bot:finance'})
+    machine = runner(api)
+    assign(api, machine, 'coo')
+    ready(api, machine, ['coo'])
+    t = post(api, 'tasks', {'owner': 'coo', 'title': 'Review the project plan',
+                            'body': 'Review the linked project context.', 'private': False}, finance['token'])
+    attempt = claim(api, machine, 'coo')
+    assert attempt and attempt['task']['id'] == t['id']
     filename = 'confidential-plan.html'
     fid = published(api, finance, task=t['id'], name=filename)
     response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
