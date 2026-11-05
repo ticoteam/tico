@@ -246,10 +246,11 @@ Bots use their own repositories and task checkouts, including when working on Ti
 also refuses outside paths whose resolved Git directory or common directory is shared with the install,
 including linked worktrees and `.git` pointers. For paths inside a repo, it finds and trusts only that
 repo's root for the Git check. This lets the supervisor check bot-owned folders such as `playbooks/`
-and `.state/`. Missing paths and broken repositories keep their usual worktree status or Git error;
-only matching Git metadata is reported as shared with the install. A check that cannot run still
-reports that the repo could not be checked. This guard checks destinations Tico selects; it does not
-isolate a bot's shell or user account.
+and `.state/`. Paths with no Git repo above them, and worktrees whose Git directory is gone, keep
+their usual worktree status or Git error. Any other failed check of the install or bot repo, including
+bad config, access errors and timeouts, refuses the path and says the repo could not be checked.
+Only matching Git metadata is reported as shared with the install. This guard checks destinations
+Tico selects; it does not isolate a bot's shell or user account.
 
 There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
 with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.

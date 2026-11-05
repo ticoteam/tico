@@ -5,19 +5,51 @@ use std::os::unix::fs::MetadataExt;
 fn git_identity(path: &Path) -> Result<Vec<PathBuf>, String> {
     let unchecked = || format!("Cannot check repository identity: {}", path.display());
     let mut existing = path;
-    while !existing.exists() {
-        existing = existing.parent().ok_or_else(unchecked)?;
-    }
-    if !existing.is_dir() {
+    let info = loop {
+        match existing.metadata() {
+            Ok(info) => break info,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                existing = existing.parent().ok_or_else(unchecked)?;
+            }
+            Err(_) => return Err(unchecked()),
+        }
+    };
+    if !info.is_dir() {
         existing = existing.parent().ok_or_else(unchecked)?;
     }
     // Ownership checks require the worktree root, even when the requested directory already exists.
     let mut root = None;
     for parent in existing.ancestors() {
-        match parent.join(".git").symlink_metadata() {
-            Ok(_) => {}
+        let marker = parent.join(".git");
+        match marker.symlink_metadata() {
+            Ok(_) => {
+                // A worktree whose Git directory is gone keeps its normal missing-worktree report.
+                let present = (|| -> std::io::Result<()> {
+                    if marker.metadata()?.is_file() {
+                        let pointer = std::fs::read_to_string(&marker)?;
+                        if let Some(target) = pointer.strip_prefix("gitdir: ").filter(|p| !p.trim().is_empty()) {
+                            parent.join(target.trim_end_matches(['\r', '\n'])).metadata()?;
+                        }
+                    }
+                    Ok(())
+                })();
+                match present {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+                    Err(_) => return Err(unchecked()),
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if !(parent.join("HEAD").exists() && parent.join("objects").is_dir()) { continue; }
+                let bare = (|| -> std::io::Result<bool> {
+                    parent.join("HEAD").metadata()?;
+                    Ok(parent.join("objects").metadata()?.is_dir())
+                })();
+                match bare {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return Err(unchecked()),
+                }
             }
             Err(_) => return Err(unchecked()),
         }
@@ -25,14 +57,29 @@ fn git_identity(path: &Path) -> Result<Vec<PathBuf>, String> {
         break;
     }
     let Some(root) = root else { return Ok(vec![]); };
-    let out = std::process::Command::new("git")
+    let mut child = std::process::Command::new("git")
         .args(crate::safegit::args(root))
         .args(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"])
         .env_clear().envs(crate::safegit::clean_environment(&crate::env::process_environment()))
-        .stdin(std::process::Stdio::null()).output().map_err(|_| unchecked())?;
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null()).spawn().map_err(|_| unchecked())?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() < std::time::Duration::from_secs(10) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(unchecked());
+            }
+        }
+    }
+    let out = child.wait_with_output().map_err(|_| unchecked())?;
     if !out.status.success() {
-        // Missing or broken repos keep their normal handling; only resolved metadata proves an install match.
-        return Ok(vec![]);
+        return Err(unchecked());
     }
     let text = std::str::from_utf8(&out.stdout).map_err(|_| unchecked())?;
     if text.lines().count() != 2 || text.lines().any(|p| !Path::new(p).is_absolute()) {
@@ -177,16 +224,98 @@ mod tests {
                 }
             }
             assert_eq!(outside(&dir.join("new"), &install).unwrap(), dir.join("new"));
+            let plain = dir.join("plain");
+            std::fs::create_dir(&plain).unwrap();
+            assert_eq!(outside(&plain, &install).unwrap(), plain);
             let broken = dir.join("broken");
             std::fs::create_dir_all(broken.join("playbooks")).unwrap();
             std::fs::write(broken.join(".git"), "invalid gitdir\n").unwrap();
             for path in [broken.clone(), broken.join("playbooks"), broken.join("new/deep")] {
-                assert_eq!(outside(&path, &install).unwrap(), path);
+                assert!(outside(&path, &install).unwrap_err().starts_with("Cannot check repository identity"));
             }
             std::fs::write(broken.join(".git"), format!("gitdir: {}\n", dir.join("missing").display())).unwrap();
-            assert_eq!(outside(&broken, &install).unwrap(), broken);
+            for path in [broken.clone(), broken.join("playbooks"), broken.join("new/deep")] {
+                assert_eq!(outside(&path, &install).unwrap(), path);
+            }
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn config_errors_on_either_side_refuse_siblings() {
+        if !crate::regular_file::in_child("repo_safety::tests::config_errors_on_either_side_refuse_siblings").await { return; }
+        use std::os::unix::fs::PermissionsExt;
+        for linked in [false, true] {
+            let dir = std::env::temp_dir().join(format!("tico-repo-config-{}", uuid::Uuid::new_v4()));
+            let source = dir.join("source");
+            std::fs::create_dir_all(&source).unwrap();
+            let dir = dir.canonicalize().unwrap();
+            let source = dir.join("source");
+            git(&source, &["init", "-q", "-b", "main"]);
+            git(&source, &["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "init"]);
+            let install = if linked {
+                let install = dir.join("install");
+                git(&source, &["worktree", "add", "--detach", install.to_str().unwrap()]);
+                install
+            } else { source.clone() };
+            let sibling = dir.join("task");
+            git(&source, &["worktree", "add", "--detach", sibling.to_str().unwrap()]);
+            git(&source, &["config", "extensions.worktreeConfig", "true"]);
+            for (broken, healthy) in [(&install, &sibling), (&sibling, &install)] {
+                let config = PathBuf::from(git(broken, &["rev-parse", "--absolute-git-dir"])).join("config.worktree");
+                std::fs::write(&config, "[invalid config\n").unwrap();
+                let failed = std::process::Command::new("git").args(crate::safegit::args(broken))
+                    .args(["rev-parse", "--git-dir"]).output().unwrap();
+                assert_eq!(failed.status.code(), Some(128));
+                assert!(!git(healthy, &["rev-parse", "--git-dir"]).is_empty());
+                assert_eq!(outside(&sibling, &install).unwrap_err(), format!("Cannot check repository identity: {}", broken.display()));
+                // Unreadable per-worktree config must not hide the install's shared metadata either.
+                if unsafe { libc::geteuid() } != 0 {
+                    std::fs::write(&config, "").unwrap();
+                    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o000)).unwrap();
+                    assert_eq!(outside(&sibling, &install).unwrap_err(), format!("Cannot check repository identity: {}", broken.display()));
+                    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+                }
+                std::fs::remove_file(config).unwrap();
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    fn refuse_timed_out_probe(install_side: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tico-repo-timeout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let install = dir.join("install");
+        let repo = dir.join("bot");
+        for root in [&install, &repo] {
+            std::fs::create_dir_all(root.join(".git")).unwrap();
+        }
+        let broken = if install_side { &install } else { &repo };
+        let bin = dir.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let wrapper = bin.join("git");
+        std::fs::write(&wrapper, format!("#!/bin/sh\nwhile [ \"$1\" != '-C' ]; do shift; done\nshift\nif [ \"$1\" = {} ]; then exec sleep 30; fi\nprintf '%s/.git\\n%s/.git\\n' \"$1\" \"$1\"\n",
+            crate::gitcred::shell_quote(&broken.display().to_string()))).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let original = std::env::var_os("PATH").unwrap();
+        let paths = std::iter::once(bin).chain(std::env::split_paths(&original));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+        assert_eq!(outside(&repo, &install).unwrap_err(), format!("Cannot check repository identity: {}", broken.display()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_probe_timeout_is_refused() {
+        if !crate::regular_file::in_child("repo_safety::tests::install_probe_timeout_is_refused").await { return; }
+        refuse_timed_out_probe(true);
+    }
+
+    #[tokio::test]
+    async fn candidate_probe_timeout_is_refused() {
+        if !crate::regular_file::in_child("repo_safety::tests::candidate_probe_timeout_is_refused").await { return; }
+        refuse_timed_out_probe(false);
     }
 
     #[test]

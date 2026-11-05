@@ -1,6 +1,7 @@
 """Bot files never belong in the Tico checkout running this code."""
 from pathlib import Path
 import os
+import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,19 +9,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _git_identity(path):
     # Git resolves .git files, commondir and linked installs; inherited turn overrides must not redirect it.
-    existing = path
-    while not existing.exists():
-        existing = existing.parent
-    if not existing.is_dir():
-        existing = existing.parent
     try:
+        existing = path
+        while True:
+            try:
+                info = existing.stat()
+                break
+            except FileNotFoundError:
+                if existing.parent == existing:
+                    raise
+                existing = existing.parent
+        if not stat.S_ISDIR(info.st_mode):
+            existing = existing.parent
         # Ownership checks require the worktree root, even when the requested directory already exists.
         for root in (existing, *existing.parents):
+            marker = root / ".git"
             try:
-                (root / ".git").lstat()
+                marker.lstat()
             except FileNotFoundError:
-                if not ((root / "HEAD").exists() and (root / "objects").is_dir()):
+                try:
+                    (root / "HEAD").stat()
+                    objects = (root / "objects").stat()
+                except FileNotFoundError:
                     continue
+                if not stat.S_ISDIR(objects.st_mode):
+                    continue
+            else:
+                # A worktree whose Git directory is gone keeps its normal missing-worktree report.
+                try:
+                    info = marker.stat()
+                    if stat.S_ISREG(info.st_mode):
+                        pointer = marker.read_text()
+                        if pointer.startswith("gitdir: ") and pointer[8:].strip():
+                            (root / pointer[8:].rstrip("\r\n")).stat()
+                except FileNotFoundError:
+                    return ()
             break
         else:
             return ()
@@ -30,15 +53,17 @@ def _git_identity(path):
                                "-c", "safe.directory=" + str(root), "-C", str(root),
                                "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
                               env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Cannot check repository identity: {path}") from exc
     if done.returncode:
-        # Missing or broken repos keep their normal handling; only resolved metadata proves an install match.
-        return ()
+        raise ValueError(f"Cannot check repository identity: {path}")
     names = done.stdout.splitlines()
     if len(names) != 2 or any(not Path(name).is_absolute() for name in names):
         raise ValueError(f"Cannot check repository identity: {path}")
-    return tuple(_resolve(Path(name)) for name in names)
+    try:
+        return tuple(_resolve(Path(name)) for name in names)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"Cannot check repository identity: {path}") from exc
 
 
 def _same_path(left, right):

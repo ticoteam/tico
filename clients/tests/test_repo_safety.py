@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -61,21 +62,74 @@ def test_git_metadata_aliases_of_the_install_are_refused(tmp_path, monkeypatch, 
         for path in (repo, repo / "playbooks", repo / ".state", repo / "new/deep"):
             assert repo_safety.outside_installation(path) == path
     assert repo_safety.outside_installation(tmp_path / "new") == tmp_path / "new"
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert repo_safety.outside_installation(plain) == plain
     broken = tmp_path / "broken"
     (broken / "playbooks").mkdir(parents=True)
     (broken / ".git").write_text("invalid gitdir\n")
     for path in (broken, broken / "playbooks", broken / "new/deep"):
-        assert repo_safety.outside_installation(path) == path
+        with pytest.raises(ValueError, match="^Cannot check repository identity"):
+            repo_safety.outside_installation(path)
     (broken / ".git").write_text("gitdir: " + str(tmp_path / "missing") + "\n")
-    assert repo_safety.outside_installation(broken) == broken
+    for path in (broken, broken / "playbooks", broken / "new/deep"):
+        assert repo_safety.outside_installation(path) == path
 
 
-def test_unsuccessful_probe_leaves_repository_errors_to_the_caller(tmp_path, monkeypatch):
+@pytest.mark.slow
+@pytest.mark.parametrize("linked_install", [False, True])
+def test_config_error_on_either_side_refuses_a_sibling(tmp_path, monkeypatch, linked_install):
+    source = tmp_path / "source"
+    source.mkdir()
+    git(source, "init", "-q", "-b", "main")
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "init")
+    install = tmp_path / "install" if linked_install else source
+    if linked_install:
+        git(source, "worktree", "add", "--detach", str(install))
+    sibling = tmp_path / "task"
+    git(source, "worktree", "add", "--detach", str(sibling))
+    git(source, "config", "extensions.worktreeConfig", "true")
+    monkeypatch.setattr(repo_safety, "ROOT", install)
+    for broken, healthy in ((install, sibling), (sibling, install)):
+        config = Path(git(broken, "rev-parse", "--absolute-git-dir")) / "config.worktree"
+        config.write_text("[invalid config\n")
+        try:
+            failed = subprocess.run(["git", "-C", str(broken), "rev-parse", "--git-dir"], capture_output=True, check=False)
+            assert failed.returncode == 128
+            assert git(healthy, "rev-parse", "--git-dir")
+            with pytest.raises(ValueError, match="^Cannot check repository identity") as error:
+                repo_safety.outside_installation(sibling)
+            assert str(error.value).endswith(str(broken))
+            if os.geteuid() != 0:
+                config.write_text("")
+                config.chmod(0o000)
+                with pytest.raises(ValueError, match="^Cannot check repository identity") as error:
+                    repo_safety.outside_installation(sibling)
+                assert str(error.value).endswith(str(broken))
+        finally:
+            config.chmod(0o600)
+            config.unlink()
+
+
+@pytest.mark.parametrize("failure", ["exit", "permission", "timeout"])
+def test_probe_failures_on_either_side_are_refused(tmp_path, monkeypatch, failure):
     install = tmp_path / "install"
-    install.mkdir()
+    (install / ".git").mkdir(parents=True)
     repo = tmp_path / "bot"
     (repo / ".git").mkdir(parents=True)
     (repo / "playbooks").mkdir()
     monkeypatch.setattr(repo_safety, "ROOT", install)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 128, "", "probe failed"))
-    assert repo_safety.outside_installation(repo / "playbooks") == repo / "playbooks"
+    for broken in (install, repo):
+        def probe(args, **kwargs):
+            root = Path(args[args.index("-C") + 1])
+            if root == broken:
+                if failure == "permission":
+                    raise PermissionError("config is unreadable")
+                if failure == "timeout":
+                    raise subprocess.TimeoutExpired(args, 10)
+                return subprocess.CompletedProcess(args, 128, "", "bad config")
+            return subprocess.CompletedProcess(args, 0, f"{root / '.git'}\n{root / '.git'}\n", "")
+        monkeypatch.setattr(subprocess, "run", probe)
+        with pytest.raises(ValueError, match="^Cannot check repository identity") as error:
+            repo_safety.outside_installation(repo / "playbooks")
+        assert str(error.value).endswith(str(broken / "playbooks" if broken == repo else install))
