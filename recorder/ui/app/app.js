@@ -438,7 +438,7 @@
         if ((draft.nativeRecovery && draft.closed) || (it.status !== 'proposed' && !(draft.sending && it.updated_by === a.actor) && !draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length))) {
           return sharedClosedCard(it, draft, a);
         }
-        if (it.status === 'dismissed' || draft.closedAcknowledged) return '';
+        if (it.status === 'dismissed' || (draft.closedAcknowledged && it.status !== 'proposed')) return '';
         if (it.status === 'pushed' && linkedIds.has(it.result_ref)) return '';
         if (it.status === 'pushed') return `<div class="item sent" data-shared-row="${esc(it.id)}">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
         const server = draft.base?.version > it.version ? draft.base : it;

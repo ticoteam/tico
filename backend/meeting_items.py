@@ -376,7 +376,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         with store.read_transaction() as c:
             media.authorized(c, request.state.identity, rid)
             result = dict(result)
-            iid = result.pop('item_id', None)
+            iid = result.pop('item_id', None) or (result.get('item') or {}).get('id')
             if iid:
                 result['item'] = view(one(c, rid, iid))
             return redact(c, request.state.identity, auth, result)

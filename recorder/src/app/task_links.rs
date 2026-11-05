@@ -114,6 +114,7 @@ impl Recorder {
             .find(|d| d.id == destination);
         json!([
             self.meeting,
+            self.items_epoch,
             connected.map(|d| (&d.id, &d.actor, &d.base_url))
         ])
     }
@@ -505,5 +506,31 @@ mod tests {
             app.actions_view("one")["linked"]["tasks"][0]["pending"],
             false
         );
+    }
+    #[test]
+    fn save_recovery_drafts_survive_a_stale_window_and_connection_epoch_changes() {
+        let (_dir, mut app, id) = local_app();
+        app.context.items.push(Item {
+            id: "a".into(),
+            kind: "task".into(),
+            title: "My current fields".into(),
+            ..Default::default()
+        });
+        app.store.save_context(&id, &app.context).unwrap();
+        let closed = json!({"item":{"id":"server-a","status":"proposed","version":2,"updated_by":"human:ben"},"text":"My current fields","detail":{"owner":"human:ana"}});
+        app.store
+            .update_context(&id, |c| {
+                c.items[0].closed_draft = Some(closed.clone());
+                Ok(())
+            })
+            .unwrap();
+        app.save_context();
+        assert_eq!(app.actions_view("Acme")["items"][0]["closed_draft"], closed);
+        let scope = app.link_scope();
+        app.reset_saved();
+        assert_ne!(scope, app.link_scope());
+        app.close();
+        app.open(&id).unwrap();
+        assert_eq!(app.context.items[0].closed_draft, Some(closed));
     }
 }

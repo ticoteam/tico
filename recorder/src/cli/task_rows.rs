@@ -87,6 +87,8 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
         .task_id;
 
     let local = recording(store, "This Mac synthetic")?;
+    tico.ensure_live(store, &local, false)?;
+    tico.finish_live(store, &local)?;
     tico.queue_links(store, &local, &tasks[..1])?;
     tico.keep_local(store, &local)?;
     ensure!(

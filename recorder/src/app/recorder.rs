@@ -593,7 +593,11 @@ impl Recorder {
                 for item in std::mem::take(&mut current.items) {
                     match items.iter_mut().find(|row| row.id == item.id) {
                         Some(row) if !item.task_id.is_empty() => *row = item,
-                        Some(_) => {}
+                        Some(row) => {
+                            if item.closed_draft.is_some() {
+                                row.closed_draft = item.closed_draft;
+                            }
+                        }
                         None => items.push(item),
                     }
                 }

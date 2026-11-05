@@ -189,6 +189,22 @@ const path = require('node:path');
       await page.getByText('Original server title · Sent',{exact:false}).waitFor();
       assert.equal(await page.locator('[data-shared-row] pre').count(),0);
     }
+    // A Save recovery also keeps local fields when the server is still proposed but has moved on.
+    await page.evaluate(() => {
+      const a=window.pendingFixture.a;
+      const current={id:'changed-on-save',section:'task',status:'proposed',version:2,text:'New remote title',detail:{owner:'human:sam'},updated_by:'human:sam'};
+      a.saved=true; a.shared_scope='save-recovery';
+      a.shared={can_send:true,sections:{task:[current]}};
+      a.items=[{id:'local-save',title:'My retry title',sent:false,closed_draft:{item:current,text:'My retry title',detail:{owner:'human:dana',body:'My retry details'}}}];
+    });
+    const moved=page.locator('[data-shared-row="changed-on-save"]');
+    await moved.getByText('Changed by Sam Okafor',{exact:true}).waitFor();
+    assert.match(await moved.locator('pre').textContent(),/My retry title[\s\S]*My retry details/);
+    assert.equal(await moved.locator('textarea,input,select').count(),0);
+    await moved.getByRole('button',{name:'Copy',exact:true}).click();
+    assert.match(await page.evaluate(()=>window.copiedText),/My retry title/);
+    await moved.getByRole('textbox',{name:'Title',exact:true}).waitFor();
+    assert.equal(await moved.getByRole('textbox',{name:'Title',exact:true}).inputValue(),'New remote title');
     // Linking controls and remote rows stay in the saved shared panel.
     await page.evaluate(() => {
       const f=window.pendingFixture, a=f.a;

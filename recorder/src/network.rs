@@ -882,6 +882,7 @@ impl Tico {
                             "Tico did not return the created task reference"
                         );
                         item_version = reply["item"]["version"].as_u64().unwrap_or(item_version);
+                        server_row = Some(reply["item"].clone());
                     }
                 }
                 if item.task_id.is_empty() {

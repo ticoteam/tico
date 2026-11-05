@@ -2649,6 +2649,7 @@ fn a_task_created_before_save_is_uploaded_as_a_sent_meeting_item() {
         Some(json!({"id":"saved-meeting"})),
         Some(json!({"sections":{"task":[]}})),
         Some(json!({"item":{"id":"sent-row","status":"pushed","result_ref":"created-task"}})),
+        Some(json!({})),
     ]);
     tico.send(&store, &record.id, false).unwrap();
     worker.join().unwrap();
@@ -2702,7 +2703,7 @@ fn partial_save_create_adopts_another_readers_task_and_save_recovers() {
             steps.extend([Some(who.clone()), Some(adopted)]);
         }
         steps.extend([
-            Some(who.clone()), Some(json!({"sections":{"task":[sent_a]}})), Some(json!({"item":b})),
+            Some(who.clone()), Some(json!({"sections":{"task":[sent_a]}})), Some(json!({"item":b})), Some(json!({})),
             Some(who), Some(json!({"people":[{"id":"test","name":"Test"}]})),
             Some(json!({"sections":{"task":[sent_a,b]}})),
             Some(json!({"item":{"id":"server-b","version":2,"status":"pushed","result_ref":"task-b"}})),
@@ -2743,7 +2744,7 @@ fn partial_save_create_adopts_another_readers_task_and_save_recovers() {
         assert_eq!(pushes.len(), if lost_reply { 2 } else { 1 });
         assert_eq!(
             pushes[0].1,
-            json!({"version":1,"text":"Task a","detail":{"owner":"human:test"}})
+            json!({"version":1,"text":"Task a","detail":{"owner":"human:test","due":"","body":""},"private":true})
         );
         if lost_reply {
             assert_eq!(pushes[0].2, pushes[1].2);
@@ -2851,6 +2852,7 @@ fn create_replays_uncertain_item_upload_before_adopting_another_readers_task() {
                 Some(json!({"item":sent,"pushed":false})),
                 Some(who),
                 Some(json!({"sections":{"task":[sent]}})),
+                Some(json!({})),
             ],
             in_flight.then_some((3, held)),
         );
@@ -3090,7 +3092,7 @@ fn recorder_saves_approval_notes_and_proposal_before_sent_links() {
 }
 
 #[test]
-fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued_links() {
+fn recorder_this_mac_removes_a_finalized_pending_meeting_and_drops_only_queued_links() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let record = transcript(&store, "This Mac");
@@ -3132,18 +3134,15 @@ fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued
     tico.keep_local(&store, &record.id).unwrap();
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert!(calls[0].0.contains("/live-fixture/control"));
-    assert!(calls[1].0.contains("/pending/review"));
-    assert_eq!(calls[1].1, json!({"action":"dismiss"}));
+    assert!(calls[0].0.contains("/pending/delete"));
+    assert!(calls[1].0.contains("/live-fixture/discard"));
+    assert_eq!(calls[0].1, json!({}));
     let context = store.context(&record.id).unwrap();
     assert!(context.kept_on_mac && context.live_removed);
     assert_eq!(context.items.len(), 2);
     assert_eq!(context.items[0].task_id, "task-sent");
     assert!(context.items[1].proposed_task_id.is_empty());
-    assert_eq!(
-        store.get(&record.id).unwrap().deliveries[0].receipt["dismissed"],
-        true
-    );
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
 }
 
 #[test]

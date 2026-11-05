@@ -467,32 +467,6 @@ impl Tico {
             c.live_discarded = true;
             Ok(())
         })?;
-        if let Some(entry) =
-            filed.filter(|entry| !entry.meeting_id.is_empty() && entry.receipt["source"] == "live")
-        {
-            let mut entry = entry.clone();
-            if entry.receipt["dismissed"] != true {
-                self.call(
-                    &format!("/api/v2/meetings/{}/review", entry.meeting_id),
-                    Some(&json!({"action":"dismiss"})),
-                    &format!("recorder:{id}:keep-local:dismiss"),
-                )?;
-                entry.receipt["dismissed"] = json!(true);
-                store.delivery(id, &entry)?;
-            }
-            store.update_context(id, |c| {
-                c.kept_on_mac = true;
-                c.task_link_operations.clear();
-                c.items.retain(|item| item.kind != "link");
-                for item in &mut c.items {
-                    item.proposed_task_id.clear();
-                }
-                c.live_state = "ended".into();
-                c.live_removed = true;
-                Ok(())
-            })?;
-            return Ok(());
-        }
         if let Some(entry) = filed.filter(|entry| !entry.meeting_id.is_empty()) {
             self.call(
                 &format!("/api/v2/meetings/{}/delete", entry.meeting_id),

@@ -250,7 +250,12 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
             if not message.get('more_body'):
                 break
         payload = json.loads(body or '{}')
+        delivered = False
         async def replay_body():
+            nonlocal delivered
+            if delivered:
+                return await receive()
+            delivered = True
             return {'type': 'http.request', 'body': body, 'more_body': False}
         fail = False
         if path.endswith('/tasks') and '/meetings/' in path:
