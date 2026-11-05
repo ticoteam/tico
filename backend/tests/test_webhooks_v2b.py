@@ -16,6 +16,7 @@ from backend.tests.test_triggers import hook, sig
 from backend.tests.test_triggers_incoming import as_bot, stored_rows
 from backend.tests.test_wake_rules import setup
 from backend.tests.test_webhooks import due, make, net, publish, run, sends, verify  # noqa: F401
+from backend import bot_settings as BS
 
 # Slack's published request-signing example (api.slack.com/authentication/verifying-requests-from-slack): its
 # secret, timestamp, form body and signature.
@@ -99,7 +100,7 @@ def test_recover_runs_refused_calls_again_once_and_the_senders_retry_is_a_duplic
     assert len(runs(api, aid)) == 1
     again = post(api, "triggers/shop/recover", {"since_hours": 24})["recover"]
     assert (again["found"], again["recovered"], again["still_refused"]) == (1, 0, 1)      # only w2 is left, and still bad
-    assert stored_rows(api, "SELECT detail_json FROM events WHERE action='trigger.recovered' ORDER BY ts")[0][0].count("recovered") == 1
+    assert stored_rows(api, "SELECT detail FROM events WHERE action='trigger.recovered' ORDER BY created_at")[0][0].count("recovered") == 1
     post(api, "triggers/_tico/recover", {}, expected=422)                                   # the built-in trigger takes no edits
 
 
@@ -112,7 +113,7 @@ def test_a_webhook_turn_reads_the_call_as_data_and_one_without_braces_is_left_al
              name="Filled")
     hook(api, made["url"], b'{"kind": "order.created", "order": 42, "note": "{{webhook.name}}"}', {"Webhook-Id": "t1"})
     with api.app.state.store.read() as c:
-        bodies = {r["title"]: r["body"] for r in c.execute("SELECT title, body FROM tasks WHERE owner='bot:ops'")}
+        bodies = {r["title"]: r["body"] for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:ops'")}
     assert bodies["Plain"] == "Ship it."
     filled = bodies["Filled"]
     # The author's words point at quoted data blocks; the call's own braces stay text and are never filled in.
@@ -153,14 +154,15 @@ def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
     assert len(tasks) == 1 and tasks[0]["title"] == "Order 42 for Buyer"
     body = get(api, "tasks/" + tasks[0]["id"])["task"]["body"]
     assert body == "Look at order.created."                     # nothing was cut: no line about the rest
-    assert get(api, "tasks/" + tasks[0]["id"])["task"]["requester"] == "human:ben"          # in the rule maker's name
+    assert get(api, "tasks/" + tasks[0]["id"])["task"]["requester_id"] == "human:ben"          # in the rule maker's name
 
 
 
 def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_company_events_alone(api, net):
     department(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='engineering',config_json=json_set(config_json,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'engineering'})
     everyone = make(api, events=["task.created", "custom.*"])
     eng = make(api, events=["task.created", "custom.*"], filter={"departments": ["engineering"]})
     cpo = make(api, events=["task.created"], filter={"bots": ["cpo"]})
@@ -240,8 +242,8 @@ def test_five_days_of_failing_turn_an_endpoint_off_but_thirteen_hours_after_a_qu
         with api.app.state.store.transaction() as c:
             c.execute("DELETE FROM webhook_attempts")
             c.execute("UPDATE webhooks SET failing_since=? WHERE id=?", (since, hook_["id"]))
-            c.execute("UPDATE webhook_sends SET state='failed', next_attempt=? WHERE id=?", (since, send["id"]))
-            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent,status,ms) VALUES(?,?,1,?,0,500,0)",
+            c.execute("UPDATE webhook_sends SET state='failed', next_attempt_at=? WHERE id=?", (since, send["id"]))
+            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent,status,ms) VALUES(?,?,1,?,0,500,0)",
                       (send["id"], hook_["id"], last))
             return W.auto_disable(c)
     now = H.now()
@@ -255,7 +257,7 @@ def test_five_days_of_failing_turn_an_endpoint_off_but_thirteen_hours_after_a_qu
         assert W.auto_disable(c) == []                          # said once
         assert W.health_summary(c)["disabled"] == ["Acme hook"]
         notes = [t for t in c.execute("SELECT * FROM tasks WHERE title LIKE 'Webhook % was turned off'")]
-    assert len(notes) == 1 and notes[0]["owner"] == "human:ana"
+    assert len(notes) == 1 and notes[0]["owner_id"] == "human:ana"
     assert sends(api, hook_["id"])[0]["state"] == "failed"
     post_w(api, f"webhooks/{hook_['id']}/recover", {"since": "2020-01-01"}, expected=409)          # on first
     enabled = post_w(api, f"webhooks/{hook_['id']}/enable", {})
@@ -278,8 +280,8 @@ def test_custom_headers_go_out_and_a_secret_one_is_never_shown_again(api, net):
         assert shown["headers"][0] == {"name": "x-api-key", "secret": True, "set": True}
     assert "s3cret-value-123" not in json.dumps(get(api, "webhooks/" + made["id"])) + json.dumps(get(api, "webhooks"))
     with api.app.state.store.read() as c:
-        assert "s3cret-value-123" not in c.execute("SELECT headers_json FROM webhooks").fetchone()[0]
-        assert "s3cret-value-123" not in " ".join(r["detail_json"] for r in c.execute("SELECT detail_json FROM events"))
+        assert "s3cret-value-123" not in c.execute("SELECT headers FROM webhooks").fetchone()[0]
+        assert "s3cret-value-123" not in " ".join(r["detail"] for r in c.execute("SELECT detail FROM events"))
     post_w(api, "webhooks/" + made["id"] + "/example", {"type": "custom.example"})
     assert run(api, net) == 1
     wire = {k.lower(): v for k, v in net.seen[0].headers.items()}
@@ -331,7 +333,7 @@ def test_recovering_a_relayed_call_keeps_the_gateways_delivery_id_so_its_retry_i
     aid = listener(api, "shop")
     post(api, "triggers/shop/signing", {"preset": "stripe", "secret": "t" * 20})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana", H.now()))
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings, SimpleNamespace(state=api.app.state),
                                  api.app.state.auth)

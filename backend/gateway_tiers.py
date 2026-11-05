@@ -45,18 +45,18 @@ INPUT_KINDS = ("text", "image", "pdf")
 # maps to the same rows at 1.0: there is no department benchmark yet that justifies another pick. Haiku's rates go up
 # for a prompt past `long`'s limit.
 ROWS = {
-    "low": {"model": "Claude Haiku 5.5", "price": (0.15, 0.015, 0.75), "long": (100_000, (0.75, 0.075, 3.75)),
+    "low": {"model": "Claude Haiku 5.5", "context": 1_000_000, "price": (0.15, 0.015, 0.75), "long": (100_000, (0.75, 0.075, 3.75)),
             "inputs": CLAUDE_INPUTS},
-    "medium": {"model": "Claude Sonnet 5.5", "price": (2.50, 0.25, 12.50), "long": None, "inputs": CLAUDE_INPUTS},
-    "high": {"model": "Claude Opus 5.5", "price": (5.0, 0.50, 25.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "medium": {"model": "Claude Sonnet 5.5", "context": 1_000_000, "price": (2.50, 0.25, 12.50), "long": None, "inputs": CLAUDE_INPUTS},
+    "high": {"model": "Claude Opus 5.5", "context": 1_000_000, "price": (5.0, 0.50, 25.0), "long": None, "inputs": CLAUDE_INPUTS},
 }
 # The row a fast tier points at (`tico-fast-low-1.0`, `tico-fast-high-1.0` at Tico HQ). Fast is measurably faster and may
 # cost more. Low Fast is DeepSeek V4.1 Flash; Medium Fast and High Fast are both Claude Opus 5.5 in Anthropic's fast mode,
 # the only fast route at or above Medium's quality. Cached input is 10% of input for both (HQ prices DeepSeek cache reads at a tenth).
 FAST_ROWS = {
     "low": {"model": "DeepSeek V4.1 Flash", "price": (0.45, 0.045, 1.80), "long": None, "inputs": ("text",)},
-    "medium": {"model": "Claude Opus 5.5 (fast mode)", "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
-    "high": {"model": "Claude Opus 5.5 (fast mode)", "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "medium": {"model": "Claude Opus 5.5 (fast mode)", "context": 1_000_000, "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "high": {"model": "Claude Opus 5.5 (fast mode)", "context": 1_000_000, "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
 }
 
 # The meeting tier (HQ's `tico-meeting`, pinned `tico-meeting-1.0`): a chat tier with no department, level or fast. It is
@@ -147,7 +147,8 @@ def _long(row):
 
 def _version(row, ident, version, released=""):
     return {"version": version, "id": ident, "model": row["model"], "price": _price(row), "long_prompt": _long(row),
-            "inputs": list(row["inputs"]), **({"released": released} if released else {})}
+            "inputs": list(row["inputs"]), **({"context": row["context"]} if row.get("context") else {}),
+            **({"released": released} if released else {})}
 
 
 def _snapshot():
@@ -416,7 +417,7 @@ def _long_tuple(long):
 
 def resolve(model, cat=None):
     """What an id is, or None when it is not a Tico id: {id, tier (the auto id), kind (chat|decide), name, model (what
-    runs underneath), label (the name without a version), version, auto, price {input, cached_input, output}, long_prompt, inputs (what it reads: text, image, pdf; text alone when the catalog names none), department, level, fast, old}.
+    runs underneath), label (the name without a version), version, auto, price {input, cached_input, output}, long_prompt, inputs (what it reads: text, image, pdf; text alone when the catalog names none), context (tokens, or None), department, level, fast, old}.
     An auto id answers with the tier's current version; an old-lineup id with its own price, marked `old`."""
     model = str(model or "").strip().lower()
     if not model.startswith(PREFIX):
@@ -428,7 +429,7 @@ def resolve(model, cat=None):
         return {"id": model, "tier": model, "kind": "chat", "name": label + OLD_SUFFIX, "label": label, "model": row["model"],
                 "version": version, "auto": False, "price": _price(row), "long_prompt": _long(row)
                 if model == "tico-cheap-1.1" else None, "department": "", "level": level, "fast": False, "old": True,
-                "inputs": list(row["inputs"])}
+                "inputs": list(row["inputs"]), "context": row.get("context")}
     if model in OLD_DECISIONS:
         row = next(r for r in DECISIONS if r["id"] == OLD_DECISIONS[model].rsplit("-", 1)[0])
         return {"id": model, "tier": model, "kind": "decide", "name": row["name"] + " 1.0" + OLD_SUFFIX, "label": row["name"],
@@ -446,7 +447,7 @@ def resolve(model, cat=None):
             "price": version["price"], "long_prompt": version.get("long_prompt"),
             "inputs": list(version.get("inputs") or ["text"]),
             "department": tier.get("department") or "", "level": tier["level"], "fast": bool(tier.get("fast")),
-            "old": False, "current": tier["current"]}
+            "old": False, "current": tier["current"], "context": version.get("context")}
 
 
 def price_for(model):
@@ -476,6 +477,8 @@ def row_for(model):
     row = {"id": found["id"], "label": found["name"], "runtime": "pi", "provider": "tico",
            "description": (found["model"] + " underneath") if found["model"] else "",
            "efforts": efforts, "default_effort": default}
+    if found.get("context"):
+        row["context_tokens"] = found["context"]
     if found["old"]:
         row["deprecated"] = True
         row["lineup"] = "old"
@@ -562,7 +565,8 @@ def view(cat=None):
             "levels": cat["levels"],
             "tiers": {row["id"]: {"name": row["name"], "department": row.get("department", ""), "level": row["level"],
                                   "fast": bool(row.get("fast")), "current": row["current"], "versions": [
-                {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"]}
+                {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"],
+                 **({"context": v["context"]} if v.get("context") else {})}
                 for v in reversed(row["versions"])]} for row in cat["models"] if row.get("department")}}
 
 

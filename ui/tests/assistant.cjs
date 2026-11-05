@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body, refs = {}) => ({id, from_actor: from, body, refs, created: now, kind: 'say'});
+const msg = (id, from, body, refs = {}) => ({id, sender_id: from, body, refs, created_at: now, kind: 'say'});
 
 async function open(browser, viewport, state) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
@@ -45,12 +45,13 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act1' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act2' && method === 'GET') return json({action: state.bulk});
     if (p === '/api/v2/assistant/actions/act3' && method === 'GET') return json({action: state.enrol});
+    if (p === '/api/v2/assistant/actions/act4' && method === 'GET') return json({action: state.routine});
     if (act) {
-      const card = {act2: state.bulk, act3: state.enrol}[act[1]] || state.card;
-      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      const card = {act2: state.bulk, act3: state.enrol, act4: state.routine}[act[1]] || state.card;
+      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'canceled';
       if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
       // A new computer's code comes back to the person who tapped, in this answer only.
-      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires: new Date(Date.now() + 9e5).toISOString(), operator: 'ana'}});
+      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires_at: new Date(Date.now() + 9e5).toISOString(), owner_id: 'ana'}});
       return json({action: card});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -69,13 +70,18 @@ function fixture() {
     diff: ['Plan the launch', 'Book the venue', 'Draft the post'].map(t => ({field: `Change task “${t}” (2 fields)`, new: 'close: true, note: Done'}))};
   state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
     result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
+  state.routine = {id: 'act4', summary: 'Handle customer mail', method: 'PATCH', path: '/api/v2/automations/auto_mail', status: 'pending',
+    description: 'Turn on routine “Customer mail”', proposed_via: 'assistant', result: null,
+    body: {enabled: true, trigger: {type: 'message', inbox: 'ana@acme.example'}, steps: [{type: 'llm', prompt: 'Draft customer replies'}]},
+    diff: [{field: 'Inbox', new: 'ana@acme.example', routine: true}, {field: 'Mode', new: 'Draft'},
+      {field: 'Customers', new: 'Leave in inbox'}, {field: 'Read later', new: 'Label Read later'}]};
   state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Acme', can_turn_on: false, room_id: 'room1',
-    messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol}, pending: []});
+    messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol, act4: state.routine}, pending: []});
   state.reply = () => {
     const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1));
-    const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)', {fast: true});
+    const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)');
     state.messages.push(user, bot);
-    return {message: user, reply: bot, fast: true, intent: 'waiting'};
+    return {message: user};
   };
   return state;
 }
@@ -112,7 +118,7 @@ function fixture() {
       await link.waitFor();
       assert.deepEqual(state.sent, ["What's waiting on me?"], tag + ': the chip sent its words once');
       assert.equal(await page.locator('#conv-thread .asst-hints').count(), 0, tag + ': no suggestions once it has messages');
-      assert.equal(await page.locator('#conv-thread .thinking').count(), 0, tag + ': a fast answer has no thinking state');
+      assert.equal(await page.locator('#conv-thread .thinking').count(), 0, tag + ': the answer in the thread has no thinking state');
 
       // The old link lands here; search no longer offers the Assistant (Ask does, on every page).
       await page.goto('https://tico-ui.test/#/person/ana/assistant');
@@ -180,6 +186,25 @@ function fixture() {
       await page.locator('.asst-card[data-action="act3"] [data-shown-once]').waitFor();
       assert.match(await page.locator('.asst-card[data-action="act3"] [data-shown-once] code').innerText(), /ONE-TIME-CODE-1234/, tag + ': the code is on the card');
 
+      // The routine's plan is readable with Details closed; raw flow data stays under Details.
+      state.messages.push(msg('m12', 'bot:coo', 'Needs your OK: Handle customer mail', {action: 'act4'}));
+      await page.goto('https://tico-ui.test/#/updates');
+      await page.goto('https://tico-ui.test/#/assistant');
+      const routine = page.locator('.asst-card[data-action="act4"]');
+      await routine.waitFor();
+      assert.equal(await routine.locator('[data-what]').innerText(), 'Turn on routine “Customer mail”');
+      assert.equal(await routine.locator('[aria-label="Changes"]').isVisible(), true);
+      assert.deepEqual(await routine.locator('[aria-label="Changes"] li').allInnerTexts(),
+        ['Inbox: ana@acme.example', 'Mode: Draft', 'Customers: Leave in inbox', 'Read later: Label Read later']);
+      assert.equal(await routine.locator('[aria-label="Request"]').isVisible(), false);
+      assert.equal(state.decided.some(([id]) => id === 'act4'), false, tag + ': the routine has not been approved');
+      await routine.locator('summary[title="Details"]').click();
+      assert.match(await routine.locator('[aria-label="Request"]').innerText(), /Draft customer replies/);
+      await routine.locator('summary[title="Details"]').click();
+      await routine.locator('[data-confirm]').click();
+      await page.locator('.asst-card[data-action="act4"][data-status="done"]').waitFor();
+      assert.deepEqual(state.decided.at(-1), ['act4', 'confirm']);
+
       // It fits: no sideways scroll, the box and Send are on screen.
       const at = await box.boundingBox(), send = await page.locator('#chat-composer .p-send').boundingBox();
       assert.ok(at && at.x >= 0 && at.x + at.width <= viewport.width + 1 && at.y + at.height <= viewport.height, tag + ': the box is on screen');
@@ -214,7 +239,7 @@ function fixture() {
       assert.match(await pill.innerText(), /New reply/, 'stick: the pill says a reply came');
       await page.locator('#chat-composer .p-text').fill('what changed?');
       await page.locator('#chat-composer .p-send').click();
-      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 27);
+      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 26);
       assert.ok(await gap() <= 1, 'stick: your own message takes you to the bottom');
       assert.equal(await pill.isHidden(), true, 'stick: and the pill goes');
       assert.deepEqual(errors, [], 'stick: no page errors');

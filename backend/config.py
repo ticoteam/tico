@@ -196,6 +196,11 @@ class Settings:
     # visual page sits apart from the app's cookies. Empty: the fallback (backend/visuals.py mode), where the app's
     # own address serves pictures, video and audio as media only and pages and SVG open in the file viewer.
     visual_origin: str = ""
+    # The Company page's own address and the folder its public files are written to (backend/company_page).
+    reader_origin: str = ""
+    # The domain a page's own address sits under when the install has no reader origin of its own: <slug>.<page domain>.
+    page_domain: str = ""
+    company_page_dir: str = ""
     runner_url: str = ""
     screen_relay_url: str = ""
     screen_relay_key: str = field(default="", repr=False)
@@ -352,6 +357,11 @@ class Settings:
     # messages per channel per pass.
     slack_digest_minutes: int = 60
     slack_digest_cap: int = 200
+    # Link previews (backend/slack_unfurl.py): task links on these hosts, besides the server's own, get a preview in
+    # Slack, whose button opens `slack_open_url` ("{id}" is the task id; default the task in the web app).
+    slack_unfurl_hosts: tuple = ()
+    slack_open_label: str = "Open in Tico"
+    slack_open_url: str = ""
     # Test-only identities are injected in memory, never enabled through HTTP or an env flag.
     test_identities: dict = field(default_factory=dict, repr=False)
     # `python -m backend.demo`: sample data, no bots, no outbound calls (backend/demo.py). A public
@@ -386,6 +396,9 @@ class Settings:
         self.public_url = self.public_url.rstrip("/")
         from .visuals import check_origin
         self.visual_origin = check_origin(self)
+        if self.reader_origin:          # most installs have none, and this import brings the whole sign-in stack
+            from .company_page.reader_app import check_origin as check_reader_origin
+            self.reader_origin = check_reader_origin(self)
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
         self.cors_origins = cors.parse(self.cors_origins)
@@ -403,7 +416,8 @@ class Settings:
         self.credential_admins_follow_owner = not _emails(",".join(self.credential_admins))
         self.credential_admins = _emails(",".join(self.credential_admins)) or tuple(
             filter(None, [self.owner_email]))
-        if self.local_owner_token_file and not self.loopback:
+        # A public demo is that session on purpose: it is read-only (backend/demo.py).
+        if self.local_owner_token_file and not self.loopback and not (self.demo and self.demo_public):
             raise RuntimeError(
                 "Local owner sign-in mints its own session and is only safe on loopback; "
                 + self.public_url + " is reachable by others. Unset TICO_LOCAL_OWNER_TOKEN_FILE "
@@ -444,7 +458,8 @@ class Settings:
                 "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
                 "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
-                "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
+                "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo,
+                "demo_public": self.demo and self.demo_public, "rehearsal": self.rehearsal}
 
     def allows_origin(self, origin):
         """Whether a browser write comes from this server's own page. A demo is opened by whatever
@@ -495,6 +510,9 @@ class Settings:
             public_url=(os.environ.get("TICO_PUBLIC_URL") or
                         "http://127.0.0.1:" + os.environ.get("TICO_PORT", "8765")).rstrip("/"),
             visual_origin=os.environ.get("TICO_VISUAL_ORIGIN", "").strip(),
+            reader_origin=os.environ.get("TICO_READER_ORIGIN", "").strip(),
+            page_domain=os.environ.get("TICO_PAGE_DOMAIN", "").strip().strip("."),
+            company_page_dir=os.environ.get("TICO_COMPANY_PAGE_DIR", "").strip(),
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
@@ -591,6 +609,9 @@ class Settings:
             slack_max_recipients=max(1, int(os.environ.get("TICO_SLACK_MAX_RECIPIENTS", "3") or "3")),
             slack_digest_minutes=max(0, int(os.environ.get("TICO_SLACK_DIGEST_MINUTES", "60") or "60")),
             slack_digest_cap=max(1, int(os.environ.get("TICO_SLACK_DIGEST_CAP", "200") or "200")),
+            slack_unfurl_hosts=tuple(h.strip() for h in os.environ.get("TICO_SLACK_UNFURL_HOSTS", "").split(",") if h.strip()),
+            slack_open_label=os.environ.get("TICO_SLACK_OPEN_LABEL", "").strip() or "Open in Tico",
+            slack_open_url=os.environ.get("TICO_SLACK_OPEN_URL", "").strip(),
         )
         # Local by default, public only with sign-in: no domain and no sign-in setup runs on loopback, but a server
         # that others can reach never starts without a way to sign in.

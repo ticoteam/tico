@@ -23,4 +23,4 @@ Direction matters. Symmetric relations (`competes_with`, `partners_with`) are st
 | member_of | `company/self member_of channel/trade-association` |
 | mentioned_in | `company/example-co mentioned_in channel/r-smallbusiness` |
 
-Add a verb by editing the constant in `backend/market.py` and this page in the Librarian template. Do not invent one in a write.
+If a real relation keeps being needed and none of these fits, say so in `_librarian/missing.md`. Do not invent one in a write.

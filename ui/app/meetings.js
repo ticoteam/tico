@@ -50,6 +50,7 @@ async function pageNotes() {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
+  meetRecorderLink();
   $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog = $('#notes-modal');
   const closeNote = () => {
@@ -158,7 +159,7 @@ async function meetReviewAct(state, button, action, id) {
   finally { state.reviewBusy = false; button.disabled = false; }
 }
 function meetReviewDetail(rec) {
-  const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.name !== 'coo').map(e => `<option value="${esc(e.name)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
+  const sendTo = `<option value="auto">Send to ${esc(assistantName())}</option>` + activeEmps().filter(e => e.id !== 'coo').map(e => `<option value="${esc(e.id)}">Send to ${esc(e.display_name)}</option>`).join('') + '<option value="">Don\'t send</option>';
   return `<div class="note-send meet-review-detail"><span class="meet-review-tag">${rec.review_state === 'pending' ? 'Pending' : 'Dismissed'}</span><span class="muted meet-review-who">Only you see this</span><span class="spacer"></span>
     ${rec.review_state === 'pending' ? `<select id="meet-review-private" aria-label="Who sees it once shared"><option value="team"${!rec.private ? ' selected' : ''}>Team</option><option value="private"${rec.private ? ' selected' : ''}>Private</option></select>
     <select id="meet-review-send" aria-label="Bot that files its tasks">${sendTo}</select>
@@ -195,6 +196,19 @@ async function meetSettingsOpen(state) {
 // rest in a dialog (ui/meeting-importers.js).
 // Tico Recorder for Mac: the newest release's disk image.
 const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
+// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
+// A browser can't tell, so it keeps the download.
+async function meetRecorderLink() {
+  if (!nativeHas('openRecorder')) return;
+  let installed = false;
+  try { installed = await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch {}
+  const link = $('#meet-recorder');
+  if (!installed || !link) return;
+  const button = document.createElement('button');
+  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
+  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
+  link.replaceWith(button);
+}
 const MEET_SOURCES = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -233,7 +247,7 @@ function meetTile(state, source, big) {
   const account = source.id === 'granola' && !!state.granola;
   const mine = account ? granolaTileState(state) : null;
   const st = mine || (known ? meetSourceState(row, source.id) : {key: '', word: ''});
-  const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_success) : '';
+  const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
   const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
   return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile${big ? ' big' : ' item'}" data-state="${st.key}" ${attrs}${big ? '' : ' role="menuitem"'} aria-label="${esc(label)}">
@@ -447,9 +461,10 @@ function meetMadeChips(r) {
   }
   return chips.join('');
 }
-const sentLink = s => s?.task
-  ? `<a href="#/bot/${esc(s.slug)}/tasks">${esc(empName(s.slug))}</a>`
-  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${esc(empName(s.slug))}</a>`;
+// `bot` is the bot's id; a record sent before ids says `slug`.
+const sentLink = s => { const bot = s?.bot || s?.slug; return s?.task
+  ? `<a href="#/bot/${encodeURIComponent(bot)}/tasks">${empName(bot)}</a>`
+  : `<a href="${esc(s.url || `${GH}/issues/${s.issue}`)}" target="_blank" rel="noopener">${empName(bot)}</a>`; };
 // "Today, 2:37 PM" / "Yesterday, 9:12 AM" / "Sep 4, 2:37 PM"
 function meetWhen(iso) {
   if (!iso) return '';
@@ -537,7 +552,7 @@ function meetPaint(state, rec) {
     `<details data-note-section="source-${t.id}"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)} transcript${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
       ${t.summary ? `<div class="note-body">${esc(t.summary).replace(/\n/g, '<br>')}</div>` : ''}
       <div class="note-transcript">${(t.turns || []).map(turn => `<p><span class="muted mono">[${mmss(turn.start_ms)}]</span> ${turn.speaker ? `<strong>${esc(turn.speaker)}</strong> ` : ''}${esc(turn.text)}</p>`).join('')}</div></details>`).join('');
-  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.name)}">${esc(e.display_name)}</option>`).join('');
+  const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('');
   const owner = rec.owner === 'owner' ? 'the owner' : (rec.owner || 'the sender');
   const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
   const leadLink = rec.source === 'close' && /^https:\/\//i.test(rec.source_context?.lead_url || '')
@@ -669,7 +684,7 @@ function meetPaint(state, rec) {
     const msg = $('#meet-msg');
     send.disabled = true; send.title = msg.textContent = 'Sending…';
     try {
-      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {slug: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
+      toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {bot_id: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
       await refresh(true); await meetLoad(state, true);
     } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; send.removeAttribute('title'); }
   };
@@ -715,7 +730,7 @@ function meetNotesOpen(state) {
           <label>Recording link (optional) <input type="url" id="manual-media" placeholder="https://…"></label>
         </div>
       </div>
-      <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.name)}">${esc(e.display_name)}</option>`).join('')}</select></label>
+      <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('')}</select></label>
       <label class="import-private"><input type="checkbox" id="manual-private"> Private: participants, its owner and the team owner only</label>
       <div class="row"><button class="primary" type="submit" id="manual-go">Add notes</button>
         <button class="ghost" type="button" id="manual-cancel">Cancel</button><span class="muted" id="manual-msg" role="status"></span></div>
@@ -792,7 +807,7 @@ const meetItemLine = it => {
   const d = it.detail || {};
   // A bare "ana" or "support" is a person's id or a bot's name: show the name, as everywhere else.
   const who = o => String(o).includes(':') ? actorLabel(o) : (S.people || []).find(p => p.id === o)?.name
-    || (S.emps.some(e => e.name === o) ? botDisplayName(o) : o);
+    || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
   if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
     /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
   if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
@@ -818,11 +833,15 @@ function meetSeek(ms) {
   line.classList.add('meet-seeked');
   setTimeout(() => line.classList.remove('meet-seeked'), 1500);
 }
+// The owner picker's bot options are bare ids; a task owner is the actor, `bot:<id>`.
+const meetFieldValue = f => { const v = f.value.trim(); return f.dataset.field === 'owner' && !v.includes(':') ? 'bot:' + v : v; };
 function meetItemFields(section, detail) {
   const fields = (MEET_SECTIONS.find(s => s.key === section) || {fields: []}).fields;
   return fields.map(([name, label]) => {
     if (name === 'owner') {
-      const current = (detail || {}).owner || '';
+      // An owner the notes named by slug (or a bare name) is picked by its id.
+      const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
+      const current = bot ? bot.id : named;
       return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
     }
     return `<input type="text" data-field="${name}" placeholder="${esc(label)}" aria-label="${esc(label)}" value="${esc((detail || {})[name] || '')}">`;
@@ -869,6 +888,7 @@ function meetItemsRender(state, rec) {
         ${canPush && proposed > 1 ? `<button class="linkish" type="button" data-all="${key}">Push all</button>` : ''}
         <button class="linkish" type="button" data-add="${key}">Add</button></header>
       ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
+      ${key === 'task' ? '<div data-linked-tasks></div>' : ''}
       ${state.itemAdd === key ? `<div class="meet-item"><form data-new="${key}">
           <textarea data-text aria-label="What to add" placeholder="What should happen?"></textarea>
           ${meetItemFields(key, {})}
@@ -877,6 +897,7 @@ function meetItemsRender(state, rec) {
   }).join('');
   box.innerHTML = `<div class="cols">${sections}</div>`;
   meetItemsHandlers(state, rec);
+  meetLinkedTasksRender(state, rec.id);
   box.querySelectorAll('.at[data-seek]').forEach(b => { b.onclick = () => meetSeek(Number(b.dataset.seek)); });
 }
 function meetItemsHandlers(state, rec) {
@@ -911,7 +932,7 @@ function meetItemsHandlers(state, rec) {
       const text = form.querySelector('[data-text]').value.trim();
       if (!text) return;
       const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = f.value.trim(); });
+      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
       state.itemAdd = '';
       if (await call('', {section: form.dataset.new, text, detail})) toast('Added');
       else repaint();
@@ -924,7 +945,7 @@ function meetItemsHandlers(state, rec) {
       const text = form.querySelector('[data-text]').value.trim();
       if (!text) return;
       const detail = {};
-      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = f.value.trim(); });
+      form.querySelectorAll('[data-field]').forEach(f => { if (f.value.trim()) detail[f.dataset.field] = meetFieldValue(f); });
       state.itemEdit = '';
       if (await call('/' + encodeURIComponent(form.dataset.edit), {text, detail}, form.dataset.edit)) toast('Saved');
       else repaint();
@@ -966,10 +987,96 @@ async function meetItemsLoad(state, id) {
   }
   return data;
 }
+function meetLinkedTasksRender(state, id) {
+  if (MEET !== state || !state.open || state.selected !== id) return;
+  const slot = $('[data-linked-tasks]');
+  if (!slot) return;
+  const linked = state.linkedTasks?.[id];
+  const held = new Map([...slot.querySelectorAll('[data-linked-task]')].map(row => [row.dataset.linkedTask, row]));
+  for (const task of linked?.tasks || []) {
+    let row = held.get(task.task_id);
+    held.delete(task.task_id);
+    if (!row) { row = document.createElement('div'); row.className = 'meet-item'; row.dataset.linkedTask = task.task_id; }
+    const html = `<span class="t">${task.number ? '#' + esc(task.number) + ' ' : ''}${esc(task.title)} · ${esc(task.status)}</span><a href="#/task/${encodeURIComponent(task.task_id)}">Open</a>`;
+    if (row.innerHTML !== html) row.innerHTML = html;
+    slot.append(row);
+  }
+  for (const row of held.values()) row.remove();
+  const empty = $('[data-sec="task"] .meet-empty');
+  if (empty) empty.hidden = !!linked?.tasks?.length;
+  let more = $('[data-linked-more]', slot);
+  if (!linked?.next_cursor) { more?.remove(); more = null; }
+  else {
+    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'linkish'; more.dataset.linkedMore = ''; more.textContent = 'More'; }
+    slot.append(more);
+  }
+  if (more) more.onclick = () => { more.disabled = true; meetLinkedTasksLoad(state, id, linked.next_cursor); };
+}
+async function meetLinkedTasksLoad(state, id, cursor) {
+  const changes = new Map();
+  (state.linkedTaskChanges ||= {})[id] = changes;
+  try {
+    const target = cursor ? 0 : Math.max(20, state.linkedTasks?.[id]?.tasks?.length || 0);
+    const previous = cursor ? state.linkedTasks?.[id]?.tasks || [] : [];
+    const rows = new Map(previous.map(task => [task.task_id, task]));
+    let next = cursor, result;
+    do {
+      const query = new URLSearchParams({limit: '20'});
+      if (next) query.set('cursor', next);
+      result = await get(`/v2/meetings/${encodeURIComponent(id)}/tasks?${query}`);
+      if (MEET !== state || state.linkedTaskChanges[id] !== changes) return;
+      for (const task of result.tasks || []) rows.set(task.task_id, task);
+      next = result.next_cursor;
+    } while (!cursor && next && rows.size < target);
+    for (const [tid, task] of changes) {
+      if (task) rows.set(tid, task);
+      else rows.delete(tid);
+    }
+    state.linkedTasks = {...state.linkedTasks, [id]: {...result, tasks: [...rows.values()]}};
+    meetLinkedTasksRender(state, id);
+  } catch (e) {
+    if (MEET === state && state.selected === id) {
+      const more = $('[data-linked-more]');
+      if (more) more.disabled = false;
+      if (cursor) toast(e.message, true);
+    }
+  }
+}
+// The task event carries only links whose meeting and task this viewer can both read.
+liveOn('tasks', event => {
+  const state = MEET, id = state?.selected;
+  if (!state?.open || !id) return;
+  const linked = state.linkedTasks?.[id];
+  const change = event.meeting_links?.find(link => link.meeting_id === id);
+  const existing = linked?.tasks?.find(task => task.task_id === event.id);
+  const changes = (state.linkedTaskChanges ||= {});
+  const pending = (changes[id] ||= new Map());
+  const known = existing || pending.get(event.id);
+  if (event.bulk || ((event.kind === 'meetings' || event.kinds?.includes('meetings')) && !event.meeting_links)) {
+    liveSoon('meeting-tasks:' + id, () => { if (MEET === state && state.open && state.selected === id) meetLinkedTasksLoad(state, id); }, 200);
+    return;
+  }
+  if (!change && !known) return;
+  if (event.gone || (change && !change.link)) pending.set(event.id, null);
+  else if (event.task) {
+    pending.set(event.id, {...(change?.link || known), task_id: event.id, number: event.task.number,
+      title: String(event.task.title || '').slice(0, 200), status: event.task.status});
+  } else return;
+  const rows = new Map((linked?.tasks || []).map(task => [task.task_id, task]));
+  for (const [tid, task] of pending) { if (task) rows.set(tid, task); else rows.delete(tid); }
+  state.linkedTasks = {...state.linkedTasks, [id]: {...linked, tasks: [...rows.values()]}};
+  meetLinkedTasksRender(state, id);
+});
+liveOn('reset', () => {
+  if (!MEET?.open || !MEET.selected) return;
+  MEET.linkedTaskChanges = {};
+  meetLinkedTasksLoad(MEET, MEET.selected);
+});
 function meetItemsWire(state, rec) {
   if (!$('#meet-sections')) return;
   meetItemsRender(state, rec);
   meetItemsLoad(state, rec.id);
+  meetLinkedTasksLoad(state, rec.id);
 }
 
 // Click the title to rename it, Enter or blur saves, Escape keeps the old name (owner only).

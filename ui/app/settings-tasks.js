@@ -1,11 +1,10 @@
 /* ui/app/settings-tasks.js — Settings > Tasks: what bots may put on you
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
-// What bots may put on you (backend/ask_ingest.py): your own Off / Rehearsal / On, how many open items you take before
+// What bots may put on you (backend/ask_ingest.py): your own Off or On, how many open items you take before
 // the filter tightens, the chores budget and your lines; an owner or admin also sets the team default everyone starts
 // from. A change applies to the next item; nothing already on a plate moves.
 const ASK_FILTER_MODES = [['off', 'Off', 'Bots put things on you as before.'],
-  ['rehearsal', 'Rehearsal', 'Nothing changes; Filtered for you lists what On would have kept off.'],
   ['on', 'On', 'Over your budget, bots keep what doesn’t meet your lines; you can let any of it through.']];
 let ASK_FILTER = null;
 async function askFilterSettingsLoad() {

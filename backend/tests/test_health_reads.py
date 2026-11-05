@@ -5,6 +5,7 @@ from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_assigned_start import advance, cancel, clock, sweep  # noqa: F401
 from backend.tests.test_status_reads import busy, setup
 from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def counted(api, monkeypatch, path, token="ana-test", trace=None):
@@ -118,7 +119,7 @@ def test_review_children_seek_the_parent_instead_of_scanning_every_task(api):
     from backend.health import review_children_sql
     store = api.app.state.store
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "Task", "Done.", "human:ana", "bot:ops", "done", H.now(), H.now(), 0)
                        for _ in range(2000)])
@@ -143,12 +144,12 @@ def stuck_company(api, monkeypatch, count):
     with api.app.state.store.transaction() as c:
         for k in range(count):
             slug, other = f"busy-{k}", f"busy-{(k + 1) % count}"
-            tasks = [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner=? ORDER BY rowid", ("bot:" + slug,))]
+            tasks = [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id=? ORDER BY rowid", ("bot:" + slug,))]
             H.task_create(c, "bot:" + slug, f"Part of {slug}", "Part.", "bot:" + other, parent_id=tasks[0])
-            c.execute("UPDATE tasks SET status='waiting',blocked_since=?,blocked_kind='dependency' WHERE id=?",
-                      (H.now(), tasks[0]))
+            c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tasks[0],))
+            set_holds(c, tasks[0], blocked_since=H.now(), blocked_kind='dependency')
             blocker = H.task_create(c, "human:ana", f"First for {slug}", "First.", "bot:" + other)
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created) "
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) "
                       "VALUES(?,?,'blocks','human:ana',?)", (blocker["id"], tasks[3], H.now()))
             if k % 3 == 0:
                 c.execute("UPDATE tasks SET status='doing' WHERE id=?", (tasks[2],))
@@ -157,6 +158,34 @@ def stuck_company(api, monkeypatch, count):
         for k in range(count):
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (f"queue-refusal:busy-{k}", encode(
                 {"since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now(), "job": "j", "reason": "r"})))
+
+
+def refuse_queues(api, monkeypatch, slugs):
+    """Each of these bots' queues refused for over 12 hours, as stuck_company leaves them."""
+    from backend.store import H, encode
+    from backend.tests.test_run_backoff import at
+    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
+    with api.app.state.store.transaction() as c:
+        for slug in slugs:
+            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (f"queue-refusal:{slug}", encode(
+                {"since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now(), "job": "j", "reason": "r"})))
+
+
+def test_refused_queue_checks_read_the_company_limit_once_for_all_bots(api, monkeypatch):
+    # Each refused queue's claim check read the company's limit default fresh: its budget cutoffs (the Finance book
+    # first, one read a bot) and every period's spend. One pass over the refused queues shares that default now.
+    from backend.tests.test_run_backoff import at
+    machine = setup(api, monkeypatch, tasks=2)
+    at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
+    busy(api, machine, 0, 6)
+    refuse_queues(api, monkeypatch, [f"busy-{k}" for k in range(6)])
+    counted(api, monkeypatch, "/api/v2/health")
+    few = counted(api, monkeypatch, "/api/v2/health")[1]
+    at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
+    busy(api, machine, 6, 12)
+    refuse_queues(api, monkeypatch, [f"busy-{k}" for k in range(6, 18)])
+    many = counted(api, monkeypatch, "/api/v2/health")[1]
+    assert many == few, (few, many)
 
 
 def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api, monkeypatch):

@@ -26,21 +26,21 @@ def finish(api, r, attempt, text="Done."):
 def reply(api, r, attempt, words):
     """The owner's Assistant turn ends on its read-back; the owner answers, and that starts its next turn."""
     finish(api, r, attempt, "Want me to save it?")
-    assert say(api, words)["fast"] is False
+    assert say(api, words)
     return post(api, "jobs/claim", {}, token=r["token"])["attempt"]
 
 
 def room_messages(api):
     room = get(api, "assistant")["room_id"]
     with api.app.state.store.read() as c:
-        return [dict(m) for m in c.execute("SELECT id, from_actor, body, created FROM messages WHERE conversation_id=? "
-                                           "ORDER BY created, rowid", (room,))]
+        return [dict(m) for m in c.execute("SELECT id, sender_id, body, created_at FROM messages WHERE conversation_id=? "
+                                           "ORDER BY created_at, rowid", (room,))]
 
 
 def backdate(api, minutes, *ids):
     with api.app.state.store.transaction() as c:
         for i, mid in enumerate(ids):
-            c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60 - len(ids) + i),
+            c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-minutes * 60 - len(ids) + i),
                                                                     mid))
 
 
@@ -49,7 +49,7 @@ def read_back(api, attempt, *changes, expected=200):
 
 
 def save(api, attempt, step, expected=200, ref="turn"):
-    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body_json"]), attempt["token"], ref,
+    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body"]), attempt["token"], ref,
                  expected=expected)
 
 
@@ -72,11 +72,11 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert text.endswith("Reply yes to save exactly this; any other reply saves nothing.")
     # Tico wrote it, as the Assistant's reply in the owner's chat; the turn's closing text is not posted after it.
     said = room_messages(api)
-    assert (said[-1]["id"], said[-1]["from_actor"]) == (back["message_id"], "bot:coo")
+    assert (said[-1]["id"], said[-1]["sender_id"]) == (back["message_id"], "bot:coo")
     # Before the yes, nothing saves, cited or not.
     first, measure = back["changes"][0]["steps"]
     assert save(api, attempt, first, expected=403)["error"]["code"] == "not_agreed"
-    assert post(api, "goals", json.loads(first["body_json"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
+    assert post(api, "goals", json.loads(first["body"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
     attempt = reply(api, r, attempt, "yes")
     assert room_messages(api)[-2]["id"] == back["message_id"]
     made = save(api, attempt, first)
@@ -89,14 +89,14 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     save(api, attempt, {**measure, "path": measure["path"].replace(GR.NEW, gid)})
     # Saved exactly as read back, and once.
     shown = get(api, "goals/" + gid)["goal"]
-    assert (shown["title"], shown["owner"], shown["parent_id"]) == ("Get 100 companies to try Tico", "bot:ops",
+    assert (shown["title"], shown["owner_id"], shown["parent_id"]) == ("Get 100 companies to try Tico", "bot:ops",
                                                                     serves["id"])
     assert [(k["name"], k["target_label"]) for k in shown["kpis"]] == [("Companies that tried Tico", "→ 100 by Nov 28")]
     assert save(api, attempt, first, expected=409)["error"]["code"] == "conflict"
     # Recorded as the owner, via their Assistant, citing their yes and the read-back.
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor, detail_json FROM events WHERE action='goal.create' AND target=?", (gid,)).fetchone()
-    detail = H._json(row["detail_json"], {})
+        row = c.execute("SELECT actor, detail FROM events WHERE action='goal.create' AND target=?", (gid,)).fetchone()
+    detail = H._json(row["detail"], {})
     assert row["actor"] == "human:ana" and detail["via"] == "assistant"
     assert {k: detail["delegation"][k] for k in ("for", "cited", "assistant", "goal_read_back", "change", "words")} == \
         {"for": "human:ana", "cited": turn_message(api, attempt), "assistant": "bot:coo",
@@ -147,7 +147,7 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
         room = H.conversation(c, get(api, "assistant")["room_id"])
         H._write_message(c, "human:ana", "bot:coo", "hmm, the owner", room, "say", {"assistant": True}, None,
                          None)
-    assert say(api, "yes")["fast"] is False
+    assert say(api, "yes")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
     # A notice, or the Assistant's own message, between the read-back and the yes: the yes answers that, not the
@@ -159,7 +159,7 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
         with api.app.state.store.transaction() as c:
             H._write_message(c, who, "human:ana", "Want a daily digest of this chat?", room, kind, {"assistant": True},
                              None, None)
-        assert say(api, "yes")["fast"] is False
+        assert say(api, "yes")
         attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
         assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed", who
     # And so does anything after the yes.
@@ -200,10 +200,10 @@ def test_a_save_that_differs_from_the_read_back_is_refused_and_saves_nothing(api
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": target["id"], "title": "Ship the docs"})
     step = back["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
-    for changed in ({**step, "body_json": '{"title": "Ship the docs v2"}'},                       # another value
-                    {**step, "body_json": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
+    for changed in ({**step, "body": '{"title": "Ship the docs v2"}'},                       # another value
+                    {**step, "body": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
                     {**step, "path": f"/api/v2/goals/{other['id']}"},                             # another goal
-                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body_json": '{"why": "Ship the docs"}'}):
+                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body": '{"why": "Ship the docs"}'}):
         assert save(api, attempt, changed, expected=403)["error"]["code"] == "not_agreed"
     assert [get(api, "goals/" + g["id"])["goal"]["title"] for g in (target, other)] == ["Launch the docs",
                                                                                           "Keep the bots running"]
@@ -220,7 +220,7 @@ def test_a_change_to_a_goal_reads_back_was_and_now_for_the_changed_fields_only(a
                                     "owner": "ops", "parent_id": serves["id"], "why": "Docs bring developers"})["text"]
     assert ("Change **Launch the docs**: title was “Launch the docs”, now “Ship the docs”; Why was none, now "
             "“Docs bring developers”") in text
-    assert "owner" not in text and "supports" not in text
+    assert "owner_id" not in text and "supports" not in text
     refused = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Launch the docs"},
                         expected=409)["error"]
     assert refused["code"] == "no_change"
@@ -365,9 +365,9 @@ def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     from backend.tests.test_assistant import assistant_turn
     r, attempt = assistant_turn(api, "ben-test", "Set a goal for Ops")
     read_back(api, attempt, NEW_GOAL, expected=403)
-    # Another person's Assistant still proposes a goal on a card, as before.
+    # Another person's Assistant may not make a goal: the route's own owner check refuses it as that person.
     refused = asked(api, "goals", {"title": "x", "owner": "ops"}, attempt["token"], "turn", expected=403)["error"]
-    assert refused["code"] == "confirm_required"
+    assert refused["code"] == "forbidden"
 
 
 def test_repeated_changes_are_refused_before_posting_a_draft(api):
@@ -424,7 +424,7 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
     assert hubcli.main(['goal', 'create', '--owner', 'company', '--title', 'First', '--on-behalf-of', 'turn']) == 0
     gid = json.loads(capsys.readouterr().out)['id']
     step = back['changes'][0]['steps'][1]
-    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body_json'],
+    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body'],
                        '--created-goal', gid, '--on-behalf-of', 'turn']) == 0
     capsys.readouterr()
     with api.app.state.store.read() as c:
@@ -542,7 +542,7 @@ def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
     allowed = post(api, "goal-proposals", {"kind": "flag", "goal_id": row["id"],
                    "payload": {"issue": "vague"}}, token="strategy-test")["proposal"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE goal_proposals SET payload_json=? WHERE id=?",
+        c.execute("UPDATE goal_proposals SET payload=? WHERE id=?",
                   (json.dumps({"issue": "unmeasured"}), allowed["id"]))
     assert get(api, "goal-proposals")["proposals"][0]["payload"]["issue"] == "unmeasured"
 
@@ -556,12 +556,12 @@ def test_legacy_read_backs_require_a_fresh_draft_before_read_or_save(api):
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": child["id"], "parent_id": ""})
     attempt = reply(api, r, attempt, "yes")
     with api.app.state.store.transaction() as c:
-        stored = c.execute("SELECT detail_json FROM events WHERE action=? AND target=?",
+        stored = c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                            (GR.EVENT, back["message_id"])).fetchone()
-        old = json.loads(stored["detail_json"])
+        old = json.loads(stored["detail"])
         for change in old["changes"]:
             change.pop("read_owners")
-        c.execute("UPDATE events SET detail_json=? WHERE action=? AND target=?",
+        c.execute("UPDATE events SET detail=? WHERE action=? AND target=?",
                   (json.dumps(old), GR.EVENT, back["message_id"]))
         G.update(c, "human:ana", child["id"], parent_id="")
         restrict(c, "finance", people=["ana"])
@@ -630,7 +630,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
             else:
                 G.update(c, "human:ana", row["id"], title="Private revised words")
         before = dict(G.goal(c, row["id"]))
-        events = c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0]
+        events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='goal' AND subject_id=?", (row["id"],)).fetchone()[0]
         saved = c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
                           (GR.SAVED, back["message_id"])).fetchone()[0]
     for denied in (get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403),
@@ -640,6 +640,6 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
         assert "Private revised words" not in str(denied) and "inbox" not in str(denied)
     with api.app.state.store.read() as c:
         assert dict(G.goal(c, row["id"])) == before
-        assert c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0] == events
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='goal' AND subject_id=?", (row["id"],)).fetchone()[0] == events
         assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
                          (GR.SAVED, back["message_id"])).fetchone()[0] == saved

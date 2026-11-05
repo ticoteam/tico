@@ -6,6 +6,8 @@ from backend import hubdb as H
 from backend.store import encode
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import HEAD, move, ticket as base_ticket
+from backend.tests.usage_rows import segment
+from backend import bot_settings as BS
 
 RECEIPT = f"Tests: base {'c' * 40} head {HEAD}: 9 passed, 0 failed"
 # The builder (cpo) runs on Anthropic; rev-a and rev-b on OpenAI; rev-c on Anthropic like the builder.
@@ -20,10 +22,11 @@ def team(api, seen=None):
         for slug, model in MODELS.items():
             config = {"name": slug, "runtime": "claude" if model.startswith("claude") else "codex", "model": model,
                       "status": "active", **({"profile": "reviewer"} if slug.startswith("rev-") else {})}
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE "
-                      "SET config_json=excluded.config_json", (slug, encode(config), "engineering", "ana"))
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r1','box','ana','h',?,?)",
-                  (H.now(), seen or H.now()))
+            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?) ON CONFLICT(bot) DO NOTHING",
+                      (slug, "engineering", "ana"))
+            BS.write(c, slug, config)
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (seen or H.now(),))
         for slug in ("rev-a", "rev-b", "rev-c"):
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
@@ -42,10 +45,9 @@ def ticket(api, receipt):
     """A synthetic PR built by cpo on Anthropic, with head-specific run evidence for the family gate."""
     task = base_ticket(api, receipt)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
                   ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES(?,0,'claude-opus-5-5','anthropic','claude')", ("builder-" + task["id"],))
+        segment(c, "builder-" + task["id"], model='claude-opus-5-5', provider='anthropic', runtime='claude')
     return task
 
 
@@ -65,8 +67,8 @@ def checks(api, task):
 def woken(api, slug, task_id):
     """The queued, unheld job that wakes `slug` on a task, with its age in seconds."""
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT j.created FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                        "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs_json,'$.task')=?",
+        row = c.execute("SELECT j.created_at FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+                        "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task')=?",
                         (slug, task_id)).fetchone()
     return (H.parse_ts(H.now()) - H.parse_ts(row[0])).total_seconds() if row else None
 
@@ -80,11 +82,11 @@ def test_entering_review_1_files_the_check_to_the_least_busy_reviewer_and_wakes_
     r = move(api, task)
     assert r.status_code == 200, r.text
     [check] = checks(api, task)
-    assert check["title"] == "Review 1: PR #412" and check["owner"] == "bot:rev-a"
-    assert check["requester"] == "bot:cpo", "filed as the builder's own request, so its verdict comes back to it"
+    assert check["title"] == "Review 1: PR #412" and check["owner_id"] == "bot:rev-a"
+    assert check["requester_id"] == "bot:cpo", "filed as the builder's own request, so its verdict comes back to it"
     with api.app.state.store.read() as c:
-        head = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head'", (check["id"],)).fetchone()
-        filed = c.execute("SELECT actor,note FROM task_events WHERE task_id=? AND field='check_filed'", (task["id"],)).fetchone()
+        head = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head'", (check["id"],)).fetchone()
+        filed = c.execute("SELECT actor_id AS actor,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed'", (task["id"],)).fetchone()
     assert head[0] == HEAD
     assert filed["actor"] == H.KEEPER and "rev-a" in filed["note"]
     age = woken(api, "rev-a", check["id"])
@@ -99,14 +101,13 @@ def test_pool_candidate_model_details_show_configured_and_actual_families(api):
             "reviewer-xai": {"name": "Reviewer xAI", "runtime": "fake", "status": "active"},
             "pr-reviewer-sol": {"name": "Reviewer GPT", "runtime": "fake", "status": "active"},
         }, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)", (
-            "reviewer-xai", encode({"runtime": "claude", "model": "claude-haiku-5-5"}), "engineering", "ana"))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)", (
-            "pr-reviewer-sol", encode({"runtime": "codex", "model": "gpt-6-sol"}), "engineering", "ana"))
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('fallback-turn','pr-reviewer-sol',?,?)",
+        c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', ('reviewer-xai', 'engineering', 'ana'))
+        BS.write(c, 'reviewer-xai', {'runtime': 'claude', 'model': 'claude-haiku-5-5'})
+        c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', ('pr-reviewer-sol', 'engineering', 'ana'))
+        BS.write(c, 'pr-reviewer-sol', {'runtime': 'codex', 'model': 'gpt-6-sol'})
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('fallback-turn','pr-reviewer-sol',?,?)",
                   (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES('fallback-turn',0,'claude-opus-5-5','anthropic','claude')")
+        segment(c, 'fallback-turn', model='claude-opus-5-5', provider='anthropic', runtime='claude')
         candidates = {item["slug"]: item for item in check_pools.candidate_details(c,
                       ["reviewer-xai", "pr-reviewer-sol"])}
     assert candidates["reviewer-xai"]["configured"]["provider"] == "Anthropic"
@@ -121,17 +122,15 @@ def test_filed_check_captures_actual_builder_and_checker_families_for_its_head(a
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a"])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('builder-turn','cpo',?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('builder-turn','cpo',?,?,?)",
                   (H.now(), H.now(), task["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES('builder-turn',0,'claude-opus-5-5','anthropic','claude')")
+        segment(c, 'builder-turn', model='claude-opus-5-5', provider='anthropic', runtime='claude')
     assert move(api, task).status_code == 200
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('checker-turn','rev-a',?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('checker-turn','rev-a',?,?,?)",
                   (H.now(), H.now(), check["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES('checker-turn',0,'gpt-6-sol','openai','codex')")
+        segment(c, 'checker-turn', model='gpt-6-sol', provider='openai', runtime='codex')
         check_pools.capture_attempt(c, "checker-turn")
         evidence = c.execute("SELECT * FROM check_head_provenance WHERE check_id=? AND head=?",
                              (check["id"], HEAD)).fetchone()
@@ -148,7 +147,7 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
     assert move(api, task).status_code == 200
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
         H.task_update(c, "bot:rev-a", check["id"], status="done", verdict="approve", verdict_head=HEAD)
         from backend import verdict_moves
         assert verdict_moves.after_capture(c, check["id"], HEAD, "review-turn") is None
@@ -158,13 +157,13 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
                   "provider": "openai", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "codex",
                   "harness": "codex", "effort": "high", "profile": "engineering"}
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
-        events = c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+        events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move'",
                            (check["id"],)).fetchone()[0]
         assert events == 1
         moved_step = c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
                                (task["id"],)).fetchone()[0]
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move'",
                          (check["id"],)).fetchone()[0] == 1
     assert moved_step == "Review 1 Fixes"
 
@@ -176,9 +175,9 @@ def test_same_family_fallback_verdict_counts_and_advances_the_ticket(api):
     set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
     assert move(api, task).status_code == 200
     [check] = checks(api, task)
-    assert check["owner"] == "bot:rev-a"
+    assert check["owner_id"] == "bot:rev-a"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
         H.task_update(c, "bot:rev-a", check["id"], status="done", verdict="approve", verdict_head=HEAD)
         actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": "claude-opus-5-5",
                   "provider": "anthropic", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "claude",
@@ -187,7 +186,7 @@ def test_same_family_fallback_verdict_counts_and_advances_the_ticket(api):
         rerouted = H.task(c, check["id"])
         active = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
         active = [child for child in active if child["status"] in H.ACTIVE_STATUSES]
-    assert rerouted["owner"] == "bot:rev-a" and rerouted["status"] == "done"
+    assert rerouted["owner_id"] == "bot:rev-a" and rerouted["status"] == "done"
     assert rerouted["verdict"] == "approve" and rerouted["verdict_head"] == HEAD
     assert not active
     with api.app.state.store.read() as c:
@@ -199,7 +198,7 @@ def test_same_family_fallback_verdict_counts_and_advances_the_ticket(api):
 
 def _finish(c, turn, bot, check, model, provider, runtime):
     """`bot` records approve at HEAD in its own turn on `check`, then the turn finishes with the model it actually ran."""
-    c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES(?,?,?,?)", (turn, bot, H.now(), check["id"]))
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES(?,?,?,?)", (turn, bot, H.now(), check["id"]))
     H.task_update(c, "bot:" + bot, check["id"], status="done", verdict="approve", verdict_head=HEAD)
     actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": model, "provider": provider,
               "est_cost_usd": 0.01, "billing": "subscription", "runtime": runtime, "harness": runtime,
@@ -222,7 +221,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
         assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Review 1 Fixes"
-        moves = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY rowid",
+        moves = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' ORDER BY rowid",
                           (check["id"],)).fetchall()
         assert [json.loads(m[0])["attempt_id"] for m in moves] == ["review-1"]
         evidence = c.execute("SELECT builder_families,configured_families,checker_families "
@@ -253,7 +252,7 @@ def test_unknown_builder_runtime_still_gets_a_free_pool_checker(api):
     set_pool(api, task, "Review 1", ["rev-a"])
     assert move(api, task).status_code == 200
     [check] = checks(api, task)
-    assert check["owner"] == "bot:rev-a"
+    assert check["owner_id"] == "bot:rev-a"
 
 
 def test_same_family_verdict_does_not_become_an_unowned_wait(api):
@@ -263,7 +262,7 @@ def test_same_family_verdict_does_not_become_an_unowned_wait(api):
     assert move(api, task).status_code == 200
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
         H.task_update(c, "bot:rev-a", check["id"], status="done", verdict="approve", verdict_head=HEAD)
         actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": "claude-opus-5-5",
                   "provider": "anthropic", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "claude",
@@ -296,13 +295,13 @@ def test_with_every_reviewer_at_its_limit_the_check_waits_and_the_first_to_finis
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-b", held_b["id"], status="done", note="VERDICT: approve")
     [check] = checks(api, task)
-    assert check["owner"] == "bot:rev-b" and check["title"] == "Review 1: PR #412"
+    assert check["owner_id"] == "bot:rev-b" and check["title"] == "Review 1: PR #412"
     assert woken(api, "rev-b", check["id"]) is not None
     assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == []
     # rev-a finishing later finds nothing waiting.
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held_a["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-b"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-b"]
 
 
 def test_a_checker_that_finishes_ordinary_work_takes_no_check_and_a_checker_takes_only_checks(api):
@@ -318,7 +317,7 @@ def test_a_checker_that_finishes_ordinary_work_takes_no_check_and_a_checker_take
     assert checks(api, task) == []
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_same_company_is_a_fallback_and_an_offline_reviewer_is_passed_over(api):
@@ -327,18 +326,18 @@ def test_same_company_is_a_fallback_and_an_offline_reviewer_is_passed_over(api):
     set_pool(api, task, "Review 1", ["rev-c"])
     assert move(api, task).status_code == 200
     [first] = checks(api, task)
-    assert first["owner"] == "bot:rev-c", "same-family reviewers remain eligible when they are the only free option"
+    assert first["owner_id"] == "bot:rev-c", "same-family reviewers remain eligible when they are the only free option"
     set_pool(api, task, "Review 2", ["rev-a", "rev-b", "rev-c"])
     busy(api, "rev-b")
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-c", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r2','old','ana','h2',?,?)",
-                  (H.now(), H.shift(H.now(), hours=-2)))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r2','old','ana','h2',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r2'", (H.shift(H.now(), hours=-2),))
         c.execute("UPDATE assignments SET runner_id='r2' WHERE bot='rev-a'")
     task = get(api, "tasks/" + task["id"])["task"]
     assert move(api, task, "Review 2").status_code == 200
     [second] = checks(api, task)
-    assert second["owner"] == "bot:rev-b", "the online same-family checker is preferred over an offline reviewer"
+    assert second["owner_id"] == "bot:rev-b", "the online same-family checker is preferred over an offline reviewer"
 
 
 def test_review_2_goes_to_a_bot_other_than_reviewer_1(api):
@@ -349,14 +348,14 @@ def test_review_2_goes_to_a_bot_other_than_reviewer_1(api):
     busy(api, "rev-b")
     assert move(api, task).status_code == 200
     [first] = checks(api, task)
-    assert first["owner"] == "bot:rev-a"
+    assert first["owner_id"] == "bot:rev-a"
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
     task = get(api, "tasks/" + task["id"])["task"]
     assert move(api, task, "Review 2").status_code == 200
     [second] = checks(api, task)
     assert second["title"] == "Review 2: PR #412"
-    assert second["owner"] == "bot:rev-b", "rev-a has fewer open checks but did Review 1"
+    assert second["owner_id"] == "bot:rev-b", "rev-a has fewer open checks but did Review 1"
 
 
 def test_one_check_per_head_a_builder_check_already_open_is_kept(api):
@@ -409,7 +408,7 @@ def test_dev_types_get_the_proposed_pools_once_with_the_bots_the_company_has(api
         c.execute("UPDATE task_steps SET check_pool=NULL WHERE id=?", (steps["Review 1"]["id"],))
         check_pools.seed(c)
         assert H.type_get(c, kind["id"])["steps"][1]["check_pool"] == []
-        assert json.loads(c.execute("SELECT detail_json FROM events WHERE action=? AND target=?",
+        assert json.loads(c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                                     (check_pools.SEEDED, kind["id"])).fetchone()[0])["pools"]["In QA"] == ["qa-muse"]
 
 
@@ -419,18 +418,18 @@ def test_a_reviewer_whose_last_run_fell_back_to_the_builders_company_is_passed_o
     set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
     busy(api, "rev-b")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('t1','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('t1',0,'claude-haiku-5-5','anthropic')")
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('t1','rev-a',?,?)", (H.now(), H.now()))
+        segment(c, 't1', model='claude-haiku-5-5', provider='anthropic')
     assert move(api, task).status_code == 200
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-b"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-b"]
 
 
 # A QA check prefers a bot of another model company than the builder's, and takes a bot of the builder's company only
 # when no other is free.
-def qa_ticket(api, built=True):
+def qa_ticket(api, built=True, ran=("claude-opus-5-5", "anthropic", "claude")):
     """A Dev ticket on the full board, its PR built by cpo (configured on Anthropic), ready to enter In QA. `built`
-    adds the builder's run on Anthropic; without it the ticket's only run has no usage record (provenance unknown)."""
+    adds the builder's run on `ran` (model, provider, runtime: Anthropic); without it the ticket's only run has no usage
+    record (provenance unknown)."""
     from backend import rules
     from backend.tests.test_github import PR, hook, post, pr_event
     from backend.tests.test_verdict_moves import STEPS
@@ -442,11 +441,11 @@ def qa_ticket(api, built=True):
     hook(api, "pull_request", pr_event("opened", head={"sha": HEAD}))
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET note=? WHERE id=?", (RECEIPT, task["id"]))
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
                   ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]))
         if built:
-            c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                      "VALUES(?,0,'claude-opus-5-5','anthropic','claude')", ("builder-" + task["id"],))
+            model, provider, runtime = ran
+            segment(c, "builder-" + task["id"], model=model, provider=provider, runtime=runtime)
     return get(api, "tasks/" + task["id"])["task"]
 
 
@@ -467,7 +466,7 @@ def test_a_same_company_bot_finishing_a_check_leaves_a_waiting_one_to_a_free_bot
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (held_a["id"],))
         H.task_update(c, "bot:rev-c", held_c["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_qa_goes_to_the_builders_company_bot_when_the_other_company_bot_is_at_its_limit(api):
@@ -477,7 +476,7 @@ def test_qa_goes_to_the_builders_company_bot_when_the_other_company_bot_is_at_it
     busy(api, "rev-a")
     to_qa(api, task)
     [check] = checks(api, task)
-    assert check["owner"] == "bot:rev-c" and check["title"] == "QA: PR #412"
+    assert check["owner_id"] == "bot:rev-c" and check["title"] == "QA: PR #412"
     assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == [], "the only free QA bot takes it: no wait"
 
 
@@ -486,7 +485,7 @@ def test_a_pool_of_only_builder_company_qa_bots_takes_the_check_rather_than_wait
     task = qa_ticket(api)
     set_pool(api, task, "In QA", ["rev-c"])
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-c"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
     assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == []
 
 
@@ -498,12 +497,11 @@ def test_a_qa_bot_configured_elsewhere_whose_recent_runs_were_claude_ranks_behin
     task = qa_ticket(api, built=False)
     set_pool(api, task, "In QA", ["rev-a", "rev-b"])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('qa-run','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('qa-run',0,'claude-haiku-5-5','anthropic')")
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('qa-run','rev-a',?,?)", (H.now(), H.now()))
+        segment(c, 'qa-run', model='claude-haiku-5-5', provider='anthropic')
     busy(api, "rev-b")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-b"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-b"]
 
 
 def test_unknown_builder_provenance_prefers_qa_off_the_builders_configured_company_even_when_busier(api):
@@ -514,7 +512,7 @@ def test_unknown_builder_provenance_prefers_qa_off_the_builders_configured_compa
     set_pool(api, task, "In QA", ["rev-c", "rev-a"])
     busy(api, "rev-a")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_builder_makers_is_what_its_runs_ran_on_and_the_configured_company_only_without_a_known_run(api):
@@ -525,8 +523,7 @@ def test_builder_makers_is_what_its_runs_ran_on_and_the_configured_company_only_
     with api.app.state.store.transaction() as c:
         ticket = H.task(c, task["id"])
         assert check_pools.builder_makers(c, ticket) == {"anthropic"}
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES(?,0,'gpt-6-sol','openai','codex')", ("builder-" + task["id"],))
+        segment(c, "builder-" + task["id"], model='gpt-6-sol', provider='openai', runtime='codex')
         assert check_pools.builder_makers(c, ticket) == {"openai"}
 
 
@@ -536,7 +533,7 @@ def test_reviews_still_take_a_same_company_reviewer_when_none_other_is_free(api)
     set_pool(api, task, "Review 1", ["rev-c"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:cpo", task["id"], step="Review 1")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-c"], "family is a preference for reviews"
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"], "family is a preference for reviews"
 
 
 def _save_other_company(api, task, step, rule):
@@ -574,7 +571,7 @@ def test_require_keeps_the_builders_company_off_a_qa_check_until_another_company
     assert wait["reason"].endswith("the rest run on the builder's model company"), wait["reason"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_a_same_company_bot_that_frees_up_does_not_take_a_require_check(api):
@@ -593,7 +590,7 @@ def test_a_same_company_bot_that_frees_up_does_not_take_a_require_check(api):
     assert len(get(api, "tasks/" + task["id"])["task"]["check_waits"]) == 1
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held_a["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_require_on_a_review_step_keeps_the_builders_company_off_the_review(api):
@@ -609,7 +606,7 @@ def test_require_on_a_review_step_keeps_the_builders_company_off_the_review(api)
     assert wait["title"] == "Review 1: PR #412" and "builder's model company" in wait["reason"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_other_company_prefer_gives_a_same_company_bot_the_check_when_no_other_is_free(api):
@@ -618,7 +615,7 @@ def test_other_company_prefer_gives_a_same_company_bot_the_check_when_no_other_i
     set_pool(api, task, "In QA", ["rev-c"])
     set_other_company(api, task, "In QA", "prefer")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-c"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
     assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == []
 
 
@@ -628,9 +625,9 @@ def task_model(api, slug, model, harness):
     from backend.tests.test_check_models import company
     company(api, "anthropic", "openai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+        config = BS.read(c, slug)
         config["task_model"] = {"model": model, "harness": harness}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
+        BS.write(c, slug, config)
 
 
 def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(api):
@@ -642,9 +639,8 @@ def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(a
     task_model(api, "rev-a", "claude-haiku-5-5", "claude")
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('chat','rev-c',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('chat',0,'claude-haiku-5-5','anthropic')")
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('chat','rev-c',?,?)", (H.now(), H.now()))
+        segment(c, 'chat', model='claude-haiku-5-5', provider='anthropic')
     set_pool(api, task, "In QA", ["rev-a", "rev-c"], limit=1)
     set_other_company(api, task, "In QA", "require")
     held = busy(api, "rev-c")
@@ -653,7 +649,7 @@ def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(a
     assert len(get(api, "tasks/" + task["id"])["task"]["check_waits"]) == 1
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-c", held["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-c"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
 
 
 def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api):
@@ -663,7 +659,7 @@ def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api)
     task = qa_ticket(api)
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"codex": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -672,7 +668,7 @@ def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api)
     assert checks(api, task) == [], "rev-c's check would run on the builder's company"
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_a_recent_task_on_its_own_model_says_nothing_about_where_a_check_runs(api):
@@ -686,14 +682,13 @@ def test_a_recent_task_on_its_own_model_says_nothing_about_where_a_check_runs(ap
         c.execute("INSERT INTO task_run_models(task_id,runtime,model,harness) VALUES(?,'claude','claude-haiku-5-5',"
                   "'claude')", (own["id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('own','rev-c',?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('own','rev-c',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('own',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'own', model='claude-haiku-5-5', provider='anthropic')
     set_pool(api, task, "In QA", ["rev-c"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-c"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
 
 
 def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_require(api):
@@ -706,7 +701,7 @@ def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_requ
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     task_model(api, "rev-a", "claude-haiku-5-5", "claude")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'", (json.dumps({"schema_version": 1, "bots": {},
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({"schema_version": 1, "bots": {},
                   "runtimes": {"codex": {"installed": True}, "claude": {"installed": False}}}),))
         login_holds.record(c, "r1", login_holds.canonical(c, "r1", "", "codex"), "codex", H.now(),
                            reset=H.shift(H.now(), hours=2))
@@ -717,7 +712,7 @@ def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_requ
     assert checks(api, task) == [], "rev-c's check would run on the builder's company"
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_model(api):
@@ -729,16 +724,15 @@ def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_mode
     own = busy(api, "rev-a")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('earlier','rev-a',?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('earlier','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('earlier',0,'claude-haiku-5-5','anthropic')")
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'",
+        segment(c, 'earlier', model='claude-haiku-5-5', provider='anthropic')
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off_the_bot(api):
@@ -750,11 +744,10 @@ def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off
     own = busy(api, "rev-a")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('fell','rev-a',?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('fell','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('fell',0,'claude-sonnet-5-5','anthropic')")
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'",
+        segment(c, 'fell', model='claude-sonnet-5-5', provider='anthropic')
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -768,8 +761,7 @@ def test_require_never_gives_the_check_to_a_bot_on_a_model_a_reseller_picks(api)
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-a'", (encode(
-            {"name": "rev-a", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-a', {'name': 'rev-a', 'runtime': 'cursor', 'model': 'cursor-auto', 'status': 'active', 'profile': 'reviewer'})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -782,12 +774,11 @@ def test_prefer_ranks_a_bot_of_another_company_ahead_of_one_whose_company_is_unk
     team(api)
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-b'", (encode(
-            {"name": "rev-b", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-b', {'name': 'rev-b', 'runtime': 'cursor', 'model': 'cursor-auto', 'status': 'active', 'profile': 'reviewer'})
     set_pool(api, task, "In QA", ["rev-b", "rev-a"], limit=2)
     busy(api, "rev-a")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_a_bot_now_on_a_model_a_reseller_picks_is_not_independent_whatever_it_ran_before(api):
@@ -795,15 +786,11 @@ def test_a_bot_now_on_a_model_a_reseller_picks_is_not_independent_whatever_it_ra
     shown independent of an OpenAI build."""
     from backend.check_independence import assess
     team(api)
-    task = qa_ticket(api)
+    task = qa_ticket(api, ran=("gpt-6.1-sol", "openai", "codex"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turn_usage_segments SET model='gpt-6.1-sol',provider='openai',runtime='codex' "
-                  "WHERE turn_id=?", ("builder-" + task["id"],))
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('before','rev-c',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('before',0,'claude-haiku-5-5','anthropic')")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-c'", (encode(
-            {"name": "rev-c", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('before','rev-c',?,?)", (H.now(), H.now()))
+        segment(c, 'before', model='claude-haiku-5-5', provider='anthropic')
+        BS.write(c, 'rev-c', {"name": "rev-c", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"})
         decision = assess(c, task, "rev-c")
     assert decision["eligible"] is False and decision["reason"] == "checker model-family provenance is unknown"
 
@@ -814,8 +801,7 @@ def test_require_never_gives_the_check_to_a_bot_whose_model_company_is_unknown(a
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-a'",
-                  (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
+        BS.write(c, 'rev-a', {'name': 'rev-a', 'runtime': 'fake', 'status': 'active', 'profile': 'reviewer'})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -830,8 +816,7 @@ def test_require_waits_while_the_builders_model_company_is_unknown(api):
     team(api)
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'",
-                  (encode({"name": "cpo", "runtime": "fake", "status": "active"}),))
+        BS.write(c, 'cpo', {'name': 'cpo', 'runtime': 'fake', 'status': 'active'})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -846,16 +831,16 @@ def test_require_never_gives_the_check_to_a_bot_whose_recent_run_has_a_segment_o
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('mixed','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('mixed',0,'gpt-6.1-sol','openai'),('mixed',1,'','')")
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('mixed','rev-a',?,?)", (H.now(), H.now()))
+        segment(c, 'mixed', model='gpt-6.1-sol', provider='openai')
+        segment(c, 'mixed', position=1, model='', provider='')
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
     set_other_company(api, task, "In QA", "prefer")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_require_waits_while_part_of_the_builders_run_is_of_unknown_company(api):
@@ -864,8 +849,7 @@ def test_require_waits_while_part_of_the_builders_run_is_of_unknown_company(api)
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) VALUES(?,1,'','')",
-                  ("builder-" + task["id"],))
+        segment(c, "builder-" + task["id"], position=1, model='', provider='')
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -880,11 +864,9 @@ def test_require_never_gives_the_check_to_a_bot_now_on_a_model_of_unknown_compan
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('before','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('before',0,'gpt-6.1-sol','openai')")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-a'",
-                  (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('before','rev-a',?,?)", (H.now(), H.now()))
+        segment(c, 'before', model='gpt-6.1-sol', provider='openai')
+        BS.write(c, 'rev-a', {"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"})
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -901,14 +883,13 @@ def test_a_recent_check_on_a_check_model_says_nothing_about_a_bot_with_no_task_m
         c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by) "
                   "VALUES(?,'claude','claude-haiku-5-5','claude','','review','bot:rev-a')", (own["id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
-        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('checked','rev-a',?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('checked','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('checked',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'checked', model='claude-haiku-5-5', provider='anthropic')
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+    assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
 def test_other_company_is_prefer_or_require_and_only_on_a_check_step(api):

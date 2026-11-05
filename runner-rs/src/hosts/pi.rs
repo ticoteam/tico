@@ -1383,6 +1383,11 @@ while True:
         std::fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
     }
 
+    /// Whether the idle pool still owns this conversation's lease or relay.
+    pub fn has_held(pool: &super::Pool, owner: &str) -> bool {
+        pool.kept().values().any(|k| k.owner == owner && !k.held.is_empty())
+    }
+
     /// A fake pi in `dir`, kept in `pool` for `owner` with `held` after one turn that completed.
     pub async fn kept(pool: std::sync::Arc<super::Pool>, dir: &Path, owner: &str, held: super::Held) {
         let fixture = dir.join("kept.jsonl");

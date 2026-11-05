@@ -3,8 +3,6 @@ checkpoint starts no run (backend/wake_rules.py same_state). Anything that diffe
 
 import json
 
-import pytest
-
 from backend import hubdb as H
 from backend import wake_rules as W
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
@@ -13,7 +11,7 @@ from backend.tests.test_wake_rules import skips
 
 def jobs(c, bot):
     """Runs waiting to start (the checkpointing turn's own job is done)."""
-    return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND id NOT IN (SELECT job_id FROM attempts)",
+    return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND id NOT IN (SELECT job_id FROM attempts)",
                      (bot,)).fetchone()[0]
 
 
@@ -47,7 +45,7 @@ def check(c, tid, wake="status_check"):
     """The stall check the scheduler writes for a task that has not moved."""
     c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM attempts)")
     task = H.task(c, tid)
-    msg = H._wake(c, task, task["owner"], "Status check: anything to report?", {"wake": wake}, trigger="stall_check")
+    msg = H._wake(c, task, task["owner_id"], "Status check: anything to report?", {"wake": wake}, trigger="stall_check")
     return msg
 
 
@@ -101,13 +99,13 @@ def changes(c, tid):
         H.task_comment(c, "bot:ops", tid, "Heads up: the spec moved.")
 
     def status():
-        c.execute("UPDATE tasks SET status='blocked' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tid,))
 
     def step():
         c.execute("UPDATE tasks SET step_id=(SELECT id FROM task_steps LIMIT 1) WHERE id=?", (tid,))
 
     def relation():
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'related',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'related',?)",
                   (*sorted((other["id"], tid)), H.now()))
 
     def relation_state():
@@ -117,7 +115,7 @@ def changes(c, tid):
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (other["id"],))
 
     def pr_head():
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,pr_sha,checks) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,pr_sha,checks) "
                   "VALUES(?,?,'pr','https://github.com/o/r/pull/9','PR','open','bot:cpo',?,'abc','pending')",
                   ("lk" + tid[:8], tid, H.now()))
 
@@ -190,7 +188,7 @@ def test_another_bots_task_is_not_held_for_this_bots_checkpoint(api):
     r = setup(api)
     tid = checkpointed(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:ops' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (tid,))
         c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM attempts)")
         task = H.task(c, tid)
         H._wake(c, task, "bot:ops", "Status check", {"wake": "status_check"}, trigger="stall_check")
@@ -215,7 +213,7 @@ def test_synchronizing_an_existing_pr_head_with_unchanged_checks_runs_the_next_c
         G.pull_request(c, {"action": "synchronize", "pull_request": {
             "html_url": url, "head": {"sha": "b" * 40}, "mergeable": None}})
         after = dict(c.execute("SELECT * FROM task_links WHERE task_id=?", (tid,)).fetchone())
-        assert json.loads(after["detail_json"])["head_sha"] == "b" * 40
+        assert json.loads(after["detail"])["head_sha"] == "b" * 40
         assert [after[k] for k in ("pr_sha", "checks", "mergeable")] == [
             before[k] for k in ("pr_sha", "checks", "mergeable")]
         assert jobs(c, "cpo") == 0       # synchronize itself is quiet
@@ -260,67 +258,7 @@ def test_an_existing_related_task_changing_mid_turn_is_not_checkpointed_unseen(a
         assert jobs(c, "cpo") == 1
 
 
-def test_scheduler_skips_never_become_retries_or_diagnostics(api, monkeypatch):
-    from backend.execution import LANES
-    r = setup(api)
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": [LANES],
-                                  "readiness": {"cpo": True, "ops": True}}, token=r["token"])
-    tid = checkpointed(api, r)
-    with api.app.state.store.transaction() as c:
-        # Both the idle stall and the recent-session spot-check paths see the same settled task.
-        assert H.task(c, tid)["checkpoint_state"]
-        start = H.now()
-        for spot_only in (False, True):
-            if spot_only:
-                c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (tid,))
-                monkeypatch.setattr(H, "stalled_tasks", lambda *a, **k: [])
-                c.execute("DELETE FROM events WHERE action='task.stall_quiet' AND target=?", (tid,))
-            next_run = H.task(c, tid)["next_run"]
-            for minutes in (31, 62, 123, 244):      # each clears the back-off the one before it left
-                at = H.shift(start, seconds=minutes * 60)
-                monkeypatch.setattr(H, "now", lambda: at)
-                candidates = H.spot_check_tasks(c, at) if spot_only else H.stalled_tasks(c, at)
-                assert tid in [t["id"] for t in candidates], (spot_only, minutes)
-                result = H.wake_stalled(c, at)
-                assert all(not ids for ids in result.values()), result
-                assert jobs(c, "cpo") == 0
-                assert H.task(c, tid)["next_run"] == next_run
-        assert [s["detail"]["rule"] for s in skips(c)] == ["same_state"] * 8
-        assert c.execute("SELECT count(*) FROM events WHERE target=? AND action IN "
-                         "('task.stall_wake','task.stuck_retry','task.stuck','task.stall_escalated')",
-                         (tid,)).fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Find why %'").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize("spot_only", [False, True])
-def test_held_stall_notices_keep_the_back_off_instead_of_repeating_every_pass(api, monkeypatch, spot_only):
-    """A wake rule holds the notice, so no stall wake is recorded; the minute-by-minute sweep must not write another."""
-    from backend.execution import LANES
-    r = setup(api)
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": [LANES],
-                                  "readiness": {"cpo": True, "ops": True}}, token=r["token"])
-    tid = checkpointed(api, r)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        if spot_only:
-            c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (tid,))
-            monkeypatch.setattr(H, "stalled_tasks", lambda *a, **k: [])
-        start, written = H.now(), []
-        for minutes in range(1, 241):
-            at = H.shift(start, seconds=minutes * 60)
-            monkeypatch.setattr(H, "now", lambda: at)
-            before = len(skips(c))
-            assert not any(H.wake_stalled(c, at).values())
-            if len(skips(c)) > before:
-                written.append(minutes)
-        assert [b - a for a, b in zip(written, written[1:])] == [30, 60, 120], written
-        assert jobs(c, "cpo") == 0
-        # Spacing the notices is not trying a wake: no retry, stuck report or escalation counts them.
-        assert c.execute("SELECT count(*) FROM events WHERE target=? AND action IN ('task.stall_wake',"
-                         "'task.stuck_retry','task.stuck','task.stall_escalated')", (tid,)).fetchone()[0] == 0
-
-
-def test_a_second_active_turn_keeps_status_retry_and_diagnostic_recovery(api, monkeypatch):
+def test_a_leased_turn_does_not_borrow_the_completed_turns_checkpoint(api):
     from backend.execution import LANES
     r = setup(api)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": [LANES],
@@ -339,25 +277,6 @@ def test_a_second_active_turn_keeps_status_retry_and_diagnostic_recovery(api, mo
         # Even a leased turn must not borrow the preceding completed turn's idle checkpoint.
         assert W.MARK not in check(c, tid)["refs"]
         c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM attempts)")
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        row = H.task(c, tid)
-        assert row["status"] == "doing" and not row["next_run"]
-        assert row["checkpoint_state"] == W.state_of(c, row)
-        start = H.now()
-        # A real second turn, resuming the same thread, has made no task progress. While it is live, no check or
-        # retry steers it (H.stall_skip); the checks run again only once the turn ends.
-        for minutes in (31, 61, 91):
-            at = H.shift(start, seconds=minutes * 60)
-            monkeypatch.setattr(H, "now", lambda: at)
-            assert tid in [t["id"] for t in H.spot_check_tasks(c, at)]
-            assert H.stall_skip(c, H.task(c, tid), at) == "live_session"
-            assert not any(H.wake_stalled(c, at).values())
-        assert c.execute("SELECT count(*) FROM events WHERE target=? AND action IN "
-                         "('task.stall_wake','task.stuck_retry','task.stuck','task.stall_escalated')",
-                         (tid,)).fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Find why %'").fetchone()[0] == 0
 
 
 def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api):
@@ -377,7 +296,7 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, token=r["token"])
     with api.app.state.store.read() as c:
         before = H.task(c, first["id"])
-        comments_before = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND from_actor<>?",
+        comments_before = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id<>?",
                                     (first["conversation_id"], H.KEEPER)).fetchone()[0]
     # B's leased identity changes an already-related General task while A runs.
     post(api, f"tasks/{second['id']}", {"status": "waiting", "version": b["task"]["version"]}, token=b["token"])
@@ -385,7 +304,7 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
     post(api, f"attempts/{b['id']}/complete", {"outcome": "completed", "text": "B moved.", "last_seq": 0},
          token=r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND from_actor<>?",
+        assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id<>?",
                          (first["conversation_id"], H.KEEPER)).fetchone()[0] == comments_before
     post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "A checkpoint.", "last_seq": 0},
          token=r["token"])

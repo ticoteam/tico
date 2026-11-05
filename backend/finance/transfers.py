@@ -11,7 +11,7 @@ The send is an outbox write (sync.outbox, op `transfer_create`, the provider cal
 key: Mercury's POST /transfer. The claim re-checks it right before that call (recheck, §5 re-check at use): the requester
 still has the payment right and sees both accounts, payments are still on, and the gates still let it through. A gate
 that now asks a person holds it; anything else cancels it. Neither sends. Until its call is claimed, the transfer can be
-cancelled (plan_cancel). An unknown result (no answer, a 5xx, or a worker cut off mid-call) is never sent again on its
+canceled (plan_cancel). An unknown result (no answer, a 5xx, or a worker cut off mid-call) is never sent again on its
 own: the row goes `unknown` and a finance admin is asked to check Mercury. A refused send (4xx) goes `failed` and is
 reported the same way.
 
@@ -114,8 +114,8 @@ def plan_internal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def request_body(payload: Mapping[str, Any]) -> dict[str, object]:
     """Mercury's transfer body: the documented fields, the amount in dollars, and Finance's key for this transfer.
-    The key also goes in `note` (payments.request_body does the same): an unknown transfer is found by it in Mercury's
-    transactions. `note` is not among the documented transfer fields, so it must be confirmed against Mercury."""
+    The key also goes in `note`, a documented field (payments.request_body does the same): an unknown transfer is found
+    by it in Mercury's transactions."""
     key = str(payload["idempotency_key"])
     return {"sourceAccountId": str(payload["source_account"]),
             "destinationAccountId": str(payload["destination_account"]),
@@ -142,23 +142,23 @@ def _stop(ctx: Ctx, o: Any, t: Any, why: str, *, hold: bool) -> None:
                            f"Transfer {tid} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
                            "own.", private=True)
         return
-    SK.update(ctx.c, "fin_transfers", tid, {"status": "cancelled", "last_error": why[:500], "updated_at": ctx.at},
+    SK.update(ctx.c, "fin_transfers", tid, {"status": "canceled", "last_error": why[:500], "updated_at": ctx.at},
               "status='queued'")
     _give_back(ctx, tid)                         # it never goes to Mercury: the limits its claim reserved come back
     SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "claimed_at": None, "next_try_at": None,
                                          "last_error": why[:300], "updated_at": ctx.at})
     tico.needs_you(ctx.c, payments.admin_person(ctx), f"Transfer of {amount} was not sent",
-                   f"Transfer {tid} was cancelled before it went to Mercury: {why}. Nothing moved.", private=True)
+                   f"Transfer {tid} was canceled before it went to Mercury: {why}. Nothing moved.", private=True)
 
 
 def recheck(ctx: Ctx, o: Any, fresh: list[G.Hit] | None = None) -> bool:
     """Right before Mercury is called (§5, re-check at use), for a transfer write the claim just took: whoever asked still
     has the payment right and sees both accounts, payments are still on for the bank connection, and the gate rules (with
     their counters, less this transfer's own) still let it through. True when it did not, so nothing is sent: the claim
-    is released (a hold) or the transfer is cancelled. On a send, the limits it fits that it has not counted yet go into
+    is released (a hold) or the transfer is canceled. On a send, the limits it fits that it has not counted yet go into
     `fresh`, for `reserve` once the send is claimed."""
     from . import gating
-    body = SK.loads(o["payload_json"])
+    body = SK.loads(o["payload"])
     t = SK.get(ctx.c, "fin_transfers", str(body["transfer_id"]))
     if t is None or str(t["status"]) != "queued":
         SK.update(ctx.c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "next_try_at": None,
@@ -180,7 +180,7 @@ def recheck(ctx: Ctx, o: Any, fresh: list[G.Hit] | None = None) -> bool:
         _stop(ctx, o, t, "payments were turned off for this bank connection", hold=False)
         return True
     found = gating.send_facts(ctx, who, "payment_create", _facts(ctx, src, dst, amount))
-    mine = payments.own_counts(ctx, t["counted_json"], t["action_id"])
+    mine = payments.own_counts(ctx, t["counted"], t["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -204,15 +204,15 @@ def reserve(ctx: Ctx, o: Any, hits: Sequence[G.Hit]) -> None:
     does the same): the transfer owns them, so they move once, and come back if Mercury refuses it."""
     if not hits:
         return
-    tid = str(SK.loads(o["payload_json"])["transfer_id"])
+    tid = str(SK.loads(o["payload"])["transfer_id"])
     t = SK.get(ctx.c, "fin_transfers", tid)
     if t is None:
         return
-    owned = [list(x) for x in SK.loads_list(t["counted_json"])]
+    owned = [list(x) for x in SK.loads_list(t["counted"])]
     for h in hits:
         SK.count(ctx.c, h.rule, h.period_key, h.subject, int(t["amount"]), ctx.at)
         owned.append([h.rule, h.period_key, h.subject])
-    SK.update(ctx.c, "fin_transfers", tid, {"counted_json": SK.dump(owned)})
+    SK.update(ctx.c, "fin_transfers", tid, {"counted": SK.dump(owned)})
 
 
 def _give_back(ctx: Ctx, tid: str) -> None:
@@ -221,11 +221,11 @@ def _give_back(ctx: Ctx, tid: str) -> None:
     t = SK.get(ctx.c, "fin_transfers", tid)
     if t is None:
         return
-    for raw in SK.loads_list(t["counted_json"]):
+    for raw in SK.loads_list(t["counted"]):
         if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
             rule, key, subject = cast(list[Any], raw)
             SK.uncount(ctx.c, str(rule), str(key), str(subject), int(t["amount"]), ctx.at)
-    SK.update(ctx.c, "fin_transfers", tid, {"counted_json": "[]"})
+    SK.update(ctx.c, "fin_transfers", tid, {"counted": "[]"})
 
 
 def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -247,13 +247,13 @@ def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         # Both writes must still hold: the transfer queued and its write unclaimed. A worker that claimed it first wins.
-        if SK.update(ctx.c, "fin_transfers", tid, {"status": "cancelled", "updated_at": ctx.at}, "status='queued'") != 1 \
-                or SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "last_error": "cancelled before it was sent",
+        if SK.update(ctx.c, "fin_transfers", tid, {"status": "canceled", "updated_at": ctx.at}, "status='queued'") != 1 \
+                or SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "last_error": "canceled before it was sent",
                                                          "next_try_at": None, "updated_at": ctx.at},
                              "status='pending' AND claimed_at IS NULL") != 1:
             raise FinanceError(CONFLICT, "the transfer moved on; check its status")
         _give_back(ctx, tid)                     # it never goes to Mercury: the limits its claim reserved come back
-        return {"transfer_id": tid, "status": "cancelled"}
+        return {"transfer_id": tid, "status": "canceled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"),
                 f"Cancel the transfer of {int(t['amount']) / 100:.2f} {ctx.book.base_currency}", apply)
 
@@ -335,7 +335,7 @@ def _stamp(value: object) -> str:
 
 def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool, *, started: object = None) -> None:
     """A send that did not clearly land: `unknown` when it may have (no answer, a 5xx, a call cut off), else refused.
-    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started` is
+    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started_at` is
     when the call was claimed: it may have landed from then, so its legs are looked for from that day, not from the day
     the failure is recorded (a recovery can run days later)."""
     tid = str(payload["transfer_id"])

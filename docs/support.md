@@ -7,39 +7,42 @@ is sent and kept.
 
 ## For a human
 
-Help (the `?` at the bottom of the sidebar) has a short overview on the left (what Tico is, where to start, how to get
-help, and links to the docs) and **Support** in the right rail, using the same sizing and resize controls as the rest of
-the app. On a narrower screen, such as a phone, Support comes first: your
-requests, **New request** and the composer are at the top without scrolling. A **Read the Tico docs** link sits right under
-Support, and the short overview follows below it.
+The **?** beside Search (on a computer, at the end of the sidebar's Ask row; on a phone, beside Search in the More
+drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
+over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
+has replied to one of your requests and you haven't seen it.
 
-- **Your requests (N)** is a list of all N requests, newest activity first. Each row shows the first line of your first message
-  as its title and the rest of it as a muted preview, a status badge
-  (**Open**: waiting for Tico support; **Answered**: they replied; **Closed**; **Removed**: the team deleted it at HQ), when it
-  last changed, and a dot when it has a reply you haven't read. **New request** starts another.
-- Opening a request shows the conversation as bubbles, yours on the right and **Tico support**'s on the left, each with its
-  time, and the composer below. It opens at the newest message; when replies arrive while you are reading further up, it
-  doesn't move you. The back arrow returns to the list. An open request says **Delivered to Tico support** under it: a
-  request is only listed once HQ has accepted it.
-- In the composer, **Enter** sends and **Shift+Enter** adds a new line; the round arrow button (labelled Send) does the
-  same. While a message is sending the composer is locked. If it fails, **Not sent** and the reason appear under the box
-  and the message stays in it; nothing has reached Tico support. A sent message appears in the conversation at once.
-- The trash icon in the corner of a conversation deletes it, after you confirm.
-- With no requests yet, the rail is an **Ask Tico support** prompt with the composer. When support is off on the server
-  (demo, rehearsal or `TICO_SUPPORT=off`), Help says so in place of the rail.
+- It is one ongoing conversation, oldest at the top, opening at the newest message; when messages arrive while you are
+  reading further up, it doesn't move you. Your messages are dark bubbles on the right, the team's are on the left, with
+  a small name above them when the sender changes (the person who wrote it, else **Tico team**). Lines with the day
+  (Today, Yesterday, a date) sit where the day changes. Each message's time shows on hover.
+- With nothing sent yet, the chat is just the box: "Message the Tico team".
+- **Enter** sends and **Shift+Enter** adds a new line; the round arrow button (labelled Send) does the same. While a
+  message is sending the box is locked. If it fails, **Not sent** and the reason appear under the box and the message
+  stays in it; nothing has reached the Tico team. A sent message appears in the chat at once.
+- Your email, the version and the install ID go with each message on their own; there is no form.
+- The trash icon in the header, left of Close, is **Delete chat history**. It asks first, inside the chat ("Delete chat
+  history?", Delete or Cancel); Delete removes every one of your tickets and their attachments at HQ and the local
+  ticket records, and leaves the empty chat.
+- When support is off on the server (demo, rehearsal or `TICO_SUPPORT=off`) the **?** is hidden, and a `#/support` link
+  says messages to the Tico team are off.
+
+Behind the chat, messages are still tickets at HQ, so the team can work them: a message goes to your newest ticket that is
+not closed or removed, and starts a new one when there is none. The chat shows every ticket's messages together in time
+order.
 
 | Field | |
 |---|---|
 | Message | Required, up to 4000 characters. Plain text. |
-| Reply email and install details | Expand to change the optional reply email and inclusion of version/install ID. From the desktop app, the app's own version goes with them, labelled apart from the server's. |
-| @diagnostics | On by default for a new request. Uncheck to send none. Follow-up replies start with it off. |
-| Computer performance | How much of each computer's performance history goes with @diagnostics: None, 1 day (the default), 7 days or 14 days. Computers and bots are relabelled as everywhere else in the bundle. |
+| Email and install details | Your account's email, the version and the install ID go with a message that starts a new ticket. From the desktop app, the app's own version goes with them, labelled apart from the server's. |
+| Diagnostics | Off by default. The paperclip (Attach diagnostics) opens **Review and edit**; once attached, a **Diagnostics** line above the box has **Review** and **×** to remove it. Report this attaches them on its own. |
+| Computer performance | In Review and edit: how much of each computer's performance history goes with the diagnostics: None, 1 day (the default), 7 days or 14 days. Computers and bots are relabelled as everywhere else in the bundle. |
 | Review and edit | Inspect the exact JSON, remove sections, or edit fields. **Check edits** validates and redacts again; **Use diagnostics** attaches the reviewed result. |
 
-The composer lists what Send will send and the destination. No ticket or attachment leaves for HQ until Send. If a capture
+Nothing leaves for HQ until Send. If a capture
 expires, the message stays intact and sending fails visibly; use Review and edit → Refresh capture to explicitly replace it.
-If HQ refuses an attachment, remove it yourself to send just the message; it is never silently omitted. A reply can include
-its own fresh, edited diagnostics without replacing the first report.
+If HQ refuses an attachment, remove it yourself to send just the message; it is never silently omitted. Each message can carry
+its own fresh, edited diagnostics without replacing an earlier one.
 
 Diagnostics contain redacted versions, health, computer readiness and last heartbeat, capped server/runner/updater failures,
 and capture coverage, and the [Beta features](#beta-features) your team has on or in use (`beta`, by id). From the desktop
@@ -55,39 +58,36 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask: on **Your requests**
-in the Ask header, and on **Tico support** under its **+**. Ask's own button carries no count. Opening a
-conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
-Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
-refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its
-local ticket record. Closed requests remain readable.
+A reply to a request you wrote opens the chat by itself, once, with the reply in it; if you are typing in a field or a
+dialog is open, or Ask's panel or its peek is up, it waits until you are not. A bot's report is not in your chat at all: it is not listed there, and its
+replies neither open the chat nor put a dot on the **?**. Having the chat open marks everything read; there is no Mark
+read or Refresh button.
+Messages are checked when you open the chat, when the app regains focus or comes back into view, and on the timer below.
+Background refresh preserves your draft, focus and scroll position.
 
-- Any signed-in human may file a ticket from the form. A personal API token, the Assistant acting for a human, and a bot
-  may not file one directly; they report through a person's yes (below).
-- Demo mode has no Contact support: nothing leaves a demo. Neither does a rehearsal (`TICO_REHEARSAL=1`), which reports "rehearsal" as the reason it is off.
+- Any signed-in human may message the Tico team. A personal API token, the Assistant acting for a human, and a bot
+  may not file one directly; a bot reports through a person's yes, or at once when the team lets bots send (below).
+- Demo mode has no Tico team chat: nothing leaves a demo. Neither does a rehearsal (`TICO_REHEARSAL=1`), which reports "rehearsal" as the reason it is off.
 - `TICO_SUPPORT=off` in the server's `.env` removes it from an install that must not phone out. `TICO_HQ_URL` points it at your
   own HQ (see [telemetry.md](telemetry.md)).
 
 ### Reach us from anywhere
 
-- **Tico support** opens from any link to `#/support` (a chat reply's "Loop in Tico support", `#/help`): Help with a
-  new request, ready to write; a `#/support/manage` link opens one asking for full management. **Loop in Support**,
-  the link at the top right of the Ask panel, shows an open request's messages in that chat as blue-gray bubbles and
-  writes your replies to it. It sends the chat's last 20
-  turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)).
-  A new request sent that way has no diagnostics; **Attach diagnostics** under its line in the chat opens **Review and edit** for it. Empty lists carry no support line of their own.
+- **The Tico team chat** opens from the **?** and from any link to `#/support` (an Assistant reply's "Message the Tico
+  team", an old `#/help` link); a `#/support/manage` link opens it with a message asking for full management in the box.
+  The Assistant's DM never goes to the Tico team ([The Assistant](assistant.md)).
 - **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
-  Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as
+  Health line and on a stuck bot. It opens the chat with what failed named in the box and attached as
   diagnostics in a `report` section: its kind (`toast`, `run`, `health`, `stuck`, `setup_check`), the words on screen,
   the run, check or bot it is about, and a `group` that names the same problem the same way each time (numbers and quoted
-  names left out). The composer shows **Attached:** with a **Remove** button, and **Review and edit** shows the exact
+  names left out). The box shows a **Diagnostics** line with **Review** and **×** to remove it, and Review shows the exact
   attachment before anything is sent. Every string in it goes through the same redactor as the rest of the diagnostics.
   When support is off, no Report this is offered.
 - **Setup check** in Help runs the checks `tico-setup doctor` runs, from the server against its own address (HTTPS
   certificate, `/healthz`, the sign-in redirect for Google or Microsoft sign-in, the runner hostname), plus Health's red
   and yellow lines, and shows each with a plain fix. A Tico that serves only its own computer has no HTTPS to check.
   The server container, tunnel connector and `.env` permissions need a shell on the server, so for those it points to
-  doctor. **Send to support** attaches the result to a new request, so support can ask you to "press Setup check and
+  doctor. **Send to Tico team** attaches the result to a message in the chat, so the team can ask you to "press Setup check and
   send" instead of asking questions. The check itself works with support off (`POST /api/v2/support/setup-check`, any
   signed-in person, once every 30 seconds each).
 - When the installer or `tico-setup doctor` fails at a terminal, it asks **Send this to Tico support? [y/N]**. Only a
@@ -120,34 +120,43 @@ the team and getting started; never ask for a key or password (tools connect on 
 the usual way (step 4 below), shows on the visitor's request page, and, since every setup-website ticket has an email,
 is marked email pending for the email copy.
 
-### A bot's report, after a person's yes
+### A bot's report
 
 A bot that hits a Tico bug (or a person's token, through MCP) reports it to the Tico team without handing the person a
-copy-and-paste task, and nothing leaves the install until a person says yes:
+copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
+asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
+
+**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
+are kept for the team and the bot, not shown to the person. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
+
+**Off.** The report waits for a person's yes:
 
 1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
    `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
    (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
    Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
 2. The person the approval goes to sees **Send this to Tico support?** in Needs you and Decide, with the whole message,
-   what goes with it and the host it goes to, and approves or declines it in their own browser (not with a token or
-   through the Assistant). A bot's report goes where any approval goes: the owner of its task, else the default person. A
-   person's own report (drafted with their token) goes to them.
+   what goes with it and the host it goes to, and approves or declines it in their own browser. Their Assistant may
+   approve it too, after its read-back and their plain yes, as with any approval ([The Assistant](assistant.md#letting-it-decide-your-approvals)).
+   A token may not approve it. Declining sends nothing, so anyone who may decide it may decline it. A bot's report goes
+   where any approval goes: the owner of its task, else the default person. A person's own report (drafted with their
+   token) goes to them.
 3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
-   files it **as the person who approved it**: the ticket is theirs, its replies show on their Support page, and it counts
-   toward their 10 a day. Only whoever asked for the approval may send it, and only once it is approved and its message
+   files it **as the person who approved it**: the ticket is kept under their name and counts
+   toward their 10 a day, but it is not in their Support chat (a bot's report is not shown there, and its replies are
+   not either). Only whoever asked for the approval may send it, and only once it is approved and its message
    still matches its hash. The approval is spent in the same step that keeps the ticket, so if HQ refuses or cannot be
    reached nothing is spent and the send can be tried again; sending again after it worked answers with the same ticket.
 
 No email and no diagnostics bundle go this way: diagnostics need a person to preview them on the form.
 
-## Letting Tico support in
+## Letting the Tico team in
 
 When a reply is not enough, an owner or an admin can let the Tico team into their app for a while. It is off until you
-start it, it always starts from one of your own open requests, and it ends on its own.
+start it, it always starts from your open conversation with the team, and it ends on its own.
 
-1. Open the request in Help > Support and press **Let Tico support in**, under the conversation. Where it is off, the same place says
-   why in one line (the server's `TICO_SUPPORT_ACCESS`, or the team rule).
+1. Open the Tico team chat and press **Let the Tico team in**, over the box. Where it is off (the server's
+   `TICO_SUPPORT_ACCESS`, or the team rule), the chat shows nothing about it.
 2. Choose what support may do:
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
      bot's model, fallback and context size; a computer's runner restart; asking a computer to read its subscriptions'
@@ -161,10 +170,10 @@ start it, it always starts from one of your own open requests, and it ends on it
      support to have that.
 3. Choose how long: 1 hour, 4 hours, 24 hours (the default), 7 days, or any number of hours up to 30 days. Press **Start**.
 
-While it lasts, everyone on your Tico sees a banner on every screen: "Tico support has access (App only), 23 h 12 min left ·
-Stop"; the request it started from says the same, and the banner opens it. **Stop** (the person who started it, the owner or
-an admin) ends it at once. Only one session runs at a time. Every request support makes is listed under the request it
-started from, in every session started there (when, as how long ago with the full time on hover; who made it, staff or the
+While it lasts, everyone on your Tico sees a banner on every screen: "Tico team has access (App only), 23 h 12 min left ·
+Stop"; the chat says the same over the box, and the banner opens the chat. **Stop** (the person who started it, the owner or
+an admin) ends it at once. Only one session runs at a time. Every request the team makes is listed in the chat under **What the Tico team did**, for every session started from
+your conversation (when, as how long ago with the full time on hover; who made it, staff or the
 Support Agent; the method, the path and the answer's status), and in the audit log support's changes show as **Tico support**.
 
 How it reaches you: while a session is live your Tico keeps one request open to HQ asking for work (HQ holds it up to 30
@@ -210,7 +219,7 @@ The request is `POST <TICO_HQ_URL>/v1/support` with `message`, and, only if pres
 desktop app's, when sent from it) and `diagnostics` (up to 256 KB). The answer is a ticket ID and a **secret for that ticket alone**. Your Tico keeps the ticket, the ID and the secret; the secret
 never reaches a browser. HQ keeps the message, the email, the version and install ID and diagnostics if sent, a hash of the secret, the status,
 the times, and the thread. It keeps no IP address and no log of a request. Tickets are **kept until someone deletes them**: you,
-with **Delete**, or the team when you ask (put "delete this request" in the ticket, or open an issue). The 13 month rule is for
+with **Delete chat history**, or the team when you ask (say so in the chat, or open an issue). The 13 month rule is for
 the anonymous install rows only. The reference for HQ's routes is in [telemetry.md](telemetry.md#support-tickets).
 
 Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back
@@ -304,7 +313,7 @@ Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repos
 
 **Fixed in.** Link a ticket to the ticoteam/tico issue or pull request that will fix it (`software/hq-tickets link TK-XXXXXXXX
 '#712'`). When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
-and the human sees it in Help under Your requests. HQ also keeps the known issues by version that Help shows.
+and the human sees it in the Tico team chat. HQ also keeps the known issues by version that Help shows.
 
 `software/hq-tickets list`, `show TK-XXXXXXXX`; or with curl and the key in a header (`Authorization: Bearer $HQ_STAFF_KEY`):
 `GET /v1/staff/tickets?status=open`, `POST /v1/staff/tickets/{id}/reply` with `{"body": "..."}`, `POST .../status` with

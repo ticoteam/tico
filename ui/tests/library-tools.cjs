@@ -4,7 +4,7 @@
 // Removed; search, who has access (a bot, a person, or a team with the teams under it) and Issues narrow the list and
 // ride in the address. A row opens the tool: its issues, who has it (each with what they may change there), its
 // credentials (set or not, when a bot last used it, Rotate / Access / Add), then the page, its queries and learnings.
-// A credential no tool names has its own page. The old addresses (#/library/connections, #/integrations, #/credentials)
+// A credential no tool names has its own page. The old addresses (#/library/connections/<tool>, #/integrations, #/credentials)
 // lead here. A member who cannot open the vault never reads it. No secret value is ever on the page.
 // Phone first (390×844), then a computer. TICO_UI_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright');
@@ -58,8 +58,8 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
     if (p === '/api/v2/credentials' && method === 'POST') {
       const body = JSON.parse(req.postData());
       seen.vault.credentials.push({id: 'c9', name: body.name, username: body.username, kind: body.kind, env: body.env, preview: 'ghp-••••3a',
-        source: body.source, revision: 1, created: '2026-10-28T09:00:00Z', updated: '2026-10-28T09:00:00Z', stored: true, can_reveal: true,
-        last_used: null, last_used_by: '', grants: []});
+        source: body.source, revision: 1, created_at: '2026-10-28T09:00:00Z', updated_at: '2026-10-28T09:00:00Z', stored: true, can_reveal: true,
+        last_used_at: null, last_used_by: '', grants: []});
       return json({id: 'c9', name: body.name});
     }
     const grant = p.match(/^\/api\/v2\/credentials\/([^/]+)\/grants$/);

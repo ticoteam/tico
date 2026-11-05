@@ -4,7 +4,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 # Acme CI health, week to Tue 2026-09-29
 
 Sample output for Acme, a fictional studio-software team. Every workflow, test and name is invented.
-Nothing was rerun, cancelled or changed. First draft, not yet reviewed.
+Nothing was rerun, canceled or changed. First draft, not yet reviewed.
 
 **Headline: the merge check failed for flaky reasons on 9% of runs (last fortnight 4%); its median rose to
 18 min 40 s from 14 min 10 s. One fix saves about 6 minutes a run.**

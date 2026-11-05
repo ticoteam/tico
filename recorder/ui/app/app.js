@@ -16,13 +16,15 @@
     meeting: null,
     transcript: null,
     settings: null,
+    desktopOrgs: [],
     hash: { library: '', meeting: '', transcript: '', settings: '' },
     statusKey: '',
     ui: {
-      search: '', ask: '', addItem: '', peopleQuery: '', ownerQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
+      search: '', ask: '', addItem: '', ownerQuery: '', shareQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
       editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
-      hot: 0, mention: null,
-      panel: null, opened: null, pop: null, tsearch: false, showAudio: false, confirm: null,
+      hot: 0, mention: null, address: false,
+      pop: null, tsearch: false, showAudio: false, confirm: null, hideSide: false,
+      share: null, finish: null,
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
     },
   };
@@ -60,14 +62,36 @@
   const initials = (name) =>
     String(name || '?').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
   function avatar(row, extra = '') {
-    if (row.kind === 'bot' || row.bot) return `<span class="avatar bot ${extra}">${icon('bot', 14)}</span>`;
-    if (row.me) return `<span class="avatar me ${extra}">${esc(initials('Me'))}</span>`;
-    let hue = 0;
-    for (const c of String(row.name)) hue = (hue * 31 + c.charCodeAt(0)) % 360;
-    const letters = extra.includes('small') ? initials(row.name).slice(0, 1) : initials(row.name);
-    return `<span class="avatar ${extra}" style="background:hsl(${hue} 32% 52%)">${esc(letters)}</span>`;
+    if (row.kind === 'bot' || row.bot) return `<span class="avatar bot c5 ${extra}">${icon('bot', 11)}</span>`;
+    return `<span class="avatar c${tone(row.name || '')} ${extra}">${esc(initials(row.me ? 'Me' : row.name))}</span>`;
   }
   const badge = (label, tone, extra = '') => `<span class="badge ${tone}" ${extra}>${label}</span>`;
+
+  // ---- Orgs: the desktop rail's tiles, initials on a colour picked by the org's host ----
+  const hostOf = (url) => String(url || '').replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '');
+  function tone(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+    return (h >>> 0) % 8;
+  }
+  function orgInitials(name, host) {
+    const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    return String(words[0] || host || '?').slice(0, 2).toUpperCase();
+  }
+  function orgTile(org, size = '') {
+    const host = hostOf(org?.url) || org?.host || org?.name || '';
+    return `<span class="otile ${size} c${tone(host)}" aria-hidden="true">${esc(orgInitials(org?.name, host))}</span>`;
+  }
+  const macTile = (size = 's32') => `<span class="otile ${size} mac" aria-hidden="true">${icon('mac', size === 's32' ? 16 : 13)}</span>`;
+  const orgs = () => S.settings?.connections || [];
+  const orgById = (id) => orgs().find((o) => o.id === id) || null;
+  const defaultOrg = () => orgs().find((o) => o.default) || orgs()[0] || null;
+  /** The Recorder's mark: the Liquid Dot holding a mic, on ink. */
+  const MARK = '<svg width="72" height="72" viewBox="0 0 64 64" role="img" aria-label="Tico Recorder"><rect width="64" height="64" rx="14" fill="#172221"/><path fill="#56a578" d="M29.9 15A17.1 13.2 0 0 1 47 28.2A16.5 16.8 0 0 1 30.5 45A13.5 18.6 0 0 1 17 26.4A12.9 11.4 0 0 1 29.9 15Z"/><g fill="none" stroke="#172221" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="28.4" y="20.5" width="6.4" height="11.6" rx="3.2" fill="#172221"/><path d="M25.3 27.6v.9a6.3 6.3 0 0 0 12.6 0v-.9"/><path d="M31.6 34.8v3.2"/></g></svg>';
+  const WORDMARK = '<svg class="word" height="30" viewBox="0 -744 1424 754" role="img" aria-label="tico"><path fill="currentColor" d="M245 10Q159 10 118 -31Q77 -73 77 -157V-615L219 -674V-155Q219 -129 234 -115Q249 -102 281 -102Q292 -102 303 -104Q313 -107 323 -111V-3Q312 4 291 7Q270 10 245 10ZM0 -400V-510H320V-400Z M343 0V-510H485V0Z M729 10Q664 10 614 -22Q563 -54 534 -114Q505 -174 505 -256Q505 -339 535 -398Q565 -457 616 -488Q668 -520 732 -520Q789 -520 835 -496Q881 -473 909 -427Q936 -382 940 -315H809Q805 -366 785 -387Q764 -408 735 -408Q712 -408 693 -394Q673 -379 663 -346Q652 -312 652 -256Q652 -200 663 -166Q673 -132 693 -117Q712 -102 735 -102Q764 -102 785 -123Q805 -144 809 -195H940Q936 -129 907 -83Q878 -38 832 -14Q786 10 729 10Z M1187 10Q1117 10 1063 -23Q1010 -56 980 -117Q950 -177 950 -257Q950 -337 980 -396Q1010 -455 1063 -488Q1116 -520 1187 -520Q1259 -520 1312 -488Q1365 -455 1395 -396Q1424 -337 1424 -257Q1424 -177 1395 -117Q1365 -56 1312 -23Q1258 10 1187 10ZM1187 -102Q1213 -102 1233 -118Q1253 -134 1265 -169Q1277 -203 1277 -257Q1277 -337 1252 -373Q1226 -408 1187 -408Q1148 -408 1123 -372Q1098 -336 1098 -257Q1098 -203 1109 -169Q1121 -134 1141 -118Q1162 -102 1187 -102Z"/><circle fill="#56a578" cx="414" cy="-662" r="82"/></svg>';
+  /** Tico's own mark: the Liquid Dot, flat. Bots get the bot avatar, never the dot. */
+  const ticoDot = (thinking = false) => `<i class="ldot ${thinking ? 'thinking' : ''}" aria-label="Tico"></i>`;
 
   // ---- Models: inputs read and write these; values are set after rendering, never in HTML ----
   const models = {
@@ -78,11 +102,13 @@
   const model = (name) => {
     if (models[name]) return models[name][0]();
     if (name.startsWith('form.')) return S.ui.form?.[name.slice(5)] ?? '';
+    if (name.startsWith('finish.')) return S.ui.finish?.[name.slice(7)] ?? '';
     return S.ui[name] ?? '';
   };
   function setModel(name, value) {
     if (models[name]) models[name][1](value);
     else if (name.startsWith('form.')) S.ui.form[name.slice(5)] = value;
+    else if (name.startsWith('finish.')) { if (S.ui.finish) S.ui.finish[name.slice(7)] = value; }
     else S.ui[name] = value;
   }
 
@@ -125,19 +151,21 @@
         }
       }
       S.status = v.status;
-      S.live = v.live || null;
+      // The desktop app's signed-in orgs, when this build gets them (older ones send nothing).
+      const desktop = v.desktop_orgs || v.status?.desktop_orgs;
+      S.desktopOrgs = Array.isArray(desktop) ? desktop : [];
       window.ticoUpdate?.(v.status.update);
-      // Profiling builds open the transcript of the test recording once.
-      if (S.status.profile && S.status.recording && !S.ui.profiled) { S.ui.profiled = true; S.page = 'meeting'; S.ui.panel = 'transcript'; }
-      const key = statusKey(v.status) + JSON.stringify(S.live?.notices || []);
+      if (S.status.profile && S.status.recording && !S.ui.profiled) { S.ui.profiled = true; S.page = 'meeting'; }
+      const key = statusKey(v.status) + JSON.stringify(S.desktopOrgs);
       if (key !== S.statusKey) {
         S.statusKey = key;
         changed = true;
       }
       if (S.page === 'meeting' && !S.status.meeting) {
         S.page = 'library';
-        S.ui.panel = null;
         S.ui.pop = null;
+        S.ui.share = null;
+        if (S.ui.finish?.fromMeeting) S.ui.finish = null;
         changed = true;
       }
       if (S.ui.saving && !S.status.busy) {
@@ -149,6 +177,7 @@
         }
         changed = true;
       }
+      if (settleShare()) changed = true;
       if (changed) render();
       else live();
     } catch (error) {
@@ -175,39 +204,84 @@
   // ---- Top bar ----
   function topbar() {
     const st = S.status;
+    if (!st.screen?.active) document.getElementById('screen-preview')?.remove();
     let left = '';
     let right = '';
+    if (S.page === 'signin') return `<header class="topbar bare" data-tauri-drag-region><div class="spacer" data-tauri-drag-region></div></header>`;
     if (S.page !== 'library') {
       const label = S.page === 'settings' && S.ui.prevPage === 'meeting' ? 'Back' : 'Recordings';
-      left = `<button class="pill-back" data-act="back" title="Back (Esc)">${icon('back', 14)}${label}</button>`;
+      left = `<button class="back" data-act="back" title="Back (Esc)">${icon('back', 14)}${label}</button>`;
     }
+    const screen = st.screen;
+    if (screen?.active) right += `<button class="btn small danger screen-stop" data-act="stop-screen" title="${esc(screen.title)} · ${esc(screen.source || screen.phase)}">${icon('screen', 13)}<span>${screen.phase === 'Sharing' ? 'Sharing screen' : 'Starting…'}</span><b>Stop</b></button>`;
     if (st.demo) right += badge('Demo library', 'amber');
-    if (S.page === 'meeting' && S.meeting) {
-      const m = S.meeting;
-      // Send does every step itself (stop, last words, finish the live meeting); the button shows the step.
-      const sending = st.sending?.id === m.id ? st.sending : null;
-      if (m.can_finish && !sending) right += `<button class="btn small" data-act="finish" ${st.busy ? 'disabled' : ''}>Finish meeting</button>`;
-      right += peopleButton(m.people);
-      if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
-      else if (sending) right += `<button class="btn small sending" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
-      else right += `<button class="btn small" data-act="pop" data-pop="send" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>${icon('send', 13)}Send</button>`;
-      right += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}</button>`;
+    if (S.page === 'meeting' && S.meeting) right += meetingActions(S.meeting);
+    if (S.page === 'library') {
+      const org = defaultOrg();
+      if (org) right += `<button class="org-pill ${S.ui.pop?.kind === 'orgs' ? 'on' : ''}" data-act="pop" data-pop="orgs" aria-label="Org">${orgTile(org)}<span class="name">${esc(org.name)}</span>${icon('down', 12)}</button>`;
+      else right += `<button class="btn small" data-act="settings">Sign in</button>`;
+      right += `<button class="icon-btn" data-act="settings" title="Settings (⌘,)" aria-label="Settings">${icon('gear')}</button>`;
     }
-    if (S.page === 'library') right += `<button class="icon-btn" data-act="settings" title="Settings (⌘,)" aria-label="Settings">${icon('gear')}</button>`;
     return `<header class="topbar" data-tauri-drag-region>${left}<div class="spacer" data-tauri-drag-region></div>${right}</header>`;
   }
-  function peopleButton(p) {
-    const shown = p.rows.slice(0, 3).map((row) => avatar(row, 'small')).join('');
-    const more = p.rows.length > 3 ? `<span class="more">+${p.rows.length - 3}</span>` : '';
-    const on = S.ui.pop?.kind === 'people' ? 'on' : '';
-    return `<button class="people-btn ${on}" data-act="pop" data-pop="people" title="People" aria-label="People"><span class="avatars">${shown}</span>${more}</button>`;
+  /** Share live, Finish and More. Share live shows who can join once it is shared. */
+  function meetingActions(m) {
+    const st = S.status;
+    const sending = st.sending?.id === m.id ? st.sending : null;
+    let html = '';
+    const ended = m.live_state === 'ended';
+    if (m.live && !ended && !m.discarded) {
+      const who = m.people.team ? `Anyone on ${m.people.org}` : `${peopleIn(m).length || 'Only'} ${peopleIn(m).length === 1 ? 'person' : peopleIn(m).length ? 'people' : 'you'}`;
+      const paused = m.live_state === 'paused';
+      html += `<button class="share-btn live ${S.ui.share ? 'on' : ''}" data-act="share-open" title="${esc(m.place)}"><i class="live-dot ${paused ? 'amber' : ''}"></i><span>${paused ? 'Paused' : 'Live'}<span class="who"> · ${esc(who)}</span></span></button>`;
+    } else if (m.discarded && m.discard_pending) {
+      html += badge('Ending in Tico', 'amber');
+    } else if (ended && !m.sent) {
+      html += badge('Ended in Tico', '');
+    } else if (!m.sent && !m.kept_local && !m.discarded && m.connected) {
+      html += `<button class="share-btn ${S.ui.share ? 'on' : ''}" data-act="share-open">${icon('people', 15)}<span>Share live</span></button>`;
+    }
+    if (m.sent) html += badge(`${icon('check', 12)}In Tico`, '');
+    else if (sending) html += `<button class="btn small" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
+    else html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
+    html += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}${m.audio.attention ? '<span class="dot"></span>' : ''}</button>`;
+    return html;
   }
+  /** Teammates in the live meeting other than me, and names typed here. */
+  const peopleIn = (m) => m.people.rows.filter((row) => !row.me);
 
   // ---- Notices ----
   function errorNotice() {
-    const error = S.status.error;
+    const error = S.status.error || S.status.screen?.error;
     if (!error) return '';
     return `<div class="notice">${icon('alert')}<span class="grow selectable">${esc(error)}</span><button class="icon-btn dismiss" data-act="dismiss-error" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>`;
+  }
+
+  // ---- Sign in ----
+  function signinPage() {
+    const st = S.status;
+    const desktop = S.desktopOrgs;
+    const address = S.ui.address || !desktop.length;
+    let intro = `<div class="intro">${MARK}<div class="brand">${WORDMARK}<span class="sub">Recorder</span></div><p>Record any meeting on this Mac. It goes to the Tico you pick.</p>`;
+    if (st.signing_in) intro += `<div class="waiting"><span class="spin"></span>Choose Allow in ${S.ui.signingDesktop ? 'Tico' : 'your browser'}…</div>`;
+    else if (address) {
+      intro += `<div class="address"><input class="field" data-model="signin" data-enter="signin" placeholder="your-tico.example" spellcheck="false" aria-label="Tico address"><button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in</button></div>`;
+      if (desktop.length) intro += `<button class="link" data-act="address-off">Cancel</button>`;
+    }
+    intro += errorNotice() + '</div>';
+    if (!desktop.length) return `<div class="signin single">${intro}</div>`;
+    // One row per org of the Tico desktop app; Allow signs in to that org.
+    let card = `<div class="orgs">`;
+    for (const org of desktop) {
+      const tail = org.connected
+        ? `<span class="check" aria-label="Added">${icon('check')}</span>`
+        : st.signing_in && S.ui.signingDesktop === org.url
+          ? `<span class="spin"></span>`
+          : `<button class="btn small primary" data-act="signin-desktop" data-url="${esc(org.url)}" ${st.busy ? 'disabled' : ''} aria-label="Allow ${esc(org.name)}">Allow</button>`;
+      card += `<div class="org-row">${orgTile(org, 's32')}<div class="grow"><div class="name">${esc(org.name)}</div>${org.email ? `<div class="sub">${esc(org.email)}</div>` : ''}</div>${tail}</div>`;
+    }
+    if (!address) card += `<button class="org-row dim" data-act="address-on"><span class="otile s32 add">+</span><div class="grow"><div class="name">Another Tico</div></div></button>`;
+    return `<div class="signin">${intro}${card}</div>`;
   }
 
   // ---- Library ----
@@ -218,28 +292,18 @@
     const q = S.ui.search.trim().toLowerCase();
     const rows = lib.rows.filter((row) => !q || row.title.toLowerCase().includes(q));
     let html = `<div class="column"><div class="lib-head"><h1 class="page-title">Recordings</h1>`;
-    if (lib.rows.length) html += `<label class="search">${icon('search', 14)}<input data-model="search" placeholder="Search" spellcheck="false"></label>`;
+    if (lib.rows.length) html += `<label class="search">${icon('search', 14)}<input data-model="search" placeholder="Search" spellcheck="false" aria-label="Search"></label>`;
     html += `</div>${errorNotice()}`;
-    if (st.first_run) {
-      // First run: sign in to a Tico, then macOS asks for the mic and meeting audio on the first recording.
-      const signin = st.signing_in
-        ? `<div class="waiting"><span class="spin"></span>Choose Allow in your browser…</div>`
-        : `<div class="signin-row"><input class="field" data-model="signin" data-enter="signin" placeholder="your-tico.example" spellcheck="false" aria-label="Your Tico's address"><button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in</button></div>`;
-      html += `<div class="card setup"><div class="step"><span class="step-mark">${ticoDot()}</span><div class="grow"><div class="step-title">Sign in with Tico</div>${signin}</div></div>`;
-      html += `<div class="step"><span class="step-mark">${icon('mic', 16)}</span><div class="grow step-line"><div class="step-title">Microphone and meeting audio</div><span class="faint">Asked on first recording</span></div></div></div>`;
-    }
     if (!st.recording && lib.events.length && !q) {
-      html += `<div class="group-label">Coming up${lib.calendar_stale ? ` · <span style="color:var(--amber)">Calendar out of date</span>` : ''}</div>`;
+      html += `<div class="label group">Coming up${lib.calendar_stale ? ` · <span style="color:var(--amber)">Calendar out of date</span>` : ''}</div><div class="events">`;
       html += lib.events.map((event, index) => {
         const start = new Date(event.start);
-        return `<div class="event"><span class="time">${isNaN(start) ? '' : esc(timeOf(start))}</span><span class="name">${esc(event.title || 'Meeting')}</span><button class="btn small" data-act="record-event" data-index="${index}">${icon('mic', 13)}Record</button></div>`;
+        return `<div class="event"><span class="time">${isNaN(start) ? '' : esc(timeOf(start))}</span><span class="name">${esc(event.title || 'Meeting')}</span><button class="btn small" data-act="record-event" data-index="${index}"><i class="reddot"></i>Record</button></div>`;
       }).join('');
+      html += '</div>';
     }
-    if (!lib.rows.length) {
-      html += `<div class="empty">${icon('wave', 34)}<div class="big">No recordings yet</div>Audio stays on this Mac until you send a meeting.</div>`;
-    } else if (!rows.length) {
-      html += `<div class="empty"><div class="big">No matches</div></div>`;
-    }
+    if (!lib.rows.length) html += `<div class="empty"><div class="big">No recordings yet</div></div>`;
+    else if (!rows.length) html += `<div class="empty"><div class="big">No matches</div></div>`;
     let day = '';
     let open = false;
     for (const row of rows) {
@@ -247,7 +311,7 @@
       const label = isNaN(date) ? '' : dayOf(date);
       if (label !== day) {
         if (open) html += '</div>';
-        html += `<div class="group-label">${esc(label)}</div><div class="rows">`;
+        html += `<div class="label group">${esc(label)}</div><div class="rows">`;
         day = label;
         open = true;
       }
@@ -256,138 +320,469 @@
     if (open) html += '</div>';
     return html + '</div>';
   }
+  /** A row's pill, only when it says something: live, in Tico, still transcribing, or a problem. */
+  function rowStatus(row) {
+    const status = row.status;
+    if (!status) return '';
+    const tone = status.tone === 'live' ? 'live' : status.tone === 'red' ? 'red' : status.tone === 'amber' ? 'amber' : '';
+    const lead = status.label === 'Recording' ? '<i class="pulse"></i>' : '';
+    return badge(lead + esc(status.label), tone, row.sync_error ? `title="${esc(row.sync_error)}"` : '');
+  }
   function libraryRow(row, date) {
     const id = esc(row.id);
     if (S.ui.confirm === row.id) {
-      return `<div class="row confirm"><div class="tile">${icon('trash', 17)}</div><div class="body"><div class="title">Delete “${esc(row.title)}”?</div><div class="sub">Removes its audio and transcript from this Mac.</div></div><div class="tail"><button class="btn small quiet" data-act="cancel-delete">Cancel</button><button class="btn small danger" data-act="delete" data-id="${id}">Delete</button></div></div>`;
+      return `<div class="row confirm"><span class="otile s32 rec">${icon('trash', 15)}</span><div class="body"><div class="title">Delete “${esc(row.title)}”?</div></div><div class="tail"><button class="btn small quiet" data-act="cancel-delete">Cancel</button><button class="btn small danger" data-act="delete" data-id="${id}">Delete</button></div></div>`;
     }
-    const status = row.status;
-    let statusHtml = '';
-    if (status) {
-      const lead = status.label === 'Recording' ? '<i class="pulse"></i>' : '';
-      statusHtml = badge(lead + esc(status.label), status.tone, row.sync_error ? `title="${esc(row.sync_error)}"` : '');
-    }
+    const org = row.org ? { ...row.org, ...(orgById(row.org.id) || {}) } : null;
     const menu = S.ui.pop?.anchorId === row.id ? 'menu-open' : '';
-    const sub = [isNaN(date) ? '' : timeOf(date), length(row.duration_ms)].filter(Boolean).map(esc).join(' · ');
+    const sub = [isNaN(date) ? '' : timeOf(date), length(row.duration_ms), org ? org.name : 'This Mac only'].filter(Boolean).map(esc).join(' · ');
+    const save = row.local && row.can_send ? `<button class="btn small" data-act="finish-open" data-id="${id}">Save to Tico</button>` : '';
+    const trash = row.recording ? '' : `<button class="icon-btn trash hover-only" data-act="ask-delete" data-id="${id}" title="Delete" aria-label="Delete ${esc(row.title)}">${icon('trash', 15)}</button>`;
     return `<div class="row ${menu}" data-act="open" data-id="${id}" role="button" tabindex="0" aria-label="${esc(row.title)}">
-      <div class="tile ${row.recording ? 'live' : ''}">${icon('wave', 18)}</div>
+      ${org ? orgTile(org, 's32') : macTile()}
       <div class="body"><div class="title">${esc(row.title)}</div><div class="sub">${sub}</div></div>
-      <div class="tail">${row.can_send ? `<button class="btn small hover-only" data-act="pop" data-pop="send" data-id="${id}">Send</button>` : ''}${row.recording ? '' : `<button class="icon-btn trash hover-only" data-act="ask-delete" data-id="${id}" title="Delete" aria-label="Delete ${esc(row.title)}">${icon('trash', 15)}</button>`}${statusHtml}</div>
+      <div class="tail">${trash}${rowStatus(row)}${save}</div>
     </div>`;
   }
 
-  // ---- Meeting ----
+  // ---- Meeting: notes and items on the left, the transcript and private questions on the right ----
   function meeting() {
     const m = S.meeting;
     if (!m) return '';
-    let meta = [esc(fullDate(m.started_at))];
-    if (m.duration_ms) meta.push(esc(length(m.duration_ms)));
-    let html = `<div class="column"><input class="title-input" data-model="title" data-enter="rename" data-blur="rename" spellcheck="false" ${m.title_editable ? '' : 'disabled'} aria-label="Title">`;
-    html += `<div class="meta">${meta.join('<span class="sep"></span>')}<span class="sep"></span>${visibility(m)}`;
-    if (m.live_url) html += `<span class="sep"></span><button class="link" data-act="open-url" data-url="${esc(m.live_url)}">Open in Tico</button>`;
-    html += `</div>`;
+    const names = peopleIn(m).map((row) => row.name);
+    const line = [fullDate(m.started_at), names.join(', ')].filter(Boolean).map(esc).join(' · ');
+    let html = `<div class="main" id="main"><div class="main-inner"><input class="title-input" data-model="title" data-enter="rename" data-blur="rename" spellcheck="false" ${m.title_editable ? '' : 'disabled'} aria-label="Title">`;
+    html += `<div class="people-line">${line}${m.live_url ? ` · <button class="link" data-act="open-url" data-url="${esc(m.live_url)}">Open in Tico</button>` : ''}</div>`;
     if (m.sync_error) html += `<div class="notice">${icon('alert')}<span class="grow selectable">${esc(m.sync_error)}</span></div>`;
-    for (const note of m.setup) html += `<div class="notice">${icon('alert')}<span class="grow">${esc(note)}</span>${S.page === 'meeting' ? `<button class="link" data-act="settings">Settings</button>` : ''}</div>`;
+    for (const note of m.setup) html += `<div class="notice">${icon('alert')}<span class="grow">${esc(note)}</span><button class="link" data-act="settings">Settings</button></div>`;
     html += errorNotice();
     html += actions(m.actions);
-    const notes = m.notes;
-    html += `<section class="section"><div class="section-head"><h2>Notes</h2></div><div class="notes-wrap"><div class="notes-backdrop" aria-hidden="true"></div><textarea class="notes" data-model="notes" data-defer placeholder="Write notes… @ to mention" ${notes.editable ? '' : 'disabled'} aria-label="Notes"></textarea></div></section>`;
-    html += chatSection(m.chat);
-    return html + '</div>';
+    html += `<section class="section"><div class="label">Notes</div><div class="notes-wrap"><div class="notes-backdrop" aria-hidden="true"></div><textarea class="notes" data-model="notes" data-defer placeholder="Write notes… @ to mention" ${m.notes.editable ? '' : 'disabled'} aria-label="Notes"></textarea></div></section>`;
+    html += '</div></div>';
+    if (!S.ui.hideSide) html += sidebar(m);
+    return html;
   }
-  /** The meeting's chat: people, bots and private questions to Tico, in time order, with bot-turn notices between. */
-  function chatSection(c) {
-    const notices = liveNotices(S.meeting);
-    let html = `<section class="section chat-section" id="chat"><div class="section-head"><h2>Chat</h2></div>`;
-    if (!c.messages.length && !c.replying.length && !notices.length) html += `<div class="chat-empty">Bots you add can reply here.</div>`;
-    let last = null;
-    let n = 0;
-    // Notices are newest last, like the messages; each goes in before the first message after it.
-    const flush = (until) => {
-      while (n < notices.length && !(notices[n].at > until)) {
-        html += chatNotice(notices[n++]);
-        last = null;
-      }
-    };
-    for (const msg of c.messages) {
-      const date = new Date(msg.time);
-      if (!isNaN(date)) flush(date.getTime());
-      const cont = last && last.name === msg.name && last.private === msg.private && !msg.pending;
-      const head = cont ? '' : `<div class="msg-head"><b>${esc(msg.name)}</b>${msg.bot && !msg.private ? '<span class="tag">Bot</span>' : ''}${msg.private ? `<span class="tag private">${icon('lock', 11)}Only you</span>` : ''}${msg.time && !isNaN(date) ? `<span class="time">${esc(timeOf(date))}</span>` : ''}</div>`;
-      const who = msg.private && !msg.me ? ticoDot() : avatar({ name: msg.name, bot: msg.bot, me: msg.me });
-      const text = esc(msg.text).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
-      html += `<div class="msg ${msg.private ? 'private' : ''} ${msg.pending ? 'pending' : ''} ${cont ? 'cont' : ''}">${cont ? '<span class="avatar-gap"></span>' : who}<div class="msg-body">${head}<div class="msg-text selectable">${text}</div></div></div>`;
-      last = msg;
-    }
-    flush(Infinity);
-    const typing = '<span class="dots"><i></i><i></i><i></i></span>';
-    for (const name of c.replying) html += `<div class="msg replying">${avatar({ name, bot: true })}<div class="msg-body"><div class="msg-line"><b>${esc(name)}</b> is replying${typing}</div></div></div>`;
-    if (c.thinking) html += `<div class="msg replying private">${ticoDot(true)}<div class="msg-body"><div class="msg-line"><b>Tico</b> is answering privately${typing}</div></div></div>`;
-    if (c.error) html += `<div class="notice inline">${icon('alert')}<span class="grow selectable">${esc(c.error)}</span>${c.retry && c.ready ? `<button class="link" data-act="chat-retry">Retry</button>` : ''}</div>`;
-    return html + '</section>';
-  }
-  /** Tico's own mark: the Liquid Dot, flat. Bots get the bot avatar, never the dot. */
-  const ticoDot = (thinking = false) => `<span class="avatar tico" aria-label="Tico"><i class="ldot ${thinking ? 'thinking' : ''}"></i></span>`;
-  /** What the meeting's live state reads as: a string today, an object with a label if it grows one. */
-  const liveLabel = (m) => (typeof m.live === 'string' ? m.live : m.live?.label || null);
-  /** Bot turns that failed, wait, were put off or were retried (`live.notices`), newest last. */
-  function liveNotices(m) {
-    if (!m) return [];
-    const list = S.live?.notices || (m.live && typeof m.live === 'object' ? m.live.notices : null) || [];
-    return Array.isArray(list) ? list : [];
-  }
-  /** One quiet line in the chat: a failed turn in the warning tone, the rest muted. */
-  function chatNotice(notice) {
-    const failed = notice.kind === 'failed';
-    const glyph = failed ? 'alert' : notice.kind === 'retried' ? 'retry' : 'clock';
-    const bot = String(notice.bot || '');
-    const text = String(notice.text || '');
-    // The sentence usually names the bot already; only add the name when it does not.
-    const lead = bot && !text.startsWith(bot) ? `<b>${esc(bot)}</b> · ` : '';
-    const at = new Date(notice.at);
-    return `<div class="chat-notice ${failed ? 'failed' : ''}" role="status">${icon(glyph, 13)}<span class="grow selectable">${lead}${esc(text)}</span>${notice.at && !isNaN(at) ? `<span class="time">${esc(timeOf(at))}</span>` : ''}</div>`;
-  }
-  function visibility(m) {
-    const live = liveLabel(m);
-    if (!live) return badge(`${icon('lock', 12)}Private`, 'muted', 'title="On this Mac only"');
-    const team = live === 'Team can join';
-    return `<button class="badge ${live === 'Ended in Tico' ? 'muted' : 'accent'} badge-btn" data-act="pop" data-pop="people" title="${esc(m.place)}">${icon(team ? 'globe' : 'lock', 12)}${esc(live)}</button>`;
-  }
+  /** Tasks: ones already in Tico by number, then proposals drafted as people talk, each created or dismissed. */
   function actions(a) {
-    let aside = '';
-    if (a.mode === 'ready' && a.multiple) {
-      aside = `to ${esc(a.org)}${a.can_change ? ` · <button class="link" data-act="change-org">Change</button>` : ''}`;
-    }
-    let html = `<section class="section"><div class="section-head"><h2>Action items</h2>${a.waiting ? `<span class="count">${a.waiting}</span>` : ''}<span class="aside">${aside}</span></div>`;
+    let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span><button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
     if (a.draft_status) html += `<div class="notice inline">${icon('alert')}<span class="grow">${esc(a.draft_status)}</span></div>`;
-    if (a.mode === 'choose') {
-      html += `<div class="choose-org">Send action items to ${a.orgs.map((o) => `<button class="btn small" data-act="choose-org" data-id="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>`;
+    if (a.mode === 'choose' && a.items.some((it) => !it.sent)) {
+      html += `<div class="choose-org"><span class="faint">Owners from</span>${a.orgs.map((o) => `<button class="btn small" data-act="choose-org" data-id="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>`;
     }
-    html += `<ul class="items">${a.items.map(item).join('')}</ul>`;
-    html += `<div class="add-item"><span class="bullet">${icon('plus', 14)}</span><input data-model="addItem" data-enter="add-item" placeholder="Add an action item" spellcheck="false" aria-label="Add an action item"></div>`;
-    if (!a.items.length) html += `<div class="hint">Drafted as people talk. Nothing goes to Tico until you send it.</div>`;
-    else if (a.mode === 'signin') html += `<div class="hint"><button class="link" data-act="settings">Sign in to a Tico</button> to send these.</div>`;
+    const sent = a.items.filter((it) => it.sent);
+    const proposed = a.items.filter((it) => !it.sent);
+    if (sent.length) html += `<ul class="items tasks">${sent.map(task).join('')}</ul>`;
+    if (proposed.length) html += `<ul class="items">${proposed.map(proposal).join('')}</ul>`;
+    if (S.ui.adding || !a.items.length) html += `<div class="add-item"><span class="check">${icon('plus', 13)}</span><input data-model="addItem" data-enter="add-item" data-blur="add-close" placeholder="Add a task" spellcheck="false" aria-label="Add a task"></div>`;
     return html + '</section>';
   }
-  function item(it) {
+  /** Tico's task number, when the task's id or link ends in one. */
+  function taskNumber(it) {
+    const id = String(it.task_id || '');
+    if (/^\d+$/.test(id)) return id;
+    const tail = /\/(\d+)\/?(?:[?#].*)?$/.exec(String(it.task_url || ''));
+    return tail ? tail[1] : '';
+  }
+  function task(it) {
+    const n = taskNumber(it);
+    const open = it.task_url ? `<button class="link" data-act="open-url" data-url="${esc(it.task_url)}">Open</button>` : '';
+    const sub = [it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
+    return `<li class="item task"><span class="check done">${icon('check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div></li>`;
+  }
+  function proposal(it) {
     const id = esc(it.id);
     const picking = S.ui.pop?.kind === 'owner' && S.ui.pop.id === it.id;
-    const detail = it.quote ? `<div class="detail"><span class="at">${clock(it.at_ms)}</span>“${esc(it.quote)}”</div>` : '';
-    if (it.sent) {
-      const open = it.task_url ? ` · <button class="link" data-act="open-url" data-url="${esc(it.task_url)}">Open task</button>` : '';
-      return `<li class="item sent"><span class="bullet">${icon('check', 14)}</span><div class="content"><div class="line1"><span class="title selectable">${esc(it.title)}</span></div>${detail}<div class="sent-line">Sent to ${esc(it.sent_to)}${open}</div></div></li>`;
-    }
+    const at = it.quote || it.at_ms ? `<span class="at" title="${esc(it.quote)}">${clock(it.at_ms)}</span><span>·</span>` : '';
+    const doc = it.document ? `<span>· ${esc(it.document)}</span>` : '';
     const owner = it.owner_name
-      ? `<button class="owner" data-act="pop" data-pop="owner" data-id="${id}" title="${esc(it.owner_name)}">${icon(it.owner.startsWith('bot:') ? 'bot' : 'person', 12)}<span>${esc(it.owner_name)}</span></button>`
-      : `<button class="owner empty" data-act="pop" data-pop="owner" data-id="${id}">Who gets it?</button>`;
-    const send = it.sending
-      ? `<span class="spin" style="margin:7px 8px"></span>`
-      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
-    return `<li class="item ${picking ? 'picking' : ''} ${it.sending ? 'busy' : ''}">
-      <span class="bullet"><i></i></span>
-      <div class="content"><div class="line1"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Action item">${esc(it.title)}</span>${owner}</div>${detail}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
-      <div class="actions">${send}<button class="icon-btn" data-act="remove-item" data-id="${id}" title="Dismiss" aria-label="Dismiss">${icon('close', 13)}</button></div>
+      ? `<button class="owner" data-act="pop" data-pop="owner" data-id="${id}">${esc(it.owner_name)}</button>`
+      : `<button class="owner empty" data-act="pop" data-pop="owner" data-id="${id}">Owner</button>`;
+    const anyway = S.ui.createOk === it.id;
+    const why = it.can_send ? '' : it.send_blocked || (it.owner ? '' : 'Choose an owner');
+    const create = it.sending
+      ? `<span class="spin" style="margin:0 8px"></span>`
+      : `<button class="btn small" data-act="create-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${esc(why)}">${anyway ? 'Create anyway' : 'Create'}</button>`;
+    return `<li class="item proposal ${picking ? 'picking' : ''}">
+      <span class="check dashed"></span>
+      <div class="content"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Task">${esc(it.title)}</span><div class="sub">${at}${owner}${doc}</div>${anyway ? `<div class="error">May quote paused speech</div>` : ''}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
+      <div class="item-tail">${create}<button class="icon-btn tiny" data-act="remove-item" data-id="${id}" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>
     </li>`;
+  }
+
+  // ---- Transcript sidebar ----
+  function speakerColors(blocks) {
+    const colors = {};
+    let n = 0;
+    for (const b of blocks) if (!(b.speaker in colors)) colors[b.speaker] = `var(--speaker-${(n++ % 6) + 1})`;
+    return colors;
+  }
+  function highlight(text, q) {
+    if (!q) return esc(text);
+    const lower = text.toLowerCase();
+    let out = '';
+    let at = 0;
+    for (let i = lower.indexOf(q); i >= 0; i = lower.indexOf(q, at)) {
+      out += esc(text.slice(at, i)) + `<mark>${esc(text.slice(i, i + q.length))}</mark>`;
+      at = i + q.length;
+    }
+    return out + esc(text.slice(at));
+  }
+  /** Live text per channel: nothing extra while it works, a quiet note while it reconnects. */
+  function streamState(rec) {
+    const list = rec?.stream || [];
+    const bad = list.find((x) => x.state === 'retrying') || list.find((x) => x.state === 'stopped' && x.error);
+    const note = !bad ? '' : bad.state === 'retrying' ? `Live text reconnecting${bad.error ? ` · ${bad.error}` : ''}` : bad.error;
+    return { live: list.some((x) => x.state === 'live'), bad, note };
+  }
+  function transcriptBlocks() {
+    const m = S.meeting;
+    return S.transcript?.id === m.id ? S.transcript.blocks : [];
+  }
+  /** The sidebar's frame. Its rows are patched into #tbody one by one (see `patchTranscript`). */
+  function sidebar(m) {
+    const a = m.audio;
+    const rec = S.status.recording;
+    const stream = rec && rec.id === m.id ? streamState(rec) : null;
+    let status = '';
+    // A spinner only while transcription really runs; waiting on Settings is said plainly.
+    if (stream?.bad) status = badge('Reconnecting', 'amber');
+    else if (stream?.live || (rec && rec.id === m.id)) status = badge('Live', 'live');
+    else if (a.pending && m.setup.length) status = `<span class="status">Waiting ${a.pending}</span>`;
+    else if (a.pending) status = `<span class="status"><span class="spin"></span>Transcribing ${a.pending}</span>`;
+    else if (a.finding_speakers) status = `<span class="status"><span class="spin"></span>Speakers</span>`;
+    let html = `<aside class="sidebar"><div class="side-head"><h3>Transcript</h3>${status}<span class="grow"></span>`;
+    if (a.attention) html += `<button class="icon-btn ${S.ui.showAudio ? 'on' : ''}" data-act="toggle-audio" title="Audio" aria-label="Audio">${icon('mic', 15)}<span class="dot"></span></button>`;
+    html += `<button class="icon-btn ${S.ui.tsearch ? 'on' : ''}" data-act="tsearch" title="Search (⌘F)" aria-label="Search transcript">${icon('search', 15)}</button></div>`;
+    if (S.ui.tsearch) html += `<label class="side-search">${icon('search', 13)}<input data-model="tq" data-enter="next-hit" placeholder="Search transcript" spellcheck="false" aria-label="Search transcript"><span class="hits" id="thits"></span><button class="icon-btn tiny" data-act="hit" data-step="-1" title="Previous (⇧↩)" aria-label="Previous match">${icon('up', 12)}</button><button class="icon-btn tiny" data-act="hit" data-step="1" title="Next (↩)" aria-label="Next match">${icon('down', 12)}</button></label>`;
+    if (S.ui.showAudio) {
+      let box = '';
+      if (a.warning) box += `<div class="warn selectable">${esc(a.warning)}</div>`;
+      for (const input of a.inputs) box += `<div class="rowline"><b>${esc(input.label)}</b><span class="${input.ok ? 'ok' : 'warn'}">${esc(input.state)}</span></div>`;
+      if (stream?.note) box += `<div class="warn selectable">${esc(stream.note)}</div>`;
+      for (const line of a.failures) box += `<div class="warn selectable">${esc(line)}</div>`;
+      if (a.more) box += `<div class="faint">+${a.more} more</div>`;
+      if (a.failed) box += `<div><button class="link" data-act="retry" data-id="${esc(m.id)}">Retry ${a.failed} failed</button></div>`;
+      if (!box) box = `<div class="faint">No audio yet</div>`;
+      html += `<div class="audio-box">${box}</div>`;
+    }
+    html += `<div class="side-body" id="tbody"></div>`;
+    const chat = m.chat;
+    let foot = '';
+    if (chat.error) foot += `<div class="ask-error">${icon('alert', 13)}<span class="grow selectable">${esc(chat.error)}</span>${chat.retry && chat.ready ? `<button class="link" data-act="ask-retry">Retry</button>` : ''}</div>`;
+    foot += `<label class="ask"><input data-model="ask" data-enter="ask" placeholder="Ask Tico about this meeting" spellcheck="false" aria-label="Ask Tico about this meeting"><button class="send" data-act="ask" ${chat.thinking ? 'disabled' : ''} aria-label="Ask">${chat.thinking ? '<span class="spin"></span>' : icon('arrowUp', 14)}</button></label>`;
+    return html + `<div class="side-foot">${foot}</div></aside>`;
+  }
+  /** Private questions to Tico and their answers, as cards between the turns they followed. */
+  function askCards(m) {
+    const cards = [];
+    let question = '';
+    for (const msg of m.chat.messages) {
+      if (!msg.private) continue;
+      if (msg.pending) {
+        cards.push({ at: Infinity, html: `<div class="asked pending" title="${esc(msg.text)}">${ticoDot(true)}<div class="grow"><div class="head">You asked · only you see this</div><div class="typing"><i></i><i></i><i></i></div></div></div>` });
+      } else if (msg.me) {
+        question = msg.text;
+      } else {
+        const at = new Date(msg.time).getTime();
+        const text = esc(msg.text).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+        cards.push({ at: isNaN(at) ? Infinity : at, html: `<div class="asked" title="${esc(question)}">${ticoDot()}<div class="grow"><div class="head">You asked · only you see this</div><div class="text">${text}</div></div></div>` });
+        question = '';
+      }
+    }
+    return cards;
+  }
+  /** One string per row of the sidebar: turns, private answers, and the softer words still being spoken. */
+  function transcriptItems() {
+    const m = S.meeting;
+    const a = m.audio;
+    const blocks = transcriptBlocks();
+    const q = S.ui.tsearch ? S.ui.tq.trim().toLowerCase() : '';
+    const recording = m.state === 'recording' || S.status.recording?.id === m.id;
+    const cards = askCards(m);
+    if (!blocks.length && !cards.length) {
+      return [`<div class="side-empty">${recording ? 'Listening' : a.pending ? 'Transcribing…' : 'No speech transcribed'}</div>`];
+    }
+    const items = [];
+    const colors = speakerColors(blocks);
+    const start = new Date(m.started_at).getTime();
+    let card = 0;
+    for (const b of blocks) {
+      const at = start + b.start_ms;
+      while (card < cards.length && cards[card].at <= at) items.push(cards[card++].html);
+      const when = isNaN(at) ? clock(b.start_ms) : timeOf(new Date(at));
+      items.push(`<div class="turn ${b.partial ? 'partial' : ''} ${b.removed ? 'removed' : ''}"><div class="who"><b style="color:${colors[b.speaker]}">${esc(b.speaker)}</b><span class="time">${esc(when)}</span></div><div class="said">${sharedLine(b, q)}</div></div>`);
+    }
+    while (card < cards.length) items.push(cards[card++].html);
+    const tail = blocks[blocks.length - 1];
+    if (tail && a.pending && !m.setup.length && !recording && !q && !tail.partial) items.push(`<div class="turn"><div class="typing"><i></i><i></i><i></i></div></div>`);
+    return items;
+  }
+  /** A line shared live: its text, or the edit form or removal question while one is open. */
+  function sharedLine(b, q) {
+    const seq = b.seq ?? null;
+    const current = S.transcript?.id;
+    if (seq !== null && S.ui.editLine?.id === current && S.ui.editLine?.seq === seq) {
+      // The draft is typed into the box without a re-render, so the box keeps its place and focus.
+      return `<textarea class="line-edit" data-model="editDraft" rows="3" aria-label="Edit line" spellcheck="false">${esc(S.ui.editInitial)}</textarea><div class="line-actions"><button class="btn small quiet" data-act="cancel-line">Cancel</button><button class="btn small" data-act="save-line" data-seq="${seq}">Save</button></div>`;
+    }
+    let html = b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('');
+    if (seq === null) return html;
+    if (b.edited && !b.removed) html += `<i class="line-note">edited</i>`;
+    if (S.ui.removeLine?.id === current && S.ui.removeLine?.seq === seq) {
+      return html + `<div class="line-actions"><span class="faint">Remove this line in Tico?</span><button class="btn small quiet" data-act="cancel-remove-line">Cancel</button><button class="btn small danger" data-act="remove-line" data-seq="${seq}">Remove</button></div>`;
+    }
+    if (b.editable) {
+      const remove = b.removed ? '' : `<button class="icon-btn tiny" data-act="ask-remove-line" data-seq="${seq}" title="Remove line" aria-label="Remove line">${icon('trash', 12)}</button>`;
+      html += `<div class="line-tools"><button class="icon-btn tiny" data-act="edit-line" data-seq="${seq}" title="Edit line" aria-label="Edit line">${icon('pencil', 12)}</button>${remove}</div>`;
+    }
+    return html;
+  }
+  /** Replaces only the rows that changed, so a partial turn grows in place instead of jumping. */
+  function patchTranscript(body) {
+    const items = transcriptItems();
+    const before = body._items || [];
+    if (before.length === items.length && before.every((item, i) => item === items[i])) return;
+    // A fresh body keeps where the person had scrolled to.
+    const fresh = !body._items;
+    const stick = fresh ? S.ui.stick : body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    const template = document.createElement('template');
+    items.forEach((item, i) => {
+      if (before[i] === item && body.children[i]) return;
+      template.innerHTML = item;
+      const row = template.content.firstElementChild;
+      if (body.children[i]) body.replaceChild(row, body.children[i]);
+      else body.appendChild(row);
+    });
+    while (body.children.length > items.length) body.lastElementChild.remove();
+    body._items = items;
+    if (stick) body.scrollTop = body.scrollHeight;
+    else if (fresh) body.scrollTop = S.ui.tTop || 0;
+  }
+  /** The current search match: outlined, counted, and scrolled to only when the search moves. */
+  function showHit(body, step = 0) {
+    const counter = document.getElementById('thits');
+    const q = S.ui.tsearch ? S.ui.tq.trim().toLowerCase() : '';
+    const marks = [...body.querySelectorAll('mark')];
+    let jump = step !== 0;
+    if (S.ui.hitKey !== q) {
+      S.ui.hitKey = q;
+      S.ui.hit = 0;
+      jump = true;
+    }
+    if (!marks.length) {
+      if (counter) counter.textContent = q ? '0/0' : '';
+      return;
+    }
+    S.ui.hit = (Math.min(S.ui.hit, marks.length - 1) + step + marks.length) % marks.length;
+    marks.forEach((mark, i) => mark.classList.toggle('now', i === S.ui.hit));
+    if (counter) counter.textContent = `${S.ui.hit + 1}/${marks.length}`;
+    if (jump) marks[S.ui.hit].scrollIntoView({ block: 'center' });
+  }
+
+  // ---- Floating bars ----
+  function levels(count = 5) {
+    // Bar heights and the clock are set by live(), so the markup stays the same as they move.
+    return `<span class="levels" id="levels">${'<b></b>'.repeat(count)}</span>`;
+  }
+  function dock() {
+    if (S.page === 'settings' || S.page === 'signin') return '';
+    const st = S.status;
+    const rec = st.recording;
+    const caret = `<button class="caret ${S.ui.pop?.kind === 'source' ? 'on' : ''}" data-act="pop" data-pop="source" title="Audio sources" aria-label="Audio sources">${icon('down', 12)}</button>`;
+    const stop = (title) => `<button class="rec stop" data-act="stop" title="${title}" aria-label="Stop"><i></i>${streamState(rec).bad ? '<span class="rec-dot"></span>' : ''}</button>`;
+    let bar = '';
+    let foot = st.message || '';
+    let side = 'center';
+    if (S.page === 'library') {
+      if (rec) {
+        bar = `<div class="bar">${stop('Stop')}${levels()}<span class="elapsed" id="elapsed"></span>${caret}<button class="chip" data-act="open-active">Open</button></div>`;
+        foot = foot || streamState(rec).note;
+      } else {
+        bar = `<div class="record-pill" data-act="record" role="button" tabindex="0" aria-label="Record"><span class="rec"><i></i></span>Record${caret}</div>`;
+      }
+    } else {
+      const m = S.meeting;
+      if (!m) return '';
+      side = 'left';
+      if (rec && rec.id === m.id) {
+        bar = `<div class="bar">${stop('Stop recording')}${levels()}<span class="elapsed" id="elapsed"></span>${caret}</div>`;
+        foot = foot || streamState(rec).note;
+      } else if (rec) {
+        bar = `<div class="bar" style="padding-right:8px"><button class="rec" data-act="open-active" title="Open the recording in progress" aria-label="Open the recording in progress"><i></i></button><span class="elapsed" id="elapsed"></span><button class="chip" data-act="open-active">Open</button></div>`;
+      }
+    }
+    // A recording problem worth knowing about, in plain words; closing it keeps it closed.
+    const notice = st.notice && rec ? `<div class="dock-notice" role="status">${icon('alert', 14)}<span class="grow">${esc(st.notice)}</span><button class="icon-btn" data-act="dismiss-notice" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>` : '';
+    const toast = foot ? `<div class="toast">${esc(foot)}</div>` : '';
+    if (!bar && !notice && !toast) return '';
+    const style = side === 'left' ? `style="right:${S.ui.hideSide ? 0 : 'min(400px, 46%)'}"` : '';
+    return `<div class="dock ${side}" ${style}>${notice}${toast}${bar}</div>`;
+  }
+
+  // ---- Share live: nothing reaches Tico until Share live or Copy link ----
+  function openShare() {
+    const m = S.meeting;
+    if (!m) return;
+    if (S.ui.share) { S.ui.share = null; render(); return; }
+    S.ui.pop = null;
+    const org = m.live_org || (orgById(m.people?.orgs?.[0]?.id) && m.targets?.[0]?.id) || defaultOrg()?.id || '';
+    S.ui.share = { id: m.id, org, team: false, picks: [], busy: false, error: '', copied: false, after: '' };
+    S.ui.shareQuery = '';
+    S.ui.hot = 0;
+    S.ui.focusNext = '#sheet .add-field input';
+    render();
+    // Names to add come from the org it would go to; loading them sends nothing.
+    if (!m.live && org) act('choose_people_org', { id: org });
+  }
+  /** Settles a share the app is starting: closes once live, or shows why it did not start. */
+  function settleShare() {
+    const d = S.ui.share;
+    if (!d?.busy || !S.meeting || S.meeting.id !== d.id) return false;
+    if (S.meeting.live) {
+      d.busy = false;
+      if (d.after === 'copy') { d.after = ''; copyMeetingLink(d); return true; }
+      S.ui.share = null;
+      return true;
+    }
+    const error = S.status.error || S.meeting.people.error;
+    if (error && !S.status.busy) {
+      d.busy = false;
+      d.error = error;
+      return true;
+    }
+    return false;
+  }
+  function shareSheet() {
+    const d = S.ui.share;
+    const m = S.meeting;
+    if (!d || !m || m.id !== d.id || S.page !== 'meeting') return '';
+    const p = m.people;
+    const live = !!m.live;
+    const org = orgById(live ? m.live_org : d.org) || (live ? { name: p.org } : null);
+    const team = live ? p.team : d.team;
+    const many = !live && orgs().length > 1;
+    let html = `<div class="sheet share" id="sheet" role="dialog" aria-label="Share live"><h2>Share this meeting live</h2>`;
+    html += `<${many ? 'button' : 'div'} class="org-choice" ${many ? 'data-act="pop" data-pop="share-org"' : ''}>${org ? orgTile(org, 's28') : ''}<span class="grow">${esc(org?.name || 'Choose an org')}</span>${many ? icon('down', 12) : ''}</${many ? 'button' : 'div'}>`;
+    const blocked = live && !p.can_share;
+    html += `<div class="radios" role="radiogroup" aria-label="Who can join"><div class="label">Who can join</div>`;
+    html += `<button class="radio ${team ? 'on' : ''}" data-act="share-team" data-team="true" role="radio" aria-checked="${team}" ${blocked ? 'disabled' : ''}><i></i>Anyone on ${esc(org?.name || 'the org')}</button>`;
+    html += `<button class="radio ${team ? '' : 'on'}" data-act="share-team" data-team="false" role="radio" aria-checked="${!team}" ${blocked ? 'disabled' : ''}><i></i>Only people I add</button></div>`;
+    if (!p.blocked || !live) {
+      html += `<div class="add-field"><input class="field" data-model="shareQuery" data-enter="share-enter" data-list placeholder="Add a person or bot" spellcheck="false" aria-label="Add a person or bot">`;
+      const q = S.ui.shareQuery.trim().toLowerCase();
+      if (q) {
+        const taken = new Set(d.picks.map((x) => x.actor));
+        const matches = ranked(p.candidates.filter((c) => !taken.has(c.actor)), q).slice(0, 8);
+        const hot = Math.min(S.ui.hot, matches.length - 1);
+        html += `<div class="matches">${matches.length ? matches.map((c, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-act="share-pick" data-actor="${esc(c.actor)}" data-name="${esc(c.name)}" data-bot="${c.bot ? 1 : ''}">${avatar(c)}<span class="grow">${esc(c.name)}</span></button>`).join('') : `<div class="pop-text">${p.candidates.length ? 'No match' : '<span class="spin" style="display:inline-block;vertical-align:-2px"></span>'}</div>`}</div>`;
+      }
+      html += `</div>`;
+    }
+    const chips = live
+      ? peopleIn(m).map((row) => `<span class="chip-person ${row.pending ? 'pending' : ''} ${row.removable ? '' : 'plain'}">${avatar(row)}<span class="name">${esc(row.name)}</span>${row.removable ? `<button class="x" data-act="remove-access" data-actor="${esc(row.actor)}" aria-label="Remove ${esc(row.name)}">${icon('close', 10)}</button>` : ''}</span>`)
+      : d.picks.map((row) => `<span class="chip-person">${avatar(row)}<span class="name">${esc(row.name)}</span><button class="x" data-act="share-unpick" data-actor="${esc(row.actor)}" aria-label="Remove ${esc(row.name)}">${icon('close', 10)}</button></span>`);
+    if (chips.length) html += `<div class="chips">${chips.join('')}</div>`;
+    const error = d.error || (live ? p.error || p.blocked : '');
+    if (error) html += `<div class="sheet-error">${icon('alert', 13)}<span class="selectable">${esc(error)}</span></div>`;
+    if (d.copied) html += `<div class="sheet-ok">Link copied</div>`;
+    const busy = d.busy || S.status.busy;
+    html += `<div class="sheet-foot"><button class="link-btn" data-act="share-copy" ${busy || (!live && !d.org) ? 'disabled' : ''}>${icon('link', 14)}Copy link</button>`;
+    html += live
+      ? `<button class="btn primary" data-act="share-close">Done</button>`
+      : `<button class="btn primary" data-act="share-go" ${busy || !d.org ? 'disabled' : ''}>${d.busy ? '<span class="spin"></span>' : ''}Share live</button>`;
+    return html + `</div></div>`;
+  }
+  async function copyMeetingLink(d) {
+    const m = S.meeting;
+    if (!m) return;
+    try {
+      const link = await invoke('meeting_link', { id: m.id, destination: m.live_org || d.org, confirmed: true, copy: true });
+      if (!link?.url) throw new Error('Update Tico to copy meeting links.');
+      if (!link.copied) await copyText(link.url);
+      d.copied = true;
+      d.error = '';
+    } catch (error) {
+      d.error = String(error?.message || error);
+    }
+    await poll();
+    render();
+  }
+  async function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(text); return; } catch { /* Use the selected text fallback. */ }
+    }
+    const area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select();
+    const copied = document.execCommand('copy'); area.remove();
+    if (!copied) throw new Error('Could not copy the link.');
+  }
+
+  // ---- Finish: where it is saved and who can see it ----
+  function finishSource(id) {
+    if (S.meeting?.id === id) {
+      const m = S.meeting;
+      return { id, title: m.title, live_org: m.live_org, team: m.people.team, live: !!m.live && !m.kept_local, targets: m.targets, paused: m.paused_warning, blocked: m.send_blocked, sent: m.sent, connected: m.connected };
+    }
+    const row = S.library?.rows.find((r) => r.id === id);
+    if (!row) return null;
+    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library.connected };
+  }
+  function openFinish(id) {
+    const src = finishSource(id);
+    if (!src) return;
+    S.ui.pop = null;
+    S.ui.share = null;
+    const choices = src.targets.filter((t) => !t.already);
+    const org = src.live_org || (choices.find((t) => t.id === defaultOrg()?.id) || choices[0])?.id || '';
+    // Shared live with only the people added: saving keeps it with them.
+    const audience = src.live && src.live_org && !src.team ? 'participants' : 'team';
+    S.ui.finish = { id, title: src.title, dest: org || 'local', org, audience, confirmDelete: false, pausedOk: false, fromMeeting: S.page === 'meeting' };
+    render();
+  }
+  function finishSheet() {
+    const f = S.ui.finish;
+    if (!f) return '';
+    const src = finishSource(f.id);
+    if (!src) return '';
+    const org = orgById(f.org) || src.targets.find((t) => t.id === f.org);
+    const choices = src.live ? src.targets.filter((t) => t.id === src.live_org) : src.targets.filter((t) => !t.already);
+    let html = `<div class="scrim" data-act="finish-close"></div><div class="sheet finish" id="sheet" role="dialog" aria-modal="true" aria-label="Finish">`;
+    if (f.confirmDelete) {
+      html += `<h2>Delete “${esc(f.title || src.title)}”?</h2><div class="sheet-foot"><button class="btn quiet" data-act="finish-keep">Cancel</button><button class="btn danger" data-act="finish-delete">Delete</button></div></div>`;
+      return html;
+    }
+    html += `<div class="title-row"><input data-model="finish.title" data-enter="finish-save" spellcheck="false" aria-label="Title"><button class="icon-btn trash" data-act="finish-ask-delete" title="Delete" aria-label="Delete">${icon('trash', 16)}</button></div>`;
+    html += `<div class="field-group"><div class="label">Save to</div><div class="seg2" role="radiogroup" aria-label="Save to">`;
+    html += `<button class="${f.dest === 'local' ? 'on' : ''}" data-act="finish-dest" data-dest="local" role="radio" aria-checked="${f.dest === 'local'}">${icon('mac', 14)}<span class="name">This Mac</span></button>`;
+    if (org) {
+      const more = choices.length > 1;
+      html += `<button class="${f.dest !== 'local' ? 'on' : ''}" data-act="finish-dest" data-dest="${esc(org.id)}" data-more="${more ? 1 : ''}" role="radio" aria-checked="${f.dest !== 'local'}">${orgTile(orgById(org.id) || org, 's18')}<span class="name">${esc(org.name)}</span>${more ? icon('down', 11) : ''}</button>`;
+    } else {
+      html += `<button data-act="settings">Sign in</button>`;
+    }
+    html += `</div></div>`;
+    if (f.dest !== 'local' && org) {
+      html += `<div class="field-group"><div class="label">Who can see it</div><div class="seg2" role="radiogroup" aria-label="Who can see it">`;
+      html += `<button class="${f.audience === 'team' ? 'on' : ''}" data-act="finish-audience" data-audience="team" role="radio" aria-checked="${f.audience === 'team'}"><span class="name">${esc(org.name)}</span></button>`;
+      html += `<button class="${f.audience === 'participants' ? 'on' : ''}" data-act="finish-audience" data-audience="participants" role="radio" aria-checked="${f.audience === 'participants'}"><span class="name">Participants only</span></button>`;
+      html += `</div></div>`;
+    }
+    const toOrg = f.dest !== 'local';
+    const blocked = toOrg ? src.blocked : null;
+    if (blocked) html += `<div class="sheet-error">${icon('alert', 13)}<span>${esc(blocked)}</span></div>`;
+    const paused = toOrg && src.paused && f.pausedOk;
+    if (paused) html += `<div class="finish warn">A kept task may quote paused speech.</div>`;
+    html += `<button class="btn primary big block" data-act="finish-save" ${S.status.busy || blocked ? 'disabled' : ''}>${paused ? 'Save anyway' : 'Save'}</button>`;
+    return html + `</div>`;
+  }
+  function saveFinish() {
+    const f = S.ui.finish;
+    const src = f && finishSource(f.id);
+    if (!src || S.status.busy) return;
+    const toOrg = f.dest !== 'local';
+    if (toOrg && src.paused && !f.pausedOk) { f.pausedOk = true; render(); return; }
+    S.ui.finish = null;
+    const title = (f.title || '').trim() || src.title;
+    act('save_meeting', { id: f.id, destination: toOrg ? f.dest : 'local', audience: toOrg ? f.audience : '', title, pausedConfirmed: toOrg && src.paused && f.pausedOk });
   }
 
   // ---- Settings ----
@@ -426,16 +821,16 @@
     const toggle = (key, checked, disabled = false) =>
       `<label class="switch"><input type="checkbox" data-check="${key}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><i></i></label>`;
     let html = `<div class="column narrow"><h1 class="page-title">Settings</h1>${errorNotice()}`;
-    html += `<div class="settings-group"><div class="label">Tico</div><div class="inset">`;
+    html += `<div class="settings-group"><div class="label">Orgs</div><div class="inset">`;
     for (const c of s.connections) {
       const tail = c.default
-        ? s.connections.length > 1 ? badge('Default', 'muted') : ''
-        : `<button class="btn small quiet" data-act="make-default" data-id="${esc(c.id)}" title="Used for new live shares and private chat">Make default</button>`;
-      html += `<div class="line"><div class="name">${esc(c.name)}${c.host ? `<small>${esc(c.host)}</small>` : ''}</div>${tail}<button class="btn small" data-act="sign-out" data-id="${esc(c.id)}">Sign out</button></div>`;
+        ? s.connections.length > 1 ? badge('Default', 'accent') : ''
+        : `<button class="btn small quiet" data-act="make-default" data-id="${esc(c.id)}">Make default</button>`;
+      html += `<div class="line">${orgTile(c, 's28')}<div class="name">${esc(c.name)}${c.host ? `<small>${esc(c.host)}</small>` : ''}</div>${tail}<button class="btn small" data-act="sign-out" data-id="${esc(c.id)}">Sign out</button></div>`;
     }
-    html += `<div class="line">${field('signin', 'your-tico.example').replace('class="field"', 'class="field" data-enter="signin"')}<button class="btn ${s.connections.length ? '' : 'primary'}" data-act="signin" ${st.busy ? 'disabled' : ''} title="Opens your browser to approve the recorder">${s.connections.length ? 'Add another' : 'Sign in with Tico'}</button></div>`;
-    if (st.signing_in) html += `<div class="line"><div class="waiting" style="margin:0"><span class="spin"></span>Choose Allow in your browser…</div></div>`;
-    html += line('<span title="Shows upcoming meetings and names recordings after them">Use my Tico calendar</span>', toggle('calendar', f.calendar, !s.calendar_available));
+    html += `<div class="line">${field('signin', 'your-tico.example').replace('class="field"', 'class="field" data-enter="signin"')}<button class="btn ${s.connections.length ? '' : 'primary'}" data-act="signin" ${st.busy ? 'disabled' : ''}>${s.connections.length ? 'Add org' : 'Sign in'}</button></div>`;
+    if (st.signing_in) html += `<div class="line"><div class="waiting" style="height:auto"><span class="spin"></span>Choose Allow in your browser…</div></div>`;
+    html += line('Use my Tico calendar', toggle('calendar', f.calendar, !s.calendar_available));
     html += `</div></div>`;
     html += speechGroup(s, f, line, field, toggle);
     const mics = ['', ...s.microphones.filter((name) => name)];
@@ -450,7 +845,6 @@
     html += `<div class="settings-foot"><span class="grow">${esc(foot)}</span><button class="btn" data-act="back" ${dirty ? '' : 'hidden'}>Cancel</button><button class="btn primary" data-act="save-settings" ${dirty && !st.busy ? '' : 'disabled'}>Save</button></div>`;
     return html + '</div>';
   }
-
   /** Speech: through your Tico (no keys of your own), or your own providers and keys. */
   function speechGroup(s, f, line, field, toggle) {
     const speech = S.status.speech;
@@ -483,296 +877,66 @@
     return html + `</div></div>`;
   }
 
-  // ---- Dock ----
-  function levels(sources, count = 5) {
-    // Bar heights and the clock are set by live(), so the dock markup stays the same as they move.
-    return `<span class="levels" id="levels" style="color:var(--red)">${'<b></b>'.repeat(count)}</span>`;
-  }
-  function dock() {
-    if (S.page === 'settings') return '';
-    const st = S.status;
-    const rec = st.recording;
-    const caret = `<button class="caret ${S.ui.pop?.kind === 'source' ? 'on' : ''}" data-act="pop" data-pop="source" title="Audio sources" aria-label="Audio sources">${icon('down', 12)}</button>`;
-    let bar;
-    let foot = '';
-    if (S.page === 'library') {
-      if (rec) {
-        bar = `<div class="dock-bar" style="width:fit-content;margin:0 auto;padding-right:7px"><button class="rec stop" data-act="stop" title="Stop" aria-label="Stop"><i></i>${streamState(rec).bad ? '<span class="rec-dot"></span>' : ''}</button>${levels(rec.sources)}<span class="elapsed" id="elapsed"></span>${caret}<button class="chip" data-act="open-active">Open</button></div>`;
-      } else {
-        bar = `<div class="dock-bar" style="width:fit-content;margin:0 auto;padding-right:6px"><button class="rec start" data-act="record" title="Record" aria-label="Record"><i></i></button><span class="record-label" data-act="record">Record</span>${caret}</div>`;
-      }
-      foot = st.message || (rec ? streamState(rec).note : '');
-    } else {
-      const m = S.meeting;
-      if (!m) return '';
-      const chat = m.chat;
-      let left = '';
-      if (rec && rec.id === m.id) {
-        const stream = streamState(rec);
-        left = `<button class="rec stop" data-act="stop" title="Stop recording" aria-label="Stop"><i></i>${stream.bad ? '<span class="rec-dot" title="Live text reconnecting"></span>' : ''}</button>${levels(rec.sources, 4)}<span class="elapsed" id="elapsed"></span>${caret}`;
-      } else if (rec) {
-        left = `<button class="rec" data-act="open-active" title="Open the recording in progress" aria-label="Open the recording in progress"><i class="pulse"></i></button>`;
-      }
-      // Messages go to the meeting; "Ask privately" (or /ask) asks Tico with only you seeing it.
-      const placeholder = !chat.private ? 'Message the meeting' : chat.can_message ? 'Ask Tico privately' : 'Ask anything';
-      const ready = chat.ready;
-      const attention = m.audio.attention || m.setup.length;
-      const toggle = chat.can_message ? `<button class="ask-private ${chat.private ? 'on' : ''}" data-act="toggle-private" title="Only you see the question and the answer" aria-pressed="${chat.private}">${icon('lock', 12)}<span>Ask privately</span></button>` : '';
-      bar = `<div class="dock-bar">${left}<label class="ask ${S.ui.ask.trim() ? '' : 'blank'}" data-act="focus-ask"><input data-model="ask" data-enter="ask" placeholder="${placeholder}" spellcheck="false" aria-label="${placeholder}">${toggle}<button class="send" data-act="ask" ${ready ? '' : 'disabled'} aria-label="Send">${chat.thinking ? '<span class="spin" style="border-top-color:currentColor"></span>' : icon('arrowUp', 14)}</button></label><button class="chip ${S.ui.panel === 'transcript' ? 'on' : ''}" data-act="toggle-transcript" title="Transcript (⌘T)">${icon('transcript', 14)}Transcript${attention ? '<span class="dot"></span>' : ''}</button></div>`;
-      const note = rec && rec.id === m.id ? streamState(rec).note : '';
-      const reach = chat.private ? 'Only you see this' : chat.connected ? 'Everyone in the meeting sees this' : 'Sending connects this meeting to Tico, private to you';
-      foot = st.message || note || reach;
-    }
-    // A recording problem worth knowing about, in plain words; closing it keeps it closed.
-    const notice = st.notice && rec ? `<div class="dock-notice" role="status">${icon('alert', 14)}<span class="grow">${esc(st.notice)}</span><button class="icon-btn" data-act="dismiss-notice" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>` : '';
-    return `<div class="dock"><div class="dock-inner">${notice}${bar}<div class="dock-foot ${st.message ? 'message' : ''}">${esc(foot)}</div></div></div>`;
-  }
-
-  // ---- Floating panels ----
-  function panel() {
-    if (S.page !== 'meeting' || !S.meeting) return '';
-    if (S.ui.panel === 'transcript') return transcriptPanel();
-    return '';
-  }
-  function speakerColors(blocks) {
-    const colors = {};
-    let n = 0;
-    for (const b of blocks) if (!b.me && !(b.speaker in colors)) colors[b.speaker] = `var(--speaker-${(n++ % 5) + 1})`;
-    return colors;
-  }
-  function highlight(text, q) {
-    if (!q) return esc(text);
-    const lower = text.toLowerCase();
-    let out = '';
-    let at = 0;
-    for (let i = lower.indexOf(q); i >= 0; i = lower.indexOf(q, at)) {
-      out += esc(text.slice(at, i)) + `<mark>${esc(text.slice(i, i + q.length))}</mark>`;
-      at = i + q.length;
-    }
-    return out + esc(text.slice(at));
-  }
-  /** Live text per channel: nothing extra while it works, a quiet note while it reconnects. */
-  function streamState(rec) {
-    const list = rec?.stream || [];
-    const bad = list.find((x) => x.state === 'retrying') || list.find((x) => x.state === 'stopped' && x.error);
-    const note = !bad ? '' : bad.state === 'retrying' ? `Live text reconnecting${bad.error ? ` · ${bad.error}` : ''}` : bad.error;
-    return { live: list.some((x) => x.state === 'live'), bad, note };
-  }
-  function transcriptBlocks() {
-    const m = S.meeting;
-    return S.transcript?.id === m.id ? S.transcript.blocks : [];
-  }
-  /** The panel's frame. Its turns are patched into #tbody one by one (see `patchTranscript`). */
-  function transcriptPanel() {
-    const m = S.meeting;
-    const a = m.audio;
-    const rec = S.status.recording;
-    const stream = rec && rec.id === m.id ? streamState(rec) : null;
-    let status = '';
-    // A spinner only while transcription really runs; waiting on Settings is said plainly.
-    if (a.pending && m.setup.length) status = `Waiting to transcribe ${a.pending}`;
-    else if (a.pending) status = `<span class="spin"></span>Transcribing ${a.pending}…`;
-    else if (a.finding_speakers) status = `<span class="spin"></span>Finding speakers…`;
-    if (stream?.bad) status = `<i class="live-dot amber"></i>Reconnecting`;
-    else if (stream?.live) status = `<i class="live-dot"></i>Live`;
-    let html = `<div class="panel transcript"><div class="panel-head"><h3>Transcript</h3><span class="status">${status}</span><span class="grow"></span>`;
-    if (a.failed) html += `<button class="btn small quiet" data-act="retry" data-id="${esc(m.id)}">${icon('retry', 13)}Retry ${a.failed} failed</button>`;
-    html += `<button class="icon-btn ${S.ui.showAudio ? 'on' : ''}" data-act="toggle-audio" title="${a.attention ? 'Audio · needs attention' : 'Audio'}" aria-label="${a.attention ? 'Audio · needs attention' : 'Audio'}">${icon('mic')}${a.attention ? '<span class="dot"></span>' : ''}</button>`;
-    html += `<button class="icon-btn ${S.ui.tsearch ? 'on' : ''}" data-act="tsearch" title="Search (⌘F)" aria-label="Search">${icon('search')}</button>`;
-    html += `<button class="icon-btn" data-act="copy" title="Copy transcript" aria-label="Copy transcript">${icon(S.ui.copied ? 'check' : 'copy')}</button>`;
-    html += `<button class="icon-btn" data-act="close-panel" title="Minimize" aria-label="Minimize">${icon('minimize')}</button></div>`;
-    if (S.ui.tsearch) html += `<label class="panel-search">${icon('search', 14)}<input data-model="tq" data-enter="next-hit" placeholder="Search transcript" spellcheck="false"><span class="hits" id="thits"></span><button class="icon-btn tiny" data-act="hit" data-step="-1" title="Previous (⇧↩)" aria-label="Previous match">${icon('up', 12)}</button><button class="icon-btn tiny" data-act="hit" data-step="1" title="Next (↩)" aria-label="Next match">${icon('down', 12)}</button></label>`;
-    if (S.ui.showAudio) {
-      let box = '';
-      if (a.warning) box += `<div class="warn selectable">${esc(a.warning)}</div>`;
-      for (const input of a.inputs) box += `<div class="rowline"><b>${esc(input.label)}</b><span class="${input.ok ? 'ok' : ''}" style="${input.ok ? '' : 'color:var(--amber)'}">${esc(input.state)}</span></div>`;
-      if (stream?.note) box += `<div class="warn selectable">${esc(stream.note)}</div>`;
-      for (const line of a.failures) box += `<div class="warn selectable">${esc(line)}</div>`;
-      if (a.more) box += `<div class="faint">+${a.more} more</div>`;
-      if (!box) box = `<div class="faint">No audio yet</div>`;
-      html += `<div class="audio-box">${box}</div>`;
-    }
-    return html + `<div class="panel-body" id="tbody"></div></div>`;
-  }
-  /** One string per row of the transcript: timestamps, turns, and the softer words still being spoken. */
-  function transcriptItems() {
-    const m = S.meeting;
-    const a = m.audio;
-    const blocks = transcriptBlocks();
-    const q = S.ui.tsearch ? S.ui.tq.trim().toLowerCase() : '';
-    const recording = m.state === 'recording' || S.status.recording?.id === m.id;
-    // Search marks matches in place instead of filtering, so the list never reflows as you type.
-    const shown = blocks;
-    if (!blocks.length) {
-      return [`<div class="panel-empty">${recording ? 'Listening. Speech appears here.' : a.pending ? 'Transcribing…' : 'No speech transcribed.'}</div>`];
-    }
-    const items = [];
-    const colors = speakerColors(blocks);
-    let stamp = -Infinity;
-    let previous = null;
-    for (const b of shown) {
-      if (b.start_ms - stamp >= 60000) {
-        items.push(`<div class="stamp">${clock(b.start_ms)}</div>`);
-        stamp = b.start_ms;
-        previous = null;
-      }
-      const who = !b.me && previous !== b.speaker ? `<div class="who" style="color:${colors[b.speaker]}">${esc(b.speaker)}</div>` : '';
-      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''} ${b.removed ? 'removed' : ''}">${who}<div class="bubble">${sharedLine(b, q)}</div></div>`);
-      previous = b.speaker;
-    }
-    const tail = blocks[blocks.length - 1];
-    if (a.pending && !m.setup.length && !recording && !q && !tail.partial) items.push(`<div class="turn"><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
-    return items;
-  }
-  /** A line shared live: its text, or the edit form or removal question while one is open. */
-  function sharedLine(b, q) {
-    const seq = b.seq ?? null;
-    const current = S.transcript?.id;
-    if (seq !== null && S.ui.editLine?.id === current && S.ui.editLine?.seq === seq) {
-      // The draft is typed into the box without a re-render, so the box keeps its place and focus.
-      return `<textarea class="line-edit" data-model="editDraft" rows="3" aria-label="Edit line" spellcheck="false">${esc(S.ui.editInitial)}</textarea><div class="line-actions"><button class="btn small quiet" data-act="cancel-line">Cancel</button><button class="btn small" data-act="save-line" data-seq="${seq}">Save</button></div>`;
-    }
-    let html = b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('');
-    if (seq === null) return html;
-    if (b.edited && !b.removed) html += `<i class="line-note">edited</i>`;
-    if (S.ui.removeLine?.id === current && S.ui.removeLine?.seq === seq) {
-      return html + `<div class="line-actions"><span class="faint">Remove this line in Tico?</span><button class="btn small quiet" data-act="cancel-remove-line">Cancel</button><button class="btn small danger" data-act="remove-line" data-seq="${seq}">Remove</button></div>`;
-    }
-    if (b.editable) {
-      const remove = b.removed ? '' : `<button class="icon-btn tiny" data-act="ask-remove-line" data-seq="${seq}" title="Remove line" aria-label="Remove line">${icon('trash', 12)}</button>`;
-      html += `<div class="line-tools"><button class="icon-btn tiny" data-act="edit-line" data-seq="${seq}" title="Edit line" aria-label="Edit line">${icon('pencil', 12)}</button>${remove}</div>`;
-    }
-    return html;
-  }
-  /** Replaces only the rows that changed, so a partial turn grows in place instead of jumping. */
-  function patchTranscript(body) {
-    const items = transcriptItems();
-    const before = body._items || [];
-    if (before.length === items.length && before.every((item, i) => item === items[i])) return;
-    // A fresh panel body keeps where the person had scrolled to.
-    const fresh = !body._items;
-    const stick = fresh ? S.ui.stick : body.scrollHeight - body.scrollTop - body.clientHeight < 40;
-    const template = document.createElement('template');
-    items.forEach((item, i) => {
-      if (before[i] === item && body.children[i]) return;
-      template.innerHTML = item;
-      const row = template.content.firstElementChild;
-      if (body.children[i]) body.replaceChild(row, body.children[i]);
-      else body.appendChild(row);
-    });
-    while (body.children.length > items.length) body.lastElementChild.remove();
-    body._items = items;
-    if (stick) body.scrollTop = body.scrollHeight;
-    else if (fresh) body.scrollTop = S.ui.tTop || 0;
-  }
-  /** The current search match: outlined, counted, and scrolled to only when the search moves. */
-  function showHit(body, step = 0) {
-    const counter = document.getElementById('thits');
-    const q = S.ui.tsearch ? S.ui.tq.trim().toLowerCase() : '';
-    const marks = [...body.querySelectorAll('mark')];
-    let jump = step !== 0;
-    if (S.ui.hitKey !== q) {
-      S.ui.hitKey = q;
-      S.ui.hit = 0;
-      jump = true;
-    }
-    if (!marks.length) {
-      if (counter) counter.textContent = q ? '0/0' : '';
-      return;
-    }
-    S.ui.hit = (Math.min(S.ui.hit, marks.length - 1) + step + marks.length) % marks.length;
-    marks.forEach((mark, i) => mark.classList.toggle('now', i === S.ui.hit));
-    if (counter) counter.textContent = `${S.ui.hit + 1}/${marks.length}`;
-    if (jump) marks[S.ui.hit].scrollIntoView({ block: 'center' });
-  }
-
   // ---- Popovers ----
   function popover() {
     const pop = S.ui.pop;
     if (!pop) return '';
     let body = '';
-    let cls = '';
-    if (pop.kind === 'send') body = sendPop(pop);
-    else if (pop.kind === 'more') body = morePop(pop);
+    if (pop.kind === 'more') body = morePop(pop);
     else if (pop.kind === 'owner') body = ownerPop(pop);
-    else if (pop.kind === 'people') {
-      body = peoplePop();
-      cls = 'people';
-    } else if (pop.kind === 'source') body = sourcePop();
+    else if (pop.kind === 'source') body = sourcePop();
+    else if (pop.kind === 'orgs') body = orgsPop();
+    else if (pop.kind === 'share-org') body = orgList('share-set-org', S.ui.share?.org);
+    else if (pop.kind === 'finish-org') {
+      const src = S.ui.finish && finishSource(S.ui.finish.id);
+      body = src ? orgList('finish-set-org', S.ui.finish.org, src.targets.filter((t) => !t.already).map((t) => t.id)) : '';
+    }
     if (!body) return '';
-    return `<div class="popover ${cls}" id="popover" style="${pop.style}">${body}</div>`;
+    return `<div class="popover" id="popover" style="${pop.style}">${body}</div>`;
   }
-  function sendPop(pop) {
-    const fromMeeting = S.page === 'meeting' && S.meeting?.id === pop.id;
-    const row = fromMeeting ? S.meeting : S.library?.rows.find((r) => r.id === pop.id);
-    if (!row) return '';
-    const connected = fromMeeting ? row.connected : S.library.connected;
-    let html = `<div class="pop-title">Send to Tico</div>`;
-    if (!connected) return html + `<div class="pop-text">Sign in to a Tico first.</div><button class="menu-item" data-act="settings">${icon('gear')}<span class="grow">Settings</span></button>`;
-    if (fromMeeting && row.send_blocked) return html + `<div class="pop-text">${esc(row.send_blocked)}</div>`;
-    return html + row.targets.map((t) => `<button class="menu-item" data-act="send-meeting" data-id="${esc(pop.id)}" data-dest="${esc(t.id)}" ${t.already ? 'disabled' : ''}>${icon(t.already ? 'check' : 'send')}<span class="grow">${t.already ? 'Already in' : 'Send to'} ${esc(t.name)}</span></button>`).join('');
+  function orgList(act, current, only = null) {
+    return orgs().filter((o) => !only || only.includes(o.id)).map((o) => `<button class="menu-item" data-act="${act}" data-id="${esc(o.id)}">${orgTile(o, 's18')}<span class="grow">${esc(o.name)}</span>${o.id === current ? `<span class="check">${icon('check')}</span>` : ''}</button>`).join('');
+  }
+  function orgsPop() {
+    return orgList('make-default', defaultOrg()?.id) + `<div class="menu-sep"></div><button class="menu-item" data-act="settings">${icon('plus')}<span class="grow">Add org</span></button>`;
   }
   function morePop(pop) {
     const m = S.meeting;
     if (!m) return '';
-    if (pop.confirm) {
-      return `<div class="pop-title">Delete recording?</div><div class="pop-text">Removes its audio and transcript from this Mac.</div><div class="pop-foot"><span class="grow"></span><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="delete" data-id="${esc(m.id)}">Delete</button></div>`;
+    if (pop.confirm === 'delete') {
+      return `<div class="pop-title">Delete recording?</div><div class="pop-foot"><span class="grow"></span><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="delete" data-id="${esc(m.id)}">Delete</button></div>`;
     }
+    if (pop.confirm === 'discard') {
+      return `<div class="pop-title">Remove it from Tico?</div><div class="pop-text">It stays on this Mac.</div><div class="pop-foot"><span class="grow"></span><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="keep-local">Discard</button></div>`;
+    }
+    const item = (act, glyph, label, extra = '') => `<button class="menu-item" data-act="${act}" ${extra}>${icon(glyph)}<span class="grow">${label}</span></button>`;
     let html = '';
-    if (m.audio.failed) html += `<button class="menu-item" data-act="retry" data-id="${esc(m.id)}">${icon('retry')}<span class="grow">Retry ${m.audio.failed} failed</span></button>`;
-    html += `<button class="menu-item" data-act="audio-status">${icon('mic')}<span class="grow">Audio status</span></button>`;
-    html += `<button class="menu-item" data-act="copy">${icon('copy')}<span class="grow">Copy transcript</span></button>`;
-    html += `<div class="menu-sep"></div><button class="menu-item danger" data-act="confirm-delete" ${m.recording_here ? 'disabled title="Stop recording before deleting it"' : ''}>${icon('trash')}<span class="grow">Delete recording…</span></button>`;
+    if (!S.status.screen?.active && m.can_share_screen && m.connected) html += item('share-screen', 'screen', 'Share screen');
+    if (m.connected && !m.kept_local && !m.discarded) html += item('copy-link', 'link', 'Copy meeting link');
+    if (m.can_control) html += item('control-live', m.live_state === 'paused' ? 'retry' : 'clock', m.live_state === 'paused' ? 'Resume sharing' : 'Pause sharing', `data-action="${m.live_state === 'paused' ? 'resume' : 'pause'}"`);
+    html += item('audio-status', 'mic', 'Audio details');
+    if (m.audio.failed) html += item('retry', 'retry', `Retry ${m.audio.failed} failed`, `data-id="${esc(m.id)}"`);
+    html += item('copy', 'copy', S.ui.copied ? 'Copied' : 'Copy transcript');
+    html += item('toggle-side', 'transcript', S.ui.hideSide ? 'Show transcript' : 'Hide transcript');
+    html += `<div class="menu-sep"></div>`;
+    if (m.can_discard) html += `<button class="menu-item danger" data-act="confirm-more" data-confirm="discard">${icon('close')}<span class="grow">Discard live share…</span></button>`;
+    html += `<button class="menu-item danger" data-act="confirm-more" data-confirm="delete" ${m.recording_here ? 'disabled title="Stop recording first"' : ''}>${icon('trash')}<span class="grow">Delete recording…</span></button>`;
     return html;
   }
   function ownerPop(pop) {
     const a = S.meeting?.actions;
     if (!a) return '';
-    if (a.mode === 'signin') return `<div class="pop-text">Sign in to a Tico to choose who gets it.</div><button class="menu-item" data-act="settings">${icon('gear')}<span class="grow">Settings</span></button>`;
-    if (a.mode === 'choose') return `<div class="pop-text">Choose a Tico first.</div>`;
+    if (a.mode === 'signin') return `<div class="pop-text">Sign in to choose an owner.</div><button class="menu-item" data-act="settings">${icon('gear')}<span class="grow">Settings</span></button>`;
+    if (a.mode === 'choose') return a.orgs.map((o) => `<button class="menu-item" data-act="choose-org" data-id="${esc(o.id)}">${orgTile(orgById(o.id) || o, 's18')}<span class="grow">${esc(o.name)}</span></button>`).join('');
     const it = a.items.find((i) => i.id === pop.id);
     const q = S.ui.ownerQuery.trim().toLowerCase();
     const owners = q ? ranked(a.owners, q) : a.owners;
-    let html = `<input class="pop-input" data-model="ownerQuery" data-enter="owner-first" data-list placeholder="Who gets it?" spellcheck="false" aria-label="Who gets it?"><div class="pop-list">`;
-    if (!a.owners.length) html += `<div class="pop-text"><span class="spin" style="display:inline-block;vertical-align:-2px;margin-right:6px"></span>Loading…</div>`;
+    let html = `<input class="pop-input" data-model="ownerQuery" data-enter="owner-first" data-list placeholder="Owner" spellcheck="false" aria-label="Owner"><div class="pop-list">`;
+    if (!a.owners.length) html += `<div class="pop-text"><span class="spin" style="display:inline-block;vertical-align:-2px"></span></div>`;
     else if (!owners.length) html += `<div class="pop-text">No match</div>`;
     const hot = Math.min(S.ui.hot, owners.length - 1);
-    html += owners.map((o, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-act="set-owner" data-id="${esc(pop.id)}" data-actor="${esc(o.actor)}">${icon(o.bot ? 'bot' : 'person')}<span class="grow">${esc(o.name)}</span>${it && it.owner === o.actor ? `<span class="check">${icon('check')}</span>` : ''}</button>`).join('');
+    html += owners.map((o, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-act="set-owner" data-id="${esc(pop.id)}" data-actor="${esc(o.actor)}">${avatar(o)}<span class="grow">${esc(o.name)}</span>${it && it.owner === o.actor ? `<span class="check">${icon('check')}</span>` : ''}</button>`).join('');
     return html + `</div>`;
-  }
-  function peoplePop() {
-    const m = S.meeting;
-    if (!m) return '';
-    const p = m.people;
-    let html = `<div class="pop-title">In this meeting</div><div class="pop-list">`;
-    for (const row of p.rows) {
-      const tail = row.pending ? `<span class="spin" title="Adding…"></span>` : row.removable ? `<button class="btn small quiet" data-act="remove-access" data-actor="${esc(row.actor)}">Remove</button>` : row.local ? `<span class="tag">Not in Tico</span>` : row.kind === 'bot' ? `<span class="tag">Bot</span>` : '';
-      html += `<div class="person ${row.pending ? 'pending' : ''}">${avatar(row)}<span class="grow">${esc(row.name)}</span>${tail}</div>`;
-    }
-    html += `</div>`;
-    if (p.error) html += `<div class="pop-error">${icon('alert', 13)}<span>${esc(p.error)}</span></div>`;
-    if (p.stage === 'invite') {
-      return html + `<div class="pop-foot" style="padding:6px 4px 2px"><button class="btn block" data-act="start-adding">${icon('plus', 13)}Add people</button></div>`;
-    }
-    if (p.stage === 'org') {
-      return html + `<div class="vis"><span class="grow">Which Tico?</span></div>` + p.orgs.map((o) => `<button class="menu-item" data-act="people-org" data-id="${esc(o.id)}">${icon('globe')}<span class="grow">${esc(o.name)}</span></button>`).join('');
-    }
-    if (p.org) {
-      const label = p.team ? `Everyone signed in to ${esc(p.org)} can see this meeting as it happens` : 'Only you and people you add in Tico can see this meeting';
-      const button = `<button class="btn small" data-act="set-team" data-team="${!p.team}" ${p.can_share ? '' : 'disabled'} title="${esc(p.blocked)}">${p.team ? 'Make private' : 'Make public'}</button>`;
-      html += `<div class="vis">${icon(p.team ? 'globe' : 'lock')}<span class="grow">${label}</span>${button}</div>`;
-    }
-    if (p.blocked && p.org) html += `<div class="pop-text">${esc(p.blocked)}</div>`;
-    if (p.blocked) return html;
-    html += `<input class="pop-input" data-model="peopleQuery" data-enter="people-enter" data-list placeholder="Add a person or bot" spellcheck="false" aria-label="Type a name to add a person or bot">`;
-    const q = S.ui.peopleQuery.trim().toLowerCase();
-    if (q) {
-      const matches = ranked(p.candidates, q).slice(0, 8);
-      const hot = Math.min(S.ui.hot, matches.length - 1);
-      html += `<div class="pop-list">` + matches.map((c, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-act="pick" data-actor="${esc(c.actor)}">${icon(c.bot ? 'bot' : 'person')}<span class="grow">${esc(c.name)}</span></button>`).join('') + `</div>`;
-      if (!matches.length) html += `<div class="pop-text">Enter adds “${esc(S.ui.peopleQuery.trim())}” to this recording only.</div>`;
-    }
-    return html;
   }
   function sourcePop() {
     const s = S.settings;
@@ -795,25 +959,57 @@
     const address = S.status.connect;
     if (!address) return '';
     const host = address.split('://')[1] || address;
-    return `<div class="connect"><div class="card"><div class="pop-title" style="padding:0 0 6px">Connect to Tico?</div><div class="host">${esc(host)}</div><p>Your browser opens this Tico to approve. Continue only if you chose Connect recorder there.</p><div class="buttons"><button class="btn" data-act="connect-cancel">Cancel</button><button class="btn primary" data-act="connect-ok" ${S.status.busy ? 'disabled' : ''}>Sign in</button></div></div></div>`;
+    return `<div class="connect"><div class="card"><div class="host">Connect to ${esc(host)}?</div><p>Continue only if you chose Connect recorder in your browser.</p><div class="buttons"><button class="btn" data-act="connect-cancel">Cancel</button><button class="btn primary" data-act="connect-ok" ${S.status.busy ? 'disabled' : ''}>Sign in</button></div></div></div>`;
+  }
+  // Screen sharing: a private live share in the chosen org first, then the system picker.
+  function screenCard() {
+    const d = S.ui.screen;
+    if (!d) return '';
+    const m = S.meeting;
+    const targets = m?.targets || [];
+    const choose = !m?.live && targets.length > 1 ? `<div class="buttons" style="justify-content:flex-start;margin-bottom:12px">${targets.map((t) => `<button class="btn small ${d.destination === t.id ? 'on' : ''}" data-act="screen-org" data-id="${esc(t.id)}">${esc(t.name)}</button>`).join('')}</div>` : '';
+    const who = m?.live ? (m.people.team ? `Anyone on ${esc(m.people.org)} sees it.` : 'Only people you add see it.') : 'It shares this meeting live, only to you, first.';
+    return `<div class="connect" role="dialog" aria-modal="true" aria-label="Share screen"><div class="card"><div class="host">Share a screen or window</div><p>${who} Never saved.</p>${choose}${d.error ? `<p class="error selectable" role="alert">${esc(d.error)}</p>` : ''}<div class="buttons"><button class="btn small quiet" data-act="screen-cancel">Cancel</button><button class="btn small primary" data-act="screen-go" ${d.busy || !d.destination ? 'disabled' : ''}>${d.busy ? 'Connecting…' : 'Choose'}</button></div></div></div>`;
+  }
+  async function shareScreen() {
+    const d = S.ui.screen;
+    const m = S.meeting;
+    if (!d || d.busy || !d.destination || !m) return;
+    d.busy = true; d.error = ''; render();
+    try {
+      await invoke('meeting_link', { id: m.id, destination: d.destination, confirmed: true, copy: false });
+      // Cancellation is available while the picker is open; it never changes the audience.
+      await invoke('share_screen', { id: m.id, expectedTeam: !!m.people.team });
+      S.ui.screen = null;
+      await poll();
+    } catch (error) { if (S.ui.screen === d) d.error = String(error?.message || error); }
+    finally { d.busy = false; render(); }
   }
 
   // ---- Rendering ----
   function page() {
     if (S.page === 'meeting') return meeting();
     if (S.page === 'settings') return settingsPage();
+    if (S.page === 'signin') return signinPage();
     return library();
   }
   function render() {
     const root = document.getElementById('app');
     if (!root.dataset.ready) {
-      root.innerHTML = '<div id="r-top"></div><main class="page" id="r-page"></main><div id="r-dock"></div><div id="r-panel"></div><div id="r-pop"></div><div id="r-mention"></div><div id="r-connect"></div>';
+      root.innerHTML = '<div id="r-top"></div><main class="page" id="r-page"></main><div id="r-dock"></div><div id="r-sheet"></div><div id="r-pop"></div><div id="r-mention"></div><div id="r-connect"></div>';
       root.dataset.ready = '1';
     }
-    const html = { top: topbar(), page: page(), dock: dock(), panel: panel(), pop: popover(), mention: mentionPop(), connect: connectCard() };
+    // First run: no org yet and nothing recorded, so the window is the sign-in screen.
+    const first = S.status.first_run && !S.library?.rows?.length;
+    if (first && S.page === 'library') S.page = 'signin';
+    else if (!first && S.page === 'signin') S.page = 'library';
+    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
     const active = document.activeElement;
     const key = active?.dataset?.key || active?.dataset?.model;
     const selection = key && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
+    const pageEl = document.getElementById('r-page');
+    pageEl.classList.toggle('meeting', S.page === 'meeting');
+    pageEl.classList.toggle('signin-page', S.page === 'signin');
     for (const [name, content] of Object.entries(html)) {
       if (regions[name] === content) continue;
       const element = document.getElementById(`r-${name}`);
@@ -822,23 +1018,22 @@
         S.deferred = true;
         continue;
       }
-      const pageTop = name === 'page' && regions.pageKind === S.page + (S.meeting?.id || '') ? element.scrollTop : 0;
+      const scroller = name === 'page' ? (S.page === 'meeting' ? document.getElementById('main') : element) : null;
+      const sameKind = regions.pageKind === S.page + (S.meeting?.id || '');
+      const top = scroller && sameKind ? scroller.scrollTop : 0;
       const reopened = (name === 'pop' || name === 'mention') && regions[name];
       element.innerHTML = content;
       // A popover that was already open updates in place; only a fresh one rises in.
       if (reopened && element.firstElementChild) element.firstElementChild.style.animation = 'none';
+      if (name === 'sheet' && regions.sheet && element.querySelector('.sheet')) element.querySelector('.sheet').style.animation = 'none';
       regions[name] = content;
       if (name === 'page') {
-        element.scrollTop = pageTop;
+        const again = S.page === 'meeting' ? document.getElementById('main') : element;
+        if (again) again.scrollTop = top;
         regions.pageKind = S.page + (S.meeting?.id || '');
       }
       for (const input of element.querySelectorAll('[data-model]')) {
         if (input.tagName !== 'SELECT') input.value = model(input.dataset.model);
-      }
-      // After sending, the chat's newest line comes into view.
-      if (name === 'page' && S.ui.toChat && element.querySelector('#chat .msg')) {
-        S.ui.toChat = false;
-        element.querySelector('#chat').scrollIntoView({ block: 'end' });
       }
       for (const area of element.querySelectorAll('textarea.notes')) {
         grow(area);
@@ -859,14 +1054,11 @@
       patchTranscript(tbody);
       showHit(tbody);
     }
-    // Wide windows make room for the transcript beside the page instead of covering it.
-    document.getElementById('r-page').classList.toggle('side', S.page === 'meeting' && S.ui.panel === 'transcript');
     if (S.ui.focusNext) {
       const target = document.querySelector(S.ui.focusNext);
       S.ui.focusNext = null;
       if (target) target.focus();
     }
-    document.querySelector('.topbar')?.classList.toggle('scrolled', document.getElementById('r-page').scrollTop > 4);
     live();
   }
   /** Updates that change every few frames while recording: the clock and the level bars. */
@@ -876,7 +1068,7 @@
     const elapsed = document.getElementById('elapsed');
     if (elapsed) elapsed.textContent = clock(rec.elapsed_ms);
     const level = Math.max(0, ...rec.sources.map((s) => s.level || 0));
-    const shape = [0.55, 0.85, 1, 0.75, 0.5];
+    const shape = [0.45, 0.8, 1, 0.65, 0.35];
     document.querySelectorAll('#levels b').forEach((bar, i) => (bar.style.height = `${Math.round(4 + 14 * level * shape[i])}px`));
     for (const src of rec.sources) {
       const meter = document.querySelector(`[data-meter="${CSS.escape(src.channel)}"]`);
@@ -885,7 +1077,7 @@
   }
   function grow(area) {
     area.style.height = 'auto';
-    area.style.height = `${Math.max(120, area.scrollHeight)}px`;
+    area.style.height = `${Math.max(96, area.scrollHeight)}px`;
   }
   const startsWord = (name, q) => name.toLowerCase().split(/[\s.@_-]+/).some((word) => word.startsWith(q));
   /** Names containing `q`, those with a word starting with it first. */
@@ -894,7 +1086,7 @@
     return [...hits.filter((row) => startsWord(row.name, q)), ...hits.filter((row) => !startsWord(row.name, q))];
   };
   function moveHot(box, step) {
-    const options = [...document.querySelectorAll(`${box} [data-opt]`)];
+    const options = box ? [...box.querySelectorAll('[data-opt]')] : [];
     if (!options.length) return;
     S.ui.hot = Math.max(0, Math.min(options.length - 1, Math.min(S.ui.hot, options.length - 1) + step));
     options.forEach((o, i) => o.classList.toggle('hot', i === S.ui.hot));
@@ -919,7 +1111,7 @@
       html += esc(text.slice(at, match.index)) + `<mark>${esc(match[0])}</mark>`;
       at = match.index + match[0].length;
     }
-    back.innerHTML = html + esc(text.slice(at)) + '\u200b';
+    back.innerHTML = html + esc(text.slice(at)) + '​';
   }
   /** The "@query" just before the caret, if the person is typing a mention. */
   function findMention(area) {
@@ -951,7 +1143,7 @@
     const matches = mentionMatches();
     if (!matches.length) return `<div class="popover mention" id="mention" style="left:${m.left}px;top:${m.top}px"><div class="pop-text">No match</div></div>`;
     const hot = Math.min(S.ui.hot, matches.length - 1);
-    return `<div class="popover mention" id="mention" style="left:${m.left}px;top:${m.top}px"><div class="pop-list" style="max-height:${m.max}px">${matches.map((o, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-name="${esc(o.name)}" tabindex="-1">${avatar(o, 'small')}<span class="grow">${esc(o.name)}</span>${o.bot ? '<span class="tag">Bot</span>' : ''}</button>`).join('')}</div></div>`;
+    return `<div class="popover mention" id="mention" style="left:${m.left}px;top:${m.top}px"><div class="pop-list" style="max-height:${m.max}px">${matches.map((o, i) => `<button class="menu-item ${i === hot ? 'hot' : ''}" data-opt data-name="${esc(o.name)}" tabindex="-1">${avatar(o)}<span class="grow">${esc(o.name)}</span></button>`).join('')}</div></div>`;
   }
   function insertMention(area, name) {
     const m = S.ui.mention;
@@ -1003,7 +1195,9 @@
   // ---- Navigation ----
   async function openMeeting(id) {
     S.ui.pop = null;
-    S.ui.panel = null;
+    S.ui.share = null;
+    S.ui.finish = null;
+    S.ui.screen = null;
     S.ui.confirm = null;
     S.ui.titleDraft = null;
     S.ui.notesDraft = null;
@@ -1011,6 +1205,9 @@
     S.ui.tsearch = false;
     S.ui.tq = '';
     S.ui.ask = '';
+    S.ui.stick = true;
+    S.ui.adding = false;
+    S.ui.createOk = null;
     // Drafts and removal questions belong to the meeting they were started in.
     S.ui.editLine = null;
     S.ui.editDraft = '';
@@ -1024,7 +1221,7 @@
   }
   async function back() {
     S.ui.pop = null;
-    S.ui.panel = null;
+    S.ui.share = null;
     if (S.page === 'settings') {
       S.ui.form = null;
       S.ui.key = '';
@@ -1036,21 +1233,22 @@
     if (S.page === 'meeting') {
       await flushNotes();
       S.page = 'library';
-      S.ui.panel = null;
       await act('close_meeting');
     }
   }
   function settings() {
     if (S.page === 'settings') return;
-    S.ui.prevPage = S.page;
+    S.ui.prevPage = S.page === 'signin' ? 'library' : S.page;
     S.ui.pop = null;
-    S.ui.panel = null;
+    S.ui.share = null;
+    S.ui.finish = null;
     S.ui.form = null;
     S.page = 'settings';
     render();
   }
 
   // ---- Popover placement ----
+  const POP_WIDTH = { owner: 240, orgs: 240, 'share-org': 240, 'finish-org': 220, more: 230, source: 250 };
   function openPop(kind, anchor, extra = {}) {
     if (S.ui.pop?.kind === kind && S.ui.pop.id === extra.id) {
       S.ui.pop = null;
@@ -1058,17 +1256,16 @@
       return;
     }
     const rect = anchor.getBoundingClientRect();
-    const width = kind === 'people' ? 320 : kind === 'owner' ? 260 : 240;
+    const width = POP_WIDTH[kind] || 240;
     let left = Math.min(Math.max(12, rect.right - width), window.innerWidth - width - 12);
-    if (kind === 'owner' || kind === 'source') left = Math.min(Math.max(12, rect.left - 6), window.innerWidth - width - 12);
+    if (['owner', 'source', 'share-org', 'finish-org'].includes(kind)) left = Math.min(Math.max(12, rect.left - 6), window.innerWidth - width - 12);
     let style = `left:${left}px;width:${width}px;`;
     if (rect.top > window.innerHeight * 0.6) style += `bottom:${window.innerHeight - rect.top + 8}px;`;
     else style += `top:${rect.bottom + 6}px;`;
     S.ui.pop = { kind, style, ...extra };
     S.ui.ownerQuery = '';
-    S.ui.peopleQuery = '';
     S.ui.hot = 0;
-    if (kind === 'owner' || kind === 'people') S.ui.focusNext = '#popover .pop-input';
+    if (kind === 'owner') S.ui.focusNext = '#popover .pop-input';
     render();
   }
 
@@ -1085,34 +1282,42 @@
     const text = blocks.map((b) => `[${clock(b.start_ms)}] ${b.speaker}: ${b.paragraphs.join('\n\n')}`).join('\n\n');
     const done = () => {
       S.ui.copied = true;
+      S.status.message = 'Transcript copied';
       render();
-      setTimeout(() => { S.ui.copied = false; render(); }, 1400);
+      setTimeout(() => { S.ui.copied = false; poll(); }, 1400);
     };
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
-    else fallbackCopy(text, done);
-  }
-  function fallbackCopy(text, done) {
-    const area = document.createElement('textarea');
-    area.value = text;
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand('copy');
-    area.remove();
-    done();
+    copyText(text).then(done, () => {});
   }
   function submitAsk() {
-    let text = S.ui.ask.trim();
+    const text = S.ui.ask.trim();
     const chat = S.meeting?.chat;
-    if (!text || !chat) return;
-    // "/ask …" asks privately whatever the toggle says.
-    const slash = /^\/ask\b\s*/i.exec(text);
-    const privately = chat.private || !!slash;
-    if (slash) text = text.slice(slash[0].length);
-    if (!text || (privately ? !!chat.thinking : !chat.ready)) return;
+    if (!text || !chat || chat.thinking) return;
     S.ui.ask = '';
+    S.ui.stick = true;
     S.ui.focusNext = '[data-model="ask"]';
-    S.ui.toChat = true;
-    act(privately ? 'ask' : 'chat_send', privately ? { question: text } : { text });
+    act('ask', { question: text });
+  }
+  function sharePick(actor, name, bot) {
+    const d = S.ui.share;
+    const m = S.meeting;
+    if (!d || !m) return;
+    S.ui.shareQuery = '';
+    S.ui.hot = 0;
+    S.ui.focusNext = '#sheet .add-field input';
+    // Once live, a pick is applied there and then; before, it waits for Share live.
+    if (m.live) { act('pick', { actor }); return; }
+    if (!d.picks.some((x) => x.actor === actor)) d.picks.push({ actor, name, bot });
+    render();
+  }
+  function startShare(after = '') {
+    const d = S.ui.share;
+    if (!d || d.busy || !d.org) return;
+    if (d.team && S.status.screen?.active) { d.error = 'Stop screen sharing first'; render(); return; }
+    d.busy = true;
+    d.error = '';
+    d.after = after;
+    render();
+    act('share_live', { destination: d.org, team: d.team, actors: d.picks.map((x) => x.actor) });
   }
   const handlers = {
     back,
@@ -1128,6 +1333,77 @@
       const id = await act('record', { event });
       if (id) openMeeting(id);
     },
+    'signin-desktop': async (el) => {
+      S.ui.signingDesktop = el.dataset.url;
+      // Builds without the desktop contract fall back to typing an address.
+      try { await invoke('sign_in_desktop', { url: el.dataset.url }); await poll(); } catch (error) { console.error(error); S.ui.signingDesktop = ''; S.ui.address = true; render(); }
+    },
+    'address-on': () => { S.ui.address = true; S.ui.focusNext = '[data-model="signin"]'; render(); },
+    'address-off': () => { S.ui.address = false; render(); },
+    'share-open': () => openShare(),
+    'share-close': () => { S.ui.share = null; render(); },
+    'share-team': (el) => {
+      const team = el.dataset.team === 'true';
+      const d = S.ui.share;
+      if (!d) return;
+      if (S.meeting?.live) {
+        // Stop first so widening the audience cannot expose an already captured frame.
+        if (team && S.status.screen?.active) { d.error = 'Stop screen sharing first'; render(); return; }
+        act('set_team', { team });
+      } else { d.team = team; render(); }
+    },
+    'share-pick': (el) => sharePick(el.dataset.actor, el.dataset.name, !!el.dataset.bot),
+    'share-unpick': (el) => { const d = S.ui.share; if (d) { d.picks = d.picks.filter((x) => x.actor !== el.dataset.actor); render(); } },
+    'share-set-org': (el) => {
+      const d = S.ui.share;
+      S.ui.pop = null;
+      if (!d || S.meeting?.live) return render();
+      d.org = el.dataset.id;
+      d.picks = [];
+      act('choose_people_org', { id: d.org });
+    },
+    'share-go': () => startShare(),
+    'share-copy': () => {
+      const d = S.ui.share;
+      if (!d) return;
+      if (S.meeting?.live) copyMeetingLink(d);
+      else startShare('copy');
+    },
+    'copy-link': () => {
+      S.ui.pop = null;
+      openShare();
+      if (S.meeting?.live && S.ui.share) copyMeetingLink(S.ui.share);
+    },
+    'finish-open': (el) => openFinish(el.dataset.id),
+    'finish-close': () => { S.ui.finish = null; render(); },
+    'finish-dest': (el) => {
+      const f = S.ui.finish;
+      if (!f) return;
+      if (el.dataset.dest !== 'local' && f.dest !== 'local' && el.dataset.more) { openPop('finish-org', el); return; }
+      f.dest = el.dataset.dest;
+      f.pausedOk = false;
+      render();
+    },
+    'finish-set-org': (el) => { const f = S.ui.finish; S.ui.pop = null; if (f) { f.org = el.dataset.id; f.dest = f.org; } render(); },
+    'finish-audience': (el) => { if (S.ui.finish) { S.ui.finish.audience = el.dataset.audience; render(); } },
+    'finish-save': saveFinish,
+    'finish-ask-delete': () => { if (S.ui.finish) { S.ui.finish.confirmDelete = true; render(); } },
+    'finish-keep': () => { if (S.ui.finish) { S.ui.finish.confirmDelete = false; render(); } },
+    'finish-delete': () => { const f = S.ui.finish; S.ui.finish = null; if (f) act('delete_recording', { id: f.id }); },
+    'keep-local': () => { S.ui.pop = null; if (S.meeting) act('keep_local', { id: S.meeting.id }); },
+    'confirm-more': (el) => { S.ui.pop = { ...S.ui.pop, confirm: el.dataset.confirm }; render(); },
+    'share-screen': () => {
+      const m = S.meeting;
+      if (!m) return;
+      S.ui.pop = null;
+      const targets = m.targets || [];
+      S.ui.screen = { destination: m.live_org || (targets.length === 1 ? targets[0].id : defaultOrg()?.id || ''), busy: false, error: '' };
+      render();
+    },
+    'screen-org': (el) => { if (S.ui.screen && !S.ui.screen.busy) { S.ui.screen.destination = el.dataset.id; render(); } },
+    'screen-cancel': () => { S.ui.screen = null; render(); },
+    'screen-go': () => shareScreen(),
+    'stop-screen': () => act('stop_screen'),
     stop: () => act('stop_recording'),
     'ask-delete': (el) => { S.ui.confirm = el.dataset.id; render(); },
     'cancel-delete': () => { S.ui.confirm = null; render(); },
@@ -1136,11 +1412,9 @@
       S.ui.pop = null;
       await act('delete_recording', { id: el.dataset.id });
     },
-    'confirm-delete': () => { S.ui.pop = { ...S.ui.pop, confirm: true }; render(); },
-    pop: (el) => openPop(el.dataset.pop, el, { id: el.dataset.id, anchorId: el.dataset.pop === 'send' ? el.dataset.id : undefined }),
+    pop: (el) => openPop(el.dataset.pop, el, { id: el.dataset.id }),
     'close-pop': () => { S.ui.pop = null; render(); },
-    'send-meeting': (el) => { S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest }); },
-    finish: () => act('finish_live'),
+    'control-live': (el) => { S.ui.pop = null; act('control_live', { action: el.dataset.action }); },
     'edit-line': (el) => {
       const seq = Number(el.dataset.seq);
       const id = S.transcript?.id;
@@ -1154,7 +1428,7 @@
       document.querySelector('.line-edit')?.focus();
     },
     'cancel-line': () => { S.ui.editLine = null; render(); },
-    'save-line': async (el) => {
+    'save-line': async () => {
       const edit = S.ui.editLine;
       if (!edit) return;
       const text = (S.ui.editDraft || '').trim();
@@ -1182,9 +1456,9 @@
       }
     },
     retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
-    'audio-status': () => { S.ui.pop = null; S.ui.panel = 'transcript'; S.ui.showAudio = true; render(); },
-    'toggle-transcript': () => { S.ui.panel = S.ui.panel === 'transcript' ? null : 'transcript'; S.ui.stick = true; render(); },
+    'audio-status': () => { S.ui.pop = null; S.ui.hideSide = false; S.ui.showAudio = !S.ui.showAudio; render(); },
     'toggle-audio': () => { S.ui.showAudio = !S.ui.showAudio; render(); },
+    'toggle-side': () => { S.ui.pop = null; S.ui.hideSide = !S.ui.hideSide; S.ui.stick = true; render(); },
     hit: (el) => {
       const body = document.getElementById('tbody');
       if (body) showHit(body, Number(el.dataset.step));
@@ -1192,31 +1466,29 @@
     tsearch: () => {
       S.ui.tsearch = !S.ui.tsearch;
       if (!S.ui.tsearch) S.ui.tq = '';
-      else S.ui.focusNext = '.panel-search input';
+      else S.ui.focusNext = '.side-search input';
       render();
     },
     copy: () => { S.ui.pop = null; copyTranscript(); },
-    'close-panel': () => { S.ui.panel = null; render(); },
-    'focus-ask': () => {},
     ask: submitAsk,
-    'chat-retry': () => {
+    'ask-retry': () => {
       const c = S.meeting?.chat;
-      if (c?.retry) act(c.private ? 'ask' : 'chat_send', c.private ? { question: c.retry } : { text: c.retry });
-    },
-    'toggle-private': () => act('set_chat_private', { private: !S.meeting.chat.private }),
-    'send-item': (el) => {
-      const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
-      if (it) act('send_item', { id: it.id, owner: it.owner });
+      if (c?.retry) act('ask', { question: c.retry });
     },
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
+    'add-open': () => { S.ui.adding = true; S.ui.focusNext = '[data-model="addItem"]'; render(); },
+    // Create files the proposal as a private Tico task; one that may quote paused speech asks twice.
+    'create-item': (el) => {
+      const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.id);
+      if (!it?.can_send) return;
+      if (it.paused_warning && S.ui.createOk !== it.id) { S.ui.createOk = it.id; render(); return; }
+      const confirmed = S.ui.createOk === it.id;
+      S.ui.createOk = null;
+      act('send_item', { id: it.id, owner: it.owner, pausedConfirmed: confirmed });
+    },
     'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id, owner: el.dataset.actor }); },
-    'choose-org': (el) => act('choose_org', { id: el.dataset.id }),
-    'change-org': () => act('change_org'),
-    'start-adding': () => { S.ui.focusNext = '#popover .pop-input'; act('start_adding'); },
-    'people-org': (el) => { S.ui.focusNext = '#popover .pop-input'; act('choose_people_org', { id: el.dataset.id }); },
-    pick: (el) => { S.ui.peopleQuery = ''; act('pick', { actor: el.dataset.actor }); },
+    'choose-org': (el) => { S.ui.pop = null; act('choose_org', { id: el.dataset.id }); },
     'remove-access': (el) => act('remove_access', { actor: el.dataset.actor }),
-    'set-team': (el) => act('set_team', { team: el.dataset.team === 'true' }),
     'open-url': (el) => act('open_url', { url: el.dataset.url }),
     'dismiss-error': () => act('dismiss_error'),
     'dismiss-notice': () => act('dismiss_notice'),
@@ -1224,7 +1496,7 @@
     'connect-cancel': () => act('dismiss_connect'),
     signin: () => { const address = model('signin').trim(); if (address) act('sign_in', { address }); },
     'sign-out': (el) => act('sign_out', { id: el.dataset.id }),
-    'make-default': (el) => act('make_default', { id: el.dataset.id }),
+    'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id }); },
     import: () => { const directory = S.ui.legacy.trim(); if (directory) act('import_legacy', { directory }); },
     'save-settings': () => {
       S.ui.saving = true;
@@ -1249,28 +1521,36 @@
       if (body) showHit(body, 1);
     },
     signin: () => handlers.signin(),
+    'finish-save': saveFinish,
     'owner-first': () => {
       const first = document.querySelector('#popover [data-opt].hot') || document.querySelector('#popover [data-act="set-owner"]');
       if (first) first.click();
     },
-    'people-enter': () => {
-      const text = S.ui.peopleQuery.trim();
+    'share-enter': () => {
+      const text = S.ui.shareQuery.trim();
       if (!text) return;
-      const first = document.querySelector('#popover [data-opt].hot') || document.querySelector('#popover [data-act="pick"]');
+      const first = document.querySelector('#sheet [data-opt].hot') || document.querySelector('#sheet [data-act="share-pick"]');
       if (first) first.click();
       else {
-        S.ui.peopleQuery = '';
+        // Someone not in the org: a name on this recording only.
+        S.ui.shareQuery = '';
+        S.ui.focusNext = '#sheet .add-field input';
         act('add_participant', { name: text });
       }
-      S.ui.focusNext = '#popover .pop-input';
     },
   };
 
   document.addEventListener('click', (event) => {
     const target = event.target.closest('[data-act]');
+    const act = target?.dataset.act;
     // Clicks outside an open popover close it.
-    if (S.ui.pop && !event.target.closest('#popover') && !(target && target.dataset.act === 'pop')) {
+    if (S.ui.pop && !event.target.closest('#popover') && act !== 'pop' && act !== 'finish-dest') {
       S.ui.pop = null;
+      if (!target) render();
+    }
+    // Clicks outside the Share live sheet close it.
+    if (S.ui.share && !event.target.closest('#sheet, #popover') && act !== 'share-open' && act !== 'copy-link' && event.target.isConnected) {
+      S.ui.share = null;
       if (!target) render();
     }
     if (!target || target.disabled) {
@@ -1280,7 +1560,7 @@
       }
       return;
     }
-    const handler = handlers[target.dataset.act];
+    const handler = handlers[act];
     if (handler) {
       event.preventDefault();
       handler(target, event);
@@ -1290,7 +1570,6 @@
     const el = event.target;
     if (el.dataset.model) {
       setModel(el.dataset.model, el.value);
-      if (el.dataset.model === 'ask') el.closest('.ask')?.classList.toggle('blank', !el.value.trim());
       if (el.dataset.model === 'notes') {
         grow(el);
         paintMentions(el);
@@ -1298,14 +1577,15 @@
         clearTimeout(notesTimer);
         notesTimer = setTimeout(() => flushNotes(), 700);
       }
-      if (el.dataset.model === 'ownerQuery' || el.dataset.model === 'peopleQuery') S.ui.hot = 0;
-      if (['search', 'ownerQuery', 'peopleQuery', 'tq', 'key', 'xai'].includes(el.dataset.model) || el.dataset.model.startsWith('form.')) render();
+      if (el.dataset.model === 'ownerQuery' || el.dataset.model === 'shareQuery') S.ui.hot = 0;
+      if (['search', 'ownerQuery', 'shareQuery', 'tq', 'key', 'xai'].includes(el.dataset.model) || el.dataset.model.startsWith('form.')) render();
     }
   });
   document.addEventListener('mouseover', (event) => {
     const option = event.target.closest?.('[data-opt]');
     if (!option || option.classList.contains('hot')) return;
-    const box = option.closest('#popover, #mention');
+    const box = option.closest('#popover, #mention, #sheet');
+    if (!box) return;
     const options = [...box.querySelectorAll('[data-opt]')];
     S.ui.hot = options.indexOf(option);
     options.forEach((o) => o.classList.toggle('hot', o === option));
@@ -1338,6 +1618,10 @@
       S.ui.titleDraft = null;
       if (title.trim() && title.trim() !== S.meeting?.title) await act('rename', { title });
     }
+    if (el.dataset?.blur === 'add-close' && !S.ui.addItem.trim() && S.ui.adding) {
+      S.ui.adding = false;
+      setTimeout(render, 0);
+    }
     if (el.dataset?.editItem) {
       const text = el.textContent.replace(/\s+/g, ' ').trim();
       const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.editItem);
@@ -1359,13 +1643,13 @@
     // A list picked from a text field: ↑/↓ move the highlight, Enter takes it (below), Esc closes.
     if (el.dataset?.list !== undefined && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
-      moveHot('#popover', event.key === 'ArrowDown' ? 1 : -1);
+      moveHot(el.closest('#popover, #sheet'), event.key === 'ArrowDown' ? 1 : -1);
       return;
     }
     if (S.ui.mention && el.dataset?.model === 'notes' && !event.isComposing) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
-        moveHot('#mention', event.key === 'ArrowDown' ? 1 : -1);
+        moveHot(document.getElementById('mention'), event.key === 'ArrowDown' ? 1 : -1);
         return;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
@@ -1414,18 +1698,23 @@
     }
     if (meta && S.page === 'meeting' && (event.key === 'f' || event.key === 't')) {
       event.preventDefault();
-      S.ui.panel = 'transcript';
-      if (event.key === 'f') {
+      if (event.key === 't') S.ui.hideSide = !S.ui.hideSide;
+      else {
+        S.ui.hideSide = false;
         S.ui.tsearch = true;
-        S.ui.focusNext = '.panel-search input';
+        S.ui.focusNext = '.side-search input';
       }
+      S.ui.stick = true;
       render();
       return;
     }
     if (event.key !== 'Escape') return;
+    // Innermost first: a menu over a sheet closes before the sheet.
     if (S.ui.pop) {
       S.ui.pop = null;
       render();
+    } else if (S.ui.share || S.ui.finish || S.ui.screen) {
+      S.ui.share = null; S.ui.finish = null; S.ui.screen = null; render();
     } else if (S.status.connect) {
       act('dismiss_connect');
     } else if (S.ui.confirm) {
@@ -1437,15 +1726,11 @@
       el.blur();
     } else if (el.matches?.('input, textarea')) {
       el.blur();
-    } else if (S.ui.panel) {
-      S.ui.panel = null;
-      render();
-    } else if (S.page !== 'library') {
+    } else if (S.page === 'meeting' || S.page === 'settings') {
       back();
     }
   });
   document.addEventListener('scroll', (event) => {
-    if (event.target.id === 'r-page') document.querySelector('.topbar')?.classList.toggle('scrolled', event.target.scrollTop > 4);
     if (event.target.id === 'tbody') {
       const body = event.target;
       S.ui.stick = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
@@ -1458,13 +1743,19 @@
     invoke('set_visible', { visible: !document.hidden }).catch(() => {});
     if (!document.hidden) poll();
   });
-  document.addEventListener('compositionstart', () => (S.composing = true));
-  document.addEventListener('compositionend', () => (S.composing = false));
 
   window.addEventListener('error', (event) => bootError(event.message));
   window.addEventListener('DOMContentLoaded', () => {
     const events = window.__TAURI__.event;
     events.listen('changed', () => poll());
+    events.listen('screen-preview', async (event) => {
+      await poll();
+      if (event.payload?.capture_id !== S.status.screen?.capture_id) return;
+      let preview = document.getElementById('screen-preview');
+      if (!event.payload.url || !S.status.screen?.active) { preview?.remove(); return; }
+      if (!preview) { preview = document.createElement('div'); preview.id = 'screen-preview'; preview.innerHTML = '<img alt="Your shared screen"><div>Screen · a few times a second</div>'; document.getElementById('app').appendChild(preview); }
+      preview.querySelector('img').src = event.payload.url;
+    });
     events.listen('level', (event) => onLevel(event.payload));
     poll();
   });

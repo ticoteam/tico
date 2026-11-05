@@ -11,13 +11,14 @@ const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
 function needsIndex() {
-  const list = S.v2?.needs || [];
-  if (NEEDS_MEMO?.list !== list) {
+  const list = S.v2?.needs || [], foldedIds = S.v2?.needsFoldedIds;
+  if (NEEDS_MEMO?.list !== list || NEEDS_MEMO?.foldedIds !== foldedIds) {
     const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
     // A bot's task folded into the card that asks the person the same thing is not listed again, nor a task the
     // Strategy Bot merged into an item of its own (backend/strategy_merge.py): the server leaves both out of Needs you.
-    const folded = new Set(list.flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
-    NEEDS_MEMO = {list, byId, folded};
+    // The whole-list ids also cover unread cards; their titles and asks stay on their own pages.
+    const folded = new Set((foldedIds || list.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])])).map(String));
+    NEEDS_MEMO = {list, byId, folded, foldedIds};
   }
   return NEEDS_MEMO;
 }
@@ -72,25 +73,45 @@ async function needsRecommend(button, ask, version) {
 // One line in Needs you for an item outside any task (an approval, a question, the Stale tickets card): who asks, what,
 // and its kind. A click opens its card (decide.js); nothing unfolds in the list. Its key is the card's. It keeps the
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
+// The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
+const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
+                           thread_held: 'Held', thread_capped: 'Paused'};
 function needRowHTML(it, ctx = {}) {
-  const key = decideItemKey(it), stale = it.kind === 'stale';
-  const from = stale ? '' : taskRequester(it) || it.requester || '';
+  const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
+  const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
-  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : 'Question';
+  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
   const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
+  const open = thread && it.conversation_id
+    ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
+    : it.kind === 'thread_held'
+      ? `<button type="button" class="tl-open" data-hold-review="${esc(it.id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`
+    : `<button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>`;
   return tasksSigned(`<div class="tl-row tl-need" data-task-key="n${esc(key)}" data-need-card="${esc(key)}" role="listitem" aria-level="1" style="--depth:0">
     <span class="tl-check-pad${ctx.select ? ' tl-check-room' : ''}"></span><span class="tl-chev-pad"></span>
-    <button type="button" class="tl-open" data-open-task="n${esc(key)}" tabindex="-1" aria-haspopup="dialog"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></button>
+    ${open}
     <span class="tl-fill"></span>
     <span class="tl-chips"><span class="pill needs">${esc(kind)}</span>${stale && (it.rows || []).length ? `<span class="tl-folded tnum">${(it.rows || []).length}</span>` : ''}</span>
     ${ctx.by === 'status' ? '' : '<span class="tl-status-pad"></span>'}
     <span class="tl-people"><span class="tl-face" title="${esc(name)}">${face}</span></span>
-    <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created || '')}" title="${esc(fmt(it.ready_since || it.created))}">${esc(ageShort(it.ready_since || it.created))}</time>
+    <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created_at || '')}" title="${esc(fmt(it.ready_since || it.created_at))}">${esc(ageShort(it.ready_since || it.created_at))}</time>
   </div>`);
 }
-// The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy'].includes(it.kind) && !decideGone(decideItemKey(it)));
+// The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone). A
+// thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
+// Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
+// card is where it is answered.
+const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
+const needsExtras = () => (S.v2?.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && !decideGone(decideItemKey(it)));
+// The Tasks count includes these on unread pages too, less cards just answered here. The whole attention count also
+// includes Inbox's items and other task types; switching to it while paging makes the number depend on scrolling.
+function needsExtrasCount() {
+  const counts = S.v2?.needsByKind;
+  if (!counts) return needsExtras().length;
+  const gone = (S.v2.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && decideGone(decideItemKey(it))).length;
+  return Math.max(0, NEEDS_EXTRA_KINDS.reduce((n, kind) => n + (counts[kind] || 0), 0) - gone);
+}
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
@@ -153,10 +174,18 @@ function approvalFileIcon() {
   svg.append(path);
   return svg;
 }
-// Where a publish goes: a Support ticket by its number, a web address as a link, anything else as text.
-function approvalWhere(url) {
+// Where a publish goes: a Support ticket by its number, a Company page edition or stats board by its name, linked to where
+// it is run, a web address as a link, anything else as text.
+function approvalWhere(url, title) {
   const u = String(url ?? '').trim(), ticket = /^hq-ticket:(TK-[A-Za-z0-9]+)$/.exec(u);
   if (ticket) return 'Support ticket ' + ticket[1];
+  const edition = /^tico:editions\/([^/]+)\/\d+$/.exec(u);
+  if (edition || /^tico:stat-board\/[^/]+\/[^/]+$/.test(u)) {
+    const a = document.createElement('a');
+    a.href = '#/company-page' + (edition ? '?edition=' + encodeURIComponent(edition[1]) : '');
+    a.textContent = title ? String(title) : 'Company page';
+    return a;
+  }
   if (/^https?:\/\//i.test(u)) {
     try {
       const href = new URL(u);
@@ -185,6 +214,7 @@ function approvalTitle(it) {
   if (it?.kind !== 'approval') return it?.title || '';
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
+  if (it.what === 'mail_alert') return `Mail sending: ${approvalWho(p.bot)}`;
   return it.title || '';
 }
 function approvalFacts(what, p, it = {}) {
@@ -194,10 +224,15 @@ function approvalFacts(what, p, it = {}) {
   let rows, named;
   if (what === 'publish') {
     const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
-    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url) : shown(p.url)],
+    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url, p.title) : shown(p.url)],
       text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
                    : ['Text', shown(text), 'approval-text']];
     named = ['url', 'text', 'content_sha256'];
+    // A Company page edition or stats board: who it's for, and the bookkeeping stays in the exact payload.
+    if (typeof p.url === 'string' && p.url.startsWith('tico:')) {
+      rows.splice(1, 0, ['Audience', shown(p.audience)], ['Period', shown(p.period)]);
+      named.push('audience', 'period', 'audience_id', 'disclosure_revision', 'rules', 'title', 'version', 'edition_id', 'stats', 'kind');
+    }
   } else if (what === 'spend') {
     rows = [['Amount', shown(p.amount)], ['Account', shown(p.account)], ['For', shown(p.what)]];
     named = ['amount', 'account', 'what'];
@@ -214,6 +249,11 @@ function approvalFacts(what, p, it = {}) {
     rows = [['For', p.pool ? shown(p.pool) : approvalWho(p.bot)], ['30 min', approvalUsd(p.per_30m_usd)], ['Day', approvalUsd(p.daily_usd)],
       ['Week', approvalUsd(p.weekly_usd)], ['Month', approvalUsd(p.monthly_usd)]];
     named = ['bot', 'pool', 'per_30m_usd', 'daily_usd', 'weekly_usd', 'monthly_usd'];
+  } else if (what === 'mail_alert') {
+    // A bot's mail sending, as it asks for it now (backend/maintenance_steps/check_health.py _mail_payload). Approving turns it on.
+    rows = [['Bot', approvalWho(p.bot)], ['Sends mail', p.outbound_send ? 'Yes' : 'No'],
+      ['Forward to', Array.isArray(p.forward_to) && p.forward_to.length ? p.forward_to.map(String).join(', ') : 'Nobody']];
+    named = ['bot', 'outbound_send', 'forward_to'];
   } else if (what === 'finance') {
     // A Finance action waiting on this person (backend/finance/actions.py): its summary, and for a budget change that
     // needs room above it, which budget is raised and to what (backend/finance/handlers.py _raise_note).
@@ -339,8 +379,7 @@ async function staleDecide(button, path, body) {
   }
 }
 // Filtered for you: what the ask filter kept off your plate today (backend/ask_ingest.py), folded at the foot of Needs
-// you. In Rehearsal it lists what On would have done and changes nothing; with the filter On, Let it through puts an
-// item on your plate in one click and tells the bot that asked.
+// you. Let it through puts an item on your plate in one click and tells the bot that asked.
 const ASK_FILTER_WHY = {
   status: 'A progress note: nothing to decide', covered: 'Same as one you already have open',
   unclear: 'Doesn\u2019t say what to decide', own_work: 'Work a bot can do itself',
@@ -358,26 +397,23 @@ async function askFilteredLoad(state) {
   tasksRender(state);
 }
 function askFilteredRow(it) {
-  const rehearsal = it.mode !== 'on', done = !!it.let_through_at;
+  const done = !!it.let_through_at;
   const what = ASK_FILTER_OUTCOME[it.would] || 'Filtered';
   const title = it.task ? `<a href="#/task/${encodeURIComponent(it.task)}">${esc(it.title || 'Untitled')}</a>` : esc(it.title || 'A question');
   const act = done ? '<span class="muted">Let through</span>'
-    : rehearsal ? `<span class="muted">Would have: ${esc(what.toLowerCase())}</span>`
     : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
   return `<div class="tl-filtered-row" role="listitem">
     <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created))}</span></span>
+      <span class="muted">${esc(what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
     <span class="tl-filtered-act">${act}</span></div>`;
 }
 function askFilteredHTML(state) {
   const items = state?.filtered || [];
   if (!items.length) return '';
-  const rehearsal = items.every(it => it.mode !== 'on');
-  const label = rehearsal ? 'Filtered for you (rehearsal)' : 'Filtered for you';
-  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">${esc(label)}</span>
+  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">Filtered for you</span>
       <span class="tl-gcount tnum">${items.length}</span><span class="spacer"></span>
       <a class="tl-gchat" href="#/settings/tasks" data-ask-filter-settings>What bots may put on you</a></summary>
-    <div class="tl-rows" role="list" aria-label="${esc(label)}">${items.map(askFilteredRow).join('')}</div></details>`;
+    <div class="tl-rows" role="list" aria-label="Filtered for you">${items.map(askFilteredRow).join('')}</div></details>`;
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest?.('[data-let-through]');
@@ -397,8 +433,8 @@ document.addEventListener('click', async ev => {
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.
 function taskOutcomeNote(task, action, typed) {
-  if (!task || action.close || !String(task.owner || '').startsWith('human:') ||
-      !String(task.requester || '').startsWith('bot:')) return '';
+  if (!task || action.close || !String(task.owner_id || '').startsWith('human:') ||
+      !String(task.requester_id || '').startsWith('bot:')) return '';
   return String(typed || '').trim();
 }
 // The task window's typed outcome went with Done: it is not left behind to be sent again as a comment.
@@ -429,5 +465,65 @@ document.addEventListener('click', ev => {
     const rows = [...(host?.querySelectorAll('[data-stale-row][data-stale-action]') || [])]
       .map(li => ({id: li.dataset.staleRow, version: Number(li.dataset.staleVersion)}));
     if (rows.length) void staleDecide(sa, '/v2/stale-review/accept-all', {rows});
+  }
+});
+
+// Browser notifications for new thread items, while the page is in the background, when the person turned them on
+// (their Notifications card, person-page.js). The ids already notified are kept per person (their id, from /api/me) in
+// localStorage, so a reload does not repeat them; the first read after a fresh start records what is listed without
+// notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.js after a live change), and the calls
+// run one after another, so they share one memory and an item is notified once.
+let notifyQueue = Promise.resolve();
+function notifyNewThreadNeeds(items) {
+  notifyQueue = notifyQueue.then(() => notifyThreadNeedsOnce(items)).catch(() => {});
+  return notifyQueue;
+}
+async function notifyThreadNeedsOnce(items) {
+  const id = S.me?.id;
+  if (!id) return;                  // the identity has not loaded: there is no person to keep a memory for yet
+  if (S.notifyBrowser === undefined) {
+    // The person's own row in the people list carries the setting (there is no one-person read).
+    try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find(p => p.id === id)?.notify_browser === true; }
+    catch { S.notifyBrowser = false; }
+  }
+  const key = 'tico.notified.' + id;
+  const thread = items.filter(it => THREAD_NEED_KINDS[it.kind]);
+  let seen = null;
+  try { seen = JSON.parse(localStorage.getItem(key) || 'null'); } catch { seen = null; }
+  const first = !Array.isArray(seen);
+  const known = new Set(first ? [] : seen);
+  const fresh = thread.filter(it => !known.has(String(it.id)));
+  if (fresh.length) {
+    const ids = [...known, ...fresh.map(it => String(it.id))].slice(-200);
+    try { localStorage.setItem(key, JSON.stringify(ids)); } catch { /* private window: notify without memory */ }
+  }
+  if (first || !fresh.length || !S.notifyBrowser || !document.hidden || !('Notification' in window)
+      || Notification.permission !== 'granted') return;
+  for (const it of fresh) {
+    try { new Notification(`${THREAD_NEED_KINDS[it.kind]} in Tico`, {body: it.title || '', tag: 'need-' + it.id}); }
+    catch { /* a browser that refuses a notification shows nothing; the list still has it */ }
+  }
+}
+// A write held for review (org_rule_holds) has no thread to open: its hold card opens under the row, the card the task
+// page shows, with Send anyway and Keep blocked for its reviewer. The card is read from the hold, so its text reaches
+// only the reviewer, who is the one who may read it.
+document.addEventListener('click', async ev => {
+  const review = ev.target.closest('[data-hold-review]');
+  if (!review) return;
+  const holdId = review.dataset.holdReview, row = review.closest('[data-need-card]');
+  if (!row) return;
+  const open = row.parentElement?.querySelector(`[data-hold-slot="${CSS.escape(holdId)}"]`);
+  if (open) { open.remove(); return; }
+  const slot = document.createElement('div');
+  slot.className = 'needs-hold';
+  slot.dataset.holdSlot = holdId;
+  slot.dataset.task = holdId;       // ruleHoldRedraw checks a card's slot by this id, as a task page does
+  row.after(slot);
+  try {
+    const hold = await get('/v2/rule-holds/' + encodeURIComponent(holdId), {fresh: true});
+    slot.innerHTML = ruleHoldHTML(hold);
+    ruleHoldsWire(slot, holdId);
+  } catch (e) {
+    slot.textContent = e.message;
   }
 });

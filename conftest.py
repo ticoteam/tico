@@ -8,8 +8,14 @@ os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fix
 os.environ["TICO_UPDATE_CHECK"] = "off"
 # A runner readiness call would otherwise start real containers on whoever's computer runs the suite.
 os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
+# The start jobs a server runs beside itself once it serves (backend/app.py start_jobs) run before it serves instead, so
+# a test that starts an app sees their result at once. backend/tests/test_start_jobs.py checks the served way.
+os.environ["TICO_START_JOBS"] = "inline"
 # Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
 os.environ["TICO_SQLITE_SYNC"] = "off"
+# Bots start `nearby` (backend/reach.py), and most test companies put their bots on no chart, so tests about
+# something else start them open. The reach tests (backend/tests/test_reach*.py) clear this and test the default.
+os.environ["TICO_REACH_DEFAULT"] = "open"
 # A test that misses a stub must fail, not act in whoever's AWS account runs the suite: one already
 # created a real bucket. Fake keys and no profile or config files make any real AWS call unauthorized.
 for _name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"):
@@ -19,6 +25,7 @@ os.environ.update({"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "tes
                    "AWS_EC2_METADATA_DISABLED": "true"})
 
 
+import re  # noqa: E402
 import pytest  # noqa: E402
 
 
@@ -129,25 +136,19 @@ def api_database(tmp_path_factory, request):
     store.initialize()
     snapshot = settings.db_path.with_name("snapshot.db")
     with closing(sqlite3.connect(settings.db_path)) as source:
-        tables = [row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-        allowed = {"cloud_migrations", "registry_metadata", "sqlite_sequence", "task_types", "task_steps", "task_rules", "provenance_clock"}
+        tables = [row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'") if "_fts" not in row[0]]
+        # initialize writes system rows (markers, clocks, built-in types and rules, keeper events) that every
+        # fresh test database has too. What must never be shared between tests: a person, bot, credential,
+        # session, key or computer, and this worker's temporary path.
+        identity = re.compile(r"human|person|people|bot|cred|secret|session|token|key|auth|member|user|account|"
+                              r"identit|device|machine|computer|grant|oauth|oidc")
         for table in tables:
-            # FTS5 has internal configuration rows but no user document before fixture seeding.
-            if table in allowed or "_fts_" in table:
-                continue
-            assert not source.execute('SELECT 1 FROM "' + table.replace('"', '""') + '" LIMIT 1').fetchone(), table
-        assert source.execute("SELECT id FROM task_rules").fetchall() == [("task-rule-close-after-done",)]
-        keys = {row[0] for row in source.execute("SELECT key FROM registry_metadata")}
-        assert keys <= {"access", "owner", "access_bot_limit", "bot_access", "docs_migrated",
-                        "credential-file-migration-v1", "credential-file-migration-v2-hub", "message_links.ready",
-                        "librarian_wording35", "librarian_wording36", "release-history",
-                        "repositories-access-migrated", "task_session_default"}
-        assert source.execute("SELECT id FROM task_types").fetchall() == [("general",)]
-        assert all(row[0].startswith("general-") for row in source.execute("SELECT id FROM task_steps"))
-        # Inspect the stored values directly; dumping every empty table and trigger dominates startup
-        # when many workers build their templates at once.
-        for table in allowed:
-            assert str(settings.db_path.parent) not in repr(source.execute(f'SELECT * FROM "{table}"').fetchall())
+            quoted = '"' + table.replace('"', '""') + '"'
+            if identity.search(table):
+                assert not source.execute(f"SELECT 1 FROM {quoted} LIMIT 1").fetchone(), table
+            else:
+                assert str(settings.db_path.parent) not in repr(source.execute(f"SELECT * FROM {quoted}").fetchall()), table
+        assert {row[0] for row in source.execute("SELECT kind FROM principals")} <= {"system"}
         with closing(sqlite3.connect(snapshot.with_suffix(".building"))) as target:
             source.backup(target)
     snapshot.with_suffix(".building").replace(snapshot)

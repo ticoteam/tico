@@ -20,6 +20,7 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
   Have your mail provider send its scans there. Each PDF or image attached to a message from a listed sender becomes a
   letter; other senders, other attachments and other inboxes are left alone. The sender is what the message claims,
   so the list keeps out strangers and floods; a scan is still read as outside text.
+  Someone outside a narrowed intake inbox's audience sees that an intake is set, not which inbox or address.
 
 ## What happens to a letter
 

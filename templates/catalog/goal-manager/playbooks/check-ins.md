@@ -3,8 +3,9 @@
 A check-in is the goal owner's own words about what is going on. Readings are facts; a check-in is
 interpretation. Keep them apart: never put an explanation in a reading's note, never make up an answer.
 
-Only above Passive (`level` in `hub goal strategy-bot`); at Passive you ask nobody. When to ask: a goal turned yellow or red in the status pass, or a KPI on a goal is stale or missing for a second
-pass. Not when a check-in for that goal exists from the last 7 days (`hub goal checkin-list <id>`), and at most one
+Inputs: `hub goal show <id>` (the owner, the KPIs, the reason line and recent check-ins), then the owner's answer when it arrives.
+
+Only above Passive (`level` in `hub goal strategy-bot`); at Passive you ask nobody. When to ask: a goal turned yellow or red in this run's status pass (a goal already red that did not change is not a trigger), or a KPI on a goal is stale or missing for a second pass. Not when a check-in for that goal exists from the last 7 days (`hub goal checkin-list <id>`), and at most one
 question per goal per week. Only the owner's check-ins count here: your own comment on a goal after a level-3
 decision is not their answer.
 
@@ -19,3 +20,5 @@ decision is not their answer.
    Choose the signal only when they said it; otherwise leave it out. A long answer is trimmed to what they said
    about the cause and the next step, quoted, not paraphrased.
 4. No answer after 3 days: one nudge, then leave it and mention it in the weekly review.
+
+**Done when:** the owner's answer is recorded in their words as a check-in, or the one nudge is sent and the missing answer is noted for the weekly review.

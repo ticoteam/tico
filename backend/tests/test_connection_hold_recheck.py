@@ -23,7 +23,7 @@ def test_moving_a_limited_bot_to_a_computer_re_checks_the_hold_there(api, monkey
     assign(api, old, "ops")
     for machine in (old, free, held):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+            c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, old, ["ops"], ("fake",))
     signed_in(api, free, [], ("fake",))
     signed_in(api, held, [], ("fake",))
@@ -58,7 +58,7 @@ def test_switching_a_computers_login_frees_the_bots_limited_on_it(api, monkeypat
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("fake",))
     post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Please do it."})
     limit(api, machine, claim(api, machine))

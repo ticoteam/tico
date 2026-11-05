@@ -31,7 +31,7 @@ function finCapsOf(acc, who) {
   const rights = new Set(row.rights || []);
   const may = right => owner || rights.has(right) || rights.has('finance.admin');
   return {row, owner, all, rights, may,
-    any: all || row.default !== 'none' || live.length > 0,
+    any: all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin'),
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
@@ -52,8 +52,8 @@ function finCaps() {
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
-const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
-  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
+const finTabShown = (tab, caps, acc) => !!caps?.any && FIN_TABS.some(([id]) => id === tab) && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
+  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || caps.rights.has('finance.admin') || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
 // A Finance address that keeps "View as": the view is in the address, so Back and Forward carry it.
@@ -65,23 +65,20 @@ function finHref(path, params = {}) {
 }
 
 // ----------------------------------------------------------------- the sidebar
-// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy and Growth.
-function finNavSync() {
-  const nav = $('#side .side-scroll'); if (!nav) return;
-  const link = nav.querySelector('a[data-nav="finance"]');
-  if (!finCapsOf(FIN_ACCESS, finMe())?.any) { if (link) { link.remove(); renderTree(); } return; }
-  if (link) return;
-  const a = Object.assign(document.createElement('a'), {className: 'nav-link', href: FIN_ROUTE,
-    innerHTML: '<span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance'});
-  a.dataset.nav = 'finance';
-  const after = nav.querySelector('a[data-nav="growth"]') || nav.querySelector('a[data-nav="strategy"]');
-  if (after) after.after(a); else nav.prepend(a);
-  renderTree();
+// Finance shows in the rail (index.html, under Strategy and Growth) while Finance is set up and the viewer sees
+// something in it. Until this visit's answer it shows as the last one this browser had for the same person said, and
+// stays hidden with none (ui/app/redesign.js rdNavShow): most people never see Finance, and the few who do see it from
+// their second visit on. Only a definite answer moves it: an access list, or Finance refusing (403) or missing (404).
+// No answer at all (offline, a server error) leaves the row as it is.
+function finNavSync(error) {
+  if (error && ![403, 404].includes(error.status)) return;
+  rdNavShow('finance', !!finCapsOf(FIN_ACCESS, finMe())?.any);
 }
 async function finProbe() {
+  let error = null;
   try { const acc = await get('/v2/finance/access', {fresh: true}); FIN_ACCESS = Array.isArray(acc?.teammates) ? acc : null; }
-  catch { FIN_ACCESS = null; }
-  finNavSync();
+  catch (e) { FIN_ACCESS = null; error = e; }
+  finNavSync(error);
   return FIN_ACCESS;
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
@@ -109,6 +106,8 @@ const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect a
 
 // A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
 const finExcl = x => x?.excluded ? ' excl. payroll' : '';
+// A viewer's totals over the slice they see, labeled so they aren't read as the company's (§7.5).
+const finOwnSlice = caps => caps.viewing ? ` · ${finWho(caps.who)}'s view` : ' · Your view';
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -153,7 +152,7 @@ function finParseCents(text) {
 }
 // The group with no vendor, team or teammate (backend/finance/reads.py NONE): no real key starts with a space.
 const FIN_NONE = ' unattributed';
-// bot:<slug>, human:<id>, a team id, or FIN_NONE.
+// bot:<id>, human:<id>, a team id, or FIN_NONE.
 function finWho(ref) {
   const s = String(ref || '');
   if (!s || s === FIN_NONE) return 'Unattributed';
@@ -170,12 +169,12 @@ function finTeamKids(teams, id) {
   return teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)))
     .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
 }
-// A built-in helper (the Assistant, BotOps, Strategy Bot, Librarian, Task Manager, Bookkeeper, Health Monitor…; ui/app/sidebar.js
+// A built-in helper (the Assistant, BotOps, Strategy Bot, Librarian, Task Manager, Bookkeeper…; ui/app/sidebar.js
 // isHelperBot): listed together as Helpers, after the org chart.
 function finHelper(actor) {
   if (!String(actor || '').startsWith('bot:')) return false;
-  const slug = actor.slice(4), e = (S.emps || []).find(x => x.name === slug);
-  return e ? isHelperBot(e) : isBuiltInBot(slug);
+  const id = actor.slice(4), e = (S.emps || []).find(x => x.id === id);
+  return e ? isHelperBot(e) : isBuiltInBot(id);
 }
 const finAvatar = (ref, size = 18) => String(ref || '').startsWith('bot:') ? avatar(ref.slice(4), size)
   : personAvatar((S.people || []).find(p => p.id === String(ref).slice(6)) || {name: finWho(ref)}, size);
@@ -229,10 +228,18 @@ function finDialog(title, body, saveLabel, onSave) {
   dlg.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dlg.close(); });
   dlg.onclose = () => dlg.remove();
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
+  // While a save runs the button says so (a Mercury connect tests the token and maps accounts, which takes seconds).
+  // A save that relabels the button (Preview → Import, Send, Done) keeps its label: only the busy text is put back.
+  let idle = '';
+  const busy = on => {
+    save.disabled = on; save.setAttribute('aria-busy', on ? 'true' : 'false');
+    if (on) { idle = save.textContent; save.textContent = `${idle}…`; }
+    else if (save.textContent === `${idle}…`) save.textContent = idle;
+  };
   form.onsubmit = async ev => {
-    ev.preventDefault(); err.hidden = true; save.disabled = true;
-    try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
-    catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
+    ev.preventDefault(); err.hidden = true; busy(true);
+    try { if (await onSave(form) === false) busy(false); else dlg.close(); }
+    catch (e) { err.textContent = e.message; err.hidden = false; busy(false); }
   };
   dlg.showModal();
   form.querySelector('input:not([type=hidden]),select')?.focus();
@@ -257,7 +264,7 @@ function pageFinance() {
     try { acc = await get('/v2/finance/access', {fresh: true}); } catch (e) { error = e; }
     if (FIN !== state || !$('#fin-body')) return;
     FIN_ACCESS = state.acc = Array.isArray(acc?.teammates) ? acc : null;
-    finNavSync();
+    finNavSync(error);
     if (!state.acc) { $('#fin-body').innerHTML = finNote(error?.message || 'Finance is not set up.'); return; }
     finShow(state);
   })();

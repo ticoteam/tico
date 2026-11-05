@@ -1,13 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="redesign">
 <head>
 <meta charset="utf-8">
 <title>Tico</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-<meta name="theme-color" content="#101513">
+<meta name="theme-color" content="#131413">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=39b2d0e13e8a" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -34,6 +34,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/viewer.css">
 <link rel="stylesheet" href="/tico/ui/styles/search.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-modal.css">
+<link rel="stylesheet" href="/tico/ui/styles/task-meetings.css">
 <link rel="stylesheet" href="/tico/ui/styles/org-rule-holds.css">
 <link rel="stylesheet" href="/tico/ui/styles/roadmaps.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-files.css">
@@ -52,6 +53,10 @@
 <link rel="stylesheet" href="/tico/ui/styles/meetings.css">
 <link rel="stylesheet" href="/tico/ui/styles/bot-page.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat.css">
+<link rel="stylesheet" href="/tico/ui/styles/threads.css">
+<link rel="stylesheet" href="/tico/ui/styles/thread-rail.css">
+<link rel="stylesheet" href="/tico/ui/styles/feedback.css">
+<link rel="stylesheet" href="/tico/ui/styles/thread-connect.css">
 <link rel="stylesheet" href="/tico/ui/styles/visual-cards.css">
 <link rel="stylesheet" href="/tico/ui/styles/visual-media.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat-goal.css">
@@ -73,6 +78,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/brand.css">
 <link rel="stylesheet" href="/tico/ui/styles/updates.css">
 <link rel="stylesheet" href="/tico/ui/styles/overview.css">
+<link rel="stylesheet" href="/tico/ui/styles/overview-graph.css">
 <link rel="stylesheet" href="/tico/ui/styles/dashboard.css">
 <link rel="stylesheet" href="/tico/ui/styles/usage.css">
 <link rel="stylesheet" href="/tico/ui/styles/replay.css">
@@ -85,6 +91,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/strategy-budget.css">
 <link rel="stylesheet" href="/tico/ui/styles/finance.css">
 <link rel="stylesheet" href="/tico/ui/styles/growth.css">
+<link rel="stylesheet" href="/tico/ui/styles/company-page.css">
 <link rel="stylesheet" href="/tico/ui/styles/redesign-library.css">
 <link rel="stylesheet" href="/tico/ui/styles/org-rules.css">
 <link rel="stylesheet" href="/tico/ui/styles/pages.css">
@@ -100,33 +107,55 @@
 <div id="version-message" role="note" aria-label="Notices from Tico" hidden></div>
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
 <div id="signed-out" role="alert" hidden><span>You've been signed out.</span><button class="primary" type="button">Sign in again</button></div>
-<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open in Support"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
+<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open the Tico team chat"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
 <div id="cloud-banner" role="status"><strong>Out of credit</strong><a data-cloud-pay target="_blank" rel="noopener noreferrer">Add credit</a></div>
 <div id="cloud-lock" role="alertdialog" aria-modal="true" aria-labelledby="cloud-lock-h"><div class="cloud-lock-card"><h1 id="cloud-lock-h">Pay to continue</h1><p data-cloud-why></p><div class="row"><a class="primary btn" data-cloud-pay target="_blank" rel="noopener noreferrer">Open billing</a><a class="link" data-cloud-download download hidden>Download your files</a></div></div></div>
-<div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing leaves this computer.</span></div>
+<div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing is sent.</span></div>
 <aside id="side" aria-label="Primary navigation">
   <header class="side-head">
     <button class="side-close" type="button" aria-label="Close navigation">×</button>
   </header>
-  <!-- The rail is Overview, Updates, Tasks, Docs, Strategy (with Market) and Meetings, then the team and the message
-       bots; the Assistant is Ask, and its helpers have no row. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
-       The phone drawer (More) shows the same, opened. -->
+  <!-- The rail, whole from the first paint: the app's code adds and moves no row (ui/tests/sidebar-first-paint.cjs). What
+       waits on an answer starts as this browser last heard it, marked on <html> by ui/theme.js before the paint: Finance
+       (finance.js) and Finish setup (notices.js) for whoever signed in here last, Library open unless folded here, Rules
+       folded unless opened here (redesign.js). The Assistant is Ask, and its helpers have no row. Replay, Learnings, Usage,
+       Changelog and Settings sit in the account menu below. The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
-    <a class="nav-link" href="#/overview" data-nav="overview"><span class="nav-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 21V3h14v18M2 21h20M5 9h14M5 15h14M10 3v6m4 0v6m-4 0v6"/></svg></span>Overview</a>
-    <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome" hidden><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
+    <a class="nav-link" href="#/home" data-nav="overview"><span class="nav-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 21V3h14v18M2 21h20M5 9h14M5 15h14M10 3v6m4 0v6m-4 0v6"/></svg></span>Overview</a>
+    <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome"><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
+    <a class="nav-link" href="#/strategy/market" data-nav="strategy"><span class="nav-icon" aria-hidden="true">flag</span>Strategy</a>
+    <a class="nav-link" href="#/growth" data-nav="growth"><span class="nav-icon" aria-hidden="true">rocket_launch</span>Growth</a>
+    <a class="nav-link" href="#/finance" data-nav="finance" id="nav-finance"><span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance</a>
     <a class="nav-link" href="#/updates" data-nav="updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Updates<span class="nav-badge" data-upd-badge hidden></span></a>
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
-    <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
-    <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
-    <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
+    <a class="nav-link" href="#/automations" data-nav="automations"><span class="nav-icon" aria-hidden="true">bolt</span>Automations</a>
+    <div class="nav-row rd-lib-row"><a class="nav-link rd-lib-head" href="#/docs" data-nav="library"><span class="nav-icon" aria-hidden="true">local_library</span>Library</a><button class="rd-lib-toggle" type="button" aria-label="Library pages" aria-controls="rd-lib" aria-expanded="true"><span class="section-chev" aria-hidden="true">›</span></button></div>
+    <div class="rd-lib" id="rd-lib">
+      <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
+      <a class="nav-link" href="#/library/files" data-nav="files"><span class="nav-icon" aria-hidden="true">folder_shared</span>Files</a>
+      <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
+      <a class="nav-link" href="#/library/tools" data-nav="tools"><span class="nav-icon" aria-hidden="true">api</span>Tools</a>
+      <a class="nav-link" href="#/library/connections" data-nav="connections"><span class="nav-icon" aria-hidden="true">link</span>Connections</a>
+    </div>
+    <div class="nav-row rd-lib-row rd-rules-row"><a class="nav-link rd-lib-head" href="#/rules" data-nav="rules"><span class="nav-icon" aria-hidden="true">gavel</span>Rules</a><button class="rd-lib-toggle rd-rules-toggle" type="button" aria-label="Rules pages" aria-controls="rd-rules" aria-expanded="false"><span class="section-chev" aria-hidden="true">›</span></button></div>
+    <div class="rd-lib rd-rules" id="rd-rules">
+      <a class="nav-link" href="#/rules" data-nav="rules-internal"><span class="nav-icon" aria-hidden="true">gavel</span>Internal</a>
+      <a class="nav-link" href="#/rules/external" data-nav="rules-external"><span class="nav-icon" aria-hidden="true">gavel</span>External</a>
+      <a class="nav-link" href="#/rules/due" data-nav="rules-due"><span class="nav-icon" aria-hidden="true">gavel</span>Due</a>
+      <a class="nav-link" href="#/rules/suggested" data-nav="rules-suggested"><span class="nav-icon" aria-hidden="true">gavel</span>Suggested</a>
+    </div>
     <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
+    <!-- Threads: the rail and Catch up (ui/app/thread-rail.js); its count is what Catch up has left. Always there from the
+         first paint; only a server without threads (its read answers 404) takes it away (threads.js threadsSideRender). -->
+    <a class="nav-link" id="nav-threads" href="#/threads" data-nav="threads"><span class="nav-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span>Threads<span class="nav-badge" hidden></span></a>
     <section class="side-section">
       <div class="nav-row org-head">
         <button class="section-toggle" type="button" data-section-toggle="organisation" aria-expanded="true" aria-controls="nav-organisation">
           <span>Team</span><span class="section-chev" aria-hidden="true">›</span>
         </button>
         <button class="org-history" id="org-add-group" type="button" title="Add to team" aria-label="Add to team" aria-haspopup="menu" aria-expanded="false" aria-controls="team-add-menu" hidden><span class="org-plus" aria-hidden="true">+</span></button>
+        <a class="org-history" id="org-chart-link" href="#/strategy/org" title="Org chart" aria-label="Org chart"><span class="nav-icon" aria-hidden="true">account_tree</span></a>
         <button class="org-history" id="org-mine" type="button" aria-pressed="false" title="Only bots I can read or write" aria-label="Only bots I can read or write"><span class="nav-icon" aria-hidden="true">person</span></button>
         <button class="org-history" id="org-history" type="button" aria-pressed="false" title="Most recently viewed first" aria-label="Sort teammates by most recently viewed"><span class="nav-icon" aria-hidden="true">history</span></button>
       </div>
@@ -150,11 +179,13 @@
       <div id="new-version-pop" role="dialog" aria-label="New version" hidden></div>
     </div>
     <a id="changelog-notice" href="#/changelog" hidden><span class="changelog-notice-dot" aria-hidden="true"></span><span class="changelog-notice-label">What's new</span></a>
-    <!-- Ask on a computer: the dot and "Ask Tico" (ui/app/ask-panel.js), Search's icon at the row's end. Where Ask is away
-         (the Assistant page, setup, signed out) the icon is the whole Search row again (search.css). -->
+    <!-- Ask on a computer: the dot and "Ask Tico" (ui/app/ask-panel.js), then Search's icon and the Tico team's ? (ui/support.js). Where Ask is away
+         (the Assistant page, setup, signed out) the icon is the whole Search row again (search.css): html.ask-away, which
+         ui/theme.js sets for the first paint from the address. -->
     <div class="side-ask">
-      <button class="ask-row" id="ask-row" type="button" aria-controls="ask-panel" aria-expanded="false" hidden><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word></span></button>
+      <button class="ask-row" id="ask-row" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word></span></button>
       <button id="search-open" type="button" aria-label="Search (⌘K)" aria-haspopup="dialog" title="Search bots, humans and pages (⌘K)"><span class="nav-icon" aria-hidden="true">search</span><span class="search-label">Search</span><kbd>⌘K</kbd></button>
+      <button id="support-open" type="button" aria-label="Tico team" aria-haspopup="dialog" title="Tico team"><span class="nav-icon" aria-hidden="true">help</span></button>
     </div>
     <div class="side-utility">
       <div class="account-wrap">
@@ -168,6 +199,8 @@
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
           <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
           <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
+          <button class="nav-link" id="org-switch" type="button" hidden><span class="nav-icon" aria-hidden="true">swap_horiz</span>Switch organization</button>
+          <button class="nav-link" id="org-add" type="button" hidden><span class="nav-icon" aria-hidden="true">add</span>Add organization</button>
           <a class="nav-link" id="sign-out" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
           <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
         </nav>
@@ -187,18 +220,15 @@
 <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" inert>
   <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
     <span class="ask-sees" data-ask-sees><span data-ask-sees-name></span></span>
-    <span class="ask-people" data-ask-people></span>
-    <button type="button" class="ask-requests" data-ask-requests>Your requests</button>
-    <button type="button" class="ask-loop" data-ask-loop title="Shares this chat's last 20 turns with Tico support">Loop in Support</button>
     <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
-  <p class="ask-loop-note" data-ask-loop-note>Shares this chat's last 20 turns with Tico support</p>
   <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
   <div class="ask-form"></div>
   <p class="err" data-ask-error role="alert" hidden></p>
 </section>
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
-  <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog"><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
+  <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads"><span class="mobile-nav-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
+  <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog" hidden><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Ask Tico</span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>
   <a class="mobile-nav-item" href="#/updates" data-nav="updates"><span class="mobile-nav-icon" aria-hidden="true">dynamic_feed</span><span class="mobile-nav-label">Updates</span><span class="nav-badge" data-upd-badge hidden></span></a>
@@ -263,6 +293,7 @@
 <script src="/tico/ui/app/needs-you.js"></script>
 <script src="/tico/ui/app/bot-tasks.js"></script>
 <script src="/tico/ui/app/bot-sidebar.js"></script>
+<script src="/tico/ui/app/feedback.js"></script>
 <script src="/tico/ui/app/chat.js"></script>
 <script src="/tico/ui/app/pill.js"></script>
 <script src="/tico/ui/app/chat-goal.js"></script>
@@ -280,11 +311,19 @@
 <script src="/tico/ui/app/bot-page.js"></script>
 <script src="/tico/ui/app/bot-details.js"></script>
 <script src="/tico/ui/app/bot-conversation.js"></script>
+<script src="/tico/ui/app/threads.js"></script>
+<script src="/tico/ui/app/thread-view.js"></script>
+<script src="/tico/ui/app/threads-page.js"></script>
+<script src="/tico/ui/app/thread-rail.js"></script>
+<script src="/tico/ui/app/catch-up.js"></script>
+<script src="/tico/ui/app/thread-call.js"></script>
+<script src="/tico/ui/app/thread-connect.js"></script>
 <script src="/tico/ui/app/tags.js"></script>
 <script src="/tico/ui/app/tasks.js"></script>
 <script src="/tico/ui/app/task-pipelines.js"></script>
 <script src="/tico/ui/app/task-board.js"></script>
 <script src="/tico/ui/app/question-card.js"></script>
+<script src="/tico/ui/app/task-meetings.js"></script>
 <script src="/tico/ui/app/task-modal.js"></script>
 <script src="/tico/ui/app/org-rule-holds.js"></script>
 <script src="/tico/ui/app/roadmaps.js"></script>
@@ -323,6 +362,8 @@
 <script src="/tico/ui/app/settings-billing.js"></script>
 <script src="/tico/ui/app/settings-gateway.js"></script>
 <script src="/tico/ui/app/settings-mail.js"></script>
+<script src="/tico/ui/app/mailboxes.js"></script>
+<script src="/tico/ui/app/mailbox.js"></script>
 <script src="/tico/ui/app/settings-hosted.js"></script>
 <script src="/tico/ui/app/settings-strategy-bot.js"></script>
 <script src="/tico/ui/app/settings-bot-editor.js"></script>
@@ -351,6 +392,7 @@
 <script src="/tico/ui/app/automations-editors.js"></script>
 <script src="/tico/ui/app/automations-runs.js"></script>
 <script src="/tico/ui/app/automations-overview.js"></script>
+<script src="/tico/ui/app/automations-new.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>
 <script src="/tico/ui/app/computer-screen.js"></script>
@@ -358,6 +400,7 @@
 <script src="/tico/ui/app/overview.js"></script>
 <script src="/tico/ui/app/overview-hours.js"></script>
 <script src="/tico/ui/app/dashboard.js"></script>
+<script src="/tico/ui/app/overview-graph.js"></script>
 <script src="/tico/ui/app/redesign.js"></script>
 <script src="/tico/ui/app/strategy-budget.js"></script>
 <script src="/tico/ui/app/finance.js"></script>
@@ -366,16 +409,16 @@
 <script src="/tico/ui/app/finance-docs.js"></script>
 <script src="/tico/ui/app/finance-admin.js"></script>
 <script src="/tico/ui/app/finance-tax.js"></script>
+<script src="/tico/ui/app/company-page.js"></script>
 <script src="/tico/ui/app/redesign-org.js"></script>
 <script src="/tico/ui/app/redesign-market.js"></script>
+<script src="/tico/ui/app/growth-charts.js"></script>
 <script src="/tico/ui/app/growth-page.js"></script>
 <script src="/tico/ui/app/brand-page.js"></script>
 <script src="/tico/ui/app/growth-channels.js"></script>
 <script src="/tico/ui/app/growth-sources.js"></script>
-<script src="/tico/ui/app/growth-learning.js"></script>
-<script src="/tico/ui/app/growth-idea.js"></script>
-<script src="/tico/ui/app/growth-buyers.js"></script>
 <script src="/tico/ui/app/redesign-library.js"></script>
+<script src="/tico/ui/app/connections.js"></script>
 <script src="/tico/ui/app/org-rules.js"></script>
 <script src="/tico/ui/app/router.js"></script>
 <script src="/tico/ui/app/drawer.js"></script>
@@ -385,6 +428,8 @@
 <script src="/tico/ui/app/org-fan.js"></script>
 <script src="/tico/ui/app/nav-events.js"></script>
 <script src="/tico/ui/app/viewport.js"></script>
+<script src="/tico/ui/app/boot-timing.js"></script>
+<script src="/tico/ui/app/boot-snap.js"></script>
 <script src="/tico/ui/app/boot.js"></script>
 <!-- bundle:js:end -->
 </body>

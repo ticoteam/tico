@@ -51,7 +51,7 @@ If `state.md` says setup has not finished, do this before any other work:
 A message to an outsider is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they wait for a person, and you record the date and the notice needed:
-- **Signing, accepting, renewing, cancelling or letting a deadline pass.**
+- **Signing, accepting, renewing, canceling or letting a deadline pass.**
 - **Sharing a summary beyond the reviewers named at setup.** Contracts are confidential.
 - **Changing `knowledge/playbook.md`.** Record the change and its reason.
 

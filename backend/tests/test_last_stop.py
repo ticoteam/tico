@@ -1,5 +1,7 @@
 """A bot's last run that ended without finishing is said plainly, never as a bare "Crashed" (Oct 22: BotOps showed a
 red Crashed for a run its computer took and never started, with nothing lost and nothing to do)."""
+import pytest
+
 from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
 from backend.store import H
 from backend.tests.test_execution_review import interrupted
@@ -30,7 +32,7 @@ def test_a_run_whose_lease_lapsed_before_it_started_is_a_soft_line_not_a_crash(a
     line = status(api)
     assert line["state"] == "idle"
     assert line["last_stop"] == {**line["last_stop"], "kind": "not_started", "tone": "soft", "needs_person": False,
-                                 "action": None, "text": NOT_STARTED, "attempt_id": lapsed["id"]}
+                                 "action": None, "text": NOT_STARTED, "run_id": lapsed["id"]}
     assert "lease ran out" in line["last_stop"]["reason"]
     again = claim(api, machine)
     assert again["job_id"] == lapsed["job_id"]
@@ -43,7 +45,7 @@ def test_the_line_clears_when_the_run_that_did_not_start_is_no_longer_waiting(ap
     machine, _, lapsed = setup_attempt(api)
     lapse(api, lapsed)
     with api.app.state.store.transaction() as c:  # its work was done elsewhere first (an obsolete notice, Oct 22)
-        c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (lapsed["job_id"],))
+        c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (lapsed["job_id"],))
     line = status(api)
     assert line["state"] == "idle" and line["last_stop"] is None
 
@@ -55,7 +57,7 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
     task = post(api, "tasks", {"owner": "human:ana", "title": "Already handled", "body": "Handled elsewhere."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-        c.execute("UPDATE messages SET from_actor=?,kind='notice',refs_json=? WHERE id=?",
+        c.execute("UPDATE messages SET sender_id=?,kind='notice',refs=? WHERE id=?",
                   (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]))
         cursor = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     assert claim(api, machine) is None
@@ -79,11 +81,13 @@ def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
     line = status(api)
     assert line["state"] == "idle" and line["last_stop"]["tone"] == "soft"
     assert line["last_stop"]["reason"].startswith(HANDED_BACK)
+    turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"])
+    assert turn["end_reason"] == HANDED_BACK and turn["failure_reason"] == HANDED_BACK
     # Back in seconds, not at the lease's 90: a short wait, then the same job again.
     ready(api, machine, ["ops"])
     assert claim(api, machine) is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-HAND_BACK_WAIT - 1), attempt["id"]))
+        c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), seconds=-HAND_BACK_WAIT - 1), attempt["id"]))
     assert claim(api, machine)["job_id"] == attempt["job_id"]
 
 
@@ -105,13 +109,13 @@ def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkey
         assert job["state"] == "queued"
         waits = []
         for n in (1, 2, 3):                       # the wait doubles with each hand-back, up to its cap
-            c.execute("UPDATE attempts SET finished=? WHERE job_id=?", (H.now(), job["id"]))
+            c.execute("UPDATE attempts SET finished_at=? WHERE job_id=?", (H.now(), job["id"]))
             until = execution.handed_back_until(c, dict(c.execute("SELECT * FROM jobs").fetchone()))
             waits.append(round((H.parse_ts(until) - H.parse_ts(H.now())).total_seconds()))
             if n < 3:
-                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
-                          "finished,final_text) SELECT ?,job_id,bot,runner_id,generation,?,state,lease_until,created,"
-                          "finished,final_text FROM attempts WHERE job_id=? LIMIT 1", (f"x{n}", f"h{n}", job["id"]))
+                c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                          "finished_at,final_text) SELECT ?,job_id,bot_id,runner_id,generation,?,state,lease_until,created_at,"
+                          "finished_at,final_text FROM attempts WHERE job_id=? LIMIT 1", (f"x{n}", f"h{n}", job["id"]))
     assert [w - waits[0] for w in waits] == [0, execution.HAND_BACK_WAIT, 3 * execution.HAND_BACK_WAIT]
 
 
@@ -121,11 +125,11 @@ def test_a_stop_before_the_start_and_a_completed_report_are_not_hand_backs(api):
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
          machine["token"], expected=409)
     # Main settles a person's Stop immediately, even before the runner acknowledged start.
-    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0, "text": ""},
          machine["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "canceled"
     assert status(api)["state"] == "idle" and status(api)["last_stop"] is None
 
 
@@ -151,18 +155,99 @@ def test_a_run_its_computer_never_started_after_every_try_names_the_computer(api
     assert stop["text"] == "Your ops couldn't start on Test Mac; check that Computer."
 
 
+@pytest.mark.parametrize("handed_back", [False, True])
+def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api, handed_back):
+    from backend import execution, models
+    from backend.auth import Identity
+
+    machine, message, attempt = setup_attempt(api)
+    store = api.app.state.store
+    who = Identity("runner:" + machine["runner_id"], "runner", runner_id=machine["runner_id"])
+    job_id = attempt["job_id"]
+    for _ in range(10):
+        # A new server reads the same durable jobs and attempts after each failed start.
+        restarted = execution.Execution(store, api.app.state.execution.auth)
+        with store.transaction() as c:
+            if handed_back:
+                restarted.complete(c, who, attempt["id"], models.Completion(outcome="interrupted", last_seq=0))
+            else:
+                c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), attempt["id"]))
+                restarted.expire(c)
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?",
+                      (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]))
+        ready(api, machine, ["ops"])
+        attempt = claim(api, machine)
+    assert attempt is None
+    with store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "failed"
+        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == 10
+    replies = get(api, f"conversations/{message['conversation_id']}/messages")
+    assert [m["body"] for m in replies if m["sender_id"] == "bot:ops"] == [
+        "Your ops couldn't start on Test Mac; check that Computer"]
+
+
+@pytest.mark.parametrize("handed_back", [False, True])
+def test_failed_starts_older_than_a_day_do_not_use_the_retry_budget(api, monkeypatch, handed_back):
+    from backend import execution
+
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
+    machine, _, attempt = setup_attempt(api)
+    for n in range(3):
+        if handed_back:
+            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+        else:
+            lapse(api, attempt)
+        with api.app.state.store.transaction() as c:
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == (
+                "failed" if n == 2 else "queued")
+            # Only the first miss ages out; the two recent misses must still exhaust the budget.
+            finished = (H.shift(H.now(), hours=-execution.PRE_START_WINDOW_HOURS, seconds=-1) if n == 0
+                        else H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1))
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (finished, attempt["id"]))
+        if n < 2:
+            ready(api, machine, ["ops"])
+            attempt = claim(api, machine)
+            assert attempt
+
+
+@pytest.mark.parametrize(("cause", "handed_back"), [("update", False), ("restart", True)])
+def test_hub_cut_expiries_do_not_use_the_retry_budget(api, monkeypatch, cause, handed_back):
+    from backend import execution
+
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
+    machine, _, attempt = setup_attempt(api)
+    for n in range(4):
+        if n < 2:
+            with api.app.state.store.transaction() as c:
+                assert execution.flag_cut(c, cause) == 1
+        if handed_back:
+            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+        else:
+            lapse(api, attempt)
+        with api.app.state.store.transaction() as c:
+            # Two hub cuts cost no retries; the next two ordinary misses still fail the job.
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == (
+                "failed" if n == 3 else "queued")
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?",
+                      (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]))
+        if n < 3:
+            ready(api, machine, ["ops"])
+            attempt = claim(api, machine)
+            assert attempt
+
+
 def test_the_latest_failed_start_is_not_hidden_by_an_older_held_run(api):
     from backend.execution import settle_status
     machine, message, old = interrupted(api)
     newer = post(api, "chat/ops", {"text": "Another request."})
     with api.app.state.store.transaction() as c:
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (newer["id"],)).fetchone()[0]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
-                  "finished,final_text) SELECT 'new-start',?,bot,runner_id,generation,'new-hash','failed',lease_until,"
-                  "created,?,? FROM attempts WHERE id=?",
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                  "finished_at,final_text) SELECT 'new-start',?,bot_id,runner_id,generation,'new-hash','failed',lease_until,"
+                  "created_at,?,? FROM attempts WHERE id=?",
                   (job, H.now(), "Check the newer Computer", old["id"]))
         c.execute("UPDATE jobs SET state='failed',attempt_id='new-start' WHERE id=?", (job,))
         settle_status(c, "ops", "crashed", "Check the newer Computer", stop="new-start")
     stop = status(api)["last_stop"]
-    assert stop["attempt_id"] == "new-start" and stop["kind"] == "never_started"
+    assert stop["run_id"] == "new-start" and stop["kind"] == "never_started"
     assert stop["action"] is None and "newer Computer" in stop["text"]

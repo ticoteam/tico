@@ -2,7 +2,7 @@
 # Rust gate for the crates CI builds: rustfmt and clippy with -D warnings. app/ (the Tauri desktop shell, with
 # vendored GTK dependencies) is left out and has its own job.
 # The toolchain is pinned here, not in rust-toolchain.toml: installs that run from a checkout build runner-rs with
-# whatever cargo they have (runner/engine.py build), and a pin there would make each of them download it first.
+# whatever cargo they have (runner_support/engine.py build), and a pin there would make each of them download it first.
 # 1.92.0 is the release images' version (Dockerfile); RUST_TOOLCHAIN overrides it.
 # rustc's dead_code is allowed for clippy only (baseline: test-only helpers), so ordinary builds still warn.
 # Crates listed in scripts/rust-fmt-pending.txt are reported but do not fail until they are formatted, and the

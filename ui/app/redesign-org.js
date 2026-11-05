@@ -1,7 +1,7 @@
 /* ui/app/redesign-org.js — Strategy › Org (redesign PLAN §6 wave 6): the org chart, top down, the same chart on a phone
    (pinch and pan) and a desktop. The owner on top; under them the teammates outside groups and every top-level group,
    a group a dashed outline with its name on a tab that folds it. Inside a group the lead comes first and teammates hang
-   under whoever they report to. Helpers (the Assistants and those behind them, message bots) are off the chart.
+   under whoever they report to. Built-ins and explicitly marked helpers are off the chart.
    Tapping a teammate opens a sheet: their home group, and Move to… for the owner (any group) and a lead (the
    groups it leads), which moves them at once (PATCH /api/v2/groups/{id}). Anyone else sees the group only; org changes
    beyond that are asked of the person's Assistant, in words (redesign CONTRACT §3).
@@ -19,9 +19,9 @@ const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.st
 const rdoGroups = () => RDO?.groups || S.orgGroups || [];
 const rdoGroup = id => rdoGroups().find(g => g.id === id) || (S.orgGroups || []).find(g => g.id === id) || null;
 const rdoGroupName = id => id ? rdoGroup(id)?.name || id : 'No group';
-const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.name;
-const rdoKey = n => n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name;
-const rdoName = n => n.kind === 'group' ? n.name : n.kind === 'person' ? (n.person?.name || n.id) : botDisplayName(n.name);
+const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.id;
+const rdoKey = n => n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id;
+const rdoName = n => n.kind === 'group' ? n.name : n.kind === 'person' ? (n.person?.name || n.id) : botDisplayName(n.id);
 function rdoRefName(ref) {
   const [kind, id] = [String(ref).split(':')[0], String(ref).slice(String(ref).indexOf(':') + 1)];
   if (kind === 'person' || kind === 'human') return (S.people || []).find(p => p.id === id)?.name || id;
@@ -30,7 +30,7 @@ function rdoRefName(ref) {
 // A teammate's home group: the `team` its roster row carries (backend/groups.py).
 function rdoHome(ref) {
   const id = ref.slice(ref.indexOf(':') + 1);
-  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team) || '';
+  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team) || '';
 }
 const rdoLeadOf = ref => rdoGroups().filter(g => g.lead === ref).map(g => g.id);
 // The leads of a group and of every group above it.
@@ -49,20 +49,26 @@ function rdoMoveTargets(from) {
 }
 
 // ----------------------------------------------------------------- the tree
-// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Bot too) and recruiting seats.
-function rdoTree() {
-  const by = orgTreeWithHelpers(orgTreeByParent()), out = {};
-  for (const [k, kids] of Object.entries(by)) out[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
-  return out;
+// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Bot too) and recruiting seats,
+// drawn as an org chart: the top person (the owner nobody is above, wherever their group is) at the root, and every
+// top-level group under the one it answers to (orgGroupHead), so a department sits under the person who runs it.
+// The top person's own group is the top of the chart, not an outline: whoever is in it hangs from them. `leadOf` gives a
+// group's lead (Rules › Internal reads the groups itself).
+function rdoTree(leadOf = id => rdoGroup(id)?.lead || '') {
+  const by = {};
+  for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
+  orgChartShape(by, rdoKey, leadOf);
+  by[''] = by[''] || [];
+  return by;
 }
+const rdoTopPerson = () => orgChartTop();
 function rdoTop(by) {
-  const roots = (by[''] || []).filter(n => n.kind === 'person');
-  return roots.find(n => n.id === S.me?.owner_id) || roots.find(n => n.person?.role === 'owner') || roots[0] || null;
+  const roots = (by[''] || []).filter(n => n.kind === 'person'), person = rdoTopPerson();
+  return roots.find(n => n.id === person?.id) || roots.find(n => n.id === S.me?.owner_id) || roots.find(n => n.person?.role === 'owner') || roots[0] || null;
 }
-// Teammates first (in the chart's order), then groups by their order; in a group its lead first.
-function rdoSorted(kids, gid) {
-  const lead = gid ? rdoGroup(gid)?.lead : '';
-  const rank = n => n.kind === 'group' ? 2 : lead && rdoRef(n) === lead ? 0 : 1;
+// People first, then teammates (in the chart's order), then groups by their order; in a group its lead first.
+function rdoSorted(kids, gid, lead = gid ? rdoGroup(gid)?.lead : '') {
+  const rank = n => n.kind === 'group' ? 2 : lead && rdoRef(n) === lead ? -1 : n.kind === 'person' ? 0 : 1;
   return kids.map((n, i) => [n, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || (a[0].kind === 'group' && b[0].kind === 'group' ? (a[0].order || 0) - (b[0].order || 0) : 0) || a[1] - b[1]).map(x => x[0]);
 }
 function rdoCount(by, key, seen = new Set()) {
@@ -75,19 +81,27 @@ function rdoCount(by, key, seen = new Set()) {
 function rdoCard(n, {top = false} = {}) {
   const ref = rdoRef(n), name = rdoName(n);
   const lead = rdoLeadOf(ref).length > 0;
-  const bot = n.kind === 'bot' ? (S.emps || []).find(e => e.name === n.name) : null;
-  const role = top ? 'Owner' : lead ? 'Lead' : String(bot?.role || '').trim().length <= 24 ? String(bot?.role || '').trim() : '';
-  const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.name, 16);
-  const cls = ['rdo-card', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
-  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(name)}" title="${esc(name)}"><b>${esc(name)}</b>
+  const bot = n.kind === 'bot' ? botRow(n.id) : null;
+  const title = n.kind === 'person' ? String(n.person?.title || '').trim() : '';
+  const role = title || (top ? 'Owner' : lead ? 'Lead' : String(bot?.role || '').trim().length <= 24 ? String(bot?.role || '').trim() : '');
+  const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.id, 16);
+  const cls = ['rdo-card', n.kind === 'person' && 'person', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
+  const label = title ? `${name} · ${title}` : name;
+  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
     <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}</span></button>`;
 }
-// A teammate and, under it on a rail, whoever reports to it inside the same group.
+// A teammate and, under it on a rail, whoever reports to it inside the same group. A person who heads people or groups
+// has them side by side underneath instead, as the top person does. `ctx.group` draws a group in place of
+// rdoGroupBlock (Rules › Internal: always open, its tab selects it).
 function rdoNode(by, n, ctx, depth) {
   if (depth > 14 || ctx.seen.has(rdoKey(n))) return '';
   ctx.seen.add(rdoKey(n));
-  if (n.kind === 'group') return rdoGroupBlock(by, n, ctx, depth);
+  if (n.kind === 'group') return (ctx.group || rdoGroupBlock)(by, n, ctx, depth);
   const kids = rdoSorted(by[rdoKey(n)] || [], '');
+  if (n.kind === 'person' && kids.some(k => k.kind === 'person' || k.kind === 'group')) {
+    const cols = kids.map(k => rdoNode(by, k, ctx, depth + 1)).filter(Boolean);
+    return `<div class="rdo-br"><div class="rdo-top has-row">${rdoCard(n, ctx)}</div><ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul></div>`;
+  }
   const stack = kids.length ? `<ul class="rdo-stack">${kids.map(k => `<li class="${k.kind === 'group' ? 'is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</li>`).join('')}</ul>` : '';
   return rdoCard(n, ctx) + stack;
 }
@@ -99,10 +113,9 @@ function rdoGroupBlock(by, g, ctx, depth) {
     <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(g.name)}"><span class="rdo-cx" aria-hidden="true">›</span><span class="rdo-tn">${esc(g.name)}</span><span class="rdo-n">${count}</span></button>
     <div class="rdo-gb">${body}</div></section>`;
 }
-function rdoChartHtml() {
-  const by = rdoTree(), top = rdoTop(by);
-  const ctx = {seen: new Set()};
-  const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => n !== top)] : (by[''] || []);
+function rdoChartHtml(by = rdoTree(), ctx = {seen: new Set()}) {
+  const top = rdoTop(by);
+  const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => rdoKey(n) !== rdoKey(top))] : (by[''] || []);
   if (top) ctx.seen.add(rdoKey(top));
   const cols = rdoSorted(row, '').map(n => rdoNode(by, n, ctx, 0)).filter(Boolean);
   if (!top && !cols.length) return '<p class="muted rd-empty">No one on the chart yet.</p>';

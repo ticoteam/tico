@@ -20,14 +20,15 @@ import uuid
 from . import hubdb as H
 from . import statuses
 from .store import Problem
+from . import bot_settings as BS
 
 RECRUITING, ONBOARDING, ACTIVE = "recruiting", "onboarding", "active"
 SEAT_PREFIX = "seat:"
 TITLE_MAX, DESCRIPTION_MAX, SUMMARY_MAX = 120, 8000, 2000
 
 SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-          "reports_to TEXT NOT NULL DEFAULT '', team TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, created_by TEXT NOT NULL, "
-          "updated TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)")
+          "reports_to TEXT NOT NULL DEFAULT '', team TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL, "
+          "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)")
 
 
 # Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
@@ -49,13 +50,13 @@ EARLIER = "earlier"
 # `made` says the request made its seat, so releasing the request closes the seat rather than only clearing it.
 REQUESTS = ("CREATE TABLE IF NOT EXISTS seat_requests(id TEXT PRIMARY KEY, actor TEXT NOT NULL, "
             "request_key TEXT NOT NULL, request_hash TEXT NOT NULL, seat_id TEXT NOT NULL DEFAULT '', "
-            "state TEXT NOT NULL, ticket_id TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, "
+            "state TEXT NOT NULL, ticket_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
             "made INTEGER NOT NULL DEFAULT 0)")
 FILING_STALE_SECONDS = 120
 # A seat's cloud agent request (`request_state`): `filing` while Tico is told, `requested` once its ticket is kept,
-# `cancelling` while a cancel is told to Tico, and `cancelled` once the cancel is finished. A seat with an open request
-# changes only once the request is cancelled (refuse_if_requested).
-FILING, REQUESTED, CANCELLING, CANCELLED = "filing", "requested", "cancelling", "cancelled"
+# `canceling` while a cancel is told to Tico, and `canceled` once the cancel is finished. A seat with an open request
+# changes only once the request is canceled (refuse_if_requested).
+FILING, REQUESTED, CANCELING, CANCELED = "filing", "requested", "canceling", "canceled"
 
 
 def ensure(c):
@@ -96,7 +97,8 @@ def _bot_slug(actor):
 
 
 def _name(c, slug):
-    return (H.bot(c, slug) or {}).get("display_name") or slug
+    row = H.bot(c, slug) or {}
+    return row.get("display_name") or row.get("slug") or slug
 
 
 def may_talk_to(c, slug, to, conversation=None):
@@ -127,16 +129,16 @@ def refuse_send(c, who, to, conversation=None, what="a message"):
 
 
 def _manager_actor(c, slug):
-    row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
     if not row:
         return ""
-    reports = str(row["reports_to"] or (json.loads(row["config_json"] or "{}") or {}).get("reports_to") or "")
+    reports = str(row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or "")
     return reports if not reports or reports.startswith("human:") else H.bot_actor(reports)
 
 
 def _person_above(c, pid, slug):
     from . import people as P, views
-    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived, True)
 
 
@@ -155,10 +157,10 @@ def ready(c, who, slug, summary):
     if not is_onboarding(c, slug):
         raise Problem("onboarding", "This bot is not onboarding", 409)
     summary = str(summary or "").strip()[:SUMMARY_MAX]
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-    declared = json.loads(row["config_json"] or "{}") if row else {}
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
+    declared = json.loads(row["config"] or "{}") if row else {}
     declared["onboarding_ready"] = {"at": H.now(), "summary": summary}
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(declared), slug))
+    BS.write(c, slug, declared)
     H.event(c, who.actor, "bot.onboarding_ready", slug, {"summary": summary})
     return {"bot": slug, "stage": ONBOARDING, "ready": declared["onboarding_ready"]}
 
@@ -173,12 +175,12 @@ def ready_of(config_json):
 def _seat(row):
     return {"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
             "description": row["description"], "reports_to": row["reports_to"], "team": row["team"],
-            "created": row["created"], "created_by": row["created_by"], "updated": row["updated"],
+            "created_at": row["created_at"], "created_by": row["created_by"], "updated_at": row["updated_at"],
             "agent": row["agent"], "agent_name": row["agent_name"], "request_state": row["request_state"]}
 
 
 def seats(c):
-    return [_seat(r) for r in c.execute("SELECT * FROM seats WHERE closed_at IS NULL ORDER BY created,id")]
+    return [_seat(r) for r in c.execute("SELECT * FROM seats WHERE closed_at IS NULL ORDER BY created_at,id")]
 
 
 def seat(c, seat_id):
@@ -203,10 +205,10 @@ def _reports_to(c, value, seat_id=""):
             raise Problem("not_found", "Reports-to person was not found", 404)
         return value
     slug = _bot_slug(value) or value
-    bot = H.bot(c, slug) if slug else None
+    bot = H.resolve_bot(c, slug) if slug else None
     if not bot or bot.get("state") == "archived":
         raise Problem("not_found", "Reports-to bot was not found", 404)
-    return slug
+    return bot["id"]
 
 
 def placement(auth, c, who, reports_to, seat_id=""):
@@ -231,19 +233,19 @@ def seat_record(c, seat_id):
 
 
 def refuse_if_requested(row, c=None):
-    """Refuse a change to a seat that has an open cloud agent request. A request being filed or cancelled is in flight
+    """Refuse a change to a seat that has an open cloud agent request. A request being filed or canceled is in flight
     with Tico, so the change waits for it to finish; a requested seat keeps its line, team and title until the request
-    is cancelled (cancel_request in backend/cloud_agents.py). Filling, closing, renaming, moving and re-teaming a seat all
+    is canceled (cancel_request in backend/cloud_agents.py). Filling, closing, renaming, moving and re-teaming a seat all
     call this, so none of them can land while a request is open. Given the transaction, a request a dead process left in
     flight past its window is recovered first, so the change goes ahead; returns the seat as it now is."""
-    if c is not None and row["request_state"] in (FILING, CANCELLING):
+    if c is not None and row["request_state"] in (FILING, CANCELING):
         from .cloud_agents import _recover_stale
         _recover_stale(c, row["id"])
         row = seat(c, row["id"])
     state = row["request_state"]
-    if state in (FILING, CANCELLING):
+    if state in (FILING, CANCELING):
         raise Problem(state, "This seat's cloud agent request is in progress. Try again in a moment.", 409, retryable=True)
-    if state and state != CANCELLED:
+    if state and state != CANCELED:
         raise Problem("requested", "This seat has a cloud agent request: cancel the request first", 409)
     return row
 
@@ -323,7 +325,7 @@ def _insert(c, actor, title, description, reports_to, team, description_by=None)
     now, seat_id = H.now(), uuid.uuid4().hex
     description = str(description or "")[:DESCRIPTION_MAX]
     by = (actor if description.strip() else "") if description_by is None else str(description_by)
-    c.execute("INSERT INTO seats(id,title,description,reports_to,team,created,created_by,updated,updated_by,description_by) "
+    c.execute("INSERT INTO seats(id,title,description,reports_to,team,created_at,created_by,updated_at,updated_by,description_by) "
               "VALUES(?,?,?,?,?,?,?,?,?,?)", (seat_id, _clean_title(title), description, reports_to,
                                               str(team or "").strip(), now, actor, now, actor, by))
     H.event(c, actor, "seat.created", seat_id, {"reports_to": reports_to})
@@ -384,20 +386,20 @@ def update_seat(auth, c, who, seat_id, fields):
     if any(k in values and values[k] != row[k] for k in ("title", "team", "reports_to")):
         row = refuse_if_requested(row, c)
     if values:
-        values.update(updated=H.now(), updated_by=who.actor)
+        values.update(updated_at=H.now(), updated_by=who.actor)
         c.execute("UPDATE seats SET " + ",".join(k + "=?" for k in values) + " WHERE id=?", (*values.values(), seat_id))
         if "description" in values:
             from .recruiting import end_draft
             end_draft(c, row, "Someone wrote the job description themselves, so theirs stays")
         H.event(c, who.actor, "seat.updated", seat_id,
-                {"fields": sorted(k for k in values if k not in ("updated", "updated_by", "description_by"))})
+                {"fields": sorted(k for k in values if k not in ("updated_at", "updated_by", "description_by"))})
     return _seat(seat(c, seat_id))
 
 
 def close_seat(auth, c, who, seat_id):
     row = seat(c, seat_id)
     _may_place(auth, c, who, row["reports_to"])
-    # Closing would leave the ticket open at Tico and the first task waiting; cancelling the request does both.
+    # Closing would leave the ticket open at Tico and the first task waiting; canceling the request does both.
     row = refuse_if_requested(row, c)
     c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
     from .recruiting import end_draft
@@ -412,9 +414,9 @@ def fill_seat(c, who, seat_id, bot):
     row = seat(c, seat_id)
     row = refuse_if_requested(row, c)
     now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
+    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
               (now, who.actor, bot, now, who.actor, seat_id))
-    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+    c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
               (bot, now, who.actor, SEAT_PREFIX + seat_id))
     from .recruiting import end_draft
     end_draft(c, row, "The seat was filled")
@@ -462,5 +464,5 @@ def chart_seats(c, roster, employees, archived=(), may_see=lambda slug: True):
             parent = P.org_parent("bot", parent[2:], roster, employees, archived, bare)
         out.append({"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
                     "description": row["description"], "team": row["team"], "reports_to": row["reports_to"],
-                    "created": row["created"], "org_parent": parent})
-    return sorted(out, key=lambda seat: (seat["created"], seat["id"]))
+                    "created_at": row["created_at"], "org_parent": parent})
+    return sorted(out, key=lambda seat: (seat["created_at"], seat["id"]))

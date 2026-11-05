@@ -3,6 +3,10 @@
 A task you file for a human is a "Needs you" item: a record to create, a person to add, a key to paste, a decision to make.
 It waits for one condition.
 
+Inputs: the condition the person must settle (a record, a person to add, a key, a decision) and who must settle it.
+
+Done when: one open task exists for that condition, with a title under 10 words and a note under 40 words, and it is closed once the condition is settled.
+
 ## Before you file
 - Run `hub task list --requester me --status open` and reuse or close what is already there. Never file a second task for the
   same condition. When a superseding task exists, close yours and say by what.

@@ -1,8 +1,11 @@
 """Human read API over the server-stored mail copy.
 
-People browse `mail_messages`, never live Gmail. The owner sees every mailbox; anyone else
-sees their own address plus the people who report to them (`people.mailboxes_below`). Bots
-and runners are refused. Every thread or message body read is audited as `mail.read`.
+People browse `mail_messages`, never live Gmail: the mailboxes they hold a level on (backend/mailbox_access.py), the
+owner and managers included, with no bypass. Bots and runners are refused here. Every thread or message body read is
+audited as `mail.read`.
+
+`GET /api/v2/mail/access` is the mail CLI's question (connectors/mail/access.py): what the caller, a person or a bot's
+turn, may do on each mailbox it holds.
 """
 
 import json
@@ -11,8 +14,8 @@ import sqlite3
 
 from fastapi import Request
 
-from . import routines
-from .store import H, P, Problem
+from . import google_workspace, mailbox_access, routines
+from .store import H, Problem
 from .views import human_only, roster
 
 FTS_TOKEN = re.compile(r"[A-Za-z0-9_@.+'-]+")
@@ -30,30 +33,10 @@ def sanitize_fts(q):
 
 
 def visible_addresses(c, who):
-    """Mailbox addresses this person may browse, in a stable order."""
-    people = roster(c)
-    if who.role == "owner":
-        seen, out = set(), []
-        for person in people.get("people") or []:
-            addr = str(person.get("email") or "").strip().lower()
-            if addr and "@" in addr and addr not in seen:
-                seen.add(addr)
-                out.append(addr)
-        for row in c.execute("SELECT address FROM mail_mailboxes ORDER BY address"):
-            addr = str(row["address"] or "").strip().lower()
-            if addr and addr not in seen:
-                seen.add(addr)
-                out.append(addr)
-        return out
-    if who.role != "human":
+    """Mailbox addresses this person may browse, their own first: the ones they hold a level on."""
+    if who.role not in ("owner", "human"):
         return []
-    boxes = routines.message_bot_mailboxes(c, people)
-    addrs = list(dict.fromkeys(routines.mailbox_of(p, boxes) for p in P.below(H.actor_id(who.actor), people)
-                               if "@" in routines.mailbox_of(p, boxes)))
-    if addrs:
-        return addrs
-    email = str(who.email or "").strip().lower()
-    return [email] if email and "@" in email else []
+    return [box["address"] for box in mailbox_access.mailboxes_for(c, who)]
 
 
 def can_access(c, who):
@@ -102,14 +85,14 @@ def truthy(value):
 
 
 def message_public(row, body=False):
-    attachments = json.loads(row["attachments_json"] or "[]")
+    attachments = json.loads(row["attachments"] or "[]")
     out = {
         "mailbox": row["mailbox"], "msg_id": row["msg_id"], "thread_id": row["thread_id"],
         "epoch": row["epoch"], "date": row["date"],
         "from_addr": row["from_addr"], "from_header": row["from_header"],
-        "to": json.loads(row["to_json"] or "[]"), "cc": json.loads(row["cc_json"] or "[]"),
+        "to": json.loads(row["to_addresses"] or "[]"), "cc": json.loads(row["cc"] or "[]"),
         "subject": row["subject"], "snippet": row["snippet"],
-        "labels": json.loads(row["labels_json"] or "[]"),
+        "labels": json.loads(row["labels"] or "[]"),
         "has_attachment": bool(attachments), "attachment_count": len(attachments),
         "body_truncated": bool(row["body_truncated"]),
         "is_internal": bool(row["is_internal"]),
@@ -118,7 +101,7 @@ def message_public(row, body=False):
     if body:
         out["body"] = row["body"]
         out["attachments"] = attachments
-        out["rule_hits"] = json.loads(row["rule_hits_json"] or "[]")
+        out["rule_hits"] = json.loads(row["rule_hits"] or "[]")
         out["list_id"] = row["list_id"]
     return out
 
@@ -129,7 +112,7 @@ def mailbox_view(c, address, people, who, auth):
     bot = (person or {}).get("inbox_bot") or ""
     bot_row = H.bot(c, bot) if bot else None
     bot = bot if bot_row and bot_row["state"] != "archived" and auth.bot_access(c, who, bot)["read"] else ""
-    instructions = c.execute("SELECT updated,length(content) AS size FROM mail_agent_instructions "
+    instructions = c.execute("SELECT updated_at,length(content) AS size FROM mail_agent_instructions "
                              "WHERE bot=?", (bot,)).fetchone() if bot else None
     return {
         "address": address,
@@ -142,11 +125,28 @@ def mailbox_view(c, address, people, who, auth):
         "error": row["error"] if row else None,
         "agent_bot": bot or None,
         "agent_instructions": bool(instructions and instructions["size"]),
-        "agent_updated": instructions["updated"] if instructions and instructions["size"] else None,
+        "agent_updated": instructions["updated_at"] if instructions and instructions["size"] else None,
     }
 
 
 def install_mail(app, store, auth):
+    @app.get("/api/v2/mail/access")
+    def mail_access(request: Request, mailbox: str = ""):
+        """What the caller may do: on every mailbox it holds, and on `mailbox` when named. A person (their Assistant
+        included, which is them) or a bot's turn; a computer asks /api/v2/connectors/mail/targets instead."""
+        who = request.state.identity
+        if who.role not in ("owner", "human", "bot"):
+            raise Problem("identity", "Mail access is answered for a person or a bot's turn", 403)
+        with store.read() as c:
+            principal = mailbox_access.principal(c, who)
+            out = {"principal": principal.ref, "mailboxes": mailbox_access.mailboxes_for(c, principal),
+                   "company": google_workspace.permissions(c)}
+            addr = str(mailbox or "").strip().lower()
+            if addr:
+                out.update({"mailbox": addr, "level": mailbox_access.level(c, principal, addr),
+                            "may": mailbox_access.may(c, principal, addr)})
+            return out
+
     @app.get("/api/v2/mail/mailboxes")
     def mailboxes(request: Request):
         who = request.state.identity
@@ -168,12 +168,12 @@ def install_mail(app, store, auth):
             bot_row = H.bot(c, bot) if bot else None
             if not bot_row or bot_row["state"] == "archived" or not auth.bot_access(c, who, bot)["read"]:
                 raise Problem("not_found", "This mailbox has no visible agent", 404)
-            row = c.execute("SELECT content,updated FROM mail_agent_instructions WHERE bot=?",
+            row = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?",
                             (bot,)).fetchone()
             if not row or not row["content"].strip():
                 raise Problem("not_found", "Agent instructions are not available yet", 404)
             return {"mailbox": addr, "bot": bot, "instructions": row["content"],
-                    "updated": row["updated"]}
+                    "updated_at": row["updated_at"]}
 
     @app.get("/api/v2/mail/messages")
     def messages(request: Request, mailbox: str = "", q: str = "", label: str = "",
@@ -197,7 +197,7 @@ def install_mail(app, store, auth):
             if not boxes:
                 return {"messages": [], "next_cursor": None, "q": match}
             sql = ("SELECT m.mailbox,m.msg_id,m.thread_id,m.epoch,m.date,m.from_addr,m.from_header,"
-                   "m.to_json,m.cc_json,m.subject,m.snippet,m.labels_json,m.attachments_json,"
+                   "m.to_addresses,m.cc,m.subject,m.snippet,m.labels,m.attachments,"
                    "m.body_truncated,m.is_internal,m.has_unsubscribe "
                    "FROM mail_messages m WHERE m.deleted_at IS NULL AND m.mailbox IN ({})"
                    .format(",".join("?" * len(boxes))))
@@ -207,7 +207,7 @@ def install_mail(app, store, auth):
                         "(SELECT mailbox, msg_id FROM mail_fts WHERE mail_fts MATCH ?)")
                 args.append(match)
             if label:
-                sql += " AND EXISTS (SELECT 1 FROM json_each(m.labels_json) WHERE value=?)"
+                sql += " AND EXISTS (SELECT 1 FROM json_each(m.labels) WHERE value=?)"
                 args.append(label)
             if since_epoch is not None:
                 sql += " AND m.epoch>=?"
@@ -216,7 +216,7 @@ def install_mail(app, store, auth):
                 sql += " AND m.epoch<=?"
                 args.append(until_epoch)
             if truthy(has_attachment):
-                sql += " AND json_array_length(m.attachments_json)>0"
+                sql += " AND json_array_length(m.attachments)>0"
             if after:
                 sql += " AND (m.epoch, m.mailbox, m.msg_id) < (?, ?, ?)"
                 args.extend(after)

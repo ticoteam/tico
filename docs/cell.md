@@ -56,6 +56,10 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    ([Sleep, wake and the hold](#sleep-wake-and-the-hold)), running `python3 -m setup.cell_wake` from this checkout on
    `127.0.0.1:8082`. It is restarted and started the same way as the updater.
 
+`--page-domain DOMAIN` (for example `tico.page`, not the cell's domain) sets the domain the companies' page hosts sit under.
+`init` then adds one tunnel route, `*.<page-domain>`, beside the cell's own. `--page-domain ""` removes it. In Cloudflare,
+the page domain needs the same wildcard record as the cell's, a CNAME to the tunnel, in its own zone.
+
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
 already have their own DNS record, such as `hub` and `accounts`, are not affected.
@@ -68,12 +72,13 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
-  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
+  [--own-domain] [--alias HOST]... [--page-host HOST] [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
 python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
 python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
+python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
@@ -274,6 +279,17 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
   (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
   Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
+- **`--page-host HOST`** (for example `acme.tico.page`): the company's [Company page](company-page.md) host. The cell
+  serves its files from `pages/<slug>/current` in the company's folder, without waking the company: the home page,
+  `data.json`, `feed.xml` and `/assets/*`, for GET and HEAD only, and never with a reader's cookie or a query string.
+  Every other request on that host goes to the company's server, as for its domain. The host is refused with
+  `bad_domain` when it is the company's own domain or an alias, and with `domain_taken` when another company has it.
+  Leaving the flag
+  out keeps the host; `--page-host ""` clears it and keeps the folder. `remove` deletes the folder unless
+  `--keep-data` is given. `list` and `status` show `page_host` and `page_url` when one is set.
+  A host under the page domain needs no route of its own; any other host gets one, as an alias does.
+  For a company that already runs, `set-page-host --host HOST` sets the same host without add's sign-in settings:
+  the server restarts with it. `--host ""` clears it; the same host again changes nothing.
 - **`--env-file F`** (0600, `KEY=VALUE` lines, keys `[A-Z][A-Z0-9_]*`, values on one line): settings the cell does not
   write, such as `TICO_RUNNER_URL`, `TICO_VISUAL_ORIGIN`, `TICO_BLOB_BUCKET`, `TICO_BLOB_REGION`, `TICO_INBOUND_KEY`,
   `TYPESAFE_API_KEY`, `TICO_STALE_REVIEW`, `TICO_SUPPORT_ACCESS`, `TICO_OIDC_ALLOWED_DOMAINS`. They are kept in
@@ -282,7 +298,8 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, and `TICO_CADDY*` and `TICO_TUNNEL*`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, and the page's `TICO_READER_ORIGIN` and
+  `TICO_COMPANY_PAGE_DIR`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
 - **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
@@ -293,6 +310,31 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   than its contents). It is unpacked into `.data-import/` beside `data/`, with Python's `tarfile` data filter as a
   second check, owned by user 10001, and renamed to `data/` in one step before the server first starts, so a failed
   import leaves nothing. Once imported, run `add` again without `--import-data`.
+
+## Routes
+
+A route is something on the host that is not a company, such as Tico's public demo (docs/demo.md): its hosts go to
+its own loopback ports.
+
+```sh
+python3 -m setup cell route set --name demo --host demo.tico.team --host demo.tico.dev \
+  --port 19081 --port 19082 --noindex [--router-only] --json
+python3 -m setup cell route remove --name demo [--router-only] --json
+python3 -m setup cell route list --json
+```
+
+- The record is `routes/<name>.json` (hosts, ports, noindex). Every later router or tunnel write (`add`, `remove`,
+  `sleep`, `wake`, ...) keeps it. A route's hosts and a company's never overlap (`domain_taken` either way).
+- Up to 5 hosts and 2 ports, from 1024 to 19999 and not the cell's own (2019, 8080, 8081, 8082, 8090). With two ports
+  the router sends each request to the first one whose `/healthz` answers (checked every 2 s), so a second copy can
+  start beside the first and take over when the first stops, with no reload. The hold and the 503 are a company's.
+- `--noindex` adds `X-Robots-Tag: noindex, nofollow` to every answer and serves a `robots.txt` that disallows
+  everything.
+- A host the tunnel's wildcard misses (`demo.tico.dev`) goes into the tunnel's routes as an alias does, and restarts
+  the tunnel when the list changes. `--router-only` leaves the tunnel alone; the answer's `tunnel_pending` says a
+  restart is still due.
+- A core older than routes drops them when it rewrites the router. The demo's own timer puts its route back
+  (`deploy/demo/tico-demo route`).
 
 ## Updates
 
@@ -351,6 +393,7 @@ takes no snapshot, and it restarts the server only when a file changed, so a sec
 | Path | What it is |
 |---|---|
 | `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
+| `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
 | `/etc/systemd/system/tico-cell-wake.service` | The wake service, run from the same checkout, on `127.0.0.1:8082` |

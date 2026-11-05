@@ -5,7 +5,7 @@ act: create the repository on GitHub, or grant the permission. The server puts o
 front of the owner per bot (never one per attempt), keeps the bot as it is (planned, with its files on
 the computer that built it), and finishes on its own once either fix is in place: it creates the empty
 repository when the permission appears, or finds the repository a person made. The bot's runner then
-publishes the local history into it (runner/git_credentials.publish_history), as after any empty create.
+publishes the local history into it (runner_support/git_credentials.publish_history), as after any empty create.
 
 Triggers: the GitHub App's installation webhooks (a permission accepted, repositories added), the
 owner's "Check again" in Tools > GitHub, and a scheduler tick every few minutes while anything waits.
@@ -29,7 +29,7 @@ _last = {"at": 0.0}
 
 
 def _load(c, key):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -38,7 +38,7 @@ def _load(c, key):
 
 
 def _save(c, key, value):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (key, json.dumps(value, sort_keys=True)))
 
 
@@ -77,7 +77,7 @@ def create_url(org, name=""):
 
 def fixes(c, row, slug=""):
     """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories."""
-    name = "bot-" + slug.removeprefix("emp-") if slug else ""
+    name = H.bot_repository_name(c, slug) if slug else ""      # named for the bot, id or slug in
     return {"repository": f"{row['org']}/{name}" if name else "",
             "create_url": create_url(row["org"], name), "permissions_url": permissions_url(c, row)}
 
@@ -99,6 +99,7 @@ def _body(found):
 def raise_item(c, bot, row, owner_id, template=""):
     """One Needs-you task per waiting bot, for `owner_id` (the owner, else an Admin). A repeated attempt finds the
     open one and returns it. With nobody who can change the app, no task is filed and Health's alert stands."""
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)     # the waits are keyed by the bot's id, not the slug it was asked by
     found = fixes(c, row, bot)
     every = waits(c)
     current = every.get(bot) or {}
@@ -132,7 +133,7 @@ def _finish(store, bot, wait, how):
         row = H.task(c, task_id) if task_id else None
         if row and row["status"] != "closed":
             try:
-                H.task_close(c, H.KEEPER, task_id, note=how)
+                H.task_close(c, H.KEEPER, task_id, note=how, strict=False)
             except H.Refused:
                 log.warning("Could not close the Needs-you task for %s's repository", bot)
         H.event(c, H.KEEPER, "github.repo_wait_resolved", bot, {"repository": wait.get("repository"), "how": how})
@@ -164,11 +165,13 @@ def resume(service):
 
 def _resume_one(service, row, allowed, bot, wait):
     with service.store.read() as c:
-        state = (H.bot(c, bot) or {}).get("state")
+        found = H.bot(c, bot) or {}
+        name = H.bot_repository_name(c, bot) if found else ""
+    state = found.get("state")
     if state in (None, "archived"):
         _finish(service.store, bot, wait, "The bot was archived; nothing was created.")
         return "archived"
-    repository = wait.get("repository") or f"{row['org']}/bot-{bot}"
+    repository = wait.get("repository") or f"{row['org']}/{name}"
     how = None
     try:
         service.mint([repository], {"metadata": "read"}, diagnose=False)

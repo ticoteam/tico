@@ -13,22 +13,26 @@ const PAGE_FULL_MIN = 240;
 const pageDay = iso => { const d = new Date(String(iso) + 'T12:00:00'); return isNaN(d) ? String(iso) : d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
 const pageHref = id => PAGE_ROUTE + encodeURIComponent(id);
 // The bot's name as the rest of the app shows it (duplicates get their slug), else the server's.
-const pageBotName = x => x.bot && (S.emps || []).some(e => e.name === x.bot) ? botDisplayName(x.bot) : x.bot_name || x.bot || '';
+// A page names its bot bot_id; a Library file and a search hit name it bot.
+const pageBotName = x => {
+  const bot = x.bot_id || x.bot;
+  return bot && botRow(bot) ? botDisplayName(bot) : x.bot_name || bot || '';
+};
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 function pageStatusHTML(p, {link = true} = {}) {
-  if (p.replaced_by) {
+  if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
-    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by))}">${title}</a>` : title}</div>`;
+    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
   }
   const stale = Number.isInteger(p.stale_days);
   const by = String(p.updated_by || '');
   const who = by.startsWith('bot:') ? pageBotName({bot: by.slice(4), bot_name: p.updated_by_name}) : p.updated_by_name || pageBotName(p);
   const parts = [stale ? `Not updated in ${p.stale_days} day${p.stale_days === 1 ? '' : 's'}`
-    : `Updated ${esc(ago(p.updated))}${who ? ' by ' + esc(who) : ''}`];
+    : `Updated ${esc(ago(p.updated_at))}${who ? ' by ' + esc(who) : ''}`];
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
   if (p.cadence && p.cadence !== 'none') parts.push(esc(p.cadence));
   if (p.as_of) parts.push('data from ' + esc(pageDay(p.as_of)));
-  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated))}">${parts.join(' · ')}</div>`;
+  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${parts.join(' · ')}</div>`;
 }
 
 // ----------------------------------------------------------------- the card
@@ -65,6 +69,7 @@ window.pageCard = function pageCard(page, {size = 'medium'} = {}) {
     open.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><div class="pg-open-text"><span class="pg-open-title">${esc(page.title || 'Page')}</span>${full ? '' : pageStatusHTML(page, {link: false})}</div>${full ? '' : '<span class="pg-open-btn">Open</span>'}`;
     if (full) el.innerHTML = pageStatusHTML(page);
     el.append(open);
+    el.pageData = page; el.pageSize = size;     // drawn as its frame once the desktop app trusts it (nativeVisualRepaint)
     return el;
   }
   el.classList.add('pg-framed');
@@ -129,13 +134,13 @@ function pageFullDraw(state) {
 // A pin's place (backend/cards.py) as the app's address.
 function pagePlaceHref(place) {
   const [kind, ...rest] = String(place).split(':'), id = encodeURIComponent(rest.join(':'));
-  return kind === 'dashboard' ? OVERVIEW : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
+  return kind === 'dashboard' ? OVERVIEW : kind === 'growth' ? '#/growth' : kind === 'person' ? HOME : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
 }
 function pageFullHead(state) {
   const p = state.page, head = $('#pg-view .pg-head');
   if (!head) return;
   const versions = state.versions.length > 1 ? `<select class="pg-ver" aria-label="Version">${state.versions.map(v =>
-    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
+    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created_at || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
   const items = [
     state.can.manage ? `<button type="button" role="menuitem" data-pg-act="archive">${p.archived ? 'Restore' : 'Archive'}</button>` : '',
     `<a role="menuitem" href="${API}/v2/files/${encodeURIComponent(p.file_id)}?v=${state.shown}" download>Download</a>`,
@@ -156,6 +161,7 @@ async function pageFullBody(state) {
   const card = window.pageCard(p, {size: 'full'});
   if (current && card.querySelector('iframe')) { body.replaceChildren(card); return; }
   card.querySelector('.pg-open')?.remove();
+  delete card.pageData;                         // this view draws its own frame again (nativeVisualRepaint)
   if (!current) card.querySelector('.pg-status').textContent = `v${state.shown} · an older version`;
   const box = document.createElement('div');
   box.className = 'pg-box pg-preview';
@@ -190,21 +196,84 @@ async function pageFullAct(state, act) {
 }
 
 // ----------------------------------------------------------------- a task's pages
-// The pages filed on a task, as cards at its top. The section moves into each redraw of the task (as its files do,
+// The pages pinned to a task, as cards at its top. The section moves into each redraw of the task (as its files do,
 // tfAdopt), so a loaded frame is not loaded again.
 function taskPagesAdopt(d, task) {
   const slot = $('[data-task-pages]', d);
   if (!slot) return;
   const id = String(task.id);
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
+  d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  // The pages pinned to the task (a page published with --task pins itself there), in their order.
-  get('/v2/places/' + encodeURIComponent('task:' + id)).then(r => {
-    if (d.tpEl !== slot) return;
-    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by && !x.page.archived);   // a replaced page links on
-    slot.hidden = !pins.length;
-    slot.replaceChildren(...pins.map(x => window.pageCard(x.page, {size: x.size || 'medium'})));
-  }).catch(() => {});
+  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
+    <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
+      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div><div class="tp-pages"></div>`;
+  const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
+  $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
+  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
+  let soon = 0, search = 0;
+  input.oninput = () => {
+    clearTimeout(soon);
+    const seq = ++search, q = input.value.trim();
+    results.replaceChildren();
+    if (!q) return;
+    soon = setTimeout(async () => {
+      try {
+        const r = await get('/v2/files/search?' + new URLSearchParams({q, kind: 'page'}), {fresh: true});
+        if (d.tpEl !== slot || seq !== search) return;
+        results.innerHTML = (r.results || []).map(p => `<button type="button" class="tp-result" data-tp-page="${esc(p.id)}">${esc(p.title)}</button>`).join('') || '<p class="muted">No pages</p>';
+      } catch (e) { if (d.tpEl === slot && seq === search) results.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+    }, 250);
+  };
+  slot.onclick = async ev => {
+    const link = ev.target.closest('[data-tp-page]'), unlink = ev.target.closest('[data-tp-unlink]');
+    if ((!link && !unlink) || slot.tpBusy) return;
+    slot.tpBusy = true;
+    const button = link || unlink; button.disabled = true;
+    try {
+      if (link) await post('/v2/pins', {place: 'task:' + id, item: 'page:' + link.dataset.tpPage});
+      else await writeRequest('DELETE', '/v2/pins/' + encodeURIComponent(unlink.dataset.tpUnlink));
+      if (d.tpEl !== slot) return;
+      if (link) { picker.hidden = true; input.value = ''; results.replaceChildren(); ++search; }
+      await taskPagesLoad(d);
+    } catch (e) { toast(e.message, true); }
+    finally { slot.tpBusy = false; button.disabled = false; }
+  };
+  d.tpOff = liveOn('tasks', e => {
+    if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
+      liveSoon('task-pages:' + d.id + ':' + id, () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); }, 200);
+  });
+  void taskPagesLoad(d);
+}
+async function taskPagesLoad(d) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  const seq = slot.tpSeq = (slot.tpSeq || 0) + 1;
+  try {
+    const r = await get('/v2/places/' + encodeURIComponent('task:' + slot.dataset.task), {fresh: true});
+    if (d.tpEl !== slot || seq !== slot.tpSeq) return;
+    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);
+    slot.hidden = !r.can_link && !pins.length;
+    $('[data-tp-link]', slot).hidden = !r.can_link;
+    const kept = slot.tpCards || new Map(), cards = new Map();
+    for (const pin of pins) {
+      const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
+      let row = kept.get(pin.id);
+      if (!row || row.key !== key) {
+        const el = document.createElement('div'); el.className = 'tp-page';
+        el.append(window.pageCard(pin.page, {size: pin.size || 'medium'}));
+        if (pin.can_unpin) {
+          const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost tp-unlink';
+          b.dataset.tpUnlink = pin.id; b.textContent = 'Unlink'; b.setAttribute('aria-label', 'Unlink ' + pin.page.title);
+          el.append(b);
+        }
+        row = {key, el};
+      }
+      cards.set(pin.id, row);
+    }
+    slot.tpCards = cards;
+    $('.tp-pages', slot).replaceChildren(...[...cards.values()].map(x => x.el));
+  } catch (e) { if (d.tpEl === slot) toast(e.message, true); }
 }
 
 // ----------------------------------------------------------------- Library › Files
@@ -232,6 +301,7 @@ function lfApiQuery(cursor) {
 async function pageLibraryFiles() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
   const filter = Object.fromEntries(LF_FILTERS.map(k => [k, ['pinned', 'archived'].includes(k) ? params.get(k) === '1' : params.get(k) || '']));
+  if (filter.bot) filter.bot = botByRef(filter.bot)?.id || filter.bot;     // an old link names the bot by slug
   const same = LF && document.body.contains(LF.root);
   if (!same) {
     $('#main').innerHTML = `<div class="lf" id="lf-root">
@@ -254,7 +324,7 @@ async function pageLibraryFiles() {
 }
 function lfControls() {
   const root = LF.root, f = LF.filter;
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.name, botDisplayName(e.name)])
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, botDisplayName(e.id)])
     .sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
   const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
   const bot = root.querySelector('.lf-bot'), team = root.querySelector('.lf-team');
@@ -306,7 +376,7 @@ async function lfLoad(more = false) {
       const r = await get(`/v2/files/search?q=${encodeURIComponent(f.q)}&limit=50`, {fresh: true});
       if (LF !== state || seq !== state.seq) return;
       state.rows = (r.results || []).filter(h => (!f.kind || h.library_kind === f.kind) && (!f.bot || h.bot === f.bot))
-        .map(h => ({...h, last_activity_at: h.updated, hit: true}));
+        .map(h => ({...h, last_activity_at: h.updated_at, hit: true}));
       state.cursor = null;
     } else {
       const r = await get('/v2/files?' + lfApiQuery(more ? state.cursor : ''), {fresh: true});

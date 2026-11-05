@@ -47,6 +47,14 @@ pub struct Context {
     pub live_id: String,
     pub live_destination: String,
     pub live_state: String,
+    /// Capture-time intervals kept only on this computer. An open end survives a crash.
+    pub paused_windows: Vec<(u64, Option<u64>)>,
+    /// Discard is durable before the request, so recovery cannot accidentally file it.
+    pub live_discarded: bool,
+    /// Kept on this computer after a live share: Tico ended the meeting and removed what was said,
+    /// so it may be saved to Tico later as a meeting recorded here.
+    pub live_removed: bool,
+    pub locally_paused: bool,
     pub legacy_import_complete: bool,
     pub finalize_payload: Option<Value>,
     /// Private, router-answered chat. Never sent to a shared meeting.

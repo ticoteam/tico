@@ -22,10 +22,12 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
             {"seq": 1, "kind": "status", "payload": {"yielded": line}}]}, machine["token"])
         post(api, f"attempts/{attempt['id']}/complete",
              {"outcome": "interrupted", "yielded": True, "last_seq": 1}, machine["token"])
+        turn = next(t for t in get(api, f"bots/{attempt['bot']}/turns") if t["id"] == attempt["id"])
+        assert turn["end_reason"] == line
     with api.app.state.store.read() as c:
         assert [c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0]
                 for a in attempts] == ["queued", "queued", "queued", "running"]
-        assert [c.execute("SELECT started FROM attempts WHERE id=?", (a["id"],)).fetchone()[0]
+        assert [c.execute("SELECT started_at FROM attempts WHERE id=?", (a["id"],)).fetchone()[0]
                 for a in attempts[:3]] == [None, None, None]
         # Updating is a planned yield, so repeated updates cannot exhaust the pre-start failure budget.
         assert [c.execute("SELECT state FROM attempts WHERE id=?", (a["id"],)).fetchone()[0]
@@ -58,14 +60,18 @@ def test_a_capped_turn_resumes_its_session_without_checkpointing_partial_output_
         {"seq": 2, "kind": "status", "payload": {"yielded": line}}]}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "yielded": True,
          "text": "", "last_seq": 2}, machine["token"])
+    turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"])
+    assert turn["end_reason"] == line
     again = claim(api, machine, "ops")
     assert again["job_id"] == attempt["job_id"]
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT checkpoint FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
         saved = c.execute("SELECT thread_id,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert tuple(saved) == ("saved-thread", "")
-    post(api, "bots/ops/stop", {"attempt_id": again["id"]})
+    post(api, "bots/ops/stop", {"run_id": again["id"]})
     post(api, f"attempts/{again['id']}/complete", {"outcome": "interrupted", "yielded": True,
          "last_seq": 0}, machine["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0] == "canceled"
+    turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == again["id"])
+    assert turn["end_reason"] == "Canceled by human:ana"

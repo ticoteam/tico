@@ -3,6 +3,7 @@ on that computer (backend/model_subscriptions.py)."""
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -12,10 +13,18 @@ from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
 from backend.tests.test_credentials import setup
+from backend import bot_settings as BS
 
 TOKEN = "sk-ant-oat01-" + "a" * 24
 OTHER = "sk-ant-oat01-" + "b" * 24
 CLAUDE_LIMIT = "You've hit your limit · resets 2:40am (UTC)"
+NO_COMPUTER = {"window": None, "used_pct": None, "cost_usd_month": None, "reason": "Not on a computer yet"}
+
+
+def limit_notice_soon():
+    # Relative to the clock: a date-less reset more than 20 hours away is not believed (login_holds.reset_from_text).
+    soon = datetime.now(timezone.utc) + timedelta(hours=2)
+    return f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
 
 
 def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
@@ -34,9 +43,9 @@ def company(api, enabled=("anthropic", "openai")):
 
 def on(api, bot, runtime, model):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config.update(runtime=runtime, harness=runtime, model=model)
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def add(api, kind="claude_token", secret=TOKEN, name="Company Max", token="ana-test", expected=200):
@@ -77,7 +86,7 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     company(api, enabled=["openai"])
     saved = add(api)
     assert saved["kind"] == "claude_token" and saved["status"] == "new" and saved["runtime"] == "claude"
-    assert saved["added_by"] == "human:ana" and saved["computers"] == [] and saved["usage"] is None
+    assert saved["added_by"] == "human:ana" and saved["computers"] == [] and saved["usage"] == NO_COMPUTER
     assert TOKEN not in json.dumps(saved) and saved["preview"].endswith(TOKEN[-4:])
     # Saving it turns its provider on, so its models are offered.
     with api.app.state.store.read() as c:
@@ -90,9 +99,9 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     assert TOKEN not in json.dumps(body) and "r-1" not in json.dumps(body)
     with api.app.state.store.read() as c:
         assert TOKEN not in c.execute("SELECT sealed FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]
-        assert not c.execute("SELECT 1 FROM idempotency WHERE response_json LIKE ? OR request_hash LIKE ?",
+        assert not c.execute("SELECT 1 FROM idempotency WHERE response LIKE ? OR request_hash LIKE ?",
                              (f"%{TOKEN}%", f"%{TOKEN}%")).fetchone()
-        assert not c.execute("SELECT 1 FROM events WHERE detail_json LIKE ?", (f"%{TOKEN}%",)).fetchone()
+        assert not c.execute("SELECT 1 FROM events WHERE detail LIKE ?", (f"%{TOKEN}%",)).fetchone()
     add(api, token="cara-test", expected=403)                                 # a member saves nothing
     add(api, name="  ", expected=422)
     add(api, "claude_token", "not-a-token", expected=422)
@@ -202,7 +211,7 @@ def test_handing_a_turn_its_subscription_is_not_a_write(api):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-sub"}, m["token"])
     assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == sid
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT coalesce(writes,0) FROM turns WHERE id=?", (turn["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT coalesce(writes,0) FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM events WHERE action='subscription.sent_to_computer' AND target=?",
                          (sid,)).fetchone()[0] == 1
 
@@ -386,7 +395,7 @@ def test_an_older_computer_on_its_own_login_is_left_alone_by_give_remove_and_a_r
         with api.app.state.store.read() as c:
             epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?",
                               (message["conversation_id"],)).fetchone()
-            assert c.execute("SELECT state,stop_requested FROM attempts WHERE id=?", (turn["id"],)).fetchone()[:] == (
+            assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id=?", (turn["id"],)).fetchone()[:] == (
                 "running", None)
         assert not epoch
         assert not post(api, f"attempts/{turn['id']}/renew", {}, old["token"]).get("stop")
@@ -490,7 +499,7 @@ def test_a_reconnect_confirms_then_restarts_runs_on_the_old_value_and_their_late
     done = post(api, f"model-subscriptions/{sid}", {"secret": OTHER, "confirm": True})
     assert done["revision"] == 2 and done["preview"].endswith(OTHER[-4:])
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT detail_json FROM events WHERE action='subscription.updated' "
+        assert json.loads(c.execute("SELECT detail FROM events WHERE action='subscription.updated' "
                                     "ORDER BY rowid DESC LIMIT 1").fetchone()[0])["stopped"] == 1
     # The run handed revision 1 is stopped and put back in the queue, and never reads the new value.
     renewed = post(api, f"attempts/{turn['id']}/renew", {}, m["token"])
@@ -591,7 +600,7 @@ def limited_on(api, m, sid, bot="ops"):
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
     post(api, f"attempts/{turn['id']}/events", {"events": [
-        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+        {"seq": 1, "kind": "error", "payload": {"error": limit_notice_soon(), "limit": True}}]}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
          m["token"])
     return turn
@@ -604,7 +613,7 @@ def status(api, bot="ops"):
 
 def queued_holds(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [tuple(r) for r in c.execute("SELECT held,wake_class FROM jobs WHERE bot=? AND state='queued' "
+        return [tuple(r) for r in c.execute("SELECT held,wake_class FROM jobs WHERE bot_id=? AND state='queued' "
                                             "ORDER BY id", (bot,))]
 
 
@@ -632,14 +641,14 @@ def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z", runtime="claude"
 def hold_queued(api, bot="ops", until="2999-01-01T00:00:00.000000Z"):
     """The bot is limited and its queued work waits until `until`, as a limit with a named reset leaves it."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE bot=? AND state='queued'",
+        c.execute("UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE bot_id=? AND state='queued'",
                   (until, bot))
         H.status_set(c, H.KEEPER, bot, state="limited", focus="Usage limit", reason="test")
 
 
 def queued_until(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [tuple(r) for r in c.execute("SELECT held,hold_until FROM jobs WHERE bot=? AND state='queued'", (bot,))]
+        return [tuple(r) for r in c.execute("SELECT held,hold_until FROM jobs WHERE bot_id=? AND state='queued'", (bot,))]
 
 
 def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):
@@ -765,9 +774,9 @@ def test_a_switch_re_judges_a_bot_whose_named_fallback_runs_the_runtime_and_keep
     company(api)
     on(api, "ops", "codex", "gpt-6.1-sol")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     plan_a, plan_b = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
     m = machine(api, signed_in=True)                  # Claude is ready on its own login
     give(api, m, "claude", plan_a)
@@ -820,9 +829,8 @@ def test_a_branch_runs_its_originals_runtime_now_not_the_runtime_it_stored(api):
     m = machine(api, signed_in=True)
     assign(api, m, "cpo")
     with api.app.state.store.transaction() as c:      # made a branch of cpo once it is on this computer
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                  (json.dumps({**config, "shared_from": "cpo"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'shared_from': 'cpo'})
     give(api, m, "claude", plan_a)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     hold_queued(api)
@@ -841,12 +849,671 @@ def test_try_now_on_an_idle_branch_ends_the_hold_on_the_login_its_original_runs_
     m = machine(api, signed_in=True)
     assign(api, m, "cpo")
     with api.app.state.store.transaction() as c:      # made a branch of cpo once it is on this computer
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                  (json.dumps({**config, "shared_from": "cpo"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'shared_from': 'cpo'})
         login_holds._save(c, {"runner_id": m["runner_id"], "profile": "", "runtime": "codex",
                               "until": "2999-01-01T00:00:00.000000Z", "since": H.now(), "error": CLAUDE_LIMIT})
     with api.app.state.store.transaction() as c:
         assert clear_limits(c, api.app.state.store.settings, H.KEEPER, "ops") == 1
     with api.app.state.store.read() as c:
         assert login_holds.get(c, m["runner_id"], "", "codex")["until"] <= H.now()
+
+
+@pytest.mark.parametrize("mode", ["automatic", "disabled", "bot_off", "held", "rejected", "named", "same_runtime",
+                                  "absent", "uninstalled", "incomplete_named"])
+def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
+    from backend import execution, providers
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = machine(api, signed_in=True)
+    give(api, m, "codex", sid)
+    with api.app.state.store.transaction() as c:
+        if mode == "disabled":
+            record = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='providers'").fetchone()[0])
+            record["auto_fallback"] = False
+            c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'", (encode(record),))
+        if mode == "bot_off":
+            config = BS.read(c, 'ops')
+            config["fallback"] = {"off": True}
+            BS.write(c, 'ops', config)
+        if mode in ("named", "same_runtime"):
+            config = BS.read(c, 'ops')
+            config["fallback"] = {"harness": "codex" if mode == "named" else "claude",
+                                  "model": "gpt-6.1-sol" if mode == "named" else "claude-sonnet-5-5"}
+            BS.write(c, 'ops', config)
+        if mode in ("absent", "uninstalled"):
+            ready = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (m["runner_id"],)).fetchone()[0])
+            if mode == "absent":
+                ready["runtimes"].pop("codex")
+            else:
+                ready["runtimes"]["codex"]["installed"] = False
+            c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (encode(ready), m["runner_id"]))
+        if mode == "incomplete_named":
+            config = BS.read(c, 'ops')
+            config["fallback"] = {"harness": "claude"}
+            BS.write(c, 'ops', config)
+        if mode == "held":
+            login_holds._save(c, {"runner_id": "", "profile": login_holds.subscription_login(sid), "runtime": "codex",
+                                  "until": "2999-01-01T00:00:00.000000Z", "since": H.now(), "error": "Usage limit"})
+        if mode == "rejected":
+            c.execute("UPDATE model_subscriptions SET status='needs_reconnect' WHERE id=?", (sid,))
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    eligible = mode in ("automatic", "named", "same_runtime")
+    assert [s["id"] for s in turn.get("subscriptions", [])] == ([sid] if eligible else [])
+    with api.app.state.store.read() as c:
+        config = providers.fill(providers.load(c), json.loads(c.execute(
+            f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]))
+        choice = execution.fallback_choice(c, api.app.state.store.settings, m["runner_id"], "ops", config)
+        assert choice == ((login_holds.subscription_login(sid), "codex") if eligible else None)
+    values = get(api, "credential-runtime", turn["token"]).get("subscriptions", [])
+    assert [(v["runtime"], v["id"]) for v in values] == ([("codex", sid)] if eligible else [])
+    if eligible:
+        assert json.loads(values[0]["value"])["tokens"]["account_id"] == "acct-1"
+    # A later claim after Claude's limit must be admitted directly on the subscription fallback.
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
+    post(api, f"attempts/{turn['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+         m["token"])
+    again = claim(api, m)
+    if eligible:
+        assert again and again["config"]["primary_held"]
+        assert again["config"]["runtime"] == "claude"  # runner skips the held primary
+        assert [s["id"] for s in again["subscriptions"]] == [sid]
+    else:
+        assert again is None
+
+
+def test_automatic_subscription_fallback_precedes_gateway(api, monkeypatch):
+    from backend import execution, models_preset, providers
+    from backend.tests.test_gateway_connection import KEY, fake_gateway, save, setup as gateway_setup
+    from backend.tests.test_models_preset import choose
+    gateway_setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+    choose(api, models_preset.RECOMMENDED)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    with api.app.state.store.transaction() as c:
+        ready = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (m["runner_id"],)).fetchone()[0])
+        ready["isolated"] = True
+        ready["runtimes"]["pi"] = {"installed": True, "authenticated": "missing"}
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (encode(ready), m["runner_id"]))
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn["config"].get("gateway_fallback")
+    assert [s["id"] for s in turn["subscriptions"]] == [sid]
+    with api.app.state.store.read() as c:
+        assert any(providers.gateway_model(r["model"]) for r in providers.default_fallbacks(providers.load(c)))
+        assert execution.fallback_choice(c, api.app.state.store.settings, m["runner_id"], "ops", turn["config"]) == (
+            login_holds.subscription_login(sid), "codex")
+
+
+def test_changing_an_automatic_fallback_subscription_preserves_primary_sessions(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    message = post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
+
+    def epoch():
+        with api.app.state.store.read() as c:
+            found = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?",
+                              (message["conversation_id"],)).fetchone()
+        return found[0] if found else 0
+
+    before = epoch()
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    assert give(api, m, "codex", sid)["sessions_reset"] == 0
+    assert epoch() == before
+    assert post(api, f"model-subscriptions/{sid}", {"secret": codex_file(refresh="r-2")})["revision"] == 2
+    assert epoch() == before
+    assert give(api, m, "codex", None)["sessions_reset"] == 0
+    assert epoch() == before
+    give(api, m, "codex", sid)
+    response = api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers())
+    assert response.status_code == 200 and response.json()["sessions_reset"] == 0
+    assert epoch() == before
+
+
+@pytest.mark.parametrize("change", ["take_off", "reconnect", "remove"])
+@pytest.mark.parametrize("activate", [False, True])
+def test_live_primary_survives_unused_automatic_login_changes_but_active_fallback_stops(api, change, activate):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
+                  (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]))
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn["subscriptions"][0]["activate"] is True
+    assert "subscriptions" not in get(api, "credential-runtime", turn["token"])
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
+    if activate:
+        response = get(api, "credential-runtime?subscription_runtime=codex", turn["token"])
+        assert response["subscription_activated"] is True
+        [value] = response["subscriptions"]
+        assert value["id"] == sid and value["revision"] == 1
+
+    def changed(confirm=False):
+        if change == "take_off":
+            return api.put("/api/v2/computer-subscriptions", headers=headers(), json={
+                "runner_id": m["runner_id"], "runtime": "codex", "subscription": None, "confirm": confirm})
+        if change == "remove":
+            return api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers(), params={"confirm": confirm})
+        return api.post(f"/api/v2/model-subscriptions/{sid}", headers=headers(), json={
+            "secret": codex_file(refresh="r-2"), "confirm": confirm})
+
+    response = changed()
+    if activate:
+        assert response.status_code == 409 and response.json()["error"]["running"] == 1
+        response = changed(confirm=True)
+    assert response.status_code == 200, response.text
+    renewed = post(api, f"attempts/{turn['id']}/renew", {}, m["token"])
+    assert bool(renewed.get("stop")) == activate
+    if not activate:
+        # A late hop cannot use a removed login, and a reconnect supplies only the current revision.
+        values = get(api, "credential-runtime?subscription_runtime=codex", turn["token"]).get("subscriptions", [])
+        assert [v["revision"] for v in values] == ([2] if change == "reconnect" else [])
+
+
+@pytest.mark.parametrize("blocked", ["held", "rejected"])
+def test_automatic_login_is_rechecked_at_activation(api, blocked):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
+                  (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]))
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, "runner-model-subscription-refresh", {"attempt": turn["id"], "subscription": sid,
+         "revision": 1, "value": codex_file(refresh="r-not-used")}, m["token"], expected=403)
+    with api.app.state.store.transaction() as c:
+        if blocked == "rejected":
+            MS._status(c, sid, "needs_reconnect", "Synthetic refusal")
+        else:
+            login_holds.record(c, m["runner_id"], login_holds.subscription_login(sid), "codex",
+                               H.now(), reset="2099-01-01T00:00:00Z", attempt_id=turn["id"])
+    assert "subscriptions" not in get(api, "credential-runtime?subscription_runtime=codex", turn["token"])
+
+
+@pytest.mark.parametrize("named", [False, True])
+def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fallbacks(api, named):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", sid)
+    if named:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
+                      (encode([MS.CAPABILITY, MS.ACTIVATION_CAPABILITY]), m["runner_id"]))
+            config = BS.read(c, 'ops')
+            config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}
+            BS.write(c, 'ops', config)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert "activate" not in turn["subscriptions"][0]
+    assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == sid
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-legacy"}, m["token"])
+    assert give(api, m, "codex", None, expected=409)["error"]["running"] == 1
+    assert give(api, m, "codex", None, confirm=True)["stopped"] == 1
+
+
+def test_an_api_key_subscriptions_month_cost_is_the_measured_cost_of_its_runs(api):
+    # The month's cost sums the est_cost_usd each run stored; it once summed a column no run writes and read zero.
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")["id"]
+    m = machine(api, signed_in=True)
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "api-cost"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "completed", "text": "Done.", "last_seq": 0,
+        "usage": {"input_tokens": 1000, "cached_tokens": 0, "output_tokens": 500, "model": "claude-sonnet-5-5",
+                  "runtime": "claude", "billing": "api"}}, m["token"])
+    with api.app.state.store.read() as c:
+        cost = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
+    assert cost and cost > 0
+    assert listed(api)[0]["usage"]["cost_usd_month"] == round(cost, 2)
+
+
+def roster(api, pid, **fields):
+    """Mark a person on the roster: hidden (left) or sign_in False (switched off)."""
+    with api.app.state.store.transaction() as c:
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in people["people"] if p["id"] == pid).update(fields)
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
+
+
+def test_a_subscription_is_owned_by_a_person_of_the_company_the_adder_unless_named(api):
+    setup(api)
+    company(api)
+    mine = add(api)
+    assert mine["owner_id"] == "human:ana" and mine["owner_name"] == mine["added_by_name"] != ""
+    theirs = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": "Cara Max",
+                                               "owner_id": "cara"}, "ben-test")
+    assert (theirs["added_by"], theirs["owner_id"]) == ("human:ben", "human:cara")
+    # Only an active person of this company: not someone unknown, a bot, Tico support, one who left or is switched off.
+    for owner in ("human:eve", "bot:ops", "tico-support", "", "service:x"):
+        refused = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": "X",
+                                                    "owner_id": owner}, expected=422)
+        assert refused["error"]["code"] == "owner"
+    post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "human:ben"}, "cara-test", expected=403)
+    roster(api, "cara", hidden=True)
+    post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "human:cara"}, expected=422)
+    roster(api, "ben", sign_in=False)
+    post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "ben"}, expected=422)
+    roster(api, "ben", sign_in=True)
+    # An owner or admin changes it later (a member does not, above). A rename leaves it as it is.
+    moved = post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "human:ben"}, "ben-test")
+    assert (moved["owner_id"], moved["added_by"]) == ("human:ben", "human:ana")
+    assert post(api, f"model-subscriptions/{mine['id']}", {"name": "Max"})["owner_id"] == "human:ben"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM model_subscriptions WHERE name='X'").fetchone()[0] == 0
+        changed = c.execute("SELECT detail FROM events WHERE action='subscription.owner_changed'").fetchall()
+    assert [json.loads(d[0]) for d in changed] == [{"from": "human:ana", "to": "human:ben"}]
+
+
+def test_an_api_key_has_no_owner_and_a_company_saves_many(api):
+    setup(api)
+    company(api)
+    keys = [add(api, "anthropic_key", "sk-ant-api03-" + str(n) * 20, name=f"Key {n}") for n in range(3)]
+    assert [(k["owner_id"], k["owner_name"]) for k in keys] == [("", "")] * 3
+    assert len({k["id"] for k in keys}) == 3
+    refused = post(api, "model-subscriptions", {"kind": "openai_key", "secret": "sk-" + "c" * 24, "name": "OpenAI",
+                                                "owner_id": "human:ana"}, expected=422)
+    assert refused["error"]["code"] == "owner"
+    post(api, f"model-subscriptions/{keys[0]['id']}", {"owner_id": "human:ana"}, expected=422)
+    assert [k["kind"] for k in MS.kinds() if k["owned"]] == ["claude_token", "codex_login"]
+
+
+def test_the_owner_migration_backfills_a_plan_from_a_person_who_added_it_and_skips_a_new_file():
+    import importlib
+    import sqlite3
+    owner = importlib.import_module("backend.migrations.0059_subscription_owner")
+    conn = sqlite3.connect(":memory:")
+    owner.up(conn)                                                            # a new file: nothing there yet
+    conn.executescript(
+        "CREATE TABLE model_subscriptions(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT "
+        "NOT NULL, preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT "
+        "'new', status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL);"
+        "CREATE TABLE subscription_connects(login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',"
+        " subscription_id TEXT NOT NULL DEFAULT '');"
+        "INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at) VALUES"
+        " ('a','A','claude_token','x','human:ana','t','t'),('b','B','claude_token','x','keeper','t','t'),"
+        " ('c','C','anthropic_key','x','human:ana','t','t');"
+        "INSERT INTO subscription_connects(login_id,kind) VALUES('l','claude_token');")
+    owner.up(conn)
+    owner.up(conn)                                                            # idempotent
+    assert conn.execute("SELECT id,owner_id FROM model_subscriptions ORDER BY id").fetchall() == [
+        ("a", "human:ana"), ("b", ""), ("c", "")]
+    assert conn.execute("SELECT owner_id FROM subscription_connects").fetchall() == [("",)]
+
+
+def usage_of(api, sid):
+    return next(s for s in listed(api) if s["id"] == sid)["usage"]
+
+
+def window_reading(used, resets_in, reported_ago=timedelta(0), origin=None, subscription_id=None):
+    """A usage window as a computer reports it: `used` percent (None when the plan sends none), resetting `resets_in`
+    after the reading, which was taken `reported_ago` ago, and where it came from: `origin` "subscription" for a turn that
+    signed in with plan `subscription_id`, "login" for the computer's own login, None for a runner that sends neither."""
+    reported = datetime.now(timezone.utc) - reported_ago
+    return {"used_percent": used, "resets_at": (reported + resets_in).isoformat(), "reported_at": reported.isoformat(),
+            "origin": origin, "subscription_id": subscription_id}
+
+
+def turn_window(used, resets_in, sid, reported_ago=timedelta(0)):
+    """A usage window a turn reports after it signed in with plan `sid`."""
+    return window_reading(used, resets_in, reported_ago, origin="subscription", subscription_id=sid)
+
+
+def login_window(used, resets_in, reported_ago=timedelta(0)):
+    """A usage window the computer's own login reports: a background read, or a turn that ran on that login."""
+    return window_reading(used, resets_in, reported_ago, origin="login")
+
+
+def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="claude"):
+    """A heartbeat: each login profile's runtimes as the computer reports them. `logins` names its default login (a
+    computer that does not names none); `takes` says it can take a subscription."""
+    readiness = {"schema_version": 1, "bots": {"ops": {"runtime": runtime, "ready": True}},
+                 "runtimes": {runtime: {"installed": True, "authenticated": "ready" if signed_in else "missing"}}}
+    if logins:
+        readiness["computer_profile"] = "own"
+    capabilities = ([MS.CAPABILITY] if takes else []) + (["computer_logins_v1"] if logins else [])
+    return post(api, "runners/heartbeat", {
+        "version": "test", "platform": "test", "capabilities": capabilities, "readiness": readiness,
+        "profiles": [{"name": name, "runtimes": runtimes} for name, runtimes in profiles.items()]}, token=m["token"])
+
+
+NOT_SINCE = "No usage reported since this subscription was added"
+
+
+def runtime_state(account=None, **windows):
+    """A runtime as a computer's readiness reports it on its ordinary home: authenticated (as `account`'s email when
+    given), with its windows (`weekly`, `five_hour`)."""
+    state = {"installed": True, "authenticated": "ready", **windows}
+    return {**state, "account": {"email": account}} if account else state
+
+
+def home_beat(api, m, **runtimes):
+    """A heartbeat from a computer on its ordinary home: readiness names no profile ("", so no profile row) and carries
+    each runtime's windows itself."""
+    return post(api, "runners/heartbeat", {
+        "version": "test", "platform": "test", "capabilities": [MS.CAPABILITY, "computer_logins_v1"],
+        "readiness": {"schema_version": 1, "bots": {"ops": {"runtime": next(iter(runtimes), "claude"), "ready": True}},
+                      "computer_profile": "", "runtimes": runtimes}}, token=m["token"])
+
+
+def usage_machine(api, label="Plan Mac"):
+    """A computer that names its own login, takes plans and has the bot ops on it, so a turn can run there."""
+    m = runner(api, label=label)
+    assign(api, m, "ops")
+    beat(api, m, {})
+    return m
+
+
+def turn_on(api, m, sid, runtime="claude", bot="ops"):
+    """A turn of `bot` on computer `m` that signs in with plan `sid` (given to `m` for `runtime` first), still running:
+    the readings it reports while it runs are this plan's (their origin, model_subscriptions.provenance)."""
+    give(api, m, runtime, sid)
+    post(api, "chat/" + bot, {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn and signed_with(api, turn) == sid
+    return turn
+
+
+def test_a_plan_says_why_it_shows_no_usage_yet(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    assert usage_of(api, sid) == NO_COMPUTER
+    # An older computer signs in with its own login, so its windows are not this plan's: it is only given the plan.
+    old = machine(api, takes=False, label="Old Mac")
+    give(api, old, "claude", sid)
+    assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
+    m = runner(api, label="Plan Mac")
+    beat(api, m, {})
+    give(api, m, "claude", sid)
+    assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", ("2000-01-01T00:00:00.000000Z", m["runner_id"]))
+    assert usage_of(api, sid)["reason"] == "Its computers are offline"
+    beat(api, m, {})
+    with api.app.state.store.transaction() as c:
+        MS._status(c, sid, "needs_reconnect", "Token expired")
+    assert usage_of(api, sid)["reason"] == "Reconnect to see usage"
+
+
+def test_a_plan_shows_the_most_used_window_its_computer_reads_even_at_zero(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = usage_machine(api)
+    turn_on(api, m, sid)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(0, timedelta(days=3), sid)}}})
+    usage = usage_of(api, sid)
+    assert (usage["window"], usage["used_pct"]) == ("week", 0) and "reason" not in usage
+    # Its 5-hour window is the most used now, then its week again.
+    beat(api, m, {"own": {"claude": {"signed_in": True, "five_hour": turn_window(40, timedelta(hours=2), sid)}}})
+    assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("5h", 40)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(70, timedelta(days=3), sid)}}})
+    assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("week", 70)
+    # Another login on the computer is not this plan's, however used it is: its 99% is not read; the open 40% stands.
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(10, timedelta(days=3), sid)}},
+                  "work": {"claude": {"signed_in": True, "weekly": login_window(99, timedelta(days=3))}}})
+    assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("5h", 40)
+    # A limit met on the plan holds it at 100, whatever its computers last read.
+    hold_plan(api, sid)
+    assert usage_of(api, sid)["used_pct"] == 100
+
+
+def test_a_window_that_has_reset_or_sends_no_percent_is_not_a_reading(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = usage_machine(api)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": login_window(
+        55, timedelta(days=1), reported_ago=timedelta(days=2))}}})
+    turn_on(api, m, sid)
+    # Its week reset a day ago, so the 55% read before it is no longer this plan's usage.
+    assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(None, timedelta(days=3), sid)}}})
+    assert usage_of(api, sid)["reason"] == "No percentage from the plan"
+
+
+def test_only_a_computer_that_names_its_default_login_and_takes_plans_reads_usage(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    beat(api, m, {}, logins=False)
+    give(api, m, "claude", sid)
+    weekly = {"own": {"claude": {"signed_in": True, "weekly": login_window(30, timedelta(days=3))}}}
+    beat(api, m, weekly, logins=False)
+    assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
+    beat(api, m, {})
+    turn_on(api, m, sid)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(31, timedelta(days=3), sid)}}})
+    assert usage_of(api, sid)["used_pct"] == 31
+
+
+def test_a_reading_from_before_a_plan_was_given_to_the_computer_is_not_its_usage(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    # The computer's own login was at 88% before the plan reached it: that is not this plan's usage.
+    home_beat(api, m, claude=runtime_state(weekly=login_window(88, timedelta(days=3))))
+    give(api, m, "claude", sid)
+    assert usage_of(api, sid)["reason"] == NOT_SINCE and usage_of(api, sid)["used_pct"] is None
+    turn_on(api, m, sid)
+    home_beat(api, m, claude=runtime_state(weekly=turn_window(45, timedelta(days=3), sid)))
+    assert usage_of(api, sid)["used_pct"] == 45
+
+
+def test_a_rename_keeps_the_readings_taken_for_a_plan_and_a_new_secret_ends_them(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = usage_machine(api)
+    turn_on(api, m, sid)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(30, timedelta(days=3), sid)}}})
+    assert usage_of(api, sid)["used_pct"] == 30
+    post(api, f"model-subscriptions/{sid}", {"name": "Renamed plan"})          # the same credential: its readings stand
+    assert usage_of(api, sid)["used_pct"] == 30
+    post(api, f"model-subscriptions/{sid}", {"secret": OTHER, "confirm": True})  # another account: they are not its
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+
+
+def test_a_same_accounts_refresh_keeps_the_readings_taken_for_a_chatgpt_plan(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
+    turn = turn_on(api, m, sid, runtime="codex")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=turn_window(64, timedelta(days=3), sid)))
+    assert usage_of(api, sid)["used_pct"] == 64
+    # The run refreshes its file for the same account: the stored credential moves on, its readings stand.
+    body = {"attempt": turn["id"], "subscription": sid, "revision": 1}
+    assert post(api, "runner-model-subscription-refresh", {**body, "value": codex_file(refresh="r-2")},
+                m["token"]) == {"stored": True, "revision": 2}
+    assert usage_of(api, sid)["used_pct"] == 64
+
+
+def test_a_chatgpt_login_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
+    turn_on(api, m, sid, runtime="codex")
+    # The computer's own login is the plan's account, so its background read is the plan's usage.
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=login_window(64, timedelta(days=3))))
+    assert usage_of(api, sid)["used_pct"] == 64
+    # The same computer signed in as someone else: that account's usage is not this plan's.
+    home_beat(api, m, codex=runtime_state(account="someone@else.example", weekly=login_window(99, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+    # A reading that names no account cannot be attributed to the plan either.
+    home_beat(api, m, codex=runtime_state(weekly=login_window(50, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+
+
+def test_a_background_login_read_during_a_subscription_turn_is_not_that_plans_usage_without_an_account(api):
+    # A ChatGPT login whose id_token names no email: nothing says whose login the plan is, so the computer's own background
+    # read taken while the plan's turn runs is no reading of the plan. Only the turn's own reading (its origin and id) is.
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    sid = add(api, "codex_login", codex_file(email=""), name="ChatGPT")["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
+    turn_on(api, m, sid, runtime="codex")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=login_window(30, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE and usage_of(api, sid)["used_pct"] is None
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=turn_window(45, timedelta(days=3), sid)))
+    assert usage_of(api, sid)["used_pct"] == 45
+    # A reading that carries no origin (a runner that predates it) is no plan's either.
+    home_beat(api, m, codex=runtime_state(weekly=window_reading(60, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+
+
+def test_a_computer_on_its_ordinary_home_shows_the_plan_its_turn_ran_on_not_its_own_login(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    assign(api, m, "ops")
+    home_beat(api, m, claude=runtime_state())
+    turn_on(api, m, sid)
+    home_beat(api, m, claude=runtime_state(five_hour=turn_window(40, timedelta(hours=2), sid),
+                                           weekly=turn_window(70, timedelta(days=3), sid)))
+    usage = usage_of(api, sid)
+    assert (usage["window"], usage["used_pct"]) == ("week", 70)
+
+
+def test_a_reading_taken_on_the_computers_own_login_is_not_the_plans_when_its_hold_ends(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = usage_machine(api)
+    give(api, m, "claude", sid)
+    hold_plan(api, sid)                       # the plan's limit is met, so its turns fall back to the computer's own login
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    assert turn and signed_with(api, turn) is None
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": login_window(88, timedelta(days=3))}}})
+    assert usage_of(api, sid)["used_pct"] == 100                              # a limit met on the plan holds it at 100
+    hold_plan(api, sid, until=H.shift(H.now(), seconds=-1))                   # the hold ends: the 88% was not the plan's
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+
+
+def listing_statements(api, monkeypatch):
+    """GET /api/v2/model-subscriptions after one warm-up read, and the SQL statements that request ran."""
+    import contextlib
+    store, seen = api.app.state.store, []
+    get(api, "model-subscriptions")
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+            def traced(opened=getattr(store, name)):
+                @contextlib.contextmanager
+                def borrowed():
+                    with opened() as c:
+                        c.set_trace_callback(seen.append)
+                        try:
+                            yield c
+                        finally:
+                            c.set_trace_callback(None)
+                return borrowed()
+            patched.setattr(store, name, traced)
+        get(api, "model-subscriptions")
+    return seen
+
+
+def join_home(api, label, claude, codex, used):
+    m = runner(api, label=label)
+    home_beat(api, m, claude=runtime_state(weekly=window_reading(used, timedelta(days=3))),
+              codex=runtime_state(account="ana@acme.example"))
+    give(api, m, "claude", claude)
+    give(api, m, "codex", codex)
+
+
+def test_the_plan_list_runs_the_same_queries_however_many_computers_it_has(api, monkeypatch):
+    setup(api)
+    company(api)
+    claude = add(api)["id"]
+    codex = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    for i in range(3):
+        join_home(api, f"Mac {i}", claude, codex, 10 + i)
+    few = listing_statements(api, monkeypatch)
+    for i in range(3, 12):
+        join_home(api, f"Mac {i}", claude, codex, 10 + i)
+    many = listing_statements(api, monkeypatch)
+    assert any("computer_subscriptions" in sql for sql in many)     # the traced reads are the listing's
+    assert len(many) == len(few)
+    assert [len(row["computers"]) for row in listed(api)] == [12, 12]
+
+
+def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api, monkeypatch):
+    setup(api)
+    company(api)
+    add(api)
+    assert not any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
+    add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
+    assert any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
+
+
+def test_the_month_cost_query_reads_the_months_turns_through_their_index(api):
+    with api.app.state.store.read() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + MS.costs_sql(1), ("2026-11-01", "sub"))]
+    assert any("attempts_created" in step for step in plan), plan
+    assert not any(step.startswith("SCAN") for step in plan), plan
+
+
+def test_the_credential_time_migration_starts_each_plan_from_its_last_change_and_skips_a_new_file():
+    import importlib
+    import sqlite3
+    credential = importlib.import_module("backend.migrations.0069_subscription_credential_at")
+    conn = sqlite3.connect(":memory:")
+    credential.up(conn)                                                       # a new file: no table yet
+    conn.executescript(
+        "CREATE TABLE model_subscriptions(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT "
+        "NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
+        "INSERT INTO model_subscriptions(id,name,kind,sealed,created_at,updated_at) VALUES"
+        " ('a','A','claude_token','x','2026-10-01T00:00:00.000000Z','2026-10-09T00:00:00.000000Z');")
+    credential.up(conn)
+    credential.up(conn)                                                       # idempotent
+    assert conn.execute("SELECT id,credential_at FROM model_subscriptions").fetchall() == [
+        ("a", "2026-10-09T00:00:00.000000Z")]

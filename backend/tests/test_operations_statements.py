@@ -7,6 +7,7 @@ import re
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 from backend.tests.test_task_privacy_reads import traced
+from backend import bot_settings as BS
 
 HARNESSES = ("claude", "codex", "gemini", "pi")       # gemini and pi hold a key per bot, so each check reads the grants
 
@@ -24,8 +25,8 @@ def seed(api, computers, first, last):
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for i, s in enumerate(slugs, first):
             harness = HARNESSES[i % len(HARNESSES)]
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
-                      (s, encode({"name": s, "runtime": harness, "harness": harness}), None, "ana"))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (s, None, 'ana'))
+            BS.write(c, s, {'name': s, 'runtime': harness, 'harness': harness})
     for k, r in enumerate(computers):
         mine = slugs[k::len(computers)]
         for s in mine:
@@ -41,8 +42,8 @@ def counted(api, token="ana-test"):
     page, statements = traced(api, lambda: get(api, "operations", token=token))
     shapes = collections.Counter(shape(s) for s in statements)
     return page, {
-        "computer rows": sum(n for s, n in shapes.items() if s.startswith("SELECT id,label,last_seen,revoked_at")),
-        "placement reads": sum(n for s, n in shapes.items() if "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?" in s),
+        "computer rows": sum(n for s, n in shapes.items() if s.startswith("SELECT id,label,last_seen_at,revoked_at")),
+        "placement reads": sum(n for s, n in shapes.items() if "JOIN runners r ON r.id=a.runner_id WHERE a.bot_id=?" in s),
         "credential reads": sum(n for s, n in shapes.items() if s.startswith("SELECT id,env FROM credentials")),
         "statements": len(statements),
     }

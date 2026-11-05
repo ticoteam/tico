@@ -16,26 +16,27 @@ import time
 
 from fastapi import Request
 
+from .runs import state as run_state
 from .store import H, Problem
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, ts INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, created_at INTEGER NOT NULL,
   sampled_at INTEGER NOT NULL, cpu_pct REAL, mem_used INTEGER, mem_total INTEGER, swap_used INTEGER,
-  swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,ts)) WITHOUT ROWID;
+  swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,created_at)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS attempt_load_snapshots(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
-  start_json TEXT, end_json TEXT) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, ts INTEGER NOT NULL,
+  at_start TEXT, at_end TEXT) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, created_at INTEGER NOT NULL,
   n INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT 'host', cpu REAL NOT NULL, cpu_max REAL NOT NULL, load1 REAL,
   mem_used INTEGER, mem_max INTEGER, mem_total INTEGER, swap_used INTEGER, swap_total INTEGER, disk_free INTEGER,
-  disk_total INTEGER, active INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, span, ts)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_usage(runner_id TEXT NOT NULL, span INTEGER NOT NULL, ts INTEGER NOT NULL,
+  disk_total INTEGER, active INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, span, created_at)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS perf_usage(runner_id TEXT NOT NULL, span INTEGER NOT NULL, created_at INTEGER NOT NULL,
   kind TEXT NOT NULL, key TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '',
   n INTEGER NOT NULL, cpu REAL NOT NULL, cpu_max REAL NOT NULL, mem INTEGER NOT NULL, mem_max INTEGER NOT NULL,
-  PRIMARY KEY(runner_id, span, ts, kind, key)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started INTEGER NOT NULL,
-  last INTEGER NOT NULL, ended INTEGER, reasons TEXT NOT NULL, cpu_max REAL NOT NULL, mem_max REAL NOT NULL,
-  runs_max INTEGER NOT NULL DEFAULT 0, bots_json TEXT NOT NULL DEFAULT '[]', procs_json TEXT NOT NULL DEFAULT '[]');
-CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started);
+  PRIMARY KEY(runner_id, span, created_at, kind, key)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL, ended_at INTEGER, reasons TEXT NOT NULL, cpu_max REAL NOT NULL, mem_max REAL NOT NULL,
+  runs_max INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]', procs TEXT NOT NULL DEFAULT '[]');
+CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started_at);
 """
 MODES = ("on", "off")
 MINUTE, TEN = 60, 600
@@ -95,8 +96,8 @@ def _volume(sample):
 def backfill_last_sampled(c):
     """A computer that sampled before its last-sample mark existed takes the time of its newest kept sample. Runs at
     every start; a mark already set is left as it is."""
-    c.execute("UPDATE runners SET last_sampled_at=(SELECT max(sampled_at) FROM runner_load_samples s "
-              "WHERE s.runner_id=runners.id) WHERE last_sampled_at IS NULL")
+    c.execute("UPDATE runner_states SET last_sampled_at=(SELECT max(sampled_at) FROM runner_load_samples s "
+              "WHERE s.runner_id=runner_states.runner_id) WHERE last_sampled_at IS NULL")
 
 
 def ingest(c, runner_id, samples, now=None):
@@ -121,7 +122,7 @@ def ingest(c, runner_id, samples, now=None):
         # box with many agent turns idling on I/O reads far above its cores while it still has room to start more.
         # A retry replaces its minute, never duplicates it; delayed older samples cannot replace a newer one.
         cpu_pct = round(s.cpu, 1)
-        c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(runner_id,ts) DO UPDATE SET "
+        c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(runner_id,created_at) DO UPDATE SET "
                   "sampled_at=excluded.sampled_at,cpu_pct=excluded.cpu_pct,mem_used=excluded.mem_used,"
                   "mem_total=excluded.mem_total,swap_used=excluded.swap_used,swap_total=excluded.swap_total,"
                   "running_turns=excluded.running_turns WHERE excluded.sampled_at>=runner_load_samples.sampled_at",
@@ -132,11 +133,11 @@ def ingest(c, runner_id, samples, now=None):
         scope = "container_cpu" if s.scope == "container" and s.memory_scope == "host" else s.scope
         used = s.mem_used if s.mem_total else None
         load1 = s.load[0] if s.load else None
-        row = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND ts=?", (runner_id, MINUTE, ts)).fetchone()
+        row = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND created_at=?", (runner_id, MINUTE, ts)).fetchone()
         if row:
             n = row["n"]
             c.execute("UPDATE perf_points SET n=?,scope=?,cpu=?,cpu_max=?,load1=?,mem_used=?,mem_max=?,mem_total=?,"
-                      "swap_used=?,swap_total=?,disk_free=?,disk_total=?,active=? WHERE runner_id=? AND span=? AND ts=?",
+                      "swap_used=?,swap_total=?,disk_free=?,disk_total=?,active=? WHERE runner_id=? AND span=? AND created_at=?",
                       (n + 1, scope, _merge(n, row["cpu"], s.cpu), max(row["cpu_max"], s.cpu),
                        load1 if row["load1"] is None else _merge(n, row["load1"], load1) if load1 is not None else row["load1"],
                        None if used is None else int(_merge(n, row["mem_used"], used)),
@@ -154,28 +155,30 @@ def ingest(c, runner_id, samples, now=None):
         # The readings in time order set the computer's memory hold (start_places.computer_hold): at 85% or more it
         # holds, below 80% it clears, and in between it keeps the state the earlier reading left. Replaying the batch
         # in order means 86% then 82% holds, and 79% then 82% releases, whichever way the batch was delivered.
-        held = c.execute("SELECT memory_hold FROM runners WHERE id=?", (runner_id,)).fetchone()[0]
+        held = (c.execute("SELECT memory_hold FROM runner_states WHERE runner_id=?", (runner_id,)).fetchone() or [0])[0]
         for _, mem in readings:
             if mem is not None and mem >= MEM_HOLD_AT:
                 held = 1
             elif mem is not None and mem < MEM_HOLD_CLEAR:
                 held = 0
-        c.execute("UPDATE runners SET memory_hold=?,last_sampled_at=max(coalesce(last_sampled_at,0),?) WHERE id=?",
-                  (held, max(at for at, _ in readings), runner_id))
+        c.execute("INSERT INTO runner_states(runner_id,memory_hold,last_sampled_at) VALUES(?,?,?) "
+                  "ON CONFLICT(runner_id) DO UPDATE SET memory_hold=excluded.memory_hold,"
+                  "last_sampled_at=max(coalesce(runner_states.last_sampled_at,0),excluded.last_sampled_at)",
+                  (runner_id, held, max(at for at, _ in readings)))
     for ts in sorted(set(minutes)):    # each minute in turn: a backlog's calm minute ends an overload
         detect(c, runner_id, ts)
-    c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND ts<?", (runner_id, now - 48 * 3600))
+    c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND created_at<?", (runner_id, now - 48 * 3600))
     return kept
 
 
 def _add_usage(c, runner_id, span, ts, kind, key, bot, harness, n, cpu, cpu_max, mem, mem_max):
     """Fold `n` samples averaging `cpu`/`mem` into a usage row."""
-    old = c.execute("SELECT n,cpu,cpu_max,mem,mem_max FROM perf_usage WHERE runner_id=? AND span=? AND ts=? AND kind=? "
+    old = c.execute("SELECT n,cpu,cpu_max,mem,mem_max FROM perf_usage WHERE runner_id=? AND span=? AND created_at=? AND kind=? "
                     "AND key=?", (runner_id, span, ts, kind, key)).fetchone()
     if old:
         total = old["n"] + n
         c.execute("UPDATE perf_usage SET n=?,cpu=?,cpu_max=?,mem=?,mem_max=?,bot=?,harness=? WHERE runner_id=? AND "
-                  "span=? AND ts=? AND kind=? AND key=?",
+                  "span=? AND created_at=? AND kind=? AND key=?",
                   (total, (old["cpu"] * old["n"] + cpu * n) / total, max(old["cpu_max"], cpu_max),
                    int((old["mem"] * old["n"] + mem * n) / total), max(old["mem_max"], mem_max), bot, harness,
                    runner_id, span, ts, kind, key))
@@ -221,8 +224,8 @@ def _newest_samples(c, runner_ids, since):
     out = {rid: [] for rid in runner_ids}
     for start in range(0, len(runner_ids), 200):
         part = runner_ids[start:start + 200]
-        sql = " UNION ALL ".join("SELECT * FROM (SELECT * FROM runner_load_samples WHERE runner_id=? AND ts>=? "
-                                 "ORDER BY ts DESC LIMIT 6)" for _ in part)
+        sql = " UNION ALL ".join("SELECT * FROM (SELECT * FROM runner_load_samples WHERE runner_id=? AND created_at>=? "
+                                 "ORDER BY created_at DESC LIMIT 6)" for _ in part)
         for row in c.execute(sql, [v for rid in part for v in (rid, since)]):
             out[row["runner_id"]].append(row)
     return out
@@ -240,7 +243,7 @@ def _load_from(points, now):
               "running_turns": p["running_turns"], "stale": not fresh}
     loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
     overloaded = (fresh and len(points) == 6
-                  and all(points[i]["ts"] - points[i+1]["ts"] == 60 for i in range(5))
+                  and all(points[i]["created_at"] - points[i+1]["created_at"] == 60 for i in range(5))
                   and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300
                   and all(loaded(x) for x in points))
     return {"latest_sample": latest, "overloaded": bool(overloaded)}
@@ -257,7 +260,7 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
         latest = load_status(c, runner_id)["latest_sample"] if on(c, runner_id) else None
         value = ({k: latest[k] for k in ("at", "cpu_pct", "mem_pct", "running_turns")}
                  if latest and not latest["stale"] else None)
-    column = {"start": "start_json", "end": "end_json"}[phase]
+    column = {"start": "at_start", "end": "at_end"}[phase]
     if value is None:
         c.execute(f"UPDATE attempt_load_snapshots SET {column}=NULL WHERE attempt_id=?", (attempt_id,))
         return
@@ -268,9 +271,9 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
 
 def attempt_snapshots(c, attempt_id):
     from .read_cache import one
-    row = one(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
-    return {"load_start": json.loads(row["start_json"]) if row and row["start_json"] else None,
-            "load_end": json.loads(row["end_json"]) if row and row["end_json"] else None}
+    row = one(c, "SELECT at_start,at_end FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
+    return {"load_start": json.loads(row["at_start"]) if row and row["at_start"] else None,
+            "load_end": json.loads(row["at_end"]) if row and row["at_end"] else None}
 
 
 # ------------------------------------------------------------------------------------------------ overloads
@@ -297,50 +300,50 @@ def _pct(used, total):
 def detect(c, runner_id, upto):
     """Judge the minute at `upto`: open an overload after SUSTAINED loaded minutes in a row; extend it while they
     last; end it on the first minute that is not. The newest minute may still be filling, so it is judged as it stands."""
-    points = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND ts<=? ORDER BY ts DESC LIMIT ?",
+    points = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND created_at<=? ORDER BY created_at DESC LIMIT ?",
                        (runner_id, MINUTE, upto, SUSTAINED)).fetchall()
     if not points:
         return
     latest = points[0]
     newest = c.execute("SELECT * FROM perf_overloads WHERE runner_id=? ORDER BY id DESC LIMIT 1", (runner_id,)).fetchone()
     # A late minute from before what the newest overload already covers changes nothing.
-    if newest and latest["ts"] < (newest["last"] if newest["ended"] is None else newest["ended"]):
+    if newest and latest["created_at"] < (newest["last_seen_at"] if newest["ended_at"] is None else newest["ended_at"]):
         return
     loaded = reasons(latest)
     # The minute that ended it can fill in later (its samples split across posts): loaded after all, it carries on.
-    if newest and latest["ts"] == newest["ended"]:
+    if newest and latest["created_at"] == newest["ended_at"]:
         if not loaded:
             return
-        c.execute("UPDATE perf_overloads SET ended=NULL WHERE id=?", (newest["id"],))
-        newest = dict(newest) | {"ended": None}
-    open_ = newest if newest and newest["ended"] is None else None
+        c.execute("UPDATE perf_overloads SET ended_at=NULL WHERE id=?", (newest["id"],))
+        newest = dict(newest) | {"ended_at": None}
+    open_ = newest if newest and newest["ended_at"] is None else None
     if open_:
         if loaded:
             why = sorted(set(json.loads(open_["reasons"])) | set(loaded))
-            _update(c, open_["id"], runner_id, open_["started"], latest["ts"], why)
-        elif latest["ts"] > open_["last"]:
-            c.execute("UPDATE perf_overloads SET ended=? WHERE id=?", (latest["ts"], open_["id"]))
+            _update(c, open_["id"], runner_id, open_["started_at"], latest["created_at"], why)
+        elif latest["created_at"] > open_["last_seen_at"]:
+            c.execute("UPDATE perf_overloads SET ended_at=? WHERE id=?", (latest["created_at"], open_["id"]))
         return
-    if len(points) < SUSTAINED or points[0]["ts"] - points[-1]["ts"] > (SUSTAINED - 1) * MINUTE:
+    if len(points) < SUSTAINED or points[0]["created_at"] - points[-1]["created_at"] > (SUSTAINED - 1) * MINUTE:
         return
     all_reasons = [reasons(p) for p in points]
     if all(all_reasons):
-        started = points[-1]["ts"]
-        cur = c.execute("INSERT INTO perf_overloads(runner_id,started,last,reasons,cpu_max,mem_max) VALUES(?,?,?,?,0,0)",
-                        (runner_id, started, latest["ts"], "[]"))
-        _update(c, cur.lastrowid, runner_id, started, latest["ts"], sorted({r for rs in all_reasons for r in rs}))
+        started = points[-1]["created_at"]
+        cur = c.execute("INSERT INTO perf_overloads(runner_id,started_at,last_seen_at,reasons,cpu_max,mem_max) VALUES(?,?,?,?,0,0)",
+                        (runner_id, started, latest["created_at"], "[]"))
+        _update(c, cur.lastrowid, runner_id, started, latest["created_at"], sorted({r for rs in all_reasons for r in rs}))
         H.event(c, "system", "runner.overloaded", runner_id, {"reasons": sorted({r for rs in all_reasons for r in rs})})
 
 
 def _update(c, oid, runner_id, started, last, why):
     """An overload's peaks and what ran during it."""
     peak = c.execute("SELECT max(cpu_max),max(100.0*mem_max/mem_total),max(active) FROM perf_points WHERE runner_id=? "
-                     "AND span=? AND ts>=? AND ts<=?", (runner_id, MINUTE, started, last)).fetchone()
+                     "AND span=? AND created_at>=? AND created_at<=?", (runner_id, MINUTE, started, last)).fetchone()
     bots = ran(c, runner_id, started, last + MINUTE)[:8]
     procs = c.execute("SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
-                      "span=? AND ts>=? AND ts<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
+                      "span=? AND created_at>=? AND created_at<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
                       (runner_id, MINUTE, started, last)).fetchall()
-    c.execute("UPDATE perf_overloads SET last=?,reasons=?,cpu_max=?,mem_max=?,runs_max=?,bots_json=?,procs_json=? "
+    c.execute("UPDATE perf_overloads SET last_seen_at=?,reasons=?,cpu_max=?,mem_max=?,runs_max=?,bots=?,procs=? "
               "WHERE id=?",
               (last, json.dumps(why), round(peak[0] or 0, 1), round(peak[1] or 0, 1), peak[2] or 0,
                json.dumps(bots),
@@ -354,14 +357,14 @@ def _iso(ts):
 def _runs(c, runner_id, start, end, limit=500):
     """The turns this computer ran that overlap [start, end), oldest first: this server's own record. A busy window
     keeps its newest `limit`."""
-    # A leased turn counts from its lease: the runner reports `started` once its harness is up. Only the turns still
+    # A leased turn counts from its lease: the runner reports `started_at` once its harness is up. Only the turns still
     # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
     # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
     # disk (Dev 249).
-    return c.execute("SELECT a.id,a.bot,coalesce(a.started,a.created) started,a.finished,a.state,t.model FROM attempts a "
-                     "LEFT JOIN turns t ON t.id=a.id WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
-                     "AND finished>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished IS NULL) AND "
-                     "coalesce(a.started,a.created)<? ORDER BY coalesce(a.started,a.created) DESC LIMIT ?",
+    return c.execute("SELECT a.id,a.bot_id,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,a.usage_model AS model "
+                     "FROM attempts a WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
+                     "AND finished_at>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished_at IS NULL) AND "
+                     "coalesce(a.started_at,a.created_at)<? ORDER BY coalesce(a.started_at,a.created_at) DESC LIMIT ?",
                      (runner_id, _iso(start), runner_id, _iso(end), limit)).fetchall()[::-1]
 
 
@@ -369,16 +372,16 @@ def ran(c, runner_id, start, end):
     """Who ran during [start, end): each bot and model with its number of turns, most turns first."""
     counts = {}
     for r in _runs(c, runner_id, start, end):
-        key = (r["bot"].removeprefix("bot:"), r["model"] or "")
+        key = (r["bot_id"].removeprefix("bot:"), r["model"] or "")
         counts[key] = counts.get(key, 0) + 1
     return [{"bot": b, "model": m, "runs": n} for (b, m), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def overload_view(row):
-    return {"started": row["started"], "ended": row["ended"], "last": row["last"],
-            "minutes": (( row["ended"] or row["last"] + MINUTE) - row["started"]) // MINUTE,
+    return {"started_at": row["started_at"], "ended_at": row["ended_at"], "last_seen_at": row["last_seen_at"],
+            "minutes": ((row["ended_at"] or row["last_seen_at"] + MINUTE) - row["started_at"]) // MINUTE,
             "reasons": json.loads(row["reasons"]), "cpu_max": row["cpu_max"], "mem_max": row["mem_max"],
-            "runs_max": row["runs_max"], "bots": json.loads(row["bots_json"]), "procs": json.loads(row["procs_json"])}
+            "runs_max": row["runs_max"], "bots": json.loads(row["bots"]), "procs": json.loads(row["procs"])}
 
 
 def recent_overload(c, runner_id, within=RECENT_S, now=None):
@@ -395,7 +398,7 @@ def recent_overloads(c, runner_ids, within=RECENT_S, now=None):
         return out
     marks = ",".join("?" * len(ids))
     for row in c.execute(f"SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY runner_id ORDER BY id DESC) AS n "
-                         f"FROM perf_overloads WHERE runner_id IN ({marks}) AND (ended IS NULL OR ended>=?)) WHERE n=1",
+                         f"FROM perf_overloads WHERE runner_id IN ({marks}) AND (ended_at IS NULL OR ended_at>=?)) WHERE n=1",
                          (*ids, now - within)):
         out[row["runner_id"]] = overload_view(row)
     return out
@@ -414,7 +417,7 @@ def _who_ran(bots, label=lambda b: b):
 def describe(o, label=lambda b: b):
     """One line: when, why and what ran."""
     why = " and ".join(REASON_WORDS.get(r, r) for r in o["reasons"]) or "very loaded"
-    words = f"{why} for {o['minutes']} minutes" + ("" if o["ended"] else ", still going")
+    words = f"{why} for {o['minutes']} minutes" + ("" if o["ended_at"] else ", still going")
     ran = _who_ran(o["bots"], label)
     if ran:
         words += f"; running: {ran}"
@@ -457,11 +460,11 @@ def summary(overloads, days, label=lambda b: b):
 def _window(c, runner_id, since, span):
     """Points from both resolutions at `since` or later, folded into `span`-second buckets."""
     buckets = {}
-    for p in c.execute("SELECT * FROM perf_points WHERE runner_id=? AND ts>=? ORDER BY ts", (runner_id, since)):
-        ts = p["ts"] // span * span
+    for p in c.execute("SELECT * FROM perf_points WHERE runner_id=? AND created_at>=? ORDER BY created_at", (runner_id, since)):
+        ts = p["created_at"] // span * span
         b = buckets.get(ts)
         if b is None:
-            buckets[ts] = dict(p) | {"ts": ts}
+            buckets[ts] = dict(p) | {"created_at": ts}
             continue
         n, m = b["n"], p["n"]
         mean = lambda a, x: x if a is None else a if x is None else (a * n + x * m) / (n + m)
@@ -500,30 +503,30 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
         mem = _pct(p["mem_used"], p["mem_total"])
         mem_max = _pct(p["mem_max"], p["mem_total"])
         swap = _pct(p["swap_used"], p["swap_total"])
-        points.append([p["ts"], round(p["cpu"], 1), round(p["cpu_max"], 1), None if mem is None else round(mem, 1),
+        points.append([p["created_at"], round(p["cpu"], 1), round(p["cpu_max"], 1), None if mem is None else round(mem, 1),
                        None if mem_max is None else round(mem_max, 1),
                        None if p["load1"] is None else round(p["load1"], 2), None if swap is None else round(swap, 1),
                        p["disk_free"], p["active"]])
-    latest = c.execute("SELECT mem_total,swap_total,disk_total,scope FROM perf_points WHERE runner_id=? ORDER BY ts DESC "
+    latest = c.execute("SELECT mem_total,swap_total,disk_total,scope FROM perf_points WHERE runner_id=? ORDER BY created_at DESC "
                        "LIMIT 1", (runner_id,)).fetchone()
     seen = lambda slug, right="see": access is None or bool((access.get(slug) or {}).get(right))
     runs = []
     for r in _runs(c, runner_id, since, now + 1):
-        slug = r["bot"].removeprefix("bot:")
+        slug = r["bot_id"].removeprefix("bot:")
         shown = seen(slug)
-        runs.append({"attempt": r["id"] if seen(slug, "read") else None, "bot": label(slug) if shown else "",
-                     "model": (r["model"] or "") if shown else "", "started": r["started"], "finished": r["finished"],
-                     "state": r["state"]})
+        runs.append({"id": r["id"] if seen(slug, "read") else None, "bot": label(slug) if shown else "",
+                     "model": (r["model"] or "") if shown else "", "started_at": r["started_at"], "finished_at": r["finished_at"],
+                     "state": run_state(r["state"])})
     name = lambda b: label(b) if b else ""
     bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, runner_id, since, now + 1), access, 20)]
     procs = []
     for r in c.execute("SELECT key,sum(cpu*n) cpu_n,max(cpu_max) cpu_max,max(mem_max) mem_max FROM perf_usage "
-                       "WHERE runner_id=? AND ts>=? AND kind='proc' GROUP BY key ORDER BY cpu_n DESC LIMIT 15",
+                       "WHERE runner_id=? AND created_at>=? AND kind='proc' GROUP BY key ORDER BY cpu_n DESC LIMIT 15",
                        (runner_id, since)):
         procs.append({"name": r["key"], "cpu_minutes": round(r["cpu_n"] * SAMPLE_S / 60 / 100, 1),
                       "cpu_max": round(r["cpu_max"], 1), "mem_max": r["mem_max"]})
     overloads = [overload_view(o) for o in c.execute(
-        "SELECT * FROM perf_overloads WHERE runner_id=? AND coalesce(ended,last)>=? ORDER BY started", (runner_id, since))]
+        "SELECT * FROM perf_overloads WHERE runner_id=? AND coalesce(ended_at,last_seen_at)>=? ORDER BY started_at", (runner_id, since))]
     for o in overloads:
         o["bots"] = [b | {"bot": name(b["bot"])} for b in _shown(o["bots"], access)]
     return {"hours": hours, "span": span, "since": since, "until": now, "columns": COLUMNS, "points": points,
@@ -541,24 +544,24 @@ def sweep(store, now=None):
     cutoff = now - MINUTE_HOURS * 3600
     while True:
         with store.transaction() as c:
-            row = c.execute("SELECT min(ts) FROM perf_points WHERE span=? AND ts<?", (MINUTE, cutoff)).fetchone()
+            row = c.execute("SELECT min(created_at) FROM perf_points WHERE span=? AND created_at<?", (MINUTE, cutoff)).fetchone()
             if row[0] is None:
                 break
             hour = row[0] // 3600 * 3600
             end = min(hour + 3600, cutoff)
-            for runner_id in [r[0] for r in c.execute("SELECT DISTINCT runner_id FROM perf_points WHERE span=? AND ts>=? "
-                                                      "AND ts<?", (MINUTE, hour, end))]:
+            for runner_id in [r[0] for r in c.execute("SELECT DISTINCT runner_id FROM perf_points WHERE span=? AND created_at>=? "
+                                                      "AND created_at<?", (MINUTE, hour, end))]:
                 _roll(c, runner_id, hour, end)
-            c.execute("DELETE FROM perf_points WHERE span=? AND ts>=? AND ts<?", (MINUTE, hour, end))
-            c.execute("DELETE FROM perf_usage WHERE span=? AND ts>=? AND ts<?", (MINUTE, hour, end))
+            c.execute("DELETE FROM perf_points WHERE span=? AND created_at>=? AND created_at<?", (MINUTE, hour, end))
+            c.execute("DELETE FROM perf_usage WHERE span=? AND created_at>=? AND created_at<?", (MINUTE, hour, end))
     old = now - KEEP_DAYS * 86400
     with store.transaction() as c:
-        c.execute("DELETE FROM runner_load_samples WHERE ts<?", (cutoff,))
-        c.execute("DELETE FROM perf_points WHERE ts<?", (old,))
-        c.execute("DELETE FROM perf_usage WHERE ts<?", (old,))
-        c.execute("DELETE FROM perf_overloads WHERE coalesce(ended,last)<?", (old,))
+        c.execute("DELETE FROM runner_load_samples WHERE created_at<?", (cutoff,))
+        c.execute("DELETE FROM perf_points WHERE created_at<?", (old,))
+        c.execute("DELETE FROM perf_usage WHERE created_at<?", (old,))
+        c.execute("DELETE FROM perf_overloads WHERE coalesce(ended_at,last_seen_at)<?", (old,))
         # A computer that stopped reporting mid-overload: it ends where its samples did.
-        c.execute("UPDATE perf_overloads SET ended=last+? WHERE ended IS NULL AND last<?", (MINUTE, now - STALE_S))
+        c.execute("UPDATE perf_overloads SET ended_at=last_seen_at+? WHERE ended_at IS NULL AND last_seen_at<?", (MINUTE, now - STALE_S))
         gone = "SELECT id FROM runners WHERE revoked_at IS NOT NULL"
         for table in ("perf_points", "perf_usage", "perf_overloads", "runner_load_samples"):
             c.execute(f"DELETE FROM {table} WHERE runner_id IN ({gone})")
@@ -566,7 +569,7 @@ def sweep(store, now=None):
 
 def _roll(c, runner_id, start, end):
     for p in _window_between(c, runner_id, start, end):
-        old = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND ts=?", (runner_id, TEN, p["ts"])).fetchone()
+        old = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND created_at=?", (runner_id, TEN, p["created_at"])).fetchone()
         if old:                                         # the earlier part of the ten minutes, rolled by an earlier sweep
             n, m = old["n"], p["n"]
             mean = lambda a, x: x if a is None else a if x is None else (a * n + x * m) / (n + m)
@@ -576,27 +579,27 @@ def _roll(c, runner_id, start, end):
                      disk_free=min(x for x in (old["disk_free"], p["disk_free"], 1 << 62) if x is not None),
                      active=max(old["active"], p["active"]), n=n + m)
         c.execute("INSERT OR REPLACE INTO perf_points VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (runner_id, TEN, p["ts"], p["n"], p["scope"], p["cpu"], p["cpu_max"], p["load1"],
+                  (runner_id, TEN, p["created_at"], p["n"], p["scope"], p["cpu"], p["cpu_max"], p["load1"],
                    None if p["mem_used"] is None else int(p["mem_used"]), p["mem_max"] or None, p["mem_total"],
                    p["swap_used"], p["swap_total"], None if p["disk_free"] == 1 << 62 else p["disk_free"],
                    p["disk_total"], p["active"]))
-    for u in c.execute("SELECT ts/? * ? ts,kind,key,max(bot) bot,max(harness) harness,sum(n) n,sum(cpu*n)/sum(n) cpu,"
+    for u in c.execute("SELECT created_at/? * ? created_at,kind,key,max(bot) bot,max(harness) harness,sum(n) n,sum(cpu*n)/sum(n) cpu,"
                        "max(cpu_max) cpu_max,sum(mem*n)/sum(n) mem,max(mem_max) mem_max FROM perf_usage WHERE runner_id=? "
-                       "AND span=? AND ts>=? AND ts<? GROUP BY ts/?,kind,key",
+                       "AND span=? AND created_at>=? AND created_at<? GROUP BY created_at/?,kind,key",
                        (TEN, TEN, runner_id, MINUTE, start, end, TEN)).fetchall():
-        _add_usage(c, runner_id, TEN, u["ts"], u["kind"], u["key"], u["bot"], u["harness"], u["n"], u["cpu"],
+        _add_usage(c, runner_id, TEN, u["created_at"], u["kind"], u["key"], u["bot"], u["harness"], u["n"], u["cpu"],
                    u["cpu_max"], u["mem"], u["mem_max"])
 
 
 def _window_between(c, runner_id, start, end):
-    rows = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND ts>=? AND ts<? ORDER BY ts",
+    rows = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND created_at>=? AND created_at<? ORDER BY created_at",
                      (runner_id, MINUTE, start, end)).fetchall()
     buckets = {}
     for p in rows:
-        ts = p["ts"] // TEN * TEN
+        ts = p["created_at"] // TEN * TEN
         b = buckets.get(ts)
         if b is None:
-            buckets[ts] = dict(p) | {"ts": ts}
+            buckets[ts] = dict(p) | {"created_at": ts}
             continue
         n, m = b["n"], p["n"]
         mean = lambda a, x: x if a is None else a if x is None else (a * n + x * m) / (n + m)
@@ -621,7 +624,7 @@ def install(app, store, auth, mutate, execution):
     from . import models as M
 
     def computer(c, rid):
-        return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
     @app.post("/api/v2/runners/performance")
     def report(request: Request, body: M.PerformanceBatch):
@@ -651,10 +654,10 @@ def install(app, store, auth, mutate, execution):
                 raise Problem("forbidden", "You cannot change this computer", 403)
             c.execute("UPDATE runners SET performance=? WHERE id=?", (body.mode, rid))
             if body.mode == "off":      # no more samples will end it, so Health stops saying "overloaded now"
-                c.execute("UPDATE perf_overloads SET ended=last+? WHERE runner_id=? AND ended IS NULL", (MINUTE, rid))
+                c.execute("UPDATE perf_overloads SET ended_at=last_seen_at+? WHERE runner_id=? AND ended_at IS NULL", (MINUTE, rid))
             H.event(c, who.actor, "runner.performance", rid, {"mode": body.mode})
             # The heartbeat reply carries the switch: a `performance` event asks the runner for one now.
-            c.execute("INSERT INTO changes(topic,kind,subject_id,at) VALUES('runner','performance',?,?)", (rid, H.now()))
+            c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('runner','performance',?,?)", (rid, H.now()))
             return {"performance": body.mode}
         return mutate(request, body, work)
 
@@ -681,7 +684,7 @@ def install(app, store, auth, mutate, execution):
         runner = computer(c, name)
         if runner:
             return runner
-        hit = c.execute("SELECT * FROM runners WHERE revoked_at IS NULL AND lower(trim(label))=lower(trim(?))",
+        hit = c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL AND lower(trim(label))=lower(trim(?))",
                         (name,)).fetchall()
         if len(hit) != 1:
             raise Problem("not_found", f"No computer named {name!r}" + ("; more than one has that label, use its id"
@@ -700,4 +703,5 @@ def install(app, store, auth, mutate, execution):
             runner = named(c, rid)
             return {"computer": {"id": runner["id"], "label": runner["label"]}, **listing(runner),
                     "may_switch": may_switch(auth, who, runner),
-                    **view(c, runner["id"], hours, access=auth.bot_accesses(c, who))}
+                    **view(c, runner["id"], hours, label=lambda b: (H.bot(c, b) or {}).get("slug") or b,
+                           access=auth.bot_accesses(c, who))}

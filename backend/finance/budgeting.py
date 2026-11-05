@@ -315,7 +315,7 @@ def _reserve_detail(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, r
     by_target: dict[str, list[tuple[str, int]]] = {}
     for bid, kind, tid, amount in allocs:
         # An ended budget's allocations still reserve against its parents: its cards keep their Mercury limits until they
-        # are lowered or cancelled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
+        # are lowered or canceled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
         if bid in budgets:
             by_target.setdefault(f"{kind}:{tid}", []).append((bid, amount))
     wanted = set(budget_ids)
@@ -366,7 +366,7 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
 def retained(ctx: Ctx, budget_id: str, start: str, end: str) -> int:
     """What an ended budget still holds against its parents in the window (spec 4.4): the holds on it and its children
     with no target, and each allocation in its subtree at the larger of its amount and what its target used (holds and
-    posted spend). The allocations keep their whole amount against the parent until they are lowered or cancelled, as a
+    posted spend). The allocations keep their whole amount against the parent until they are lowered or canceled, as a
     live child's amount counts, so a parent cannot be lowered under them."""
     tree = subtree(ctx, budget_id)
     return SB.held(ctx.c, tree, start, end) + sum(reserve + spent for _, _, reserve, _, spent
@@ -389,11 +389,12 @@ def reserve_growth(ctx: Ctx, budget_id: str, allocation_on: str, target_kind: st
 
 def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = (),
           read: Netted | None = None) -> B.State:
-    """A budget now: amount, actual, held (holds and allocations' reserves in its whole subtree), remaining, percent.
+    """A budget now: amount, actual, held (active holds plus the reserves unused allocations keep in its whole subtree),
+    remaining (which refuses new holds and allocations), spent (actuals and holds: what warn and cutoff read) and percent.
     With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
     counted against it (it may spend what was set aside for it there); its allocations on other branches still are.
-    A read passes its `Netted`: the actual, the held and what depends on them (rollover, reserves) leave out the settled private payroll the viewer can't see, and the
-    State says so (`excluded`). Enforcement passes none."""
+    A read passes its `Netted`: the actual, the holds and what depends on them (rollover, reserves) leave out the settled
+    private payroll the viewer can't see, and the State says so (`excluded`). Enforcement passes none."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -404,8 +405,9 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     mine = set(path)
     reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end, read)
                   if not (bid in mine and target and t == target))
-    held = _held(ctx, tree, start, end, read) + reserve
-    st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), held)
+    holds = _held(ctx, tree, start, end, read)
+    st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), holds,
+                 reserve)
     return st if read is None else replace(st, excluded=read.excluded)
 
 
@@ -429,9 +431,9 @@ def event_period(key: str) -> str:
 
 
 def crossings(ctx: Ctx, budget_ids: Sequence[str], by: str = SYSTEM) -> None:
-    """A `finance.budget.warn` / `.cutoff` event the first time a budget reaches its warn level or its amount, once per
-    period and version (a raise arms it again), for Tico's triggers to drain. A budget of 0 is at its cutoff at once:
-    it allows no spending."""
+    """A `finance.budget.warn` / `.cutoff` event the first time a budget's spend (actuals and holds, not what its unused
+    allocations reserve) reaches its warn level or its amount, once per period and version (a raise arms it again), for
+    Tico's triggers to drain. A budget of 0 is at its cutoff at once: it allows no spending."""
     at = dates.day(ctx.today)
     for bid in dict.fromkeys(budget_ids):
         b = ctx.budgets().get(bid)
@@ -441,7 +443,7 @@ def crossings(ctx: Ctx, budget_ids: Sequence[str], by: str = SYSTEM) -> None:
         if not (s.crossed_warn or s.at_limit):
             continue
         version = max((v.version for v in SB.versions(ctx.c, [bid])[bid]), default=0)
-        facts: dict[str, object] = {"budget_id": bid, "name": b.name, "amount": s.amount, "used": s.actual + s.held,
+        facts: dict[str, object] = {"budget_id": bid, "name": b.name, "amount": s.amount, "used": s.spent,
                                     "remaining": s.remaining, "pct": str(s.pct) if s.pct is not None else None}
         if s.crossed_warn:
             SB.event(ctx.c, WARN_EVENT, bid, event_key(s.period_start, version), facts, by, ctx.at)
@@ -466,13 +468,13 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
                 vendor_text(p, "vendor"))
 
 
-def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
+def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "", past_reserves: bool = False) -> B.Decision:
     """What a new spend of `amount` meets across its budget and every parent, on the budgets the spend sits on (the chain
-    of `leaf_id`)."""
+    of `leaf_id`). `past_reserves` checks against spend, not remaining (see core budgets decide)."""
     at = dates.day(ctx.today)
     spent_on = chain_of(ctx, leaf_id)
     chain = [(b, state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
-    return B.decide(chain, amount)
+    return B.decide(chain, amount, past_reserves)
 
 
 def would_place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int,
@@ -492,10 +494,12 @@ def scope_target(budget_scope: str | Mapping[str, object] | None) -> str:
 
 def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, currency: str, source: str,
           source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM,
-          force: bool = False, moved_from: tuple[str, str] | None = None) -> HoldDecision:
+          force: bool = False, moved_from: tuple[str, str] | None = None,
+          past_reserves: bool = False) -> HoldDecision:
     """A hold for a spend. `force` holds it past an ask or hold_payment limit, for a spend someone approved; decline
     still refuses. `moved_from` names a hold the spend takes over part of (an order line a bill bills): that hold
-    shrinks by the amount and the new hold takes it in the same step, without a fit check."""
+    shrinks by the amount and the new hold takes it in the same step, without a fit check. `past_reserves` fits it
+    against spend alone, so unused allocations do not refuse it (a run claim)."""
     money.minor(amount)
     if amount <= 0:
         raise invalid("a hold is for a positive amount")
@@ -517,7 +521,7 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
         moved = _move(ctx, b, moved_from, amount, source, source_id, expires_at, by)
         if moved is not None:
             return moved
-    verdict = decide(ctx, b.id, amount, target)
+    verdict = decide(ctx, b.id, amount, target, past_reserves)
     if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
         crossings(ctx, [verdict.limit_budget], by)
         limit = ctx.budgets()[verdict.limit_budget]
@@ -657,14 +661,14 @@ def release(ctx: Ctx, hold_id: str) -> bool:
 # ------------------------------------------------------------------------------------------------ connection-level API
 def hold_place(c: sqlite3.Connection, *, budget_scope: str | Mapping[str, object], amount: int, currency: str,
                source: str, source_id: str, expires_at: str | None, target: str = "", at: str | None = None,
-               by: str = SYSTEM) -> HoldDecision:
+               by: str = SYSTEM, past_reserves: bool = False) -> HoldDecision:
     """Reserve `amount` against the budget a spend belongs to (a budget id, or {account_id, team, teammate, vendor})
     and every parent at once. A retry with the same (source, source_id) returns the live hold. Before Finance is set up
-    nothing limits spend."""
+    nothing limits spend. `past_reserves`: fit against spend, not remaining (see place)."""
     if not is_set_up(c):
         return HoldDecision(allowed=True, action="ok", reason="Finance is not set up")
     return place(load(c, at), budget_scope=budget_scope, amount=amount, currency=currency, source=source,
-                 source_id=source_id, expires_at=expires_at, target=target, by=by)
+                 source_id=source_id, expires_at=expires_at, target=target, by=by, past_reserves=past_reserves)
 
 
 def hold_settle(c: sqlite3.Connection, hold_id: str, actual_amount: int, entry_id: str | None = None,

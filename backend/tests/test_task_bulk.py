@@ -19,7 +19,7 @@ def label(api, t, *keys):
 
 def events(api, field):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT task_id, actor, new FROM task_events WHERE field=?", (field,))]
+        return [dict(r) for r in c.execute("SELECT subject_id AS task_id, actor_id AS actor, new FROM history_events WHERE subject_type='task' AND kind=?", (field,))]
 
 
 def test_the_filter_selects_exactly_what_the_task_list_shows(api):
@@ -104,7 +104,7 @@ def test_a_dry_run_counts_the_real_outcome_and_changes_nothing(api):
     mine = [label(api, task(api, f"Call the lead {i}", owner="priya"), "calls") for i in range(2)]
     theirs = label(api, task(api, "Draft the call script"), "calls")
     with api.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM task_events").fetchone()[0]
+        before = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0]
         refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
     out = bulk(api, {"label": "calls"}, "status", token="priya-test", status="done", dry_run=True)
     assert out["dry_run"] is True and (out["changed"], out["skipped"]) == (2, 1)
@@ -113,7 +113,7 @@ def test_a_dry_run_counts_the_real_outcome_and_changes_nothing(api):
         now = get(api, "tasks/" + t["id"])["task"]
         assert (now["status"], now["version"]) == ("open", t["version"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_events").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0] == before
         assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
 
 
@@ -162,11 +162,11 @@ def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
             sent.append((path, body))
             return {}
 
-    args = hubcli.parser().parse_args(["task", "bulk", "step", "Legal review", "--where-type", "Marketing",
+    args = hubcli.parser().parse_args(["task", "bulk", "step", "Legal review", "--where-type", "Campaign",
                                        "--where-step", "Draft", "--where-owner", "me", "--where-status", "open",
                                        "--where-status", "doing", "--dry-run"])
     remotecli.via_tool(Client(), args)
-    assert sent == [("task-bulk", {"filter": {"type": "Marketing", "step": "Draft", "owner": "human:ana",
+    assert sent == [("task-bulk", {"filter": {"type": "Campaign", "step": "Draft", "owner": "human:ana",
                                               "status": "open,doing"},
                                    "action": "step", "step": "Legal review", "dry_run": True})]
 

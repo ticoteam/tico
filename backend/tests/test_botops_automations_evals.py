@@ -132,9 +132,9 @@ def test_a_refusal_fails_when_a_saved_flow_names_the_forbidden_inbox():
 
 
 def _actions(node):
-    """Every action step in a flow, nested paths and otherwise-branches included."""
+    """Every action in a flow: an action step, or a filter rule's or a destination's `then` entry (each has `do`)."""
     if isinstance(node, dict):
-        if node.get("type") == "action":
+        if "do" in node:
             yield node
         for value in node.values():
             yield from _actions(value)
@@ -152,6 +152,26 @@ def _flows_in_evals():
     return flows
 
 
+def test_a_rule_sent_to_another_destination_fails_the_match():
+    observed = saved("legal-subpoena")
+    observed["created"][0]["steps"][0]["rules"][0]["to"] = "finance"
+    assert "steps in order" in failed(checker.check_case(BY_ID["legal-subpoena"], observed))
+
+
+def test_a_destination_missing_from_the_saved_flow_fails():
+    observed = saved("legal-subpoena")
+    del observed["created"][0]["destinations"]
+    assert failed(checker.check_case(BY_ID["legal-subpoena"], observed)) == {"valid flow (the save check)",
+                                                                             "destinations"}
+
+
+def test_the_change_check_sees_destinations():
+    """An edit that only changes a destination is a change to the live flow, not a no-op."""
+    flow = saved("legal-subpoena")["created"][0]
+    renamed = {**flow, "destinations": [{**flow["destinations"][0], "name": "Counsel"}]}
+    assert checker.canon(flow) != checker.canon(renamed)
+
+
 def test_the_bot_knows_every_action_the_hub_runs():
     """The flow shape the bot is given names exactly the actions the executor runs."""
     assert set(F.ACTION_ARGS) == set(automation_actions.ACTIONS) == set(F.ACTIONS)
@@ -162,7 +182,7 @@ def test_every_action_in_the_evals_uses_only_the_args_the_bot_is_told():
     `to` was such a mismatch: the action reads `text`)."""
     seen = 0
     for flow in _flows_in_evals():
-        for step in _actions(flow.get("steps", [])):
+        for step in _actions(flow):
             do = step.get("do")
             assert do in F.ACTION_ARGS, f"{do} is not an action the bot knows"
             assert set(step.get("args") or {}) <= set(F.ACTION_ARGS[do]) | {"text"}, (do, step.get("args"))

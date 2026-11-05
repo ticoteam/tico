@@ -7,15 +7,21 @@ from backend import login_holds, source_outages
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, post, ready, runner  # noqa: F401
 from backend.tests.test_login_holds import at, events, limit, done, signed_in
+from backend import bot_settings as BS
 
+
+
+def fallback_off(c, bot):
+    """Turn off the bot's declared fallback, if it has one (as json_set on `$.fallback.off` did)."""
+    fallback = BS.read(c, bot).get("fallback")
+    if isinstance(fallback, dict):
+        BS.update(c, bot, {"fallback": {**fallback, "off": True}})
 
 def notices(c):
-    return [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.source_outage') IS NOT NULL")]
+    return [dict(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL")]
 
 
 def managers(c):
-    from backend.health_monitor import SLUG
-    c.execute("INSERT INTO bots(slug,display_name,runtime,state) VALUES(?,?,?,'active')", (SLUG, 'Health', 'fake'))
     c.execute("UPDATE task_types SET manager='coo',role='engineering' WHERE id='general'")
 
 
@@ -27,9 +33,10 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
             source_outages.observe(c, 'private-login-name', 'Claude subscription quota', waiting=count,
                                    until='2026-10-27T07:00:00.000000Z')
         rows = notices(c)
-        assert len(rows) == 2 and {r['to_actor'] for r in rows} == {'bot:coo', 'bot:health-monitor'}
-        assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs_json'] for r in rows)
-        assert not c.execute("SELECT 1 FROM jobs WHERE message_id IN (?,?)", tuple(r['id'] for r in rows)).fetchone()
+        assert len(rows) == 1 and {r['recipient_id'] for r in rows} == {'bot:coo'}
+        assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs'] for r in rows)
+        ids = [r['id'] for r in rows]
+        assert not c.execute(f"SELECT 1 FROM jobs WHERE message_id IN ({','.join('?' * len(ids))})", ids).fetchone()
         assert not c.execute("SELECT 1 FROM tasks").fetchone()
     # No process-local latch: a fresh transaction observes the saved episode.
     with api.app.state.store.transaction() as c:
@@ -37,10 +44,10 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
                                until='2026-10-27T07:00:00.000000Z')
         source_outages.observe(c, 'private-login-name', 'Claude subscription quota', active=False)
         source_outages.observe(c, 'private-login-name', 'Claude subscription quota', active=False)
-        assert len(notices(c)) == 4
-        assert all('available again' in r['body'] for r in notices(c)[2:])
+        assert len(notices(c)) == 2
+        assert all('available again' in r['body'] for r in notices(c)[1:])
         source_outages.observe(c, 'another-login', 'Claude subscription quota', waiting=1)
-        assert len(notices(c)) == 6
+        assert len(notices(c)) == 3
 
 
 def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, monkeypatch):
@@ -52,8 +59,9 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
         assign(api, machine, bot)
     signed_in(api, machine, ['ops', 'finance'], ('codex',))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback.off',json('true'))")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.runtime','codex') WHERE bot='finance'")
+        for bot in BS.read_many(c):
+            fallback_off(c, bot)
+        BS.update(c, 'finance', {'runtime': 'codex'})
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare the deployment plan', 'body': 'Review existing code.'})
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
@@ -73,7 +81,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
             assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (first['job_id'],)).fetchone()[0] == 1
             assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
             assert not c.execute("SELECT 1 FROM bots WHERE state='quarantined'").fetchone()
-            assert not c.execute("SELECT 1 FROM tasks WHERE blocked_since IS NOT NULL").fetchone()
+            assert not c.execute("SELECT 1 FROM task_holds WHERE kind='blocked' AND released_at IS NULL").fetchone()
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     ready(api, machine, ['ops', 'finance'])
     resumed = claim(api, machine)
@@ -81,7 +89,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
     done(api, machine, resumed)
     with api.app.state.store.transaction() as c:
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 4
+        assert len(notices(c)) == 2                  # one start and one end notice, each to the engineering managers
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 2
 
 
@@ -99,7 +107,7 @@ def test_mid_turn_fallback_quota_is_saved_and_resumes_at_its_own_reset(api, monk
                   'fallback': 'codex', 'primary_held': True, 'limited': True, 'text': 'Checkpoint: read the files.'}, machine['token'])
     assert result['outcome'] == 'interrupted'
     with api.app.state.store.read() as c:
-        saved = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        saved = json.loads(c.execute('SELECT result FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
         assert saved['retryable'] and saved['source_pause'] == 'quota'
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'queued'
         hold = login_holds.get(c, machine['runner_id'], '', 'codex')
@@ -121,7 +129,7 @@ def test_an_absolute_reset_is_not_extended_by_a_later_status_refresh(api, monkey
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_status SET since='2026-10-27T06:59:00.000000Z' WHERE bot='ops'")
+        c.execute("UPDATE bot_status SET changed_at='2026-10-27T06:59:00.000000Z' WHERE bot='ops'")
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     with api.app.state.store.transaction() as c:
         assert not cooling_off(c, 'ops')
@@ -261,7 +269,7 @@ def test_quota_after_a_named_external_action_stays_held(api, monkeypatch):
           'last_seq': 2, 'text': 'Stopped after the merge request.'}, machine['token'])
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
-        result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0])
+        result = json.loads(c.execute('SELECT result FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0])
         assert not result.get('source_pause') and not result.get('source_continue')
 
 
@@ -287,11 +295,11 @@ def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(
     execution.served_at = None
     with api.app.state.store.transaction() as c:
         execution.expire(c)
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), minutes=-16), attempt['id']))
         row = c.execute('SELECT * FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()
-        run = c.execute('SELECT started,finished FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
-        facts = retry_facts(c, row, run['started'], run['finished'])
+        run = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
+        facts = retry_facts(c, row, run['started_at'], run['finished_at'])
         assert not facts['lease_lost']
         execution.auto_reconcile(c)
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
@@ -352,7 +360,7 @@ def test_a_turn_that_only_reported_its_limit_runs_fresh_after_the_reset(api, mon
     post(api, f"attempts/{first['id']}/complete", {'outcome': 'failed', 'limited': True, 'last_seq': len(rows),
                                                    'text': notice}, machine['token'])
     with api.app.state.store.read() as c:
-        result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        result = json.loads(c.execute('SELECT result FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
         assert bool(result.get('quota_continue')) is continued
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'queued'
         assert bool(c.execute('SELECT checkpoint FROM tasks').fetchone()[0]) is continued
@@ -400,7 +408,7 @@ def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_
     assert claim(api, machine) is None
     # A later setting stops new fallback turns, not continuation of work already saved there.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback.off',json('true')) WHERE bot='ops'")
+        fallback_off(c, "ops")
         login_holds.record(c, machine['runner_id'], '', 'fake', H.now(), reset='2026-10-19T09:00:00.000000Z')
     at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
@@ -503,10 +511,10 @@ def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_leas
     with api.app.state.store.transaction() as c:
         execution.expire(c)
         job = dict(c.execute('SELECT * FROM jobs WHERE id=?', (first['job_id'],)).fetchone())
-        attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (first['id'],)).fetchone()
-        facts = retry_facts(c, job, attempt['started'], attempt['finished'])
+        attempt = c.execute('SELECT started_at,finished_at FROM attempts WHERE id=?', (first['id'],)).fetchone()
+        facts = retry_facts(c, job, attempt['started_at'], attempt['finished_at'])
         assert facts['fallback_unknown'] and not facts['safe'] and not facts['lease_lost']
-        assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result_json,'$.lease_continue')=1").fetchone()
+        assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result,'$.lease_continue')=1").fetchone()
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
 
@@ -518,17 +526,17 @@ def test_github_retry_disappearing_never_claims_access_recovered(api, monkeypatc
         source_outages.observe(c, 'github:acme/project', 'GitHub checks access', waiting=1)
     at(monkeypatch, '2026-10-31T01:00:00.000000Z')
     with api.app.state.store.transaction() as c:
-        # The remembered move is gone: whether expired, cancelled or closed, that proves no successful read.
+        # The remembered move is gone: whether expired, canceled or closed, that proves no successful read.
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 2
+        assert len(notices(c)) == 1                  # the start notice only: one to the engineering managers
         prs = [{'id': 'pr', 'repo': 'acme/project'}]
         source_outages.github_read(c, prs, {'pr': {'error': True, 'why': 'GitHub answered 403'}})
-        assert len(notices(c)) == 2
+        assert len(notices(c)) == 1
         source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
         source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
         source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 4
-        assert all('available again' in row['body'] for row in notices(c)[2:])
+        assert len(notices(c)) == 2
+        assert all('available again' in row['body'] for row in notices(c)[1:])
 
 
 def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api):
@@ -538,6 +546,6 @@ def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api)
             completion_notes.record(c, 'bot:ops', f'synthetic-{n}')
         rows = c.execute("SELECT body FROM notes WHERE to_actor='bot:ops'").fetchall()
         assert len(rows) == 1 and '1002 tasks' in rows[0][0]
-        saved = json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+        saved = json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',
                                     (completion_notes.PREFIX + 'bot:ops',)).fetchone()[0])
         assert len(saved['tasks']) == completion_notes.MAX_BATCH and saved['count'] == 1002

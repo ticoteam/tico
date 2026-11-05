@@ -26,8 +26,8 @@ RUNNER_IMAGE = "ghcr.io/ticoteam/tico-runner"
 RUNNER_CONTAINER = "tico-runner"
 RUNNER_VOLUME = "tico-runner"
 RUNNER_DIR = "/opt/tico-runner"
-ENROLLMENTS_PATH = "/api/v2/enrollments"  # POST, owner auth: {"code", "expires"}; codes last 15 minutes, single use
-COMPUTERS_PATH = "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen, revoked_at}], "server_time"}
+ENROLLMENTS_PATH = "/api/v2/enrollments"  # POST, owner auth: {"code", "expires_at", "operator"}; codes last 15 minutes, single use
+COMPUTERS_PATH = "/api/v2/operations"  # GET, owner auth: {"machines": [{label, last_seen_at, revoked_at}], "server_time"}
 ONLINE_SECONDS = 60  # a computer is online when it reported in this recently (backend/onboarding.py)
 
 HEALTH_PATH = "/healthz"
@@ -59,7 +59,7 @@ SERVER_ONLY_KEYS = frozenset({"TICO_GATEWAY_INVITE"})
 # Order they appear in the written .env.
 ENV_ORDER = (
     "TICO_DOMAIN_ALIASES", "TICO_PUBLIC_URL", "TICO_CORS_ORIGINS", "TICO_HQ_URL", "TICO_GATEWAY_URL",
-    "TICO_VISUAL_ORIGIN", "TICO_VISUAL_SAME_ORIGIN", "TICO_CADDY_VISUALS", "TICO_VISUAL_SECRET",
+    "TICO_VISUAL_ORIGIN", "TICO_VISUAL_SAME_ORIGIN", "TICO_CADDY_VISUALS", "TICO_VISUAL_SECRET", "TICO_READER_ORIGIN",
     "TICO_TRUSTED_PROXIES", "TICO_CLIENT_IP_HEADER", "TICO_EDGE_SUBNET", "TICO_EDGE_DYNAMIC_RANGE",
     "TICO_CADDY_ADDRESS", "TICO_CLOUDFLARED_ADDRESS",
     "TICO_TEAM_NAME", "TICO_COMPANY_NAME", "TICO_OWNER_EMAIL", "COMPOSE_PROFILES", "TICO_DOMAIN", "TICO_RUNNER_URL", "CLOUDFLARE_TUNNEL_TOKEN",

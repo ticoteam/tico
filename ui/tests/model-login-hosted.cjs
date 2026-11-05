@@ -2,9 +2,9 @@
 // computer, so Settings > Computers signs Claude Code and Codex in with the provider's link and code only: the dialog
 // starts the sign-in by itself, shows the link (and Codex's one-time code, or Claude's paste field), never what else
 // the CLI printed (a failure gives its message), never points to a terminal when the computer is slow to start, and
-// closes by itself once signed in (saying so in a toast) or when cancelled, cancelling it on the computer. A
+// closes by itself once signed in (saying so in a toast) or when canceled, canceling it on the computer. A
 // self-hosted Tico keeps the computer's lines, the terminal hint and the dialog open after a cancel. Every request is
-// intercepted; the harness capabilities come from runner/harnesses/*.toml.
+// intercepted; the harness capabilities come from runner-rs/harnesses/*.toml.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cjs');
     const CLAUDE_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture';
 
     async function open(hosted) {
-      const box = {id: 'box', label: 'Server', operator: 'sam', bots: [], platform: 'linux', last_seen: at(-3000), readiness_at: at(-3000),
+      const box = {id: 'box', label: 'Server', owner_id: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), readiness_at: at(-3000),
         needed_runtimes: ['claude', 'codex'], bot_runtimes: [], signed_out: {}, profiles: [],
         readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'}},
           harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}}};
@@ -52,7 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
           // The computer has not picked it up yet: it starts on the next look, still printing only its own lines.
-          rows[id] = {id, runtime: body.runtime, profile: '', kind: 'sign_in', state: 'starting', created: new Date().toISOString(),
+          rows[id] = {id, runtime: body.runtime, profile: '', kind: 'sign_in', state: 'starting', created_at: new Date().toISOString(),
             lines: ['Opening browser to sign in…', 'bot@server:~$'], accepts_code: false};
           return json(rows[id]);
         }
@@ -67,7 +67,7 @@ const {unrouted} = require('./support/routes.cjs');
             if (state) rows[one[1]].state = state;
             return json({error: {detail}}, status);
           }
-          rows[one[1]].state = 'cancelled';
+          rows[one[1]].state = 'canceled';
           return json(rows[one[1]]);
         }
         if (one && one[2] === '/code') { writes.push({p}); rows[one[1]].code_sent = true; return json(rows[one[1]]); }
@@ -119,7 +119,7 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in on Server'}).waitFor();
       assert.deepEqual(writes, [{p: '/api/v2/computers/box/logins', body: {runtime: 'claude'}}], 'it started by itself');
       // Slow to start: the hint names Settings > Computers, never a terminal or the computer's lines.
-      Object.assign(last(), {created: new Date(Date.now() - 60000).toISOString()});
+      Object.assign(last(), {created_at: new Date(Date.now() - 60000).toISOString()});
       await dialog.locator('[data-status]', {hasText: 'Check that it shows as online in Settings > Computers'}).waitFor();
       assert.doesNotMatch(await dialog.innerText(), /terminal/i);
       // Waiting with no link yet: no CLI lines.
@@ -137,14 +137,14 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.getByRole('button', {name: 'Send code'}).click();
       await dialog.getByText('Code sent').waitFor();
       // Signed in: the dialog closes by itself and says so.
-      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      Object.assign(last(), {state: 'signed_in', updated_at: new Date().toISOString()});
       await dialog.waitFor({state: 'detached'});
       await page.locator('.toast', {hasText: 'Signed in. Claude Code is ready on Server.'}).waitFor();
       assert.deepEqual(errors, []);
       await page.close();
     }
 
-    // ---- Hosted: Codex. Link and one-time code; Cancel sign-in closes only once the computer's sign-in is cancelled.
+    // ---- Hosted: Codex. Link and one-time code; Cancel sign-in closes only once the computer's sign-in is canceled.
     {
       const {page, writes, errors, signIn, last, refuse} = await open('invited');
       await signIn('codex').click();
@@ -167,19 +167,19 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.waitFor({state: 'detached'});
       assert.deepEqual(writes.at(-1), {p: `/api/v2/computers/box/logins/${last().id}/cancel`});
-      await page.locator('.toast', {hasText: 'The sign-in was cancelled.'}).waitFor();
+      await page.locator('.toast', {hasText: 'The sign-in was canceled.'}).waitFor();
       // Refused because the computer is already putting the account in place (409): the pane stays, follows it to
       // signed in, and closes then.
       await signIn('codex').click();
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device', code: 'WXYZ-67890'});
       await dialog.locator('code[data-code]', {hasText: 'WXYZ-67890'}).waitFor();
-      const late = "The new account is already being put in place, so it can't be cancelled now";
+      const late = "The new account is already being put in place, so it can't be canceled now";
       refuse({status: 409, detail: late, state: 'finishing'});
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.locator('[data-status][data-state=finishing]', {hasText: late}).waitFor();
       assert.equal(await dialog.locator('[data-actions] button').count(), 0, 'nothing to cancel once it is finishing');
-      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      Object.assign(last(), {state: 'signed_in', updated_at: new Date().toISOString()});
       await dialog.waitFor({state: 'detached'});
       await page.locator('.toast', {hasText: 'Signed in. Codex (ChatGPT) is ready on Server.'}).waitFor();
       // A failure gives its message, still without the computer's lines.
@@ -199,18 +199,18 @@ const {unrouted} = require('./support/routes.cjs');
       await signIn('claude').click();
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
-      Object.assign(last(), {created: new Date(Date.now() - 60000).toISOString()});
+      Object.assign(last(), {created_at: new Date(Date.now() - 60000).toISOString()});
       await dialog.locator('[data-status]', {hasText: 'you can also sign in from its terminal'}).waitFor();
       Object.assign(last(), {state: 'waiting'});
       await dialog.locator('[data-lines]', {hasText: 'Opening browser to sign in'}).waitFor();
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
-      await dialog.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+      await dialog.locator('[data-status]', {hasText: 'canceled'}).waitFor();
       await dialog.getByRole('button', {name: 'Try again'}).click();
       // The retry is a new sign-in: change it only once the computer has answered its start.
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device'});
       await dialog.locator('[data-link]').waitFor();
-      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      Object.assign(last(), {state: 'signed_in', updated_at: new Date().toISOString()});
       await dialog.getByRole('button', {name: 'Done'}).waitFor();
       assert.deepEqual(errors, []);
       await page.close();

@@ -11,7 +11,7 @@ Tico does the rest here:
   later sync never moves it back. It joins their group too (a bot reporting to a human does not
   inherit the human's group on its own), so it sits under them on the chart.
 - Its name, description, section (where it sits in the maker's own list, e.g. Grok's "Pinned")
-  and full instructions are kept in `config_json[<provider key>]`, so the bot can be rebuilt
+  and full instructions are kept in `config[<provider key>]`, so the bot can be rebuilt
   somewhere else if the account goes away.
 - Its transcript is copied into the syncing person's own room with the bot, read and quiet
   (no job, no unread badge). A message's id is derived from the bot and the message, so sending
@@ -44,7 +44,9 @@ from . import models as M
 from . import people as P
 from . import rooms
 from .blobs import register
+from .enqueue import enqueue
 from .store import H, Problem, encode
+from . import bot_settings as BS
 
 # A routine runs on a schedule of days, not minutes: a bot synced within the last day and a bit
 # is reporting in.
@@ -108,7 +110,7 @@ def local_name(name):
 class Provider:
     id: str             # the harness and the `provider` a sync names
     label: str          # what the pages call it
-    key: str            # where its record sits in config_json, and its message ids' prefix
+    key: str            # where its record sits in config, and its message ids' prefix
     maker: str          # whose model it runs on, for the presence line
     single: bool        # one bot per person: Dots is a single always-on agent
     local_name: object = None
@@ -147,15 +149,15 @@ def check(provider, body):
 def slug_for(c, name, fallback):
     base = "-".join("".join(ch if ch.isalnum() else " " for ch in name.lower()).split())[:60] or fallback
     slug, n = base, 2
-    while H.bot(c, slug):
+    while c.execute("SELECT 1 FROM bots WHERE slug=?", (slug,)).fetchone():
         slug, n = f"{base}-{n}", n + 1
     return slug
 
 
 def find(c, provider, person, ext_id):
-    for row in c.execute("SELECT bot,config_json FROM bot_config WHERE operator=? AND "
-                         "json_extract(config_json,'$.harness')=?", (person, provider.id)):
-        record = (H._json(row["config_json"], {}) or {}).get(provider.key) or {}
+    for row in c.execute(f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE owner_id=? AND "
+                         f"s.harness=?", (person, provider.id)):
+        record = (H._json(row["config"], {}) or {}).get(provider.key) or {}
         if provider.single or record.get("id") == ext_id:
             return row["bot"]
     return None
@@ -307,12 +309,12 @@ def legacy_grok_message(c, room, ext_id, msg, mid, images):
     """True when a message from before per-person ids is already here, unchanged."""
     legacy_key = msg.id or f"{msg.role}|{msg.at}|{msg.text[:500]}"
     legacy_id = "grok-" + str(uuid.uuid5(NAMESPACE, ext_id + "|" + legacy_key))
-    legacy = c.execute("SELECT id,body,refs_json FROM messages WHERE id=? AND conversation_id=?", (legacy_id, room["id"])).fetchone()
+    legacy = c.execute("SELECT id,body,refs FROM messages WHERE id=? AND conversation_id=?", (legacy_id, room["id"])).fetchone()
     if not legacy:
         return False
     fetched = (images or {}).get(mid) or []
     text = msg.text + "".join(f"\n\n[Image in Grok]({row[1]})" for row in fetched if row[0] is None)
-    refs = H._json(legacy["refs_json"], {})
+    refs = H._json(legacy["refs"], {})
     previous = [c.execute("SELECT digest,name FROM blobs WHERE id=?", (item["id"],)).fetchone()
                 for item in refs.get("attachments") or []]
     have = [(row["digest"], row["name"]) for row in previous if row]
@@ -330,8 +332,8 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
     added = 0
     place = provider.label.split()[0]
     from . import app_delivery
-    config = H._json((c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-                      or {"config_json": "{}"})["config_json"], {}) or {}
+    config = H._json((c.execute(BS.ONE_SQL, (slug,)).fetchone()
+                      or {"config": "{}"})["config"], {}) or {}
     delivering = app_delivery.setting(config) is not None
     for msg in messages:
         mid = message_id(provider, ext_id, msg, person)
@@ -354,23 +356,25 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
                 attached.append(register(c, who, *row))
         if attached:
             refs["attachments"] = attached
+        dumped = encode(refs)
         cur = c.execute(
-            "INSERT OR IGNORE INTO messages (id, conversation_id, from_actor, to_actor, kind, body, "
-            "refs_json, created, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (mid, room["id"], sender, target, "say", text, encode(refs), created, now, now))
+            "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, "
+            "refs, created_at, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (mid, room["id"], sender, target, "say", text, dumped, created, now, now))
         added += cur.rowcount
-        if cur.rowcount:
+        if cur.rowcount:           # an ignored row was not inserted, so it queues nothing (the trigger never fired either)
+            enqueue(c, {"id": mid, "sender_id": sender, "recipient_id": target, "refs": dumped, "created_at": created})
             for item in attached:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (mid, item["id"]))
     if added:
-        last = c.execute("SELECT max(created) FROM messages WHERE conversation_id=?", (room["id"],)).fetchone()[0]
+        last = c.execute("SELECT max(created_at) FROM messages WHERE conversation_id=?", (room["id"],)).fetchone()[0]
         c.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (last, room["id"]))
     return added, len(messages) - added
 
 
 def synced_through(c, provider, person, slug):
-    row = c.execute("SELECT max(m.created) FROM messages m JOIN conversations v ON v.id=m.conversation_id "
-                    "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? AND m.id LIKE ?",
+    row = c.execute("SELECT max(m.created_at) FROM messages m JOIN conversations v ON v.id=m.conversation_id "
+                    "WHERE v.scope='personal' AND v.owner_id=? AND v.room_key=? AND m.id LIKE ?",
                     ("human:" + person, slug, provider.key + "-%")).fetchone()
     return row[0] if row else None
 
@@ -380,29 +384,29 @@ def take_inbox(c, provider, person, slug):
     Only their own room: another person's message to it is theirs to relay, not this sync's.
     A message with a job is the computer's while the bot is delivered through its app (backend/app_delivery.py),
     and always once a runner tried it: it reaches the bot once. A job no runner tried, with app delivery off, is
-    cancelled and its message handed over here."""
-    room = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=?",
+    canceled and its message handed over here."""
+    room = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=?",
                      ("human:" + person, slug)).fetchone()
     if not room:
         return []
     from . import app_delivery
-    config = H._json((c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-                      or {"config_json": "{}"})["config_json"], {}) or {}
+    config = H._json((c.execute(BS.ONE_SQL, (slug,)).fetchone()
+                      or {"config": "{}"})["config"], {}) or {}
     delivering = 1 if app_delivery.active(c, config) else 0
-    rows = c.execute("SELECT m.id,m.body,m.created FROM messages m WHERE m.conversation_id=? AND m.from_actor=? "
-                     "AND m.to_actor=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
+    rows = c.execute("SELECT m.id,m.body,m.created_at FROM messages m WHERE m.conversation_id=? AND m.sender_id=? "
+                     "AND m.recipient_id=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
                      "AND m.id NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=m.id AND "
-                     "(? OR j.state NOT IN ('queued','cancelled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
-                     "ORDER BY m.created LIMIT ?",
+                     "(? OR j.state NOT IN ('queued','canceled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
+                     "ORDER BY m.created_at LIMIT ?",
                      (room["id"], "human:" + person, "bot:" + slug, provider.key + "-%", delivering,
                       INBOX_LIMIT)).fetchall()
     if rows:
         now = H.now()
         c.executemany("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
                       [(now, row["id"]) for row in rows])
-        c.executemany("UPDATE jobs SET state='cancelled' WHERE message_id=? AND state='queued'",
+        c.executemany("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'",
                       [(row["id"],) for row in rows])
-    return [{"id": row["id"], "text": row["body"], "at": row["created"]} for row in rows]
+    return [{"id": row["id"], "text": row["body"], "at": row["created_at"]} for row in rows]
 
 
 def sync(c, auth, settings_admin, who, body, images=None):
@@ -428,8 +432,9 @@ def sync(c, auth, settings_admin, who, body, images=None):
                 reports_to="human:" + person, status="active", thread_mode="personal",
                 model=model_for(provider), effort="as-configured", harness=provider.id, operator=person,
                 owners=[person]))
-        row = c.execute("SELECT config_json,description FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        config = H._json(row["config_json"], {}) or {}
+            slug = (H.resolve_bot(c, slug) or {}).get("id", slug)      # the new bot's id (a UUID, not its slug)
+        row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.description FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
+        config = H._json(row["config"], {}) or {}
         before = dict(config.get(provider.key) or {})
         record = {**before, "id": ext_id, "name": item.name, "last_sync": now,
                   "source": body.source or before.get("source") or ""}
@@ -445,12 +450,15 @@ def sync(c, auth, settings_admin, who, body, images=None):
         if group and "team" not in config:      # never set, so not moved since: in its human's group
             config["team"] = group
             c.execute("UPDATE bot_config SET team=? WHERE bot=?", (group, slug))
-        c.execute("UPDATE bot_config SET config_json=?,description=? WHERE bot=?",
-                  (encode(config), item.description if "description" in item.model_fields_set else row["description"], slug))
-        c.execute("UPDATE bots SET display_name=? WHERE slug=?", (name, slug))
+            from .finance import actions as FA
+            FA.revalidate_org(c)             # the bot's team is part of the org chart Finance's grants follow (spec 7.5)
+        BS.write(c, slug, config)
+        c.execute("UPDATE bot_config SET description=? WHERE bot=?",
+                  (item.description if "description" in item.model_fields_set else row["description"], slug))
+        c.execute("UPDATE bots SET display_name=? WHERE id=?", (name, slug))
         added, known = import_messages(c, provider, person, slug, ext_id, item.messages, images, who)
         H.event(c, who.actor, provider.id + ".synced", slug, {"id": ext_id, "created": created, "messages": added})
-        out.append({"id": ext_id, "grok_id": ext_id, "bot": slug, "created": created,
+        out.append({"id": ext_id, "grok_id": ext_id, "bot": slug, "slug": H.bot(c, slug)["slug"], "created": created,
                     "messages_added": added, "messages_known": known,
                     "instructions_changed": record.get("instructions_updated") == now,
                     "synced_through": synced_through(c, provider, person, slug),
@@ -465,7 +473,7 @@ def presence(c, bot, harness, config, now=None):
     last = record.get("last_sync")
     now = now or H.now()
     online = bool(last and last > H.shift(now, seconds=-PRESENCE_GAP))
-    agent = {"harness": provider.id, "credential": True, "last_seen": last, "revoked_at": None,
+    agent = {"harness": provider.id, "credential": True, "last_seen_at": last, "revoked_at": None,
              "version": "", "platform": provider.label.lower(), "model": "", "provider": provider.maker,
              "profile": record.get("name") or "", "detail": record.get("source") or "",
              "synced": True, "label": provider.label, "section": record.get("section") or "",

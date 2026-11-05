@@ -7,6 +7,8 @@ from backend import auto_tasks, execution, health, quiet_work
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 
 def task_notice(api, task, refs, *, quiet=False, body="Check the runtime notice."):
@@ -35,7 +37,7 @@ def finish_carrier(api, machine, task, run):
     post(api, f"attempts/{run['id']}/complete", {'outcome': 'completed', 'last_seq': 0}, machine['token'])
     with api.app.state.store.transaction() as c:
         # The later notice is new work, after this completed delivery.
-        c.execute('UPDATE attempts SET created=?,finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET created_at=?,finished_at=? WHERE id=?',
                   (H.shift(H.now(), days=-8), H.shift(H.now(), days=-7), run['id']))
         assert H.task(c, task['id'])['carried_by'] == run['id']
 
@@ -96,7 +98,7 @@ def test_actionable_notice_preserves_real_gates(api, gate):
         if gate == 'resume':
             quiet_work.defer(c, 'bot:ops', task['id'], at=H.shift(H.now(), days=1))
         elif gate == 'snooze':
-            c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?', (H.shift(H.now(), days=1), task['id']))
+            set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
         elif gate == 'person':
             c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (task['id'],))
         elif gate == 'blocker':
@@ -107,9 +109,8 @@ def test_actionable_notice_preserves_real_gates(api, gate):
                                                    'body_sha256': 'a' * 64, 'mailbox': 'ops@acme.example'},
                                task_id=task['id'])
         elif gate in ('off', 'cap'):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                      (json.dumps({**config, 'keep_tasks_going': 0 if gate == 'off' else 1}),))
+            config = BS.read(c, 'ops')
+            BS.write(c, 'ops', {**config, 'keep_tasks_going': 0 if gate == 'off' else 1})
             if gate == 'cap':
                 other = H.task_create(c, 'human:ana', 'Check existing report', '', 'bot:ops', lint=False, next_run=True)
                 H.task_update(c, 'bot:ops', other['id'], status='doing')
@@ -142,11 +143,11 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
         task_notice(api, task, {'wake': 'due'})
     with api.app.state.store.transaction() as c:
         if not ready:
-            c.execute('UPDATE tasks SET resume_json=? WHERE id=?',
+            c.execute('UPDATE tasks SET resume=? WHERE id=?',
                       (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
         for task in tasks[1:]:
             c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops']
         assert len(rows) == 1
         expected = {'slow' if ready else 'task_next_run': 1, 'task_wait': 2}

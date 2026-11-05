@@ -74,8 +74,8 @@ def ask_admin_detail(c, admins, what):
 def effective_grant(c, credential, subject):
     return c.execute('SELECT g.* FROM credential_grants g LEFT JOIN credential_grants p ON p.id=g.parent_id '
                      "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
-                     'WHERE g.credential_id=? AND g.subject=? AND g.revoked IS NULL '
-                     "AND (g.parent_id IS NULL OR (p.revoked IS NULL AND p.id IS NOT NULL AND p.subject='human:'||bc.operator))",
+                     'WHERE g.credential_id=? AND g.subject=? AND g.revoked_at IS NULL '
+                     "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL AND p.subject='human:'||bc.owner_id))",
                      (credential, subject)).fetchone()
 
 
@@ -95,12 +95,34 @@ def granted(c, subject):
         'SELECT g.credential_id FROM credential_grants g '
         'LEFT JOIN credential_grants p ON p.id=g.parent_id '
         "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
-        'WHERE g.subject=? AND g.revoked IS NULL '
-        "AND (g.parent_id IS NULL OR (p.revoked IS NULL AND p.id IS NOT NULL "
-        "AND p.subject='human:'||bc.operator))", (subject,)))
+        'WHERE g.subject=? AND g.revoked_at IS NULL '
+        "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
+        "AND p.subject='human:'||bc.owner_id))", (subject,)))
     if values is not None:
         values[key] = found
     return found
+
+
+def prime_granted(c, subjects):
+    """`granted` for many subjects in one read per 500, seeded into the snapshot so each later `granted(c, subject)`
+    reads nothing. Outside a snapshot nothing is kept."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    wanted = sorted({s for s in subjects if ("credential_granted", s) not in values})
+    found = {s: set() for s in wanted}
+    for part in H.chunks(wanted):
+        for subject, credential in c.execute(
+                'SELECT g.subject,g.credential_id FROM credential_grants g '
+                'LEFT JOIN credential_grants p ON p.id=g.parent_id '
+                "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+                f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
+                "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
+                "AND p.subject='human:'||bc.owner_id))", part):
+            found[subject].add(credential)
+    for subject in wanted:
+        values[("credential_granted", subject)] = frozenset(found[subject])
 
 
 def permitted(c, who, credential, admins):
@@ -128,7 +150,7 @@ def creator(c, who, credential):
 def can_open(c, who, admins):
     return administrator(c, who, admins) or (who.role in ('human', 'owner') and (any(
         effective_grant(c, row[0], who.actor) for row in c.execute(
-            'SELECT credential_id FROM credential_grants WHERE subject=? AND revoked IS NULL', (who.actor,)))
+            'SELECT credential_id FROM credential_grants WHERE subject=? AND revoked_at IS NULL', (who.actor,)))
         or bool(owned(c, who))))
 
 
@@ -366,14 +388,14 @@ class Vault:
             if isinstance(payload.get('secret'), SecretStr):
                 payload['secret'] = payload['secret'].get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
-            old = c.execute('SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?',
+            old = c.execute('SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
             if old:
                 if not hmac.compare_digest(old['request_hash'], fingerprint):
                     raise Problem('idempotency_conflict', 'This request key was already used for different content', 409)
-                return json.loads(old['response_json'])
+                return json.loads(old['response'])
             result = fn(c)
-            c.execute('INSERT INTO idempotency VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)',
                       (who.actor, operation, key, fingerprint, encode(result), H.now()))
             return result
 
@@ -386,7 +408,7 @@ class Vault:
 
     @staticmethod
     def brief(row):
-        return {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created', 'updated')} | {
+        return {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created_at', 'updated_at')} | {
             'stored': row['ciphertext'] is not None, 'env': model_env(row['name'], row['kind'], row['env'])}
 
     def member_stores(self, c, who, bot):
@@ -424,10 +446,10 @@ class Vault:
             raise Problem('credential', 'Enter a credential name', 422)
         refuse_reserved(model_env(name, body.kind, body.env), old['env'] if old else '')
         # `member_stored` is set once, on insert: only a credential a member stored for their bot is ever theirs (`owned`).
-        c.execute('INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,'
+        c.execute('INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,'
                   'created_by,member_stored) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,username=excluded.username,'
                   'kind=excluded.kind,env=excluded.env,preview=excluded.preview,ciphertext=excluded.ciphertext,nonce=excluded.nonce,'
-                  'source=excluded.source,revision=credentials.revision+1,updated=excluded.updated,updated_by=excluded.updated_by',
+                  'source=excluded.source,revision=credentials.revision+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by',
                   (cid,name,body.username,body.kind,model_env(name,body.kind,body.env),preview,ciphertext,nonce,body.source,now,now,who.actor,who.actor,
                    int(member)))
         H.event(c,who.actor,'credential.updated' if old else 'credential.created',cid,{'secret_changed':secret is not None})
@@ -439,6 +461,8 @@ class Vault:
                 and self.auth.bot_manager(c, who, H.actor_id(subject)))
 
     def grant_authority(self, c, who, cid, subject):
+        if subject.startswith('bot:'):
+            subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
         if subject == COMPUTERS:
             require_admin(c, who, self.admins)
             return None
@@ -450,12 +474,12 @@ class Vault:
             if self.manages_bot(c, who, subject):
                 return None
             raise Problem('forbidden', 'You can share a credential you added only with bots you own or manage. '
-                          + ask_admin_detail(c, self.admins, f'give it to {H.actor_id(subject)}'), 403)
+                          + ask_admin_detail(c, self.admins, f'give it to {(H.bot(c, H.actor_id(subject)) or {}).get("slug") or H.actor_id(subject)}'), 403)
         parent = effective_grant(c,cid,who.actor) if who.role in ('human','owner') else None
-        bot = c.execute('SELECT operator,bot_owners_json FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
+        bot = c.execute('SELECT owner_id,bot_owners FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
         # A bot's owners (its creator and co-owners, and its operator) attach credentials they hold themselves.
-        if not parent or not bot or (bot['operator'] != H.actor_id(who.actor)
-                                     and H.actor_id(who.actor) not in owner_ids(bot['bot_owners_json'])):
+        if not parent or not bot or (bot['owner_id'] != H.actor_id(who.actor)
+                                     and H.actor_id(who.actor) not in owner_ids(bot['bot_owners'])):
             raise Problem('forbidden', ask_admin_detail(c, self.admins, 'give a bot a credential')
                           + (', or give a bot you manage a credential you added or were granted' if not parent else ''), 403)
         return parent['id']
@@ -474,11 +498,13 @@ class Vault:
 
     def grant(self, c, who, cid, subject):
         row=self.row(c,cid)
+        if subject.startswith('bot:'):
+            subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
         parent = self.grant_authority(c,who,cid,subject)
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
             # Older name-only model keys gain a variable only when someone grants them.
-            c.execute('UPDATE credentials SET env=?,revision=revision+1,updated=?,updated_by=? WHERE id=?',
+            c.execute('UPDATE credentials SET env=?,revision=revision+1,updated_at=?,updated_by=? WHERE id=?',
                       (inferred,H.now(),who.actor,cid))
             row=self.row(c,cid)
         if subject == COMPUTERS:
@@ -489,7 +515,7 @@ class Vault:
         elif subject.startswith('human:'):
             exists=c.execute('SELECT 1 FROM humans WHERE id=?',(H.actor_id(subject),)).fetchone()
         elif subject.startswith('bot:'):
-            exists=c.execute('SELECT 1 FROM bots WHERE slug=?',(H.actor_id(subject),)).fetchone()
+            exists=c.execute('SELECT 1 FROM bots WHERE id=?',(H.actor_id(subject),)).fetchone()
         else:
             exists=None
         if not exists:
@@ -504,17 +530,17 @@ class Vault:
             for other in c.execute('SELECT id,name FROM credentials WHERE env=? AND id!=? AND ciphertext IS NOT NULL',(row['env'],cid)):
                 held=effective_grant(c,other['id'],subject)
                 if held:
-                    bot=H.actor_id(subject)
+                    bot=(H.bot(c,H.actor_id(subject)) or {}).get('slug') or H.actor_id(subject)
                     ask='' if self.may_revoke(c,who,other['id'],held) else ' '+ask_admin_detail(
                         c,self.admins,f"take {other['name']} away from {bot}")
                     raise Problem('env_in_use',f"{bot} already gets {row['env']} from the credential {other['name']}, and a run "
                                   f"takes one value per variable. Take {other['name']} away from {bot} in Tools > Credentials "
                                   'first, then try again.'+ask,409)
         # Replace expired delegated rows, or promote a delegated grant to direct admin authorization.
-        c.execute('UPDATE credential_grants SET revoked=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked IS NULL',
+        c.execute('UPDATE credential_grants SET revoked_at=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked_at IS NULL',
                   (H.now(),who.actor,cid,subject))
         gid=H.new_id()
-        c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created) VALUES(?,?,?,?,?,?)',
+        c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created_at) VALUES(?,?,?,?,?,?)',
                   (gid,cid,subject,who.actor,parent,H.now()))
         H.event(c,who.actor,'credential.granted',cid,{'grant':gid,'subject':subject,'parent':parent})
         if subject.startswith('bot:') and row['env']:
@@ -552,22 +578,22 @@ def record_use(c,actor,action,cid,detail,windowed):
         return
     now=H.now()
     by=detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')
-    last=c.execute('SELECT logged FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
-    write=(not windowed) or last is None or (last['logged'] or '')<H.shift(now,seconds=-USE_WINDOW)
+    last=c.execute('SELECT logged_at FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
+    write=(not windowed) or last is None or (last['logged_at'] or '')<H.shift(now,seconds=-USE_WINDOW)
     if write:
         H.event(c,actor,action,cid,detail)
-    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) '
-              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=excluded.at,logged=excluded.logged',
-              (cid,actor,by,now,now if write else last['logged']))
+    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,used_at,logged_at) VALUES(?,?,?,?,?) '
+              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET used_at=excluded.used_at,logged_at=excluded.logged_at',
+              (cid,actor,by,now,now if write else last['logged_at']))
 
 
 def last_used(c,cid):
-    """`last_used` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
+    """`last_used_at` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
     key) for Library › Tools: the newest use of the credential, from credential_uses."""
-    row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
+    row=c.execute('SELECT used_at,bot FROM credential_uses WHERE credential_id=? ORDER BY used_at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
-        return {'last_used':None,'last_used_by':''}
-    return {'last_used':row['at'],'last_used_by':row['bot'] or ''}
+        return {'last_used_at':None,'last_used_by':''}
+    return {'last_used_at':row['used_at'],'last_used_by':(H.bot(c,row['bot']) or {}).get('slug') or row['bot'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):
@@ -582,8 +608,8 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         with store.read() as c:
             migration_runner(c,who)
-            pending=set(json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0]))
-            row=c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
+            pending=set(json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0]))
+            row=c.execute('SELECT value FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
             if runner_versions.at_least(c,who.runner_id,'0.2.31'):
                 pending|=set(json.loads(row[0])) if row else set()
             return {'bots':[r[0] for r in c.execute('SELECT bot FROM assignments WHERE runner_id=?',(who.runner_id,)) if r[0] in pending]}
@@ -606,21 +632,23 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         with store.transaction() as c:
             migration_runner(c,who)
-            if not c.execute('SELECT 1 FROM assignments WHERE runner_id=? AND bot=?',(who.runner_id,body.bot)).fetchone():
+            bot=(H.resolve_bot(c,body.bot) or {}).get('id',body.bot)
+            if not c.execute('SELECT 1 FROM assignments WHERE runner_id=? AND bot=?',(who.runner_id,bot)).fetchone():
                 raise Problem('forbidden','That bot is not on this Computer',403)
-            pending=json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0])
-            row=c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
+            pending=json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0])
+            row=c.execute('SELECT value FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
             hub_pending=json.loads(row[0]) if row else []
-            if body.bot not in pending and body.bot not in hub_pending:
+            if bot not in pending and bot not in hub_pending:
                 return {'migrated':True}
-            first=body.bot in pending
+            first=bot in pending
             supports_hub=runner_versions.at_least(c,who.runner_id,'0.2.31')
             if not first and not supports_hub:
                 return {'migrated':False,'min_runner':'0.2.31'}
-            if first and not supports_hub and body.bot not in hub_pending:
-                hub_pending.append(body.bot)
-                c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
-            subject='bot:'+body.bot
+            if first and not supports_hub and bot not in hub_pending:
+                hub_pending.append(bot)
+                c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
+            subject='bot:'+bot
+            label=(H.bot(c,bot) or {}).get('slug') or bot
             for item in body.credentials:
                 if item.env.startswith('HUB_') and not supports_hub:
                     continue
@@ -634,18 +662,18 @@ def install_credentials(app,store,delegate=None,propose=None):
                     continue
                 cid,gid,now=H.new_id(),H.new_id(),H.now()
                 ciphertext,nonce=vault.cipher.encrypt(c,cid,item.value.get_secret_value())
-                c.execute('INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by) '
+                c.execute('INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by) '
                           'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                          (cid,f'{item.env} ({body.bot})',item.kind,item.env,'••••••',ciphertext,nonce,'Computer migration',now,now,who.actor))
-                c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)',
+                          (cid,f'{item.env} ({label})',item.kind,item.env,'••••••',ciphertext,nonce,'Computer migration',now,now,who.actor))
+                c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
                           (gid,cid,subject,who.actor,now))
-                H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':body.bot,'grant':gid})
+                H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
             if first:
-                pending.remove(body.bot)
-                c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(pending),FILE_MIGRATION))
-            if body.bot in hub_pending and supports_hub:
-                hub_pending.remove(body.bot)
-                c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
+                pending.remove(bot)
+                c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(pending),FILE_MIGRATION))
+            if bot in hub_pending and supports_hub:
+                hub_pending.remove(bot)
+                c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
             return {'migrated':True}
 
     def acting(request, body, message_id=None):
@@ -669,6 +697,14 @@ def install_credentials(app,store,delegate=None,propose=None):
         # credential a person asked it to grant (no manual steps).
         who=acting(request,None,on_behalf_of) if on_behalf_of else request.state.identity
         with store.read() as c:
+            if who.role=='bot' and not on_behalf_of and str(who.actor).startswith('bot:'):
+                # A bot sees the names and env names of what it is granted (granted: the same rule a run's values
+                # follow), so it can check they reach its turn. No preview, no other subject's grants, no people.
+                ids=granted(c,who.actor)
+                mine=[{k:v for k,v in vault.brief(row).items() if k!='preview'}|{'can_reveal':False,'grants':[]}
+                      for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id') if row['id'] in ids]
+                return {'credentials':mine,'can_manage':False,'people':[],'bots':[],'computers':[],
+                        'configured':vault.configured,'key_storage':vault.cipher.storage}
             if who.role not in ('human','owner') or not can_open(c,who,vault.admins):
                 raise Problem('forbidden',ask_admin_detail(c,vault.admins,'share credentials, or grant you access to one'),403)
             admin=administrator(c,who,vault.admins)
@@ -681,12 +717,12 @@ def install_credentials(app,store,delegate=None,propose=None):
                 added|=mine
                 item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
-                                for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
+                                for g in c.execute('SELECT id,subject,granted_by,parent_id,created_at FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
                 rows.append(item)
             people=[dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []
-            bots=[dict(r) for r in c.execute('SELECT b.slug AS id,b.display_name AS name,bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.slug ORDER BY b.display_name')
-                  if admin or r['operator']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
+            bots=[dict(r) for r in c.execute('SELECT b.id AS id,b.slug AS slug,b.display_name AS name,bc.owner_id FROM bots b JOIN bot_config bc ON bc.bot=b.id ORDER BY b.display_name')
+                  if admin or r['owner_id']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
             # The computers a model key is shared with by name (Settings > Computers, "Shared with"), named on its grants.
             computers=[dict(r) for r in c.execute("SELECT id,label FROM runners ORDER BY lower(label),id")] if admin else []
             return {'credentials':rows,'can_manage':admin,'people':people,'bots':bots,'computers':computers,'configured':vault.configured,'key_storage':vault.cipher.storage}
@@ -737,7 +773,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 require_admin(c,who,vault.admins)
                 raise Problem('not_found','Grant not found',404)
             vault.revoke_authority(c,who,cid,row)
-            c.execute('UPDATE credential_grants SET revoked=coalesce(revoked,?),revoked_by=? WHERE id=?',(H.now(),who.actor,gid))
+            c.execute('UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by=? WHERE id=?',(H.now(),who.actor,gid))
             H.event(c,who.actor,'credential.revoked',cid,{'grant':gid,'subject':row['subject']})
             return {'ok':True}
 
@@ -762,7 +798,7 @@ def install_credentials(app,store,delegate=None,propose=None):
             return vault.reveal(c,request.state.identity,cid)
 
     @app.get('/api/v2/credential-runtime')
-    def runtime(request:Request):
+    def runtime(request:Request,subscription_runtime:Literal["claude","codex"]|None=None):
         who=request.state.identity
         if who.role!='bot':raise Problem('forbidden','An active bot run is required',403)
         with store.transaction() as c:
@@ -775,8 +811,10 @@ def install_credentials(app,store,delegate=None,propose=None):
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
             from .model_subscriptions import run_values
-            subscriptions=run_values(c,vault,who)
-            return {'credentials':values,**({'subscriptions':subscriptions} if subscriptions else {})}
+            subscriptions=run_values(c,vault,who,subscription_runtime)
+            return {'credentials':values,**({'subscriptions':subscriptions} if subscriptions else {}),
+                    **({'subscription_activated':any(s['runtime']==subscription_runtime for s in subscriptions)}
+                       if subscription_runtime else {})}
 
     @app.get('/api/v2/runner-gateway-credentials')
     def gateway_credentials(request:Request,attempt:str):
@@ -800,12 +838,13 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         def placed(c):
             migration_runner(c,who)
-            if not c.execute('SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot '
+            if not c.execute('SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot '
                              'WHERE a.runner_id=? AND a.bot=? AND b.state=\'active\'',(who.runner_id,bot)).fetchone():
                 raise Problem('forbidden','That active bot is not on this Computer',403)
         # Most watchers hold no credential: answer those from a read, so the poll never queues for the write lock.
         # Sending a value records it, so that and its checks run in one write transaction, as before.
         with store.read_transaction() as c:
+            bot=(H.resolve_bot(c,bot) or {}).get('id',bot)
             placed(c)
             held=granted(c,'bot:'+bot)
             if not any(row['id'] in held for row in c.execute(

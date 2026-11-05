@@ -9,7 +9,7 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Builder | `pr-reviewer` (Senior Software Engineer), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
+| 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
 | 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
 | 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
@@ -106,20 +106,11 @@ ticket stays at its step with a Waiting tag.
   **What wakes** automation on the Automations page.
 - **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
-  work. After 2 hours with no activity (no update, checkpoint or message), its bot owner is woken once for a status,
-  even when the ticket stands as at its last checkpoint and the plain status check would be held, and unless it waits on
-  something recorded (a question, a snooze, a due date, a blocker, a subtask) or a run of it is going. After 4 hours at
-  the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute
-  it. Each happens once per stay at the step. A step's flow sets its own hours (`status_hours`, `late_hours`), on any
-  board; a Dev step without them uses 2 and 4.
-- **A turn that ends and leaves its ticket in progress with nothing queued wakes its owner once.** Ten minutes after
-  the owner's last run on a working ticket, or on an open check below it, finished with nothing live, queued or held
-  after it and nothing recorded to wait on, the owner is woken once per stay at the step, a reviewer included.
+  work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is listed on the task roundup as late, to unblock or reroute it, and again every seven days while it stays late. Owners are not woken for a status: a quiet ticket is listed on its owner's task roundup, once per run (three times a day by default). A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
 - **Head of Engineering works by exception.** On the **Manager** profile it has no step on any ticket: a ticket's
-  steps, its subtasks' results, checks, verdicts, blockers and refused moves on tickets it asked for, and late or
-  backlog notices are notes for its next run, not wakes. An incident still wakes it.
-  About hourly (Settings > Routines, *Engineering exceptions*) Tico builds the board's exceptions list and wakes it
-  only when the list has an entry the last one did not:
+  steps, its subtasks' results, checks, verdicts, blockers and refused moves on tickets it asked for are notes for its next run, not wakes. An incident still wakes it.
+  Tico builds the board's exceptions list, and the manager's task roundup lists each entry (relisted every seven days while it
+  stands). The entries are:
   - a ticket, or the open check below it, with no live, queued or held run for 45 minutes and nothing recorded to wait
     on, or at a check step with no check filed and none waiting, or whose check finished 45 minutes ago without the
     ticket moving on, with its owner and since when;
@@ -134,7 +125,7 @@ ticket stays at its step with a Waiting tag.
   It reads the list any time with `hub pipeline` (`exceptions`), and fixes the cause by hand: moves a ticket
   (`hub task update <id> --step ...`), reassigns it (`--owner`) or closes a duplicate. People and tasks given to it
   still wake it at once. Notes held for it wake nothing: its next run, whatever starts it, carries them, so a week of
-  normal tickets is no turn at all. On the Lead profile it keeps the late and backlog notices instead, and gets no list.
+  normal tickets is no turn at all.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 

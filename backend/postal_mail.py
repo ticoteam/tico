@@ -43,9 +43,11 @@ from clients.gateway import user_agent
 
 from . import hubdb as H
 from . import outbound_tls
+from . import outbox as O
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None                 # tests' fake HQ, never the live one
@@ -57,6 +59,7 @@ QUESTION_SET = "physical-mail"
 EVERY = 60                       # seconds between drains when nothing new came
 MAX_ATTEMPTS = 5                 # then the letter stays failed until a person retries it
 BACKOFF = (60, 300, 1800, 7200)  # seconds before attempt 2, 3, 4, 5
+SCHEDULE = O.Waits(BACKOFF, repeat_last=True)
 BATCH = 10                       # letters per drain
 READS_PER_DAY = 100              # letters read (one Gateway call each) in any 24 hours; more wait for the next hour
 SENDERS = 20                     # addresses or @domains the email-in address takes scans from
@@ -118,8 +121,8 @@ def owner_actor(c, auth):
 def finance_bot(c):
     """The active Finance bot (the first of FINANCE_TEMPLATES that exists), or None."""
     marks = ",".join("?" * len(FINANCE_TEMPLATES))
-    rows = c.execute("SELECT bc.bot, json_extract(bc.config_json,'$.template') AS template FROM bot_config bc "
-                     f"JOIN bots b ON b.slug=bc.bot WHERE json_extract(bc.config_json,'$.template') IN ({marks}) "
+    rows = c.execute(f"SELECT bc.bot, s.template AS template FROM bot_config bc {BS.JOIN} "
+                     f"JOIN bots b ON b.id=bc.bot WHERE s.template IN ({marks}) "
                      "AND b.state='active' ORDER BY bc.bot", FINANCE_TEMPLATES).fetchall()
     rows = sorted(rows, key=lambda r: FINANCE_TEMPLATES.index(r["template"]))
     return rows[0]["bot"] if rows else None
@@ -204,7 +207,7 @@ class EmailProvider(Provider):
         inbound = service.inbound()
         if inbound is None or inbound.off:
             raise Unavailable("no_inbound_key")
-        raw = json.loads(row["raw_json"] or "{}")
+        raw = json.loads(row["raw"] or "{}")
         attachment = raw.get("attachment") or {}
         digest = str(attachment.get("sha256") or "")
         if not SHA256.fullmatch(digest):
@@ -236,7 +239,7 @@ def _keep(c, provider, external_id, *, delivery, address="", state="", received_
     now = H.now()
     raw_json = json.dumps(raw or {}, sort_keys=True, default=str)[:8000]
     cursor = c.execute("INSERT OR IGNORE INTO mail_items(id,provider,external_id,address,state,received_at,num_pages,"
-                       "contains_checks,delivery,raw_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                       "contains_checks,delivery,raw,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                        ("mail_" + uuid.uuid4().hex[:16], provider, external_id, address[:300], state[:20],
                         received_at or now, pages, int(bool(checks)), delivery[:200], raw_json, now, now))
     return bool(cursor.rowcount)
@@ -278,9 +281,9 @@ def intake_inbox(c):
 
 
 def intake_senders(c):
-    row = c.execute("SELECT senders_json FROM mail_intake WHERE singleton=1").fetchone()
+    row = c.execute("SELECT senders FROM mail_intake WHERE singleton=1").fetchone()
     try:
-        found = json.loads(row["senders_json"]) if row else []
+        found = json.loads(row["senders"]) if row else []
     except ValueError:
         found = []
     return [s for s in found if isinstance(s, str)] if isinstance(found, list) else []
@@ -379,7 +382,7 @@ def parent_now(c, task_id):
     live = c.execute("SELECT to_task FROM task_relations WHERE kind='parent' AND from_task=?", (task_id,)).fetchone()
     if live:
         return live[0]
-    kept = c.execute("SELECT rows_json FROM task_trash WHERE task_id=? AND purged_at IS NULL", (task_id,)).fetchone()
+    kept = c.execute("SELECT rows FROM task_trash WHERE task_id=? AND purged_at IS NULL", (task_id,)).fetchone()
     rows = json.loads(kept[0]).get("rows", {}) if kept else {}
     for r in rows.get("task_relations", []):
         if r.get("kind") == "parent" and r.get("from_task") == task_id:
@@ -422,7 +425,7 @@ class PostalMail:
         with self.store.read() as c:
             return [r["id"] for r in c.execute(
                 "SELECT id FROM mail_items WHERE status IN ('new','failed') AND attempts<? "
-                "AND (next_try IS NULL OR next_try<=?) ORDER BY received_at, id LIMIT ?",
+                "AND (next_try_at IS NULL OR next_try_at<=?) ORDER BY received_at, id LIMIT ?",
                 (MAX_ATTEMPTS, H.now(), BATCH)).fetchall()]
 
     def drain(self):
@@ -497,10 +500,10 @@ class PostalMail:
         now = H.now()
         since = H.shift(now, days=-1)
         with self.store.transaction() as c:
-            c.execute("DELETE FROM mail_reads WHERE at<=?", (since,))
-            read = c.execute("SELECT count(*) FROM mail_reads WHERE at>?", (since,)).fetchone()[0]
+            c.execute("DELETE FROM mail_reads WHERE read_at<=?", (since,))
+            read = c.execute("SELECT count(*) FROM mail_reads WHERE read_at>?", (since,)).fetchone()[0]
             if read >= READS_PER_DAY:
-                c.execute("UPDATE mail_items SET next_try=?,error='daily_cap',updated_at=? WHERE id=?",
+                c.execute("UPDATE mail_items SET next_try_at=?,error='daily_cap',updated_at=? WHERE id=?",
                           (H.shift(now, hours=1), now, row["id"]))
                 return True
             c.execute("INSERT INTO mail_reads VALUES(?,?)", (row["id"], now))
@@ -523,7 +526,7 @@ class PostalMail:
                 if row and not H.task_private(c, row):
                     H._made_private(c, H.KEEPER, task_id)
                 elif not row:
-                    c.execute("UPDATE task_trash SET private=1,rows_json=json_set(rows_json,'$.rows.tasks[0].private',"
+                    c.execute("UPDATE task_trash SET private=1,rows=json_set(rows,'$.rows.tasks[0].private',"
                               "1,'$.rows.tasks[0].visibility','private') WHERE task_id=? AND purged_at IS NULL",
                               (task_id,))
                 todo += [r[0] for r in c.execute(
@@ -532,18 +535,18 @@ class PostalMail:
                 # One whose child has another parent now (live, or in the child's own trash copy) is not followed.
                 linked = c.execute(
                     "SELECT json_extract(r.value,'$.from_task') FROM task_trash t, "
-                    "json_each(t.rows_json,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
+                    "json_each(t.rows,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
                     "AND json_extract(r.value,'$.kind')='parent' AND json_extract(r.value,'$.to_task')=? "
                     "UNION SELECT task_id FROM task_trash WHERE purged_at IS NULL "
-                    "AND json_extract(rows_json,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)).fetchall()
+                    "AND json_extract(rows,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)).fetchall()
                 todo += [r[0] for r in linked if r[0] and parent_now(c, r[0]) in (None, task_id)]
             c.execute("DELETE FROM mail_private_backfill")
 
     def fail(self, row, code):
         attempts = row["attempts"] + 1
-        wait = BACKOFF[min(attempts - 1, len(BACKOFF) - 1)]
+        wait = SCHEDULE.wait_for(attempts)
         with self.store.transaction() as c:
-            c.execute("UPDATE mail_items SET status='failed',attempts=?,next_try=?,error=?,updated_at=? "
+            c.execute("UPDATE mail_items SET status='failed',attempts=?,next_try_at=?,error=?,updated_at=? "
                       "WHERE id=? AND status IN ('new','failed')",
                       (attempts, H.shift(H.now(), seconds=wait), str(code)[:80], H.now(), row["id"]))
             H.event(c, H.KEEPER, "mail.failed", row["id"], {"error": str(code)[:80], "attempts": attempts})
@@ -658,7 +661,7 @@ class PostalMail:
             file_added(c, KEEPER, task_id, item, number)
         status = "filed" if task_id else "archived"
         c.execute("UPDATE mail_items SET status=?,kind=?,summary=?,sender=?,deadline=?,task_id=?,file_id=?,blob_id=?,"
-                  "error='',next_try=NULL,updated_at=? WHERE id=?",
+                  "error='',next_try_at=NULL,updated_at=? WHERE id=?",
                   (status, kind or "other", reading["summary"], reading["sender"], reading["deadline"], task_id,
                    file_id, item["id"], H.now(), ident))
         H.event(c, H.KEEPER, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
@@ -682,7 +685,7 @@ class PostalMail:
 
     def retry(self, ident):
         with self.store.transaction() as c:
-            n = c.execute("UPDATE mail_items SET attempts=0,next_try=NULL,updated_at=? WHERE id=? AND status='failed'",
+            n = c.execute("UPDATE mail_items SET attempts=0,next_try_at=NULL,updated_at=? WHERE id=? AND status='failed'",
                           (H.now(), ident)).rowcount
         if n:
             self.kick()
@@ -737,7 +740,7 @@ def scan_access(c, auth, who, blob_id):
 def detail(row):
     out = view(row)
     try:
-        raw = json.loads(row["raw_json"] or "{}")
+        raw = json.loads(row["raw"] or "{}")
     except ValueError:
         raw = {}
     out["flags"] = {k: v for k, v in raw.items() if isinstance(v, bool)}
@@ -871,11 +874,16 @@ def install(app, settings, store, auth):
         inbox_id: str | None = Field(default=None, max_length=120)
         senders: list[str] = Field(default_factory=list, max_length=SENDERS)
 
-    def intake_view(c):
+    def intake_view(c, who):
         row = c.execute("SELECT m.*, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i ON i.inbox_id=m.inbox_id "
                         "WHERE m.singleton=1").fetchone()
         if not row:
             return {"intake": None}
+        from . import inbound
+        if row["inbox_id"] in inbound.hidden_inboxes(c, who, auth):
+            # An inbox narrowed to a group the reader is not in (backend/inbound.py audience): it is set, nothing more.
+            return {"intake": {"inbox_id": None, "address": "", "senders": [], "hidden": True,
+                               "set_by": row["set_by"], "set_at": row["set_at"]}}
         return {"intake": {"inbox_id": row["inbox_id"], "address": row["address"] or "", "senders": intake_senders(c),
                            "set_by": row["set_by"], "set_at": row["set_at"]}}
 
@@ -885,7 +893,7 @@ def install(app, settings, store, auth):
         who = request.state.identity
         with store.read() as c:
             member(c, who)
-            return intake_view(c)
+            return intake_view(c, who)
 
     @app.put("/api/v2/postal/intake")
     def mail_intake_set(request: Request, body: Intake):
@@ -907,9 +915,9 @@ def install(app, settings, store, auth):
                 found = c.execute("SELECT kind FROM inbound_inboxes WHERE inbox_id=?", (body.inbox_id,)).fetchone()
                 if not found or found["kind"] != "email":
                     raise Problem("not_found", "No email inbox with that id", 404)
-                c.execute("INSERT OR REPLACE INTO mail_intake(singleton,inbox_id,set_by,set_at,senders_json) "
+                c.execute("INSERT OR REPLACE INTO mail_intake(singleton,inbox_id,set_by,set_at,senders) "
                           "VALUES(1,?,?,?,?)", (body.inbox_id, who.actor, H.now(), json.dumps(senders)))
             H.event(c, who.actor, "mail.intake", body.inbox_id or "", {})
-            return intake_view(c)
+            return intake_view(c, who)
 
     return service

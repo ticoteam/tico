@@ -23,7 +23,7 @@ def learn(api, text, layer="personal", token="ana-test", expected=200):
 
 def claim_turn(api, r, bot, person, text):
     """The bot's next runner turn for what this person said in their own chat."""
-    assert say(api, text, person)["fast"] is False
+    assert say(api, text, person)
     return post(api, "jobs/claim", {"bot": bot}, token=r["token"])["attempt"]
 
 
@@ -73,7 +73,7 @@ def test_a_personal_layer_is_its_persons_alone(api):
     # Ben edits and deletes his own; the same words twice are one entry.
     assert learn(api, "Put customer mail first", token="ben-test")["entry"]["id"] == ben["id"]
     edited = call(api, "PATCH", f"assistant/learned/{ben['id']}", {"text": "Customer mail, then launches"}, "ben-test")
-    assert edited["entry"]["text"] == "Customer mail, then launches" and edited["entry"]["updated"]
+    assert edited["entry"]["text"] == "Customer mail, then launches" and edited["entry"]["updated_at"]
     assert call(api, "DELETE", f"assistant/learned/{ben['id']}", None, "ben-test") == {"deleted": ben["id"]}
     assert get(api, "assistant/learned", "ben-test")["personal"] == []
     # One short line, and a bot of its own has no layer at all.
