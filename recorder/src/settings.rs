@@ -299,7 +299,7 @@ pub(crate) mod tests {
             refresh_token: "fixture-refresh".into(),
             expires_at: i64::MAX,
         };
-        let writers: Vec<Box<dyn Fn() -> Result<()>>> = vec![
+        let writers: Vec<Box<dyn Fn() -> Result<()> + '_>> = vec![
             Box::new(|| write(dir.path(), &saved)),
             Box::new(|| save_secret("settings-reload", "saved")),
             Box::new(|| save_secret("settings-reload", "")),

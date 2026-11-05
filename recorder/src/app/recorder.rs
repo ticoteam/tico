@@ -1112,6 +1112,7 @@ impl Recorder {
     /// drafts. Runs on its own timer whether or not the window is visible.
     pub fn tick(&mut self) {
         let version = settings::version();
+        // Demo settings are fixture state; normal windows follow every writer.
         if !self.demo
             && self.settings_version != version
             && let Ok(config) = settings::read(self.store.root())

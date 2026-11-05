@@ -57,7 +57,7 @@ pub struct Plan {
     pub url: String,
     pub model: String,
     pub language: String,
-    /// None reads the key from the keychain when a stream starts.
+    /// None follows saved settings and reads the key for every connection.
     pub key: Option<String>,
     /// Streams through this Tico's relay with the person's sign-in instead of a key ("Your
     /// Tico"); its token is read again for every connection, since it renews hourly.
