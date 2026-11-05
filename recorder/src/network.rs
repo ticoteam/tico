@@ -837,7 +837,16 @@ impl Tico {
                         item_version = existing["version"].as_u64().unwrap_or(1);
                     }
                 }
-                let upload = delivery.receipt["uploads"][&item.id]["body"].clone();
+                let upload = delivery.receipt["uploads"][&item.id]
+                    .get("body")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if item_id.is_empty() {
+                            payload.clone()
+                        } else {
+                            Value::Null
+                        }
+                    });
                 let baseline = delivery.receipt["items"][&item.id].clone();
                 let mut server_row = listing["sections"][section]
                     .as_array()
@@ -885,6 +894,15 @@ impl Tico {
                         server_row = Some(reply["item"].clone());
                     }
                 }
+                // An upload can wait while the person keeps typing. Reconcile the current store fields.
+                let latest = store
+                    .context(id)?
+                    .items
+                    .into_iter()
+                    .find(|local| local.id == item.id)
+                    .unwrap_or_else(|| item.clone());
+                let item = &latest;
+                let payload = self.item_payload(item);
                 if item.task_id.is_empty() {
                     let expected = if !upload.is_null() {
                         &upload

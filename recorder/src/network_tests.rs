@@ -3791,3 +3791,81 @@ fn recorder_add_after_save_uploads_once_and_create_always_uses_push() {
         );
     }
 }
+
+#[test]
+fn recorder_save_reads_fields_typed_while_the_item_upload_is_waiting() {
+    for retry in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Typing during Save");
+        store
+            .update_context(&record.id, |c| {
+                c.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    kind: "task".into(),
+                    title: "Original title".into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test"});
+        let original = json!({"id":"server-a","version":1,"status":"proposed","text":"Original title","detail":{"owner":"human:test"}});
+        let mut steps = vec![
+            Some(who.clone()),
+            Some(json!({"id":"filed"})),
+            Some(json!({"sections":{"task":[]}})),
+        ];
+        if retry {
+            steps.extend([
+                None,
+                Some(who),
+                Some(json!({"sections":{"task":[original.clone()]}})),
+            ]);
+        }
+        steps.extend([Some(json!({"item":original})),Some(json!({"item":{"id":"server-a","version":2,"status":"proposed","text":"Typed during upload","detail":{"owner":"human:test"}}}))]);
+        let (release, held) = std::sync::mpsc::channel();
+        let gate = if retry { 6 } else { 3 };
+        let (tico, seen, worker) = server_gated(steps, Some((gate, held)));
+        if retry {
+            assert!(tico.send(&store, &record.id, false).is_err());
+        }
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| tico.send(&store, &record.id, false));
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() <= gate {
+                assert!(std::time::Instant::now() < deadline, "Upload did not start");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |c| {
+                    c.items[0].title = "Typed during upload".into();
+                    Ok(())
+                })
+                .unwrap();
+            release.send(()).unwrap();
+            saving.join().unwrap().unwrap();
+        });
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        assert!(
+            calls
+                .last()
+                .unwrap()
+                .0
+                .starts_with("POST /api/v2/meetings/filed/items/server-a ")
+        );
+        assert_eq!(calls.last().unwrap().1["text"], "Typed during upload");
+        assert_eq!(calls.last().unwrap().1["version"], 1);
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].receipt["items"]["a"]["text"],
+            "Typed during upload"
+        );
+        assert!(
+            store.context(&record.id).unwrap().items[0]
+                .closed_draft
+                .is_none()
+        );
+    }
+}
