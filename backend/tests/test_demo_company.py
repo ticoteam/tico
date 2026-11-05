@@ -110,6 +110,16 @@ def test_no_task_is_left_stuck_for_days(ana):
     assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
 
 
+@pytest.mark.parametrize("hour", [0, 12])
+def test_no_task_is_left_stuck_at_other_build_hours(tmp_path, hour):
+    moment = NOW.replace(hour=hour)
+    with time_machine.travel(moment, tick=False):
+        settings = demo.build(tmp_path, now=moment)
+        with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as api:
+            api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
+            assert api.get("/api/v2/tasks/stuck").json()["tasks"] == []
+
+
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
     live = ana.get("/api/meetings").json()
     pending = ana.get("/api/meetings?review=pending").json()
