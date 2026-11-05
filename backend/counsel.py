@@ -627,7 +627,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
-    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))
+    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None), strict=False)
 
 
 def check_cite(c, auth, who, blobs, cite):

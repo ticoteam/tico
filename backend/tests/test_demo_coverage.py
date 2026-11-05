@@ -106,6 +106,20 @@ def test_full_page_audience_editor_has_a_restricted_example(api):
     assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
 
 
+def test_a_demo_task_and_meeting_link_to_each_other(api):
+    meetings = api.get('/api/v2/meetings').json()['meetings']
+    linked = []
+    for meeting in meetings:
+        response = api.get(f"/api/v2/meetings/{meeting['id']}/tasks")
+        assert response.status_code == 200, response.text
+        linked.extend((meeting['id'], t['task_id']) for t in response.json()['tasks'])
+    assert linked
+    meeting, task = linked[0]
+    response = api.get(f'/api/v2/tasks/{task}/meetings')
+    assert response.status_code == 200, response.text
+    assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
+
+
 def test_task_pages_have_demo_data(api):
     pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()

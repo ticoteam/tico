@@ -512,6 +512,28 @@ def answer(api, args):
 
 
 # ----------------------------------------------------------------------------- meetings
+@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Links preserve each resource's access.",
+      {"id": _s("Meeting id"), "task_ids": {"type": "array", "items": TASK_ID, "minItems": 1, "maxItems": 20},
+       "kind": _s("linked (default), or sent for tasks you requested", enum=["linked", "sent"])},
+      required=("id", "task_ids"), writes=True)
+def meeting_link(api, args):
+    return _as_person(api).post(f"meetings/{args['id']}/tasks",
+                                {"task_ids": args['task_ids'], "kind": args.get('kind', 'linked')}, key=_key(args))
+
+
+@tool("hub_meeting_unlink", "Remove a meeting's task link.",
+      {"id": _s("Meeting id"), "task": TASK_ID}, required=("id", "task"), writes=True)
+def meeting_unlink(api, args):
+    return _as_person(api).call("DELETE", f"meetings/{args['id']}/tasks/{args['task']}", key=_key(args))
+
+
+@tool("hub_task_meetings", "Linked meetings you may open, newest first. Follow next_cursor for more.",
+      {"id": TASK_ID, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("Previous next_cursor")},
+      required=("id",))
+def task_meetings(api, args):
+    return _as_person(api).get(f"tasks/{args['id']}/meetings", **{k: args[k] for k in ('limit', 'cursor') if k in args})
+
+
 @tool("hub_meeting_pending", "List your own Pending meetings, before sharing with the Team.", {})
 def meeting_pending(api, args):
     return _as_person(api).get("meetings", review="pending")
@@ -850,6 +872,7 @@ def task_unsnooze(api, args):
       "answer, no open blocker, no run queued).",
       {"owner": _s("Owner: a bot slug, a human id, or `me`"),
        "requester": _s("Requester: a bot slug, a human id, or `me`"),
+       "q": _s("Title words or #N"),
        "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)},
                   "description": "Only these statuses"},
        "lane": {"type": "string", "enum": ["company", "product"]},
@@ -873,7 +896,7 @@ def task_unsnooze(api, args):
 def task_list(api, args):
     if args.get("stuck"):
         return api.get("tasks/stuck", hours=args.get("hours") or 24)["tasks"]
-    more = {name: args[name] for name in ("type", "step", "sort", "number", "updated_since", "snoozed") if args.get(name)}
+    more = {name: args[name] for name in ("type", "step", "sort", "number", "updated_since", "snoozed", "q") if args.get(name)}
     if args.get("member"):
         more["member"] = _target(api, args["member"])
         if args.get("role"):
@@ -1085,7 +1108,7 @@ def task_update(api, args):
 
 @tool("hub_task_done", "Finish a task you own with its result. A review or QA subtask adds its verdict and the pull "
       "request head it judged, and the task that asked for it is woken with both (the same as hub_task_update with "
-      "status done).",
+      "status done). Its open subtasks close with it, recursively.",
       {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
@@ -3222,7 +3245,8 @@ def docs_links(api, args):
 
 @tool("hub_task_close", "A human may close a task they can edit (its requester or owner, a party to a task above it, "
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
-      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
+      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done. "
+      "Its open subtasks close with it, recursively; one you may not close refuses the whole action.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
        "wake": {"type": "boolean", "default": True,
                 "description": "false: its bots read the close on their next run instead of being woken for it"},
@@ -7650,6 +7674,9 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
+    "hub_meeting_link": REQUESTER + ("assistant",),
+    "hub_meeting_unlink": REQUESTER + ("assistant",),
+    "hub_task_meetings": REQUESTER + ("assistant",),
     "hub_task_caps": REQUESTER_READ, "hub_task_cap_set": PEOPLE + BOTS,
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
