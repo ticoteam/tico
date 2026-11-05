@@ -124,6 +124,11 @@ const init = () => {
     assert.equal(await error.count(), 1, key + ' blur keeps its failed save until Retry');
     await retry();
    }
+   // A routine's due day retains its calendar date across viewer timezones.
+   task.occurrence = 'routine:2026-12-10'; task.due_at = '2026-12-10T23:59:59-11:00'; task.version++;
+   await update();
+   assert.equal(await page.locator('#task-modal [data-prop-date]').inputValue(), '2026-12-10');
+   delete task.occurrence;
    // Every Add box and the comment box keep all their texts while each one has focus during both redraw paths.
    await page.locator('[data-task-more]').click(); await page.getByText('Add subtask', {exact: true}).click();
    await page.getByRole('button', {name: 'Add a link', exact: true}).click();

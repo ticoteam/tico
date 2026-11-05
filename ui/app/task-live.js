@@ -273,9 +273,10 @@ function taskLiveBind(d, task) {
     draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
 }
 const taskLiveValue = (task, key) => sharedDraftValue(task, key === 'due' ? 'due_at' : key);
-function taskLiveDisplay(value, key) {
+function taskLiveDisplay(value, key, task) {
   if (key !== 'due' || !value) return value ?? '';
-  const at = new Date(value);
+  const at = new Date(occurrenceDay(task) || value);
+  if (!Number.isFinite(at.getTime())) return '';
   return new Date(at - at.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 function taskLiveWireField(d, live, field) {
@@ -307,7 +308,7 @@ function taskLivePaint(d, live) {
   if (d.taskLive !== live) return;
   const draft = live.draft, pending = {...draft.inflightPatch, ...draft.patch}, shown = {...draft.base, ...pending};
   for (const field of d.querySelectorAll('[data-task-field], .tmodal-title')) {
-    const key = field.dataset.taskField || 'title', value = taskLiveDisplay(key in pending ? pending[key] : taskLiveValue(draft.base, key), key);
+    const key = field.dataset.taskField || 'title', value = taskLiveDisplay(key in pending ? pending[key] : taskLiveValue(draft.base, key), key, key in pending ? null : draft.base);
     if ((field === document.activeElement || field === live.focus?.field) && !draft.current) continue;
     live.fields[key] = key in draft.dirty ? {...draft.bases[key]} : {value: taskLiveValue(draft.base, key), version: draft.base.version};
     if (field.matches('input, textarea')) {
