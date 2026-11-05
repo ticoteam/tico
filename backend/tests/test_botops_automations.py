@@ -92,7 +92,7 @@ def test_botops_never_goes_past_the_askers_rights(api, botops):
     assert [a["id"] for a in get(api, "automations", "cara-test")["automations"] if not a["builtin"]] == []
 
 
-def test_a_bot_asks_and_botops_proposes_where_that_bot_may_not_change(api, botops):
+def test_a_bot_asks_and_botops_proposes_where_that_bot_may_not_change(api, botops, underlying_authority):
     anas = post(api, "automations", flow(owner="person:ana", trigger={"type": "event", "name": "x.y"}))["id"]
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:finance", "Automate the receipts", "Archive receipts.", "bot:botops", lint=False)

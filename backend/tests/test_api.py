@@ -33,13 +33,7 @@ def api_settings(tmp_path):
 
 
 @pytest.fixture
-def api(tmp_path, api_database, monkeypatch):
-    from backend import scoped_routes
-    # Synthetic identity probes participate explicitly in the reviewed route surface.
-    probes = ("qa-assistant-identity", "qa-handoff-identity", "qa-own-identity", "qa-requester",
-              "qa-delegated-credential", "qa-child-requester")
-    monkeypatch.setattr(scoped_routes, "ALLOWLIST", scoped_routes.ALLOWLIST + tuple(
-        ("GET", "/api/v2/" + path, False) for path in probes))
+def api(tmp_path, api_database):
     settings = api_settings(tmp_path)
     if api_database is not None:
         with closing(sqlite3.connect(api_database.as_uri() + "?mode=ro", uri=True)) as source:

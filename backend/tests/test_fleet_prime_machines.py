@@ -7,11 +7,8 @@ from backend.tests.test_views import as_member
 
 def test_fleet_snapshot_reads_no_assignment_per_bot(api):
     as_member(api, "ben@acme.example")
-    post(api, "tasks", {"title": "Fleet prime", "body": "Run", "owner": "coo"}, "ben-test")
-    machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
-    attempt = claim(api, machine)
+    from backend.tests.test_assistant import assistant_turn
+    machine, attempt = assistant_turn(api, "ben-test")
     fleet, statements = traced(api, lambda: get(api, "tico/fleet", attempt["token"]))
     assert next(bot for bot in fleet["bots"] if bot["slug"] == "coo")["online"]
     # machine() for each shown bot reads the primed row, not its own assignment SELECT.

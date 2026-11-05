@@ -89,6 +89,10 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
     put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="cara-test")
     # A bot orders its own reports, and no other bot's.
     _, _, coo = setup_attempt(api, "coo")
+    put(api, "org/order/coo", {"reports": ["ops"]}, token=coo["token"], expected=403)
+    from backend.tests.test_org_rules import as_bot
+    as_bot(api, "coo", "coo-order")
+    coo = {"token": "coo-order"}
     _, _, ops = setup_attempt(api, "ops")
     put(api, "org/order/coo", {"reports": ["doc-updater", "ops", "finance"]}, token=coo["token"])
     put(api, "org/order/coo", {"reports": ["ops"]}, token=ops["token"], expected=403)

@@ -36,11 +36,8 @@ def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
         restrict(c, "finance", people=["ana"])
     post(api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"},
          "ben-test")
-    post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner": "coo"}, "ben-test")
-    machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
-    attempt = claim(api, machine)
+    from backend.tests.test_assistant import assistant_turn
+    machine, attempt = assistant_turn(api, "ben-test", "What is blocked?")
     fleet = get(api, "tico/fleet", attempt["token"])
     assert fleet["actor"] == "human:ben"
     # The assistant is in the fleet (it still takes work) though nobody chats with it.

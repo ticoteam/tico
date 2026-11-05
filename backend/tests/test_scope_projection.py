@@ -102,6 +102,7 @@ def test_real_write_leak_sweep(api, make):
                   "messages/" + data["answered"]["comment"]["id"],
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/messages",
                   "conversations/" + data["made"]["task"]["conversation_id"] + "/snapshot",
+                  "threads/" + data["made"]["task"]["conversation_id"],
                   "files/" + data["allowed"] + "/meta", "bots/ops/files", "pages", "files/search?q=source"]
     for path in paths:
         no_sources(get(api, path, token), secrets(data))
@@ -251,3 +252,16 @@ def test_unknown_saved_file_ref_survives_the_real_message_writer(api):
     shown = get(api, "messages/" + comment["id"], attempt["token"])
     assert shown["refs"]["files"] == [unknown]
     get(api, "files/" + unknown.split("@")[0], attempt["token"], expected=403)
+
+
+def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api):
+    _, attempt = task_turn(api, bot="botops")
+    token = attempt["token"]
+    for path in ("bots/ops/repositories", "automations", "inbox", "tico/fleet", "bots/ops/turns",
+                 "turns/" + attempt["id"] + "/steps"):
+        get(api, path, token, expected=403)
+    for method, path in (("PUT", "bots/ops/repositories"), ("POST", "bots/ops/model"),
+                         ("POST", "automations"), ("PUT", "providers"), ("POST", "runners/auto")):
+        response = api.request(method, "/api/v2/" + path, json={}, headers={
+            **headers(token), "X-Tico-On-Behalf-Of": "turn"})
+        assert response.status_code == 403, (path, response.text)

@@ -14,7 +14,7 @@ def _write_everywhere(api, token):
     return api.put("/api/v2/bots/ops/repositories", json={"mode": "all", "all_access": "write"}, headers=headers(token))
 
 
-def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(api, botops):
+def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(api, botops, underlying_authority):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
@@ -38,7 +38,7 @@ def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(ap
     assert get(api, "bots/ops/repositories", "ana-test") == before
 
 
-def test_a_person_who_gives_their_own_task_to_botops_lends_their_rights(api, botops):
+def test_a_person_who_gives_their_own_task_to_botops_lends_their_rights(api, botops, underlying_authority):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Give Ops write access", "body": "x"}, token="ana-test")
@@ -96,7 +96,7 @@ def test_a_later_wake_run_citing_a_task_a_bot_moved_to_botops_lends_nothing(api,
     assert get(api, "bots/ops/repositories", "ana-test") == before
 
 
-def test_the_persons_comment_on_a_task_a_bot_moved_says_why_it_lends_nothing(api, botops):
+def test_the_persons_comment_on_a_task_a_bot_moved_says_why_it_lends_nothing(api, botops, underlying_authority):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")

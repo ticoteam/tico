@@ -38,7 +38,7 @@ def test_plain_message_from_another_conversation_does_not_interrupt_running_turn
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (update["id"],)).fetchone()[0] == "queued"
 
 
-def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the_task(api, botops):
+def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the_task(api, botops, underlying_authority):
     from backend.tests.test_botops_parity import act
     active = turn(api, botops, person="ana-test", text="Review ops and keep working until done")
     with api.app.state.store.read() as c:
@@ -256,7 +256,7 @@ def test_a_comment_in_the_room_a_task_moved_to_steers_the_turn_still_running_fro
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"]] == [comment["id"]]
 
 
-def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_run(api, botops):
+def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_run(api, botops, underlying_authority):
     """HotMic, Oct 15: BotOps filed "Build a bot" citing `turn`; the task stored the literal and its own run, which starts
     from the task notice, was refused bot registration."""
     from backend.tests.test_member_bots import register

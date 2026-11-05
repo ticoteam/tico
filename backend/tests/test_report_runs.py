@@ -54,8 +54,12 @@ def test_a_manager_reads_its_reports_runs_and_peers_and_reports_do_not(api):
     turns = {}
 
     def review(slug):
-        # A task-scoped turn cannot read saved run history; test the manager's ordinary control run.
-        turns[slug] = wake(api, machine, slug)["token"]
+        post(api, "tasks", {"owner": slug, "title": "Weekly review", "body": "Review."})
+        scoped = claim(api, machine, slug)["token"]
+        get(api, f"bots/{slug}/turns", scoped, expected=403)
+        from backend.tests.test_org_rules import as_bot
+        turns[slug] = slug + "-history"
+        as_bot(api, slug, turns[slug])
     review("boss")
     # A wake the hub posts into the operator's chat room, outside any task: before, only that room's run read it.
     asked = finish(api, machine, wake(api, machine, "mon"))

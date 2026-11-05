@@ -44,11 +44,11 @@ def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause
     # Metadata uses the existing run gate, including a bot reading its own run.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE run_backoff SET wait_until=NULL")  # the failure's wait is over
-    # Saved history belongs to an unscoped control turn, never a task's shared context.
-    post(api, 'chat/ops', {'text': 'Read the previous run reason.'})
+    post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner': 'ops'})
     next_run = claim(api, machine, 'ops')
     assert next_run
-    assert next(r for r in get(api, 'bots/ops/turns', next_run['token']) if r['id'] == a['id'])['end_reason'] == expected
+    get(api, 'bots/ops/turns', next_run['token'], expected=403)
+    assert next(r for r in get(api, 'bots/ops/turns') if r['id'] == a['id'])['end_reason'] == expected
 
 
 def test_lost_heartbeat_records_end_reason_even_before_start(api):
