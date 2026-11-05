@@ -8616,6 +8616,15 @@ export type ListMeetingItemsParams = {
 export type ListMeetingItemsBody = never;
 export type ListMeetingItemsResponse = unknown;
 
+/** GET /api/v2/meetings/{rid}/tasks */
+export type ListMeetingTasksParams = {
+  cursor?: string | null;
+  limit?: number;
+  rid: string;
+};
+export type ListMeetingTasksBody = never;
+export type ListMeetingTasksResponse = MeetingTaskLinks;
+
 /** GET /api/v2/meetings */
 export type ListMeetingsParams = {
   q?: string;
