@@ -184,6 +184,13 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
         assert jobs(c, "checker") == 1
 
 
+WIDE_GAP_NOT_RUNS = [
+    "Finish writing production acceptance tests", "Complete building production acceptance tests",
+    "Check and update production acceptance tests", "Verify and add production acceptance tests",
+    "Run writing production acceptance tests",
+]
+
+
 @pytest.mark.parametrize("title,child", [
     ("Build the thing", False), ("QA: orphan review", False),
     ("Implement acceptance criteria", False), ("Implement acceptance criteria", True),
@@ -209,6 +216,14 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
     pytest.param("Verify production acceptance checklist", False, id="production-acceptance-top-level-verify-list"),
     pytest.param("Complete the production acceptance plan", False, id="production-acceptance-top-level-complete-plan"),
     pytest.param("Run production acceptance dashboard", False, id="production-acceptance-top-level-run-dashboard"),
+    pytest.param("Build the production acceptance suite", True, id="production-acceptance-child-build"),
+    pytest.param("Update the production acceptance checklist", True, id="production-acceptance-child-update"),
+    pytest.param("Run production acceptance dashboard", True, id="production-acceptance-child-run-dashboard"),
+    pytest.param("Production acceptance checklist update", True, id="production-acceptance-child-prefix-update"),
+    # Product (34f2faaf): build, write, add, update and the other work verbs, and "and"/"or", may not sit between the
+    # run verb and the phrase; these five match the old two-word gap, so they stay ordinary, top-level and parent-linked.
+    *[pytest.param(t, child, id=f"production-acceptance-gap-{i}-{'child' if child else 'top'}")
+      for i, t in enumerate(WIDE_GAP_NOT_RUNS) for child in (False, True)],
 ])
 def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
     with api.app.state.store.transaction() as c:
@@ -240,6 +255,24 @@ def test_a_top_level_production_acceptance_run_reads_as_review_work(api, title):
         put(c, "checker", P.REVIEWER)
         made = H.task_create(c, "bot:ops", title, "x", "bot:checker")
         assert P.is_review_task(c, H.task(c, made["id"]))
+
+
+@pytest.mark.parametrize("title", [
+    "Run production acceptance for the waitlist",
+    "Run the production acceptance suite",
+    "Run waitlist production acceptance after existing release and admin gates clear",
+    "Execute production acceptance for the waitlist",
+    "Production acceptance run for the waitlist",
+])
+def test_a_parent_linked_production_acceptance_run_reads_as_review_work(api, title):
+    """Product ruling A (Dev 750, task 34f2faaf): a run linked to a parent counts as review QA, as a top-level run does."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        parent = H.task_create(c, "bot:ops", "Build it", "x", "bot:cpo")
+        made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent["id"])
+        assert P.is_review_task(c, H.task(c, made["id"]))
+        assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent["id"])
 
 
 def test_a_top_level_production_acceptance_run_is_review_work_for_a_reviewer_and_health_stops_counting_it(api):

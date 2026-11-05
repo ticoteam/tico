@@ -62,8 +62,16 @@ PRODUCTION_ACCEPTANCE_TITLE = re.compile(r"\bproduction acceptance\b", re.I)
 _ACCEPTANCE_RUN_AFTER = (
     r"(?=\s*$|\s*[:,(]|\s+(?:for|after|on|against|in|at|with|from|to|before|during|of|and|through|across"
     r"|tests?|suite|run|pass|sweep|checks?|again|now|today|as|once)\b)")
+#   Between the run verb and the phrase, at most two words, and none of them builds, writes, changes or joins the
+#   acceptance (Product, on 34f2faaf): "Finish writing production acceptance tests" is work on the tests, not a run.
+_NOT_BUILDING_THE_ACCEPTANCE = (
+    r"(?!(?:add|adds|adding|added|build|builds|building|built|write|writes|writing|wrote|written"
+    r"|update|updates|updating|updated|implement|implements|implementing|implemented|create|creates|creating|created"
+    r"|draft|drafts|drafting|drafted|plan|plans|planning|planned|develop|develops|developing|developed"
+    r"|author|authors|authoring|authored|and|or)\b)")
 PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
-    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b(?:\s+[\w-]+){0,2}?"
+    r"^(?:(?:run|rerun|re-run|execute|perform|carry out|complete|finish|check|verify|do)\b"
+    r"(?:\s+" + _NOT_BUILDING_THE_ACCEPTANCE + r"[\w-]+){0,2}?"
     r"\s+production acceptance\b" + _ACCEPTANCE_RUN_AFTER + r"|production acceptance run\b)", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
@@ -214,8 +222,9 @@ def sweeps_on(c, bot):
 def is_review_task(c, row, *, parent_id=None):
     """One classification for creation, assignment, pull, wakes and Health.
 
-    Explicit release QA and a top-level production acceptance run may be top-level. Gate and live acceptance requests
-    need a parent; an untitled delegated child also qualifies while its parent is in a review/QA step.
+    Explicit release QA and a production acceptance run (top-level, or linked to a parent: Dev 750 ruling on 34f2faaf)
+    are review work. Gate and live acceptance requests need a parent; an untitled delegated child also qualifies while
+    its parent is in a review/QA step.
     `parent_id` lets creation check the same rule before the child row exists.
     """
     from . import auto_tasks
@@ -224,9 +233,14 @@ def is_review_task(c, row, *, parent_id=None):
         return True
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
-        return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
+        return _is_production_acceptance_run(title)
     return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
-                or auto_tasks.review(c, row, parent_id=parent_id))
+                or _is_production_acceptance_run(title) or auto_tasks.review(c, row, parent_id=parent_id))
+
+
+def _is_production_acceptance_run(title):
+    """A run of the production acceptance (PRODUCTION_ACCEPTANCE_RUN_TITLE), not a request that builds or changes it."""
+    return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
 
 
 def _check_title(c, parent, title):
