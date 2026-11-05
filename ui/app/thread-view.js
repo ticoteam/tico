@@ -576,8 +576,10 @@ function thvLineGroups(view) {
   }
   return of;
 }
+// The notice about a Home's closed history keeps its Open button on the line (backend/thread_followups.py).
 const thvLineHTML = (view, m) => sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
-  attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`});
+  attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`,
+  tail: m.refs?.earlier_messages?.thread_id ? `<button type="button" class="linkish th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''});
 // The line stands for its group: a button that opens or shuts it. Its panel is always in the markup (empty while shut),
 // so aria-controls names an element either way.
 const thvUpdateLineHTML = (req, panel, open) => `<div class="th-upd"><button type="button" class="th-upd-btn" data-th-update="${esc(req)}" aria-expanded="${open}" aria-controls="${panel}">› Update generated</button></div>`;
