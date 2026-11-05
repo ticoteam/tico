@@ -57,14 +57,18 @@ def git(root, *args, run=subprocess.run, timeout=60):
     command = ["git", "-C", str(root), *args]
     kwargs = dict(capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
                   env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-    done = run(command, **kwargs)
-    if done.returncode:
-        try:
-            if git_locks.recover(root, done.stderr or ""):
-                done = run(command, **kwargs)
-        except git_locks.RecoveryConflict as error:
-            done.stderr = f"{error}; {done.stderr or ''}"
-    return done
+    try:
+        with git_locks.command_lock(root, wait=min(timeout, 10)) as common:
+            done = run(command, **kwargs)
+            if done.returncode:
+                try:
+                    if git_locks.recover_locked(root, done.stderr or "", common):
+                        done = run(command, **kwargs)
+                except git_locks.RecoveryConflict as error:
+                    done.stderr = f"{error}; {done.stderr or ''}"
+            return done
+    except OSError:
+        return subprocess.CompletedProcess(command, 1, "", "repository copy needs attention: Git work is busy or its lock cannot be checked")
 
 
 def repair_instruction_links(root, g):

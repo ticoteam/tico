@@ -706,17 +706,23 @@ work and data roots. **These repository copies must be private to one runner and
 do not share them with another container or the host. Filesystem checks cannot cheaply establish that
 no owner exists outside the namespace. User checkouts outside these roots are never recovered.
 
-The runner waits at least 30 minutes, checks open descriptors and live Git processes' working
-directories, arguments and environment against the verified main checkout, registered worktrees,
-Git admin and common directories. A prepared ref transaction remains an owner even after closing
-its lock descriptor. Recovery is refused when the main checkout or a possible owner cannot be
-verified. On macOS it uses `lsof` and `ps`,
-refusing ambiguous output. Rust and Python serialize recovery with `flock` on the common Git
-directory's `tico-lock-recovery` sidecar. After rechecking the inode, they rename the abandoned lock
-into the common Git directory's `tico-lock-backups/` as `<name>.stale-<timestamp>-*` and verify the
-moved inode. Keeping snapshots outside `refs/` prevents Git from reading them as additional refs. Raced replacements are restored only if
-the original pathname is free; otherwise both copies stay and the failed command names them in
-Health. Quarantined locks are retained; none are cleaned up within a day of quarantine.
+Automatic lock recovery is Linux-only. The runner holds the repository's `tico-lock-recovery`
+`flock` through each Git command, recovery and retry. Rust and the Python updater use the same gate;
+the main checkout and its linked worktrees share it. This keeps the runner's other Git calls out
+while recovery checks and moves a lock.
+
+The lock must be at least 30 minutes old. A `/proc` scan must find no open descriptor for its inode
+and no live Git process whose working directory, arguments or environment point into the verified
+main checkout, registered worktrees, mirror or Git metadata. A prepared ref transaction still owns
+its lock after closing the descriptor. Missing process visibility or an unverified checkout stops
+recovery. macOS and other platforms keep the lock for a person or BotOps; `lsof` and `ps` cannot
+establish writer exclusion.
+
+The inode and modification time must still match just before the move. An eligible lock moves to
+the common Git directory's `tico-lock-backups/` as `<name>.stale-<timestamp>-*`; it stays out of `refs/`
+so Git cannot read it as another ref. Retained locks keep the failed Git command and lock path in
+Health or the link detail for review. Quarantined locks are retained; none are cleaned up within a
+day of quarantine.
 
 A broken mirror is renamed to `<mirror>.broken-<timestamp>-*` before a fresh copy is built, only
 when it has no registered worktrees, no runner repository uses its objects through an alternates
