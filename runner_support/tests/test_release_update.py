@@ -725,6 +725,8 @@ def test_closed_git_lock_is_owned_by_cwd_arguments_or_environment(tmp_path, monk
     monkeypatch.setattr(Path, "iterdir", lambda p: iter([process]) if p == Path("/proc") else original(p))
     cases = [(checkout, ["git", "commit"], []),
              (tmp_path, ["git", "-C", str(checkout), "commit"], []),
+             (tmp_path, ["git", "-C" + str(checkout), "commit"], []),
+             (tmp_path, ["git", "--work-tree=" + str(checkout), "commit"], []),
              (tmp_path, ["git", "--git-dir", str(metadata), "commit"], []),
              (tmp_path, ["git", "--git-dir=" + str(metadata), "commit"], []),
              (tmp_path, ["git", "commit"], ["GIT_DIR=" + str(metadata)])]

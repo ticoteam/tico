@@ -58,14 +58,18 @@ def related(cwd, arguments, environment, roots):
             at = (at / next(args)).resolve(strict=True)
             if inside(at, cwd):
                 return True
-        elif arg == "--git-dir":
+        elif arg.startswith("-C"):
+            at = (at / arg[2:]).resolve(strict=True)
+            if inside(at, cwd):
+                return True
+        elif arg in ("--git-dir", "--work-tree"):
             if inside(next(args), at):
                 return True
-        elif arg.startswith("--git-dir="):
+        elif arg.startswith(("--git-dir=", "--work-tree=")):
             if inside(arg.partition("=")[2], at):
                 return True
     for value in environment:
-        if value.startswith(("GIT_DIR=", "GIT_COMMON_DIR=")) and inside(value.partition("=")[2], at):
+        if value.startswith(("GIT_DIR=", "GIT_COMMON_DIR=", "GIT_WORK_TREE=")) and inside(value.partition("=")[2], at):
             return True
     return False
 

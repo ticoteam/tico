@@ -63,14 +63,17 @@ fn related(cwd: &Path, args: &[String], environment: &[String], roots: &[PathBuf
         if arg == "-C" {
             at = at.join(args.next()?).canonicalize().ok()?;
             if inside(&at)? { return Some(true); }
-        } else if arg == "--git-dir" {
+        } else if let Some(path) = arg.strip_prefix("-C") {
+            at = at.join(path).canonicalize().ok()?;
+            if inside(&at)? { return Some(true); }
+        } else if arg == "--git-dir" || arg == "--work-tree" {
             if inside(&at.join(args.next()?))? { return Some(true); }
-        } else if let Some(path) = arg.strip_prefix("--git-dir=") {
+        } else if let Some(path) = arg.strip_prefix("--git-dir=").or_else(|| arg.strip_prefix("--work-tree=")) {
             if inside(&at.join(path))? { return Some(true); }
         }
     }
     for entry in environment {
-        if let Some(path) = entry.strip_prefix("GIT_DIR=").or_else(|| entry.strip_prefix("GIT_COMMON_DIR=")) {
+        if let Some(path) = entry.strip_prefix("GIT_DIR=").or_else(|| entry.strip_prefix("GIT_COMMON_DIR=")).or_else(|| entry.strip_prefix("GIT_WORK_TREE=")) {
             if inside(&at.join(path))? { return Some(true); }
         }
     }
@@ -502,7 +505,8 @@ mod tests {
         assert_eq!(git_related(&process, &roots), Some(true));
         std::fs::remove_file(process.join("cwd")).unwrap();
         std::os::unix::fs::symlink(&root, process.join("cwd")).unwrap();
-        for args in [format!("git\0-C\0{}\0commit\0", repo.display()), format!("git\0--git-dir\0{}\0commit\0", admin.display()), format!("git\0--git-dir={}\0commit\0", admin.display())] {
+        for args in [format!("git\0-C\0{}\0commit\0", repo.display()), format!("git\0-C{}\0commit\0", repo.display()),
+            format!("git\0--work-tree={}\0commit\0", repo.display()), format!("git\0--git-dir\0{}\0commit\0", admin.display()), format!("git\0--git-dir={}\0commit\0", admin.display())] {
             std::fs::write(process.join("cmdline"), args).unwrap();
             assert_eq!(git_related(&process, &roots), Some(true));
         }
