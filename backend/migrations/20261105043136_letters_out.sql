@@ -26,7 +26,7 @@ CREATE TABLE letters (
   status TEXT NOT NULL DEFAULT 'quoted', tracking TEXT NOT NULL DEFAULT '[]',
   cancel_possible INTEGER NOT NULL DEFAULT 0, always_ask INTEGER NOT NULL DEFAULT 1,
   error TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0, next_sync_at TEXT,
-  submitted_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  submitted_at TEXT, accepted_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX letters_due ON letters(status,next_sync_at);
 CREATE INDEX letters_spend ON letters(submitted_at,acting_bot_id,status);

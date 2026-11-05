@@ -520,6 +520,7 @@ class LetterRow(TypedDict):
     attempts: int
     next_sync_at: str | None
     submitted_at: str | None
+    accepted_at: str | None
     created_at: str
     updated_at: str
 

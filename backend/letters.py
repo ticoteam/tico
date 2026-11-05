@@ -394,7 +394,8 @@ class Letters:
             if limit is None:
                 continue
             sql = "SELECT COALESCE(SUM(total_micros),0) FROM letters WHERE substr(submitted_at,1,7)=? "
-            sql += "AND status IN ('submitting','submitted','printing','mailed','delivered','returned') AND id<>?"
+            sql += "AND (status IN ('submitting','submitted','printing','mailed','delivered','returned') "
+            sql += "OR (accepted_at IS NOT NULL AND status<>'cancelled')) AND id<>?"
             args = [month, row["id"]]
             if bot:
                 sql += " AND acting_bot_id=?"
@@ -511,10 +512,12 @@ class Letters:
         tracking = [{"barcode": str(t.get("barcode") or "")[:100], "status": t.get("status")
                      if t.get("status") in ACTIVE + FINAL else None} for t in result.get("tracking", [])[:20]]
         with self.store.transaction() as c:
+            previous = c.execute("SELECT accepted_at FROM letters WHERE id=?", (ident,)).fetchone()
+            accepted = previous[0] or (H.now() if status in ("submitted", "printing", "mailed", "delivered", "returned") else None)
             c.execute("UPDATE letters SET hq_letter_id=?,status=?,tracking=?,cancel_possible=?,error=?,attempts=0,"
-                "next_sync_at=?,updated_at=? WHERE id=?", (result["letter_id"], status, dump(tracking),
+                "accepted_at=?,next_sync_at=?,updated_at=? WHERE id=?", (result["letter_id"], status, dump(tracking),
                 int(bool(result.get("cancel_possible"))), str(result.get("error") or "")[:100],
-                None if status in FINAL else later(600 if status != "mailed" else 86400), H.now(), ident))
+                accepted, None if status in FINAL else later(600 if status != "mailed" else 86400), H.now(), ident))
             H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
 
     def cancel(self, who, ident):

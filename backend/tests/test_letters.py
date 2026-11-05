@@ -178,6 +178,16 @@ def test_per_bot_cap_and_bot_override_cannot_loosen_company_policy(api, hq):
     assert not hq.jobs
 
 
+def test_a_later_provider_failure_does_not_erase_accepted_spend(api, hq):
+    put(api, "letters/settings", {"monthly_cap_micros": 2000000})
+    first = send(api, quote(api))
+    approve(api, first)
+    accepted = fetch(api, first)
+    api.app.state.letters.update(first["id"], {"letter_id": accepted["hq_letter_id"], "status": "failed"})
+    second = quote(api)
+    assert post(api, "letters/" + second["id"] + "/send", {}, expected=409)["error"]["code"] == "letters_cap"
+
+
 def test_on_their_own_still_asks_for_new_address_and_certified(api, hq):
     put(api, "letters/settings", {"mode": "on_their_own"})
     first = send(api, quote(api))
