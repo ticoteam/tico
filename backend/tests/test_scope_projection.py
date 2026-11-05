@@ -47,8 +47,10 @@ def sources(api, title="Restricted source"):
 
 def narrow(api, data):
     from backend import meetings
-    archived = api.patch("/api/v2/files/" + data["hidden"], json={"archived": True}, headers=headers())
-    assert archived.status_code == 200, archived.text
+    private = post(api, "tasks", {"owner": "human:ana", "title": "Private source provenance",
+                                  "body": "Keep this source private", "private": True})
+    moved = api.patch("/api/v2/files/" + data["hidden"], json={"task": private["id"]}, headers=headers())
+    assert moved.status_code == 200, moved.text
     with api.app.state.store.transaction() as c:
         row = meetings.get(data["meeting"], c)
         meetings.snapshot({**row["metadata"], "private": True, "audience": "participants"}, conn=c)
