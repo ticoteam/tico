@@ -184,19 +184,16 @@ impl Heard {
                 }
             }
         }
+        let mut counts = vec![(0usize, 0usize); words.len()];
+        for (index, (_, _, word)) in mic.iter().enumerate() {
+            counts[*word].0 += 1;
+            counts[*word].1 += usize::from(removed[index]);
+        }
         words
             .iter()
-            .enumerate()
-            .filter(|(i, _)| {
-                let indexes: Vec<_> = mic
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, t)| t.2 == *i)
-                    .map(|(j, _)| j)
-                    .collect();
-                indexes.is_empty() || indexes.iter().any(|j| !removed[*j])
-            })
-            .map(|(_, w)| w.clone())
+            .zip(counts)
+            .filter(|(_, (total, matched))| *total == 0 || matched < total)
+            .map(|(word, _)| word.clone())
             .collect()
     }
 }
