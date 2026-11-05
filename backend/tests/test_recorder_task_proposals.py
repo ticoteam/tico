@@ -72,3 +72,14 @@ def test_this_mac_dismisses_pending_without_links(api):
     assert get(api, f'meetings/{rid}', 'ben-test')['review_state'] == 'dismissed'
     with api.app.state.store.read() as c:
         assert not c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=?', (rid,)).fetchone()
+
+
+def test_link_proposals_keep_person_and_assistant_permissions_and_refuse_bot_tokens(api):
+    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.test_api import setup_attempt
+    rid, target = record(api), task(api, private=False)
+    iid = add(api, rid, {'section': 'task', 'text': 'Follow up', 'proposed_task_id': target['id']})['item']['id']
+    _, _, claimed = setup_attempt(api)
+    accept(api, rid, iid, claimed['token'], expected=403)
+    _, attempt = assistant_turn(api, 'cara-test')
+    assert accept(api, rid, iid, attempt['token'])['item']['result_ref'] == target['id']

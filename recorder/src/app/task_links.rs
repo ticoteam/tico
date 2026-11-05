@@ -1,6 +1,23 @@
 use super::*;
 
 impl Recorder {
+    pub(super) fn draft_destination(&self, id: &str) -> String {
+        let context = self.store.context(id).unwrap_or_default();
+        if !context.live_destination.is_empty() {
+            return context.live_destination;
+        }
+        if self.meeting.as_deref() == Some(id) {
+            return self.router();
+        }
+        if !context.task_candidates_destination.is_empty() {
+            return context.task_candidates_destination;
+        }
+        self.config
+            .destinations
+            .first()
+            .map(|d| d.id.clone())
+            .unwrap_or_default()
+    }
     pub(super) fn link_scope(&self) -> Value {
         let destination = self.router();
         let connected = self
@@ -217,5 +234,13 @@ mod tests {
         assert!(rows[0]["proposed_number"].is_null());
         app.context.kept_on_mac = true;
         assert_eq!(app.actions_view("two")["can_link"], false);
+        let background = app.store.create("Background recording").unwrap();
+        app.store
+            .update_context(&background.id, |c| {
+                c.live_destination = "one".into();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(app.draft_destination(&background.id), "one");
     }
 }

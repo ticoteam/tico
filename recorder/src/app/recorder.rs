@@ -898,8 +898,14 @@ impl Recorder {
             return;
         }
         let (config, store) = (self.config.clone(), self.store.clone());
-        let destination = self.router();
+        let destination = self.draft_destination(&id);
         self.job_for("autodraft", Some(id.clone()), move || {
+            let mut config = config;
+            if speech::source(&config) == speech::TICO
+                && let Some(at) = config.destinations.iter().position(|d| d.id == destination)
+            {
+                config.destinations.swap(0, at);
+            }
             let tasks = Tico::saved(&config, &destination)
                 .and_then(|tico| tico.draft_tasks(&store, &id))
                 .unwrap_or_default();
