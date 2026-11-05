@@ -30,8 +30,6 @@ CREATE TABLE IF NOT EXISTS pages(
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
  as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS page_identities(
- identity TEXT NOT NULL, file_id TEXT NOT NULL REFERENCES pages(file_id), PRIMARY KEY(identity,file_id));
 CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
 """
 

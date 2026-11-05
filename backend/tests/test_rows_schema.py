@@ -12,6 +12,7 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.PageIdentityRow: "page_identities",
     rows.MeetingTaskLinkRow: "meeting_task_links",
     rows.SuggestionRow: "suggestions",
     rows.TaskRow: "tasks",
