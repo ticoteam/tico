@@ -605,25 +605,18 @@ def TR_parent(c, task_id):
     return TR.parent_of(c, task_id)
 
 
-def _take(c, wait, only=None):
-    """Give one waiting check to `only` (a bot that just finished one) or to the best free member. The child, else
-    None. A wait whose ticket left the step, finished or was checked meanwhile ends here."""
+def _take_plan(c, wait, only=None):
+    """Read what taking a wait would do, so idle retries need no writer transaction."""
     ticket = H.task(c, wait["ticket_id"])
     if not ticket or ticket.get("step_id") != wait["step_id"] or ticket["status"] not in H.ACTIVE_STATUSES:
-        c.execute("UPDATE check_waits SET state='dropped',reason='the ticket moved on',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "the ticket moved on"}
     found = pool(c, wait["step_id"])
     if not found:
-        c.execute("UPDATE check_waits SET state='dropped',reason='the step has no pool',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "the step has no pool"}
     step, slugs, limit = found
     heads = [h for h in wait["heads"].split(",") if h]
     if has_open_check(c, ticket, step, heads):
-        c.execute("UPDATE check_waits SET state='dropped',reason='a check was filed',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
     if only is not None:
         builder = builder_makers(c, ticket)
@@ -632,6 +625,17 @@ def _take(c, wait, only=None):
         # The bot that just finished takes the wait, unless a free bot ranks ahead of it by model company: then the
         # best free one does, as `ranked` orders them.
         free = [] if only not in free else [only] if rank(only) <= rank(free[0]) else free
+    return {"ticket": ticket, "step": step, "heads": heads, "free": free, "reason": reason}
+
+
+def _take(c, wait, only=None):
+    """Give a wait to `only` or its best free member; drop it if its ticket moved on or already has a check."""
+    plan = _take_plan(c, wait, only)
+    if "drop" in plan:
+        c.execute("UPDATE check_waits SET state='dropped',reason=?,updated_at=? WHERE id=?",
+                  (plan["drop"], H.now(), wait["id"]))
+        return None
+    ticket, step, heads, free, reason = (plan[k] for k in ("ticket", "step", "heads", "free", "reason"))
     for slug in free:
         # Taken before the request is filed, so the one-check-per-head rule does not see its own wait.
         c.execute("UPDATE check_waits SET state='filed',updated_at=? WHERE id=?", (H.now(), wait["id"]))
@@ -690,27 +694,59 @@ def drain(c):
 RETRY_LIMIT = 20
 
 
+RETRY_WAITS_SQL = ("SELECT id,step_id,created_at FROM check_waits WHERE step_id=? AND state='waiting' "
+                   "AND (created_at,id)>(?,?) "
+                   "ORDER BY created_at,id LIMIT ?")
+
+
+def _retry_waits(c, limit, after):
+    """Seek a bounded queue for each step with room, then take the oldest waits across those steps."""
+    capacity, waits = {}, []
+    for raw in c.execute("SELECT id,check_pool,check_limit FROM task_steps WHERE check_pool IS NOT NULL"):
+        slugs = members(raw["check_pool"]) or []
+        if not slugs:
+            continue
+        # Capacity depends on the bot, not on how many tickets are waiting for its pool.
+        for slug in slugs:
+            if slug not in capacity:
+                capacity[slug] = open_checks(c, slug) if online(c, slug) else None
+        if not any(capacity[s] is not None and capacity[s] < int(raw["check_limit"] or DEFAULT_LIMIT) for s in slugs):
+            continue
+        cursor = after.get(raw["id"], ("", ""))
+        rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], *cursor, limit))]
+        if not rows and cursor != ("", ""):
+            rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], "", "", limit))]
+        waits.extend(rows)
+    return sorted(waits, key=lambda w: (w["created_at"], w["id"]))[:limit]
+
+
 def retry(store, limit=RETRY_LIMIT):
-    """Retry a bounded batch with online pool members, one writer transaction per wait, no network calls."""
+    """Retry waits whose pools have room. Unchanged waits use only reads; filing rechecks under the writer."""
+    limit = max(0, min(limit, RETRY_LIMIT))
+    if not limit:
+        return []
+    # Advance past ineligible tickets without rewriting idle waits. A restart starts again at the oldest wait.
+    after = getattr(store, "_check_retry_after", {})
+    store._check_retry_after = after
     with store.read_transaction() as c:
         if not _ready(c):
             return []
-        waits = [r[0] for r in c.execute(
-            "SELECT w.id FROM check_waits w JOIN task_steps s ON s.id=w.step_id WHERE w.state='waiting' "
-            "AND EXISTS(SELECT 1 FROM json_each(s.check_pool) p JOIN bots b ON b.id=p.value "
-            "JOIN assignments a ON a.bot=b.id JOIN runners_with_state r ON r.id=a.runner_id "
-            "LEFT JOIN bot_status bs ON bs.bot=b.id WHERE b.state='active' "
-            "AND coalesce(bs.state,'') NOT IN (?,?,?,?) AND r.revoked_at IS NULL AND r.last_seen_at>=?) "
-            "ORDER BY w.updated_at,w.created_at,w.id LIMIT ?",
-            (*HELD, H.shift(H.now(), minutes=-ONLINE_MINUTES), min(limit, RETRY_LIMIT)))]
+        waits = _retry_waits(c, limit, after)
     out = []
-    for wid in waits:
+    for wait in waits:
+        wid = wait["id"]
+        after[wait["step_id"]] = (wait["created_at"], wid)
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if not row:
+                continue
+            plan = _take_plan(c, dict(row))
+            if "drop" not in plan and not plan["free"] and (not plan["reason"] or plan["reason"] == row["reason"]):
+                continue
         with store.transaction() as c:
             # A completion, pool edit or another pass may have taken it since the read above.
             row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
             if row:
-                # Rotate blocked waits too, so a busy pool cannot starve later waits out of the bounded batch.
-                c.execute("UPDATE check_waits SET updated_at=? WHERE id=?", (H.now(), wid))
                 child = safely(c, _take, dict(row))
                 if child:
                     out.append(child["id"])

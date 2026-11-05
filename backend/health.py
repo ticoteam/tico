@@ -1551,7 +1551,7 @@ def review_children_sql(visible, parents=1):
 
 
 def _review_actors(c, who, auth, tickets):
-    """Check evidence and review roles for all waiting tickets, in set reads. Hidden children supply no evidence."""
+    """Check evidence and review roles in set reads. Unseen children cannot supply approval or an owner."""
     from . import check_pools as P, step_flow as F, verdict_moves as V
     states, actors = {}, {}
     if not tickets:
@@ -1562,12 +1562,18 @@ def _review_actors(c, who, auth, tickets):
         steps[step["id"]] = step
         boards.setdefault(step["type_id"], []).append(step)
     for ticket in tickets:
-        states.setdefault(ticket["task_id"], {"ticket": ticket, "children": [], "prs": [], "waits": [], "events": [], "tags": []})
+        states.setdefault(ticket["task_id"], {"ticket": ticket, "children": [], "prs": [], "waits": [], "events": [], "tags": [],
+                                             "complete": True})
     role, visible = auth.settings.github_review_role or "reviewer", auth.task_sql(c, who)
     for part in H.chunks(sorted(states)):
         marks = ",".join("?" * len(part))
         for raw in c.execute(review_children_sql(visible, len(part)), part):
             states[raw["parent"]]["children"].append(dict(raw))
+        # Read only whether evidence is incomplete, never the hidden tasks' owners or verdicts.
+        for raw in c.execute("SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
+                             f"WHERE r.kind='parent' AND r.to_task IN ({marks}) AND tasks.owner_id LIKE 'bot:%' "
+                             f"AND NOT (coalesce(tasks.private,1)=0 AND ({visible}))", part):
+            states[raw[0]]["complete"] = False
         for raw in c.execute(f"SELECT * FROM task_links WHERE task_id IN ({marks}) AND kind='pr' ORDER BY created_at", part):
             states[raw["task_id"]]["prs"].append(dict(raw))
         for raw in c.execute(f"SELECT * FROM check_waits WHERE ticket_id IN ({marks}) AND state='waiting' ORDER BY created_at,id", part):
@@ -1607,7 +1613,7 @@ def _review_actors(c, who, auth, tickets):
         state["children"] = children
         fixes = next((s for s in boards.get(ticket["type_id"], [])
                       if F.of(s).get("on_fail") == ticket["step_id"]), None)
-        judged = next((t for t in reversed(children) if V._verdict(t) and fixes
+        judged = next((t for t in reversed(children) if H.is_bot(t["owner_id"]) and V._verdict(t) and fixes
                        and (t["check_step"] or {}).get("id") == fixes["id"]), None)
         state["judged"] = str(judged.get("verdict_head") or judged["judged_head"] or "").split(",")[0].lower() if judged else None
     # Pool status for a missing request is read for every pool together, never by calling ranked per PR.
@@ -1643,7 +1649,7 @@ def _review_move(c, link, state, actors):
     owner, number = link["owner_id"], link["number"]
     head = V._head(link)
     children, step = state["children"], state["step"]
-    judged = [t for t in children if V._verdict(t) and head and
+    judged = [t for t in children if H.is_bot(t["owner_id"]) and V._verdict(t) and head and
               any(h and head.startswith(h.lower()) for h in str(t["verdict_head"] or t["judged_head"] or "-").split(","))]
     latest = max(judged, key=lambda t: (t["updated_at"], t["created_at"], t["id"]), default=None)
     checks = [t for t in children if H.is_bot(t["owner_id"]) and (t["check_step"] or {}).get("id") == (step or {}).get("id")]
@@ -1652,18 +1658,21 @@ def _review_move(c, link, state, actors):
         return owner, f"{owner}: address review changes on PR #{number}"
     skipped = bool(step and F.skip_target(c, {**link, "tags": state["tags"]}, step)) or any(
         e["kind"] == "round_skipped" and e["new"] == f"{(step or {}).get('id')}:{head}" for e in state["events"])
-    ready = V.merge_ready(c, link, evidence={**state, "checks": checks, "skipped": skipped and (not verdict or verdict in V.GOOD)})
+    ready = state["complete"] and V.merge_ready(c, link, evidence={**state, "checks": checks,
+                                                                 "skipped": skipped and (not verdict or verdict in V.GOOD)})
     if ready:
         return owner, f"{owner}: merge PR #{number}"
-    if verdict in V.GOOD or (not F.is_check(step) and judged):
+    if state["complete"] and (verdict in V.GOOD or (not F.is_check(step) and judged)):
         return owner, f"{owner}: move PR #{number} on"
-    opened = [t for t in children if t["status"] in H.ACTIVE_STATUSES and
-              (not t["judged_head"] or not head or any(h and head.startswith(h.lower()) for h in t["judged_head"].split(",")))]
+    # An open check judges the current head when it runs, including a push since it was filed.
+    opened = [t for t in children if t["status"] in H.ACTIVE_STATUSES]
     if opened:
         actor = ", ".join(dict.fromkeys(t["owner_id"] for t in opened[:3]))
         return actor, f"{actor}: review PR #{number}"
     wait = next((w for w in state["waits"] if w["step_id"] == link["step_id"]), None)
     pool = f"{step['name']} pool" if step and F.check_kind(step) else "reviewer (not assigned)"
+    if not state["complete"]:
+        return pool, f"{pool}: check review status for PR #{number}"
     old = any(V._verdict(t) for t in children) and not judged
     if wait:
         return pool, f"{pool}: {'re-review' if old else 'check'} PR #{number} waiting for a free reviewer; {wait['reason'][:300]}"

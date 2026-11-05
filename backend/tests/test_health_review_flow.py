@@ -129,6 +129,59 @@ def test_private_children_supply_no_owner_or_verdict_to_health(environment):
     assert 'address review changes' not in item['fix']
 
 
+def test_hidden_qa_failure_cannot_turn_a_public_pass_into_merge_readiness(environment):
+    from backend import verdict_moves as V
+    api = setup(environment)
+    task = ticket(api, step='In QA')
+    with api.app.state.store.transaction() as c:
+        # With no failure target, the ticket stays at QA even after a failed check.
+        c.execute('UPDATE task_steps SET flow=? WHERE id=?',
+                  (json.dumps({'check': 'qa', 'on_pass': 'merge'}), task['step_id']))
+    hidden = child(api, task, title='QA: PR #206', owner='hidden-reviewer', verdict='fail', private=True)
+    child(api, task, title='QA again: PR #206', verdict='pass')
+    with api.app.state.store.read_transaction() as c:
+        assert V.merge_ready(c, H.task(c, task['id'])) is None
+    [item] = items(api)
+    assert item['whose_move'] == 'In QA pool'
+    assert 'merge PR' not in item['fix'] and 'move PR' not in item['fix']
+    assert 'address review changes' not in item['fix']
+    assert all(value not in json.dumps(item) for value in (hidden['id'], 'hidden-reviewer', 'QA again'))
+
+
+def test_a_push_keeps_the_open_checks_reviewer(environment):
+    from backend import verdict_moves as V
+    api = setup(environment)
+    task = ticket(api)
+    check = child(api, task, status='open')
+    with api.app.state.store.transaction() as c:
+        link = next(p for p in H.task_links(c, task['id']) if p['kind'] == 'pr')
+        detail = H._json(link['detail'], {})
+        detail['head_sha'] = OLD
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['id']))
+        assert V.new_head(c, H.task(c, task['id'])) is None
+        assert H.TR.child_ids(c, task['id']) == [check['id']]
+        assert H.task(c, check['id'])['status'] == 'open'
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:reviewer'
+    assert 'review PR #206' in item['fix'] and 'no reviewer filed' not in item['fix']
+
+
+def test_a_completed_human_subtask_is_not_review_feedback(environment):
+    from backend import step_flow as F, verdict_moves as V
+    api = setup(environment)
+    task = ticket(api)
+    check = child(api, task, status='open')
+    with api.app.state.store.transaction() as c:
+        human = H.task_create(c, 'human:morgan', 'Second look: human notes', '', 'human:morgan',
+                              parent_id=task['id'], private=False, lint=False)
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (human['id'],))
+        H._task_event(c, human['id'], H.KEEPER, 'review_head', None, HEAD, '')
+        assert [t['id'] for t in V._checks(c, task, F.step(c, task['step_id']))] == [check['id']]
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:reviewer'
+    assert 'address review changes' not in item['fix']
+
+
 def test_review_flow_keeps_its_clock_after_a_github_review(environment):
     from backend import github
     api = setup(environment)
