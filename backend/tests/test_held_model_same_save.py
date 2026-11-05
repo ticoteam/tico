@@ -40,3 +40,17 @@ def test_a_same_model_save_on_the_held_terra_keeps_it_and_a_fresh_pick_is_refuse
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6.1-terra", "expected_revision": _revision(api)},
          expected=422)
     post(api, "bots/ops/model", {"model": "gpt-6.1-terra", "expected_revision": _revision(api)}, expected=422)
+
+
+def test_the_held_terra_is_listed_only_while_a_bot_runs_it(api):
+    """The Settings editor gets the held row only for a bot that already runs it (its Model list and efforts); a
+    company with no such bot never receives it, so nothing offers it as a fresh pick."""
+    r = runner(api)
+
+    def listed():
+        return {row["id"] for row in get(api, "models")["models"]}
+
+    assert "gpt-6.1-terra" not in listed()
+    _terra_bot(api, r)
+    assert "gpt-6.1-terra" in listed()
+    assert "claude-sonnet-5-5" in listed()

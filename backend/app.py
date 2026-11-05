@@ -2873,7 +2873,12 @@ def create_app(settings=None):
         with store.read() as c:
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
-        return {"models": [row for row in MODEL_CATALOG if not row.get("held")], "harnesses": list(HARNESS_CATALOG),
+            # A held row (Dev 693) is listed only while a bot or the team default already runs it, so the Settings
+            # editor can keep the saved model and its efforts; the picker offers it to that bot alone (ui settings-bots).
+            in_use = {choice["model"]} | {(json.loads(row["config"] or "{}") or {}).get("model")
+                                          for row in c.execute(BS.ROW_SQL).fetchall()}
+        return {"models": [row for row in MODEL_CATALOG if not row.get("held") or row["id"] in in_use],
+                "harnesses": list(HARNESS_CATALOG),
                 "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
