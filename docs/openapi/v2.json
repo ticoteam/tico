@@ -34204,7 +34204,7 @@
     },
     "/api/v2/tasks": {
       "get": {
-        "summary": "Tasks the caller can see; type, step, number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), sort=step orders a board's columns, brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed",
+        "summary": "Tasks the caller can see; q matches title words or #N; type, step, number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), sort=step orders a board's columns, brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed",
         "operationId": "listTasks",
         "parameters": [
           {
@@ -34469,6 +34469,16 @@
                 }
               ],
               "title": "Snoozed"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Q"
             }
           }
         ],
@@ -35876,6 +35886,86 @@
                 ],
                 "title": "TaskFile",
                 "type": "object"
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/meetings": {
+      "get": {
+        "summary": "Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap",
+        "operationId": "listTaskMeetings",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMeetings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           }
@@ -58029,6 +58119,34 @@
         ],
         "additionalProperties": true
       },
+      "Link": {
+        "properties": {
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Task Ids"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "linked",
+              "sent"
+            ],
+            "title": "Kind",
+            "default": "linked"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task_ids"
+        ],
+        "title": "Link"
+      },
       "LinkBody": {
         "properties": {
           "url": {
@@ -58685,6 +58803,79 @@
           "mode",
           "next_offset",
           "results"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskLink": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "linked",
+              "sent",
+              "proposal"
+            ]
+          },
+          "created_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created_by",
+          "kind",
+          "number",
+          "status",
+          "task_id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskLinks": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeetingTaskLink"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskRemoved": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
         ],
         "additionalProperties": true
       },
@@ -68418,6 +68609,60 @@
           "cursor",
           "next_offset",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMeeting": {
+        "type": "object",
+        "properties": {
+          "meeting_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "linked",
+              "sent",
+              "proposal"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "meeting_id",
+          "started_at",
+          "title",
+          "url"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMeetings": {
+        "type": "object",
+        "properties": {
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskMeeting"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "meetings",
+          "next_cursor"
         ],
         "additionalProperties": true
       },

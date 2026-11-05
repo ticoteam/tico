@@ -195,9 +195,9 @@ TRIGGERS = [
     ("changes_media_link_access", "UPDATE", "media_control", _changed("deleted_at"),
      _fan("meetings", "SELECT task_id AS id FROM meeting_task_links WHERE meeting_id=NEW.meeting_id")),
     ("changes_meeting_task_links_insert", "INSERT", "meeting_task_links", None,
-     _row("tasks", "meetings", "NEW.task_id") + _row("meeting_items", "links", "NEW.id", ref="NEW.meeting_id")),
+     _row("tasks", "meetings", "NEW.task_id", ref="NEW.meeting_id") + _row("meeting_items", "links", "NEW.id", ref="NEW.meeting_id")),
     ("changes_meeting_task_links_delete", "DELETE", "meeting_task_links", None,
-     _row("tasks", "meetings", "OLD.task_id") + _row("meeting_items", "links", "OLD.id", ref="OLD.meeting_id")),
+     _row("tasks", "meetings", "OLD.task_id", ref="OLD.meeting_id") + _row("meeting_items", "links", "OLD.id", ref="OLD.meeting_id")),
     ("changes_task_meeting_access", "UPDATE", "tasks", _changed("owner_id", "requester_id", "private", "guest"),
      _meeting_links("NEW.id")),
     ("changes_roles_meeting_insert", "INSERT", "task_roles", None, _meeting_links("NEW.task_id")),
@@ -1201,15 +1201,20 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
+    from . import meeting_task_links, task_reads
     c, who = view.c, view.who
+    rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
-    last, kinds = {}, {}
+    last, kinds, public_before = {}, {}, {}
     for row in rows:
         if row["kind"] != "bulk":
             last[row["subject_id"]] = row
             kinds.setdefault(row["subject_id"], set()).add(row["kind"])
+            was = H._json(row["ref"], None) if row["kind"] in ("update", "delete") else None
+            if isinstance(was, list) and len(was) >= 3 and not was[2]:
+                public_before.setdefault(row["subject_id"], []).append(row["ref"])
     ids = list(last)
     if not ids:
         return out
@@ -1239,10 +1244,21 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
         entry = {"id": task_id, "kind": row["kind"], "kinds": sorted(kinds[task_id])}
         if task_id in views:
             entry["task"] = views[task_id]
+            if task_id in meeting_links:
+                entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
+            entry["gone"] = True
+        # A formerly public row can be removed; revoked private work stays completely silent.
+        elif any(task_reads._could_read(c, visible_sql, task_id, ref) for ref in public_before.get(task_id, ())):
             entry["gone"] = True
         else:
             continue
+        if entry.get("gone"):
+            ordinary = [r for r in rows if r["subject_id"] == task_id and r["kind"] != "meetings"]
+            if not ordinary:
+                continue
+            row = ordinary[-1]
+            entry.update(kind=row["kind"], kinds=sorted({r["kind"] for r in ordinary}))
         out.append((row, entry))
     return out
 

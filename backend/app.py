@@ -4036,7 +4036,7 @@ def create_app(settings=None):
               offset: int = 0, sort: str = "queue", type: str | None = None, step: str | None = None,
               number: int | None = None, updated_since: str | None = None, brief: bool = False,
               member: str | None = None, role: str | None = None, changed_after: str | None = None,
-              ids: str | None = None, snoozed: str | None = None):
+              ids: str | None = None, snoozed: str | None = None, q: str = ""):
         from . import task_reads as reads
         who = request.state.identity
         auth.domain(who)
@@ -4051,7 +4051,7 @@ def create_app(settings=None):
                 c, owner=owner, requester=requester, status=status, lane=lane, label=label, type=type, step=step,
                 number=number, updated_since=updated_since, member=member, role=role, snoozed=snoozed,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
-                by_id=ids is not None or number is not None)
+                by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())))
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
             visible_sql = auth.task_sql(c, who)
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
@@ -4060,7 +4060,7 @@ def create_app(settings=None):
                 typed, found = task_idents(c, who, ids, visible_sql)
                 if changed_after is not None:
                     raise Problem("ids", "ids and changed_after are separate reads", 422)
-            filters.update(order=sort, visible_sql=visible_sql)
+            filters.update(order=sort, visible_sql=visible_sql, q=q)
             if typed is not None:
                 filters["ids"] = [tid for tid in found.values() if tid]
             def brief_rows(rows):
@@ -8533,6 +8533,8 @@ def create_app(settings=None):
     install_meeting_items(app, store, mutate, task_create, auth)
     from . import presence
     presence.install(app, store, mutate, auth)
+    from .meeting_task_links import install as install_meeting_task_links
+    install_meeting_task_links(app, store, auth, mutate)
     from .connectors import install_connectors
     install_connectors(app, store, execution, mutate)
     from .imports import install_imports

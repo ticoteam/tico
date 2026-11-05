@@ -889,6 +889,7 @@ function meetItemsRender(state, rec) {
         ${proposed ? `<span class="count">${proposed}</span>` : ''}
         <button class="linkish" type="button" data-add="${key}">Add</button></header>
       ${rows.map(it => meetItemHTML(state, it, canPush)).join('') || '<div class="meet-empty">Nothing yet.</div>'}
+      ${key === 'task' ? '<div data-linked-tasks></div>' : ''}
       ${state.itemAdd === key ? `<div class="meet-item"><form data-new="${key}">
           <textarea data-text aria-label="What to add" placeholder="What should happen?"></textarea>
           ${meetItemFields(key, {})}
@@ -904,6 +905,7 @@ function meetItemsRender(state, rec) {
     if (!section) { other.firstElementChild.append(next.cloneNode(true)); continue; }
     const keep = [...section.children].filter(n => n.querySelector('form'));
     const children = [...next.children].map(child => {
+      if (child.matches('[data-linked-tasks]')) return section.querySelector('[data-linked-tasks]') || child;
       const form = child.querySelector('form');
       const existing = form && keep.find(n => n.querySelector(`form[${form.dataset.new ? 'data-new' : 'data-edit'}="${form.dataset.new || form.dataset.edit}"]`));
       return existing || child;
@@ -914,6 +916,7 @@ function meetItemsRender(state, rec) {
   }
   meetPendingRender(state, rec, data);
   meetItemsHandlers(state, rec);
+  meetLinkedTasksRender(state, rec.id);
   box.querySelectorAll('.at[data-seek]').forEach(b => { b.onclick = () => meetSeek(Number(b.dataset.seek)); });
 }
 function meetItemsHandlers(state, rec) {
@@ -1005,11 +1008,97 @@ async function meetItemsLoad(state, id) {
   }
   return data;
 }
+function meetLinkedTasksRender(state, id) {
+  if (MEET !== state || !state.open || state.selected !== id) return;
+  const slot = $('[data-linked-tasks]');
+  if (!slot) return;
+  const linked = state.linkedTasks?.[id];
+  const held = new Map([...slot.querySelectorAll('[data-linked-task]')].map(row => [row.dataset.linkedTask, row]));
+  for (const task of linked?.tasks || []) {
+    let row = held.get(task.task_id);
+    held.delete(task.task_id);
+    if (!row) { row = document.createElement('div'); row.className = 'meet-item'; row.dataset.linkedTask = task.task_id; }
+    const html = `<span class="t">${task.number ? '#' + esc(task.number) + ' ' : ''}${esc(task.title)} · ${esc(task.status)}</span><a href="#/task/${encodeURIComponent(task.task_id)}">Open</a>`;
+    if (row.innerHTML !== html) row.innerHTML = html;
+    slot.append(row);
+  }
+  for (const row of held.values()) row.remove();
+  const empty = $('[data-sec="task"] .meet-empty');
+  if (empty) empty.hidden = !!linked?.tasks?.length;
+  let more = $('[data-linked-more]', slot);
+  if (!linked?.next_cursor) { more?.remove(); more = null; }
+  else {
+    if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'linkish'; more.dataset.linkedMore = ''; more.textContent = 'More'; }
+    slot.append(more);
+  }
+  if (more) more.onclick = () => { more.disabled = true; meetLinkedTasksLoad(state, id, linked.next_cursor); };
+}
+async function meetLinkedTasksLoad(state, id, cursor) {
+  const changes = new Map();
+  (state.linkedTaskChanges ||= {})[id] = changes;
+  try {
+    const target = cursor ? 0 : Math.max(20, state.linkedTasks?.[id]?.tasks?.length || 0);
+    const previous = cursor ? state.linkedTasks?.[id]?.tasks || [] : [];
+    const rows = new Map(previous.map(task => [task.task_id, task]));
+    let next = cursor, result;
+    do {
+      const query = new URLSearchParams({limit: '20'});
+      if (next) query.set('cursor', next);
+      result = await get(`/v2/meetings/${encodeURIComponent(id)}/tasks?${query}`);
+      if (MEET !== state || state.linkedTaskChanges[id] !== changes) return;
+      for (const task of result.tasks || []) rows.set(task.task_id, task);
+      next = result.next_cursor;
+    } while (!cursor && next && rows.size < target);
+    for (const [tid, task] of changes) {
+      if (task) rows.set(tid, task);
+      else rows.delete(tid);
+    }
+    state.linkedTasks = {...state.linkedTasks, [id]: {...result, tasks: [...rows.values()]}};
+    meetLinkedTasksRender(state, id);
+  } catch (e) {
+    if (MEET === state && state.selected === id) {
+      const more = $('[data-linked-more]');
+      if (more) more.disabled = false;
+      if (cursor) toast(e.message, true);
+    }
+  }
+}
+// The task event carries only links whose meeting and task this viewer can both read.
+liveOn('tasks', event => {
+  const state = MEET, id = state?.selected;
+  if (!state?.open || !id) return;
+  const linked = state.linkedTasks?.[id];
+  const change = event.meeting_links?.find(link => link.meeting_id === id);
+  const existing = linked?.tasks?.find(task => task.task_id === event.id);
+  const changes = (state.linkedTaskChanges ||= {});
+  const pending = (changes[id] ||= new Map());
+  const known = existing || pending.get(event.id);
+  if (event.bulk || ((event.kind === 'meetings' || event.kinds?.includes('meetings')) && !event.meeting_links)) {
+    liveSoon('meeting-tasks:' + id, () => { if (MEET === state && state.open && state.selected === id) meetLinkedTasksLoad(state, id); }, 200);
+    return;
+  }
+  if (!change && !known) return;
+  if (event.gone || (change && !change.link)) pending.set(event.id, null);
+  else if (event.task) {
+    pending.set(event.id, {...(change?.link || known), task_id: event.id, number: event.task.number,
+      title: String(event.task.title || '').slice(0, 200), status: event.task.status});
+  } else return;
+  const rows = new Map((linked?.tasks || []).map(task => [task.task_id, task]));
+  for (const [tid, task] of pending) { if (task) rows.set(tid, task); else rows.delete(tid); }
+  state.linkedTasks = {...state.linkedTasks, [id]: {...linked, tasks: [...rows.values()]}};
+  meetLinkedTasksRender(state, id);
+});
+liveOn('reset', () => {
+  if (!MEET?.open || !MEET.selected) return;
+  MEET.linkedTaskChanges = {};
+  meetLinkedTasksLoad(MEET, MEET.selected);
+});
 function meetItemsWire(state, rec) {
   if (!$('#meet-sections')) return;
   meetItemsRender(state, rec);
   meetItemsLoad(state, rec.id);
   meetSharedStart(state, rec.id);
+  meetLinkedTasksLoad(state, rec.id);
 }
 
 // Click the title to rename it, Enter or blur saves, Escape keeps the old name (owner only).

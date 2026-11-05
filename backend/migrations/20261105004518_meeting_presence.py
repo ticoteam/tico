@@ -25,7 +25,7 @@ def up(conn):
     conn.execute("CREATE TRIGGER IF NOT EXISTS presences_meeting_delete BEFORE DELETE ON meetings BEGIN "
                  "DELETE FROM presences WHERE place='meeting:'||OLD.id; "
                  "DELETE FROM task_roles WHERE role='participant' AND task_id IN "
-                 "(SELECT result_ref FROM meeting_items WHERE meeting_id=OLD.id AND status='pushed' UNION SELECT t.id FROM tasks t JOIN live_meetings lm ON lm.id=t.live_meeting_id WHERE lm.imported_meeting_id=OLD.id); END")
+                 "(SELECT result_ref FROM meeting_items WHERE meeting_id=OLD.id AND status='pushed' UNION SELECT t.id FROM tasks t JOIN live_meetings lm ON lm.id=t.live_meeting_id WHERE lm.imported_meeting_id=OLD.id UNION SELECT task_id FROM meeting_task_links WHERE meeting_id=OLD.id AND kind='sent'); END")
     conn.execute("CREATE TRIGGER IF NOT EXISTS participants_live_delete BEFORE DELETE ON live_meetings BEGIN "
                  "DELETE FROM task_roles WHERE role='participant' AND task_id IN "
                  "(SELECT id FROM tasks WHERE live_meeting_id=OLD.id); END")

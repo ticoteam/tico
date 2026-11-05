@@ -377,3 +377,23 @@ def test_historical_grant_does_not_parse_string_participants_as_people(api):
         assert not c.execute('SELECT id FROM tasks WHERE id=? AND ('+api.app.state.auth.task_sql(c,who)+')',(tid,)).fetchone()
     assert api.get(f'/api/v2/meetings/{rid}',headers=headers('ben-test')).status_code == 403
     assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
+
+
+def test_sent_link_and_legacy_item_provenance_both_follow_current_access(api):
+    from backend.tests.test_api import post
+    for keep in ('link','item'):
+        rid = record(api, {'private':True,'participants':['ben@acme.example']})
+        iid = add(api,rid,{'section':'task','text':keep+' source followup','detail':{'owner':'human:ana'}})['item']['id']
+        tid = push(api,rid,iid)['item']['result_ref']
+        with api.app.state.store.transaction() as c:
+            links = c.execute("SELECT kind FROM meeting_task_links WHERE meeting_id=? AND task_id=?",(rid,tid)).fetchall()
+            assert [row[0] for row in links] == ['sent']
+            if keep == 'link':
+                c.execute('DELETE FROM meeting_items WHERE id=?',(iid,))
+            else:
+                c.execute('DELETE FROM meeting_task_links WHERE meeting_id=? AND task_id=?',(rid,tid))
+        assert get(api,'tasks/'+tid,'ben-test')['task']['id'] == tid
+        post(api,f'meetings/{rid}/review',{'action':'approve','audience':'participants'})
+        assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'",(tid,)).fetchone()

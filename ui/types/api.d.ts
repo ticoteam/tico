@@ -3114,6 +3114,11 @@ export type LibraryFile = {
   version: number;
 };
 
+export type Link = {
+  kind?: "linked" | "sent";
+  task_ids: Array<string>;
+};
+
 export type LinkBody = {
   bot?: string;
   file?: string | null;
@@ -3237,6 +3242,24 @@ export type MeetingSearch = {
   mode: string;
   next_offset: number | null;
   results: Array<unknown>;
+};
+
+export type MeetingTaskLink = {
+  created_by: string;
+  kind: "linked" | "sent" | "proposal";
+  number: number | null;
+  status: string;
+  task_id: string;
+  title: string;
+};
+
+export type MeetingTaskLinks = {
+  next_cursor: string | null;
+  tasks: Array<MeetingTaskLink>;
+};
+
+export type MeetingTaskRemoved = {
+  ok: boolean;
 };
 
 export type MemberAdd = {
@@ -5056,6 +5079,19 @@ export type TaskList = {
   next_offset: number | null;
   reset?: boolean;
   tasks: Array<Task>;
+};
+
+export type TaskMeeting = {
+  kind: "linked" | "sent" | "proposal";
+  meeting_id: string;
+  started_at: string;
+  title: string;
+  url: string;
+};
+
+export type TaskMeetings = {
+  meetings: Array<TaskMeeting>;
+  next_cursor: string | null;
 };
 
 export type TaskRelation = {
@@ -7934,6 +7970,14 @@ export type LinkGoalKpiParams = {
 export type LinkGoalKpiBody = GoalKpiLink;
 export type LinkGoalKpiResponse = GoalKpiResult;
 
+/** POST /api/v2/meetings/{rid}/tasks */
+export type LinkMeetingTasksParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type LinkMeetingTasksBody = Link;
+export type LinkMeetingTasksResponse = MeetingTaskLinks;
+
 /** GET /api/v2/automations/runs */
 export type ListAllAutomationRunsParams = {
   before?: string;
@@ -8868,6 +8912,15 @@ export type ListTaskLabelsParams = Record<string, never>;
 export type ListTaskLabelsBody = never;
 export type ListTaskLabelsResponse = unknown;
 
+/** GET /api/v2/tasks/{tid}/meetings */
+export type ListTaskMeetingsParams = {
+  cursor?: string | null;
+  limit?: number;
+  tid: string;
+};
+export type ListTaskMeetingsBody = never;
+export type ListTaskMeetingsResponse = TaskMeetings;
+
 /** GET /api/v2/tasks/{tid}/requesters */
 export type ListTaskRequestersParams = {
   limit?: number;
@@ -8894,6 +8947,7 @@ export type ListTasksParams = {
   number?: number | null;
   offset?: number;
   owner?: string | null;
+  q?: string;
   requester?: string | null;
   role?: string | null;
   snoozed?: string | null;
@@ -9414,6 +9468,15 @@ export type RemoveFeedbackParams = {
 };
 export type RemoveFeedbackBody = never;
 export type RemoveFeedbackResponse = FeedbackRemoved;
+
+/** DELETE /api/v2/meetings/{rid}/tasks/{tid} */
+export type RemoveMeetingTaskParams = {
+  "Idempotency-Key": string;
+  rid: string;
+  tid: string;
+};
+export type RemoveMeetingTaskBody = never;
+export type RemoveMeetingTaskResponse = MeetingTaskRemoved;
 
 /** DELETE /api/v2/model-subscriptions/{sid} */
 export type RemoveModelSubscriptionParams = {

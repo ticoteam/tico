@@ -107,7 +107,7 @@ function liveRestart() {
 // own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope() {
   const r = typeof S !== 'undefined' && S.route || '';
-  if (isTasksRoute(r)) return {all: true};
+  if (isTasksRoute(r) || r.startsWith('#/meetings')) return {all: true};
   if (r.startsWith('#/task/')) return {task: [decodeURIComponent(r.slice(7).split(/[/?]/)[0])], party: []};
   const open = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
   // A bot's route may name it by slug (a link made from a label); its actor is its id.

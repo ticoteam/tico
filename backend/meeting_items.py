@@ -17,7 +17,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import Field
 
-from . import media, meeting_audience
+from . import media, meeting_audience, task_references
 from . import models as M
 from . import people as P
 from .store import H, Problem
@@ -132,16 +132,9 @@ def redact(c, who, auth, value):
     """Apply current task access even to an idempotency receipt."""
     if isinstance(value, dict):
         value = {key: redact(c, who, auth, part) for key, part in value.items()}
-        for key in ("proposed_task_id", "result_ref"):
-            if value.get(key):
-                try:
-                    if auth is None:
-                        raise Problem("not_found", "Task not found", 404)
-                    auth.task(c, who, value[key])
-                except Problem:
-                    value[key] = None
-    elif isinstance(value, list):
-        value = [redact(c, who, auth, part) for part in value]
+        return task_references.redact(c, auth, who, value)
+    if isinstance(value, list):
+        return [redact(c, who, auth, part) for part in value]
     return value
 
 
@@ -152,7 +145,7 @@ def one(c, rid, iid):
     return row
 
 
-def listing(c, who, rid, auth=None):
+def listing(c, who, rid, auth):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
     rows = [view(r, c, who, auth) for r in c.execute(

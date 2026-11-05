@@ -41,7 +41,8 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models", "task_run_models", "task_holds", "maintenance_listings", "maintenance_handoffs")
+             "task_check_models", "task_run_models", "task_holds", "meeting_task_links",
+             "maintenance_listings", "maintenance_handoffs")
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
 TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
@@ -540,6 +541,8 @@ def restore_tasks(c, ids, actor=None):
     for e in entries:
         changed(c, e["task_id"])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
+    # A task restorer may not read its meetings, so skipped links must not reveal their count.
+    skipped.pop("meeting_task_links", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
 
 

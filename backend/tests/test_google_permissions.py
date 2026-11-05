@@ -44,6 +44,20 @@ def test_everything_is_on_until_an_admin_acting_as_themselves_turns_it_off(api):
         assert c.execute("SELECT count(*) FROM events WHERE action='google.permissions.set'").fetchone()[0] == 1
 
 
+def test_a_stored_legacy_attachment_switch_does_not_restrict_sending(app):
+    machine = runner(app)
+    with app.app.state.store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (W.PERMISSIONS_KEY, json.dumps({**ALL_ON, "send_attachments": False})))
+    assert get(app, "google", "cara-test")["permissions"] == ALL_ON
+    assert get(app, "connectors/mail/targets", machine["token"])["company"] == ALL_ON
+    changed = app.post("/api/v2/bots/inbox/mail-settings", json={"outbound_send": True}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    own = get(app, "bots/inbox/mail-settings", "inbox-test")
+    assert own["company_send"] is True and own["outbound_send"] is True
+    assert "company_attachments" not in own
+
+
 def test_scopes_follow_what_tico_may_do():
     send_only = {"organize_mail": False, "send_mail": True, "change_calendar": False}
     nothing = dict.fromkeys(ALL_ON, False)
