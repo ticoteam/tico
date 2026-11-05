@@ -336,6 +336,11 @@ REVIEWED = {
     "POST /api/v2/api-tools/{tool_id}/check": "one authenticated GET per stored key; it reads, records the result and returns no value",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+    "POST /api/v2/api-tools/{tool_id}/check": "Check now: one authenticated GET to the vendor per key; reveals and changes nothing",
+    "POST /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "PUT /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "PATCH /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
+    "DELETE /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
     "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }

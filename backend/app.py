@@ -93,6 +93,7 @@ from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, bot_readiness, encode, message_page, refused, repo_url, task_message_page
 from . import bot_settings as BS
 
@@ -712,6 +713,10 @@ def create_app(settings=None):
                 return await call_next(request)
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
+                return await call_next(request)
+            # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
+            # no Tico identity: the route refuses anything not signed for that tool and a live run.
+            if request.url.path.startswith(TOOL_PROXY_PATH):
                 return await call_next(request)
             # An agent signing in to the MCP server over OAuth (backend/mcp_oauth.py): the metadata it reads first, and
             # the registration, token and revocation endpoints, which carry their own codes and secrets.
@@ -8549,6 +8554,8 @@ def create_app(settings=None):
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     from . import api_tools
     api_tools.install(app, store, auth, settings)      # Tools: API tools, their keys and levels, and the tool index
+    from . import tool_proxy
+    tool_proxy.install(app, store)
     from .finance import actions as finance_vault
     finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     from .google_workspace import install as install_google_workspace

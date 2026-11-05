@@ -7086,6 +7086,23 @@ def tool_check(api,args):
     return _as_person(api).post('api-tools/'+quote(str(args['id']).removeprefix('api:'),safe='')+'/check',{})
 
 
+@tool('hub_tool_call','Call a proxied API tool from this turn: METHOD and path on the vendor\'s API, through the Tico '
+      'tool proxy, which adds the real key and logs the call. The tool id is the one in TICO_TOOL_<ID>_URL. Returns '
+      '{status, content_type, body}.',
+      {'tool':_s('The API tool id, e.g. close-crm'),
+       'method':{'type':'string','enum':['GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE']},
+       'path':_s('The vendor API path, e.g. /api/v1/me/'),
+       'data':{'description':'A JSON body'},
+       'query':{'type':'array','items':{'type':'string'},'description':'Query parameters, each key=value'}},
+      required=('tool','method','path'), local=True)
+def tool_call(api,args):
+    from clients import tool_call as T
+    try:
+        return T.call(args['tool'], args['method'], args['path'], args.get('data'), args.get('query') or ())
+    except T.CallError as exc:
+        return {'error': str(exc)}
+
+
 # ----------------------------------------------------------------------------- letters out (backend/letters.py)
 LETTER_ADDRESS = {"type": "object", "additionalProperties": False,
     "properties": {name: _s(name.replace('_', ' ')) for name in
@@ -8037,6 +8054,7 @@ ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
     "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+    "hub_tool_call",
 })
 
 
