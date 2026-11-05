@@ -6361,7 +6361,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
         if relay:
             del refs["quiet"]
         sources = list(text_sources)
-        sources.extend(o["source"] for q in asked["refs"].get("questions", []) for o in q["options"]
+        sources.extend(o["source"] for q in asked["refs"].get("questions", []) for o in q.get("options") or []
                        if o.get("source") and o["label"] == quote)
         text, refs = sourced_text(f'{name(person)} (quoted by {name(actor)}): "{quote}"', sources, refs)
         if asked["refs"].get("questions"):
