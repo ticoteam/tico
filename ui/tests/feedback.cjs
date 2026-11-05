@@ -401,7 +401,7 @@ async function threadMessage(browser) {
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   assert.equal(await page.locator('.th-msg[data-mid="h1"] [data-fb]').count(), 0);
   await msg.hover();
-  assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Acknowledge', 'Message menu'], 'the toolbar is as it was');
+  assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['React', 'Reply', 'Copy'], 'the hover bar');
   assert.deepEqual(await msg.locator('.fb-row button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Copy message', 'Good', 'Not good']);
   const under = await msg.evaluate(m => m.querySelector('.fb-row').getBoundingClientRect().top >= m.querySelector('.th-react').getBoundingClientRect().bottom - 1);
   assert.equal(under, true, 'the row sits under the words and reactions');

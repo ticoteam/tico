@@ -90,7 +90,7 @@ def failed_at(w, ticket_id, head):
 
 def waiver_events(w, ticket_id=None):
     import json
-    rows = w.sql("SELECT task_id, actor, new, created_at FROM task_events WHERE field='qa_waiver'"
+    rows = w.sql("SELECT subject_id AS task_id, actor_id AS actor, new, created_at FROM history_events WHERE subject_type='task' AND kind='qa_waiver'"
                  + (" AND task_id=?" if ticket_id else "") + " ORDER BY created_at, rowid", (ticket_id,) if ticket_id else ())
     return [{**r, "head": (json.loads(r["new"] or "{}") or {}).get("head")} for r in rows]
 
@@ -149,13 +149,13 @@ def judgments_at(w, check, head):
     "comments" when it finished with no verdict (`_verdict` in backend/verdict_moves.py). A check with no verdict judged
     the head it was filed for (its review_head, as `_judged_head` reads it)."""
     out = []
-    for e in w.sql("SELECT created_at, lower(new) new FROM task_events WHERE task_id=? AND field='verdict'", (check["id"],)):
+    for e in w.sql("SELECT created_at, lower(new) new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict'", (check["id"],)):
         verdict, _, judged = str(e["new"] or "").partition(" ")
         if judged and head.startswith(judged):
             out.append((w.H.parse_ts(e["created_at"]), verdict))
     if not check.get("verdict") and check["status"] == "done":
         judged = w.judged_head(check)
-        done = w.sql("SELECT max(created_at) created_at FROM task_events WHERE task_id=? AND field='status' AND new='done'",
+        done = w.sql("SELECT max(created_at) created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done'",
                      (check["id"],))
         if judged and head.startswith(judged) and done and done[0]["created_at"]:
             out.append((w.H.parse_ts(done[0]["created_at"]), "comments"))
@@ -257,8 +257,8 @@ def waiver_sets_no_verdict(run):
     waived = {e["task_id"] for e in waiver_events(w)}
     for tid in waived:
         for c in qa_children(w, tid):
-            for e in w.sql("SELECT actor, field FROM task_events WHERE task_id=? AND (actor LIKE 'human:%' OR "
-                           "(field IN ('verdict','verdict_head') AND new IS NOT NULL AND new<>''))", (c["id"],)):
+            for e in w.sql("SELECT actor_id AS actor, kind AS field FROM history_events WHERE subject_type='task' AND subject_id=? AND (actor_id LIKE 'human:%' OR "
+                           "(kind IN ('verdict','verdict_head') AND new IS NOT NULL AND new<>''))", (c["id"],)):
                 if e["actor"].startswith("human:") or e["actor"] not in qa:
                     bad.append(f"{w.title(tid)} QA {e['field']} by {e['actor']}")
     if not waived:

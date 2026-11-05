@@ -1,6 +1,6 @@
 """Which wakes may wait for a bot's next run (token saving 2/9, Dev 140).
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `gate` is asked once for
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `gate` is asked once for
 every message about to be written to a bot that would start one (H._write_message), and decides with two rules:
 
 - `own_write`: the bot's own write caused it. Its own comments, step moves, status changes, relations and
@@ -82,8 +82,8 @@ AWAITED = (
     ("milestone", "a pull request it waits for merged or a release it waits for was published (backend/milestone_waits.py)"),
     ("reconnected", "the account or credential its reconnect card waited for works again (backend/reconnects.py)"),
 )
-# Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A stall or
-# status check, a schedule, a pull request's checks and anything else keep their own rules (wake presets).
+# Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A schedule,
+# a pull request's checks and anything else keep their own rules (wake presets).
 HOLDABLE_TRIGGERS = ("comment", "status_or_relation")
 # wake_presets.classify classes that are news. An assignment, a blocker, a review request, an awaited result, a
 # question or a person's message is not, whatever its trigger says.
@@ -96,8 +96,8 @@ CAUSED_BY = "caused_by"
 NEWS_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via",
                        FLAG, "trigger", "trigger_source", "task_completion", CAUSED_BY, "rule", "news"})
 
-# The stall checks that only ask "has anything moved?"; same_state may hold these. A stuck run, a setup that is
-# held, a restated ask, a due date and a snooze ending are other news and keep waking.
+# Legacy stall and status checks (they only asked "has anything moved?") are what same_state holds. A stuck run, a setup that is
+# held, a due date and a snooze ending are other news and keep waking.
 SAME_STATE_WAKES = ("status_check", "stalled")
 RULES = ("own_write", "parked", "same_state")
 # Holds that leave no note: the check only asked whether anything moved (same_state), or a rule said to ignore it.
@@ -235,17 +235,12 @@ MARK = "held_by"
 
 
 def _would_queue(conn, actor, target, refs):
-    """Whether store.QUEUE_TRIGGER would queue a run for this message: to a bot that a runner runs, not from itself,
-    not quiet and not a live transcript, decision or tool line."""
-    from .harnesses import EXTERNAL_HARNESSES
-    if not str(target).startswith("bot:") or actor == target or refs.get("quiet"):
+    """Whether backend/enqueue.py queues a run for this message: to a bot, not from itself, not quiet, not a live
+    transcript, decision or tool line, and not to a bot an external agent runs (unless a computer delivers it)."""
+    from . import enqueue
+    if not enqueue.wanted(actor, target, refs):
         return False
-    live = refs.get("live")
-    if isinstance(live, dict) and live.get("kind") in ("transcript", "decision", "tool"):
-        return False
-    row = conn.execute("SELECT json_extract(config,'$.harness') FROM bot_config WHERE bot=?",
-                       (str(target)[4:],)).fetchone()
-    return not (row and row[0] in EXTERNAL_HARNESSES)
+    return not conn.execute("SELECT " + enqueue.external_bot_sql("?"), (target,)).fetchone()[0]
 
 
 def state_of(conn, task_row):
@@ -290,21 +285,22 @@ def settled_state(conn, task_row, bot, started, attempt_id):
                         "AND (state IN ('leased','running') OR finished_at>=?) LIMIT 1",
                         (bot, attempt_id, started)).fetchone():
             return None
-        if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND created_at>? AND actor<>? LIMIT 1",
+        if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND created_at>? "
+                        "AND actor_id<>? LIMIT 1",
                         (task_row["id"], started, me)).fetchone():
             return None
         # The hash includes related tasks' states too. Their events live on those tasks, not this one;
         # a change during the turn must not be saved as if the bot had already seen it.
-        if conn.execute("SELECT 1 FROM task_events WHERE task_id IN ("
+        if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id IN ("
                         "SELECT CASE WHEN from_task=? THEN to_task ELSE from_task END FROM task_relations "
-                        "WHERE ? IN (from_task,to_task)) AND created_at>? AND actor<>? LIMIT 1",
+                        "WHERE ? IN (from_task,to_task)) AND created_at>? AND actor_id<>? LIMIT 1",
                         (task_row["id"], task_row["id"], started, me)).fetchone():
             return None
         if conn.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>? AND sender_id NOT IN (?,?) "
                         "LIMIT 1", (task_row["conversation_id"], started, me, H.KEEPER)).fetchone():
             return None
         # Starting a task lane records this turn's own session link after claim. That is known
-        # to this turn; explicit edits by someone else are already caught by task_events above.
+        # to this turn; explicit edits by someone else are already caught by the task history above.
         if conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind<>'session' "
                         "AND coalesce(updated_at,created_at)>? LIMIT 1",
                         (task_row["id"], started)).fetchone():

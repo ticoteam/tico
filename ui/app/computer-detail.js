@@ -349,7 +349,7 @@ function machineVersionsHTML(machine, online) {
   };
   // The owner sees every model CLI, to turn one on; everyone else what is there.
   const harnesses = Object.entries(machine.readiness?.harnesses || {}).filter(([, value]) => S.me?.role === 'owner' || value.installed || value.wanted || value.state !== 'idle').map(harnessChip).join('');
-  // Which runner engine it runs (runner/engine.py); hovering says the build, or why it is on Python.
+  // Which runner engine it runs (runner_support/engine.py); hovering says the build, or why it is on Python.
   const engine = machine.readiness?.engine;
   const release = machineRelease(machine);
   const facts = [`Tico ${release || 'version not reported'}`, machine.platform || '',
@@ -452,6 +452,29 @@ function machineSettingsHTML(machine) {
   const body = rows.filter(Boolean).join('') + revoke;
   return body || `<p class="muted">${machine.revoked_at ? `Revoked ${esc(ago(machine.revoked_at))}.` : 'Nothing to change here.'}</p>`;
 }
+// The computer's name, with Rename for an owner or admin: the name becomes a field with Save and Cancel.
+// COMPUTER_RENAME_EDIT counts edit sessions, so a save that answers late touches only the session that sent it.
+let COMPUTER_RENAMING = '', COMPUTER_RENAME_EDIT = 0;
+function computerNameHTML(machine) {
+  const title = `<h2 id="computer-detail-title"${COMPUTER_RENAMING === machine.id ? ' class="sr-only"' : ''}>${esc(machine.label)}</h2>`;
+  if (!settingsIsAdmin() || machine.revoked_at) return title;
+  if (COMPUTER_RENAMING !== machine.id) return `<div class="computer-detail-name">${title}<button type="button" class="computer-rename" data-computer-rename="${esc(machine.id)}" title="Rename" aria-label="Rename ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">edit</span></button></div>`;
+  return `${title}<form class="computer-rename-form" data-computer-rename-form="${esc(machine.id)}" novalidate>
+    <input type="text" name="label" maxlength="100" value="${esc(machine.label)}" aria-label="Rename" data-computer-rename-input autocomplete="off">
+    <button type="submit" class="primary">Save</button><button type="button" class="ghost" data-computer-rename-cancel>Cancel</button></form>`;
+}
+function computerRenameShow(id) {
+  COMPUTER_RENAMING = id;
+  COMPUTER_RENAME_EDIT++;
+  computerDetailPaint(true);
+  const input = $('#set-machines dialog.computer-detail [data-computer-rename-input]');
+  input?.focus(); input?.select();
+}
+function computerRenameCancel() {
+  COMPUTER_RENAMING = '';
+  computerDetailPaint(true);
+  $('#set-machines dialog.computer-detail [data-computer-rename]')?.focus();
+}
 function computerDetailHTML(machine) {
   const online = machineOnline(machine), manage = !machine.revoked_at && machineCanSignIn(machine);
   const conns = machineShown(machine);
@@ -461,7 +484,7 @@ function computerDetailHTML(machine) {
   const empty = machineReported(machine) && !conns.length && !machine.revoked_at
     ? `<p class="computer-detail-empty"><span class="machine-chip-dot" aria-hidden="true"></span>Bots here can't run until a connection is added${manage ? ' · Add connection below' : ''}.</p>` : '';
   const section = (key, title, body) => `<section class="computer-detail-section" data-detail-section="${key}"><h3>${title}</h3>${body}</section>`;
-  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.owner_id))} · <span data-computer-status>${esc(status)}</span></span></div>
+  return `<header class="computer-detail-head"><div>${computerNameHTML(machine)}<span class="muted">${esc(settingsPersonName(machine.owner_id))} · <span data-computer-status>${esc(status)}</span></span></div>
       <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close">✕</button></header>
     <div class="computer-detail-body">${notes}
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}
@@ -484,14 +507,33 @@ function computerDetailOpen(id) {
     dialog.onclose = () => {
       if (dialog.open) return;
       dialog.dataset.computer = '';
+      COMPUTER_RENAMING = '';
       if (document.activeElement === document.body || dialog.contains(document.activeElement)) dialog.restoreOpener?.();
     };
     // Today's sites load when someone opens them (toggle doesn't bubble, so listen while it passes down).
     dialog.addEventListener('toggle', event => {
       if (event.target.matches?.('[data-browser-exit-usage]') && event.target.open) void machineBrowserExitUsageLoad(event.target);
     }, true);
+    dialog.addEventListener('click', event => {
+      const rename = event.target.closest('[data-computer-rename]');
+      if (rename) { computerRenameShow(rename.dataset.computerRename); return; }
+      if (event.target.closest('[data-computer-rename-cancel]')) computerRenameCancel();
+    });
+    dialog.addEventListener('submit', event => {
+      const form = event.target.closest('[data-computer-rename-form]');
+      if (!form) return;
+      event.preventDefault();
+      void settingsComputerRename(form);
+    });
+    // Escape leaves the name as it was; the pop-up stays open.
+    dialog.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || !event.target.matches?.('[data-computer-rename-input]')) return;
+      event.preventDefault(); event.stopPropagation();
+      computerRenameCancel();
+    });
     el.appendChild(dialog);
   }
+  if (dialog.dataset.computer !== id) COMPUTER_RENAMING = '';
   // Presence refreshes can replace the opener while this modal is open.
   if (!dialog.open) {
     const opener = el.querySelector(`[data-computer-open="${CSS.escape(id)}"]`);

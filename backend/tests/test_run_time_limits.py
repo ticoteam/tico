@@ -17,7 +17,7 @@ def running(api):
 
 
 def cut(api, machine, attempt, *, minutes='60', command='git push origin HEAD', approval=False,
-        end_reason=None, tool_payload=None, silent=False, **flags):
+        end_reason=None, tool_payload=None, silent=False, pause=None, **flags):
     if approval:
         with api.app.state.store.transaction() as c:
             message = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
@@ -31,8 +31,10 @@ def cut(api, machine, attempt, *, minutes='60', command='git push origin HEAD', 
         {'seq': 3, 'kind': 'diagnostic', 'payload': {
             'end_reason': end_reason or f'Timeout: max_run_minutes ({minutes} minutes)'}},
     ]
+    if pause:
+        events.append({'seq': 4, 'kind': 'status', 'payload': {'yielded': pause}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
-    return post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3,
+    return post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': len(events),
                 'text': 'Branch saved and pushed; review is next.', **flags}, machine['token'])
 
 
@@ -50,7 +52,7 @@ def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(ap
     other = claim(api, machine)
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'other-session-work'}, machine['token'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (task['id'], other['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (task['id'], other['id']))
     cut(api, machine, first)
     assert job_state(api, first['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
@@ -184,6 +186,26 @@ def test_retry_flags_cannot_bypass_irreversible_action_check(api, flags):
     cut(api, machine, first, command='gh pr merge 42', **flags)
     assert job_state(api, first['job_id']) == 'uncertain'
     assert 'merge pull request' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
+    assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
+
+
+def test_saved_pause_cannot_hide_outside_actions_or_reset_consecutive_timeout_cuts(api):
+    machine, _, first = running(api)
+    pause = "Paused at the computer's drain time limit; work and session saved, queued to continue"
+    cut(api, machine, first, pause=pause, yielded=True)
+    assert job_state(api, first['job_id']) == 'queued'
+    second = next_attempt(api, machine, first)
+    assert second['recovery'] == {'resume_session': True}
+    assert 'Reached its 60-minute run limit; continuing' in second['message']['body']
+    cut(api, machine, second, command='gh pr merge 42', pause=pause, yielded=True)
+    assert job_state(api, first['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'changed' and 'merge pull request' in review['reason']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT end_reason FROM attempt_diagnostics WHERE attempt_id=?', (second['id'],)).fetchone()[0] == pause
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()[0]
+        assert 'cut by the run time limit twice in a row' in body
+    assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
 
 
 def test_silent_harness_timeout_continues_once_under_explicit_restart_policy(api):

@@ -1,5 +1,30 @@
 # Meetings
 
+## Linked tasks
+
+`hub meeting link <meeting> <task>...` links existing tasks. `hub meeting unlink <meeting> <task>` removes a link;
+`hub task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
+`hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
+
+`GET /api/v2/meetings/{id}/tasks` returns `{tasks, next_cursor}`; `POST` on that path takes
+`{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.
+`DELETE /api/v2/meetings/{id}/tasks/{task_id}` removes the pair. The linker, meeting owner, task owner or requester,
+or org owner may remove it. Writes require an `Idempotency-Key`.
+`GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
+normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
+Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
+
+The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
+its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
+(or `hub task list --q ...`), under the task list's existing filters and access checks.
+
+Both sections apply link changes from task events without rereading the list or collapsing expanded pages.
+The meeting's task rows also follow title and status changes. Link events carry `kind: "meetings"` in `kind` or
+`kinds`, with `meeting_links` containing each changed `meeting_id`, its current `link` and meeting summary (both
+null after unlink). Delivery checks access to both resources for each viewer, so hidden meeting activity sends
+no link event or meeting reference. An ordinary task change carries no hidden link kinds or references.
+
 **Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
 have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools
 produce, keeps it in one list, and turns it into work. How the pieces fit:
@@ -55,6 +80,12 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   Omit `private` to keep its source default: Granola is private by default; other sources are team
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
+  `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
+  person it is filed for and the people added to or joined in the live meeting it came from; the company
+  owner is held to that too. `"audience": "team"` opens it to the Team. The import route takes
+  `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
+- `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
+  removes its transcript, chat and events from Tico; the recording stays on their computer.
 - The same route with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a
@@ -212,7 +243,7 @@ format is a `422` that names the problem.
 On a Linux runner nothing is installed: the job starts when `secrets/close-calls.env` (`CLOSE_API_KEY=<key>`, mode
 600) exists in the runner's `workspace/secrets/` folder, and stops when it is removed. Keep the key on one computer.
 
-The `python -m runner close-calls` job (on a Mac, or a Linux runner) polls completed Close call and Notetaker meeting activities
+The `python -m runner_support close-calls` job (on a Mac, or a Linux runner) polls completed Close call and Notetaker meeting activities
 every five minutes and imports their timed speaker turns and Close's text summary through
 `POST /api/v2/imports/transcripts`. That door is the Close worker's own: it keeps each provider
 revision, joins a call to the Notetaker meeting it belongs to, and follows Close's corrections until a
@@ -230,7 +261,7 @@ imports use that person's queue without a computer update.
 The first pull covers 30 days of Close activity creation. Close's organization-wide activity API does
 not allow filtering by meeting time, so the worker revisits pending future meetings until their
 transcripts arrive. To scan meetings created before that window, stop the `close-calls` service and
-run `python -m runner close-calls --backfill-days DAYS` from the enrolled computer, with `DAYS` between 1
+run `python -m runner_support close-calls --backfill-days DAYS` from the enrolled computer, with `DAYS` between 1
 and 365; it makes one bounded pass, then exits. Restart the service afterward. On a Linux runner there is no
 service to stop: move `secrets/close-calls.env` aside so the runner stops the job, run the backfill, then put it back. The worker stops with an
 error if a single day exceeds its 5,000-activity page limit, so narrow the window and retry.
@@ -243,7 +274,7 @@ the others a dialog with the same form as Tools > Meeting importers (owners only
 
 ## Meeting importers
 
-Zoom, Google Meet and Granola each have an importer. They run as one job, `python -m runner
+Zoom, Google Meet and Granola each have an importer. They run as one job, `python -m runner_support
 importers`, on an enrolled computer (`scripts/tico install importers` on a Mac; a Linux runner (Docker) starts it by itself once an importer is assigned to it; the Sources strip on the
 Meetings page shows each one's health). Each importer:
 
@@ -259,7 +290,7 @@ Meetings page shows each one's health). Each importer:
 - reads a bounded window: the first pass covers the last 30 days, then each pass re-reads the last
   72 hours (summaries and transcripts arrive late) and moves on. A meeting still being transcribed
   keeps the window from passing it for up to seven days. For older history, stop the job and run
-  `python -m runner importers --backfill-days DAYS [--only zoom|google-meet|granola]`
+  `python -m runner_support importers --backfill-days DAYS [--only zoom|google-meet|granola]`
   (1 to 365; Google Meet keeps only 30 days, so it is capped there); it makes one pass and exits;
 - files a meeting for the roster human it belongs to. A human who is not on the roster is filed
   under the team owner, except Granola, which skips notes it cannot place, because those are
@@ -268,7 +299,7 @@ Meetings page shows each one's health). Each importer:
 **Turn one on.** As the owner open Tools > Meeting importers, tick **Enabled**,
 choose the computer that holds the credential file, and **Save**. The card shows the last sync, the
 last import, how many meetings it has filed and the last error. Only computers whose owner may run
-importers (`TICO_PROCESSING_OPERATORS`, else the owner) are offered. `python -m runner
+importers (`TICO_PROCESSING_OPERATORS`, else the owner) are offered. `python -m runner_support
 importers-doctor` on the computer says which credential files are present, without calling any tool.
 
 **On a Linux runner** there is nothing to install: the runner starts the job while an importer is assigned to it and
@@ -493,10 +524,10 @@ Otter has no importer here. Use `hub meeting import`, the API, or write one as b
 ## Writing an importer
 
 Each of the importers above is a small module that reads one tool's API, maps it onto the fields above,
-and posts it; nothing on the Tico side changes when one is added. `runner/importers/base.py` is the
+and posts it; nothing on the Tico side changes when one is added. `runner_support/importers/base.py` is the
 shared shape: subclass `Importer`, say how to list credentials (`scopes`) and meetings (`fetch`), and it
 supplies the window, cursor, idempotent filing, roster fallback and status reporting. Add it to
-`runner/importers/__init__.py` and to `IMPORTERS` in `backend/meeting_importers.py` to get a card in
+`runner_support/importers/__init__.py` and to `IMPORTERS` in `backend/meeting_importers.py` to get a card in
 Settings. The steps below are the same whether it is a module or a standalone script.
 
 1. **Pick the door.**
@@ -504,7 +535,7 @@ Settings. The steps below are the same whether it is a module or a standalone sc
      human's own credential (a personal token). No `owner_email`; the meeting is theirs.
    - *Runs for the team on a computer that is enrolled as a runner*, as the Close worker and the
      importers above do: post to the same route with the runner's credential and `owner_email` for
-     each meeting. See `runner/importers/base.py` (or `runner/close_calls.py`) for the shape (a poll
+     each meeting. See `runner_support/importers/base.py` (or `runner_support/close_calls.py`) for the shape (a poll
      loop, a cursor in the runner's state database, a heartbeat, `CodeWatch` to restart on new code)
      and `clients/tico.py` for the client.
 2. **Choose a `source` name** (`granola`, `zoom`...). It is a label on the meeting, a filter on

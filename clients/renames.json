@@ -336,6 +336,18 @@
     {
       "fixable": true,
       "new": [
+        "goal",
+        "checkin-list"
+      ],
+      "old": [
+        "goal",
+        "checkin",
+        "list"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
         "kpi",
         "create"
       ],

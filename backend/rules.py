@@ -1,6 +1,6 @@
 """Wake rules: one engine decides what a message to a bot does, and names the rule that decided it.
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `judge` is asked once for every
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `judge` is asked once for every
 message H._write_message is about to write to a bot, and answers with an outcome and the id of the rule behind it:
 
 - `wake`: queue a run now.
@@ -14,13 +14,13 @@ message H._write_message is about to write to a bot, and answers with an outcome
   the keeper, with the rule id in the event payload, and write the message quietly with its note. An action that fails opens the message: it wakes the
   bot under `fail_open`, so work is never lost to a rule.
 
-The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `turns.rule_id`
+The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `attempts.rule_id`
 at claim, so every run joins to the rule that woke it (`rule_weekly` in hub sql).
 
 Built-in rules are defined here, in code, with stable ids. They reproduce what the wake filters did before there
 were rules: the ALWAYS_WAKE classes (a person's message, an ask, an approval, a needs-action flag, a reply, a gate
-verdict) and AWAITED results wake; a bot's own write (`own_write`), news about a parked task (`parked`) and a stall
-check on a task that stands as at the last checkpoint (`same_state`) wait; a plain bot-to-bot message waits
+verdict) and AWAITED results wake; a bot's own write (`own_write`), news about a parked task (`parked`) and a legacy stall
+or status check on a task that stands as at the last checkpoint (`same_state`) wait; a plain bot-to-bot message waits
 (`bot_to_bot`); a finished request and a person's review comments are batched (`batch_*`); one check finishing is
 ignored (`pr_check`), every check on a pull request head finished (`pr_checks_done`) wakes the ticket's owner at a
 working step and is a note otherwise (`pr_checks_note`), and a review that is not a person's is a note
@@ -122,6 +122,7 @@ WAKE_EVENTS = {
     "stall": "a task has gone quiet and nothing is set to move it",
     "status_check": "a quiet task's status check",
     "stall_check": "a stall or status check",
+    "task_roundup": "the task roundup lists a bot's tasks, asks, late tickets, exceptions or backlogs",
     "routine": "a routine ran",
     "schedule": "a scheduled run",
     "due": "a task's due date came",
@@ -147,7 +148,6 @@ WAKE_EVENTS = {
     "backlog": "updates held for the bot while it was away",
     "feed": "a Slack channel's messages were handed to the bot to read",
     "digest": "the bot's held updates were let go as one digest",
-    "exceptions": "the type manager's exceptions list has a new entry",
 }
 # Events that wait as a note when no rule says otherwise: the next run carries them. A row may wake on any of them.
 NOTE_EVENTS = {
@@ -208,6 +208,10 @@ def _profile_rules():
         for event, words in which:
             add(profile, f"profile_{profile}_{event}", event, WAKE, words)
 
+    # The task roundup is the one grouped wake per bot per run, whatever its profile: every profile wakes on it, ahead of its
+    # catch-all note. A profile with sweeps off (profiles.SPEC) is listed its questions and its own follow-ups only.
+    for profile in PROFILES:
+        add(profile, f"profile_{profile}_roundup", "task_roundup", WAKE, "the task roundup lists its tasks and lines")
     add("reviewer", "profile_reviewer_assignment", "assignment", WAKE, "a review or QA request was filed for it")
     add("reviewer", "profile_reviewer_request", "review_request", WAKE, "a review, QA or Security request")
     add("reviewer", "profile_reviewer_handback", "review_handback", WAKE, "a task it asked for came back for its review")
@@ -232,7 +236,6 @@ def _profile_rules():
     # steps, its subtasks' results, checks, verdicts and late or backlog notices wait for that run.
     add("manager", "profile_manager_assignment", "assignment", WAKE, "a task was given to it")
     add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
-    add("manager", "profile_manager_exceptions", "exceptions", WAKE, "its exceptions list has a new entry")
     timers("manager", OWN_TIMERS + OWN_WORK)
     add("manager", MANAGER_NOTE, "*", NOTE, "anything else: ticket news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
@@ -248,10 +251,10 @@ PROFILE_RULE_IDS = frozenset(r["id"] for found in PROFILE_RULES.values() for r i
 
 
 def profile_of(conn, bot):
-    """The profile a bot runs under: its `bot_config.profile`, or `doer` for a bot with none (a database from before
+    """The profile a bot runs under: its `bot_settings.profile`, or `doer` for a bot with none (a database from before
     profiles, a bot seeded since the last start)."""
     try:
-        row = conn.execute("SELECT json_extract(config,'$.profile') FROM bot_config WHERE bot=?",
+        row = conn.execute("SELECT profile FROM bot_settings WHERE bot_id=?",
                            (H.actor_id(bot),)).fetchone()
     except sqlite3.OperationalError:
         return "doer"
@@ -259,9 +262,10 @@ def profile_of(conn, bot):
 
 
 def sweeps_on(conn, bot):
-    """Whether stall and status checks (the sweeps) may wake this bot's tasks: False for a reviewer, lead, responder
-    and monitor, and for a custom profile that turned them off. Fails open: a bot whose profile cannot be read is
-    swept."""
+    """Whether the task roundup lists this bot its sweep lines (late, exception, backlog, assigned, restate, missed update and
+    quiet task): False for a reviewer, lead, responder and monitor, and for a custom profile that turned them off, which are
+    listed their questions and their own follow-ups only. A manager and a doer get all of them. Fails open: a bot whose
+    profile cannot be read is swept."""
     try:
         from . import profiles
         return profiles.sweeps_on(conn, H.actor_id(bot))
@@ -737,9 +741,10 @@ THREAD_WAKE = "thread_wake"
 
 def thread_wake(conn, message, bot, thread, mode="queue"):
     """The thread wake rule (docs/dev/threads-contract.md §4.3) for a bot that a thread message reaches but is not
-    addressed to (a mention, its DM or Home, a sub-thread it posted in): (mode, rule id), or (None, None) for no
-    delivery. backend/threads.py chose the reason by precedence; the engine judges it as it judges a message to the
-    bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
+    addressed to (a mention, its DM or Home, a sub-thread it posted in, a reply to its message): (mode, rule id), or
+    (None, None) for no delivery. A person's reply to the bot's message is judged as a mention of it, a bot's reply as
+    a bot's mention (bot_to_bot may make it wait). backend/threads.py chose the reason by precedence; the engine judges
+    it as it judges a message to the bot, so a table row or a built-in hold still decides: `wake` keeps `mode`, `note` (or a hold) defers it to the
     bot's next run, `batch` digests it, `ignore` drops it. Fail open: an error wakes."""
     try:
         refs = dict(message.get("refs") or {})
@@ -908,11 +913,11 @@ def _act(conn, decision, row, message=None):
 
 
 def _close(conn, tid, params, said):
-    H.task_close(conn, H.KEEPER, tid, note=said)
+    H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
 
 
 def _move_step(conn, tid, params, said):
-    H.task_update(conn, H.KEEPER, tid, step=str(params["step"]), note=said)
+    H.task_update(conn, H.KEEPER, tid, step=str(params["step"]), note=said, strict=False)
 
 
 def _set_wait(conn, tid, params, said):

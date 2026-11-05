@@ -70,7 +70,7 @@
       "name": "doer",
       "options": {},
       "pulls": "all",
-      "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+      "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
       "sweep_seconds": "<volatile>",
       "sweeps": true,
       "takes": "all"
@@ -128,7 +128,7 @@
       "label": "Performance",
       "preset": "performance",
       "profile": "doer",
-      "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+      "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
       "sweep_seconds": "<volatile>"
     }
   },

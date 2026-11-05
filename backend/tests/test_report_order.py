@@ -2,6 +2,7 @@
 server for every viewer, a new report goes last, and only someone who may put reports under that manager orders them."""
 from backend.tests.test_api import api, get, headers, post, put, setup_attempt  # noqa: F401
 from backend.tests.test_org_chart import revision, roster
+from backend import bot_settings as BS
 
 
 def slugs(api):
@@ -133,8 +134,8 @@ def test_reports_nobody_placed_follow_one_rule_humans_then_a_bots_order_then_nam
         report_to(api, slug, "coo")
     with api.app.state.store.transaction() as c:          # a bot's own `order`, from its definition
         for slug, place in (("ops", 1), ("finance", 2)):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode({**config, "order": place}), slug))
+            config = BS.read(c, slug)
+            BS.write(c, slug, {**config, 'order': place})
     assert order(api, "coo") == ["ops", "finance", "doc-updater"], "ordered bots first, lowest first, then names"
     assert [r for r in order(api, "human:ana") if r in ("zoe", "eli", "bea")] == ["bea", "eli", "zoe"], (
         "by name, accents and case aside, not as the roster lists them")

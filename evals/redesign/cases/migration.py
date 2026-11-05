@@ -220,12 +220,6 @@ def builtin_row(label, ident_of, extra=None, needs=()):
     return check
 
 
-def still_wanted_kept(auto):
-    """Still wanted? was set daily at 10:00: the built-in keeps that control."""
-    controls = auto.get("controls") or {}
-    return controls.get("preset") == "daily" and controls.get("at") == "10:00"
-
-
 def stale_row(f):
     installed(f, "job:stale_review")
 
@@ -249,6 +243,15 @@ def inbox_rows(f):
             return ok, f"owner {auto.get('owner_id')}, trigger {text(trig)}, llm as {llm.get('as')}"
         results.append(mapped(f, mailbox, mailbox, want))
     return all(ok for ok, _ in results), " | ".join(detail for _, detail in results)
+
+
+def retired_row(ident):
+    """A retired routine has no automation linked to its ident after the upgrade."""
+    def check(f):
+        setup(f, "autos")
+        hits = linked_to(f, ident)
+        return not hits, f"{len(hits)} automation(s) link to {ident}, want none"
+    return check
 
 
 def inbox_bots_retired(f):
@@ -644,8 +647,8 @@ SCENARIOS = [
               builtin_row("task rule", lambda f: fx(f)["task_rule"], needs=("task_rule",))),
         Check("system jobs (Start assigned tasks, Recover unstarted) become read-only built-ins", W5,
               lambda f: _all(f, [builtin_row(job, lambda f, job=job: "job:" + job) for job in BUILTIN_JOBS])),
-        Check("Still wanted? becomes a built-in that keeps its control (daily at 10:00)", W5,
-              builtin_row("still wanted", lambda f: "job:still_wanted", still_wanted_kept, needs=("job:still_wanted",))),
+        Check("Still wanted? is retired: no automation is made for it, and its daily 10:00 control is dropped", W5,
+              retired_row("job:still_wanted")),
         Check("Stale ticket review becomes a regular automation, Off, hourly", W5, stale_row),
         Check("Dana's and Priya's inboxes become message automations on their owner, LLM as the owner's Assistant", W5,
               inbox_rows),

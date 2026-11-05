@@ -61,7 +61,7 @@ def install(app, store, auth, mutate, execution, settings):
     install_policy(app, store, auth, execution, settings)
 
     def computer(c, rid):
-        return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
     @app.post("/api/v2/runners/{rid}/screen")
     def screen_mode(request: Request, rid: str, body: M.ScreenMode):

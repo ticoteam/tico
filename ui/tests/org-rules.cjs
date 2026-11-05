@@ -89,7 +89,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await go(page, '#/overview');
     await page.locator('#ru-root').waitFor({state: 'detached', timeout: t(10000)});   // so Rules reads them again
     await go(page, LEAD);
-    await page.locator('.rr-panel [data-rr-inh="all_bots"]').click({timeout: t(15000)});
+    await page.locator('.rr-panel [data-rr-inh="all_bots"][aria-expanded="true"]').waitFor({timeout: t(15000)});
     const chip = page.locator(`.rr-panel a.rr-rule[data-rule="${named.id}"] .ru-at`);
     await chip.waitFor({timeout: t(10000)});
     assert.equal(await chip.getAttribute('data-href'), '#/bot/engineering-lead');
@@ -218,6 +218,20 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(await page.locator('#bot-rules [data-ru-setting="mail"]').getAttribute('href'), '#/bot/engineering-lead/settings');
     assert.ok(await page.locator('#bot-rules .ru-setting > .ru-c:last-child > .ru-none').count() > 0, 'a fixed limit has no link');
 
+    // Its reach, as the Rules panel has it: a cap it sets has no source, a default is shown as its value with one, and
+    // an exception it sends or receives is listed; each row's link opens the Rules panel.
+    await ok(page, 'PUT', '/v2/reach/settings/' + encodeURIComponent('bot:engineering-lead'), {chats_per_day: 40});
+    await ok(page, 'POST', '/v2/reach/lines', {sender: 'bot:engineering-lead', receiver: 'human:priya', per_day: 3});
+    await go(page, '#/overview');
+    await go(page, '#/bot/engineering-lead/rules');
+    const reachRow = text => page.locator('#bot-rules .ru-setting', {has: page.locator('.ru-txt', {hasText: text})});
+    await reachRow('Up to 40 chats a day').locator('.ru-txt').waitFor({timeout: t(15000)});
+    assert.doesNotMatch(await reachRow('Up to 40 chats a day').locator('.ru-txt').innerText(), /default/, 'its own cap has no source');
+    assert.match(await reachRow('Up to 999 tasks a day').locator('.ru-txt').innerText(), /Up to 999 tasks a day.*default/s);
+    assert.match(await reachRow('Reach:').locator('.ru-txt').innerText(), /^Reach: (anyone|nearby|only who's listed)/);
+    assert.match(await reachRow('3 a day').locator('.ru-txt').innerText(), /^To .+ · 3 a day/);
+    assert.equal(await reachRow('Up to 40 chats a day').locator('a.ru-set').getAttribute('href'), '#/rules?party=bot%3Aengineering-lead');
+
     // Priya manages nothing about the Engineering Lead: the panel is read only, and the bot's Rules tab opens by link.
     const priya = await pageAs(browser, hub, 'priya');
     await ready(priya);
@@ -278,8 +292,6 @@ async function shots(browser, hub, bot, {ruleId, dueId}) {
       try {
         await ready(page);
         await page.evaluate(v => window.ticoTheme.set(v), theme);
-        // The scenario's runner notice would cover the rail in every picture.
-        await page.locator('.needs-you [data-snooze]').click({timeout: t(3000)}).catch(() => {});
         for (const [name, hash, wait, act] of screens) {
           await go(page, '#/overview');
           await go(page, hash);

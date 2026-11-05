@@ -27,7 +27,7 @@ Reading:
 
 ```bash
 $HUB_DIR/scripts/mail.sh inbox --untriaged --format brief   # inbox mail with no hub/* label; the list you work
-$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # granted mailboxes; reports only with org_read: true
+$HUB_DIR/scripts/mail.sh inbox --untriaged --all-mailboxes --format brief  # every mailbox Tico gives this run
 $HUB_DIR/scripts/mail.sh inbox --new --since 24h      # what you have not seen in the last day (marks it seen)
 $HUB_DIR/scripts/mail.sh inbox --label hub/needs-owner --format brief
 $HUB_DIR/scripts/mail.sh thread 18f2c9a3b4d5e6f7 --format brief   # the conversation, no bodies; md when drafting
@@ -63,11 +63,23 @@ $HUB_DIR/scripts/mail.sh rules explain 18f2...        # why this message got wha
 
 Rules run before any model. Marketing (unsubscribe links), notification senders, and
 `registry/mail-rules.yaml` `skip:` addresses/domains are filed and never opened by the bot.
-Each mailbox can add its own rules under that address after `common`. A message bot for a
-human reads only its assigned mailbox by default (`org_read: false`). This boundary applies to
-Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token limit
-on a two-user Docker runner. The owner can deliberately
-turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
+Each mailbox can add its own rules under that address after `common`.
+
+Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.py; Settings > Mailboxes):
+- a person has Read and write on their own mailbox, and admins on a shared inbox;
+- a person's Assistant has exactly that person's access;
+- everyone else, bots included, needs a grant: Read, or Read and write (organize, draft, send). Only the mailbox's
+  person, or an admin for a shared inbox, gives or takes one; nobody passes a grant on;
+- a mailbox whose person has not joined yet is private (Awaiting person) until they join or an admin makes it a
+  shared inbox;
+- the company's What Tico may do caps every level, and an address outside the company's domains is Read only.
+The owner has no bypass, and managers get nothing automatic on their reports' mail. Every mail command asks
+`GET /api/v2/mail/access` as its own credential (a bot's turn token, a person's own Tico token); `bot.yaml` gmail
+entries only narrow that answer (`read_only: true`, and `draft`/`send` only when `can:` lists them). `org_read` no
+longer does anything: the upgrade (migration 0092) turned each `org_read: true` into Read grants on the mailboxes
+below, so nobody lost access, and a manager's view of reports' mail is now a grant their reports give. This boundary
+applies to Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token
+limit on a two-user Docker runner.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
 switches it on. Change its time zone on its automation in **Automations**.
 
@@ -117,27 +129,26 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments are off unless the mail policy turns them on for the
-mailbox: `mailboxes.<address>.allow_attachments: true` for one mailbox, or
-`defaults.allow_attachments: true` for every mailbox that does not set its own. A file must be inside your own folder (`bot-<slug>`, or an
-older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
-refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
+from the file sizes before anything is read). Attachments use the same send permissions as the
+message without files; there is no separate attachment setting. Legacy `allow_attachments` keys
+in `registry/mail-policy.yaml` are accepted but do nothing. A file must be inside your own folder
+(`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
+there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
 `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
 `credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
 `.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
 reviewer read the text, and the reviewer is told each file's name, type and size, not its
-contents. Attaching lifts nothing, and sending an attached draft always needs `--approval-issue`,
-even to a recipient who needs none without files (the sender of the thread, a forward target,
-an internal address or an allowance).
+contents. Attaching lifts nothing: the same send chain applies with or without files. If the
+plain message could send without a per-message approval, the attached message can too. An owner's
+Tico message telling the bot to send covers the files attached to that send, as does an otherwise
+valid GitHub Issue or Tico send approval that names no files.
 
-That approval must name the files. `mail draft --attach` prints a ready request (and returns it
-as `approval_request` with `--json`): recipients, subject, draft id, and each file's name, size
-and sha256, as `hub approval request --kind send --payload '...'`. The send approval's payload
-carries `draft` and `attachments: [{name, size, sha256}]`. At send time the connector hashes the
-files as they are in the Gmail draft and sends only if they are exactly the approved set for
-that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
-counts only when its `Send to:` line matches and it names each file and its sha256 (and no
-other hash). The owner's message telling the bot to send does not cover attachments. When the draft
+If a Tico send approval names files, that binding still applies: its payload carries `draft` and
+`attachments: [{name, size, sha256}]`. At send time the connector hashes the files as they stand
+in the Gmail draft and requires the exact approved set and draft id; changed, added, removed or
+swapped files need a new approval. `mail draft --attach --json` returns an optional
+`approval_request` payload with those fields for sends that need per-message approval under the
+usual rules. Attaching files does not make that request necessary. When the draft
 belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
 each file to it and adds its `file_id` to the request, so the approver can open the file from the
 approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
@@ -171,12 +182,17 @@ asking for each message, to three kinds of recipient:**
    `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
 
 Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
-table is one), or `--approval-issue N` where N is a **closed** task in Tico with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. A Tico `send` approval (`hub approval request --kind send`) is
+table is one), or `--approval-issue N` where N is a **closed** GitHub Issue with `owner:ana` and `type:decision`
+whose title or body names that address or the thread. The id of a Tico message telling this bot to send also counts
+when its human sender may manage this bot's mail sending: Tico checks that authority, rather than the computer's
+local owner settings. The company owner, admins, bot owners and people above the bot on the org chart qualify;
+built-in bots such as Counsel require the company owner. Ordinary chat access and bot senders never qualify.
+The message is passed to the reviewer as the person's instruction. See docs/mail-service.md, "Per-message approval".
+A Tico `send` approval (`hub approval request --kind send`) is
 for one exact text: put the `body_sha256` that `mail draft --json` returns in its payload. At send time the connector
 hashes the draft's text as it stands in Gmail (line ends and the space around the whole text don't count) and refuses a
 draft whose text differs, with "the draft changed after it was approved; ask for a new yes". A changed draft needs a
-new approval. With sending off in Tico a send is always a draft. The
+new approval. With sending off in Tico a send needs a full per-message approval. The
 daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
 to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
 Tico holds, what bot.yaml asks, and which policy it is reading.
@@ -261,7 +277,7 @@ reading, drafting or sending. The equivalent shell commands are `hub calendar li
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
 change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
-mailboxes on its mail token list (a message bot's own, and its reports' only with `org_read: true`) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
+mailboxes on its mail token list (the ones Tico gives it, Settings > Mailboxes) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
 Tool entry with the required verbs. The private Google service-account setup must also be working
 on that computer. These commands do not expand the MCP/API rule above:
 
@@ -410,30 +426,110 @@ Replace `<container-name>` below with this Computer's full Docker container name
 or find it with `docker ps`. Only the optional unnamed manual install uses `tico-runner`.
 See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
-1. Create the Google service account with domain-wide delegation once (`connectors/mail/README.md`, Setup), and download its JSON key.
-   Without delegation, each person connects their own account instead ([Connect your Google account](#connect-your-google-account)) and you skip step 2.
-2. Put the key on **one** runner, in the runner's own state directory, where only the runner can read it (owner `ticorun`, mode 0600):
-   `docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`.
-   A key left in `workspace/secrets/google-sa.json` (an older install, or an older version of this page) is moved there within
-   a minute. Bots cannot read that place: a message bot's run asks the runner for a short-lived token for one mailbox instead
-   (below).
-   Re-enrollment on the same volume carries the protected key from the previous registration into the new state directory,
-   preserving its permissions. The operator and server must match; another operator's key is never copied, and an existing
-   key in the new registration is kept. Carryover is recorded once per registration after copying, finding an existing
-   key or confirming there is no previous key. Deleting that registration's key later is respected on restart;
-   a missing previous key is quiet, while failed reads or copies can retry. The previous key remains available for rollback.
-   Health warns when an assigned teammate's online Computer reports a missing Tool Credential, naming the Tool and Computer.
-3. Wait a minute. `docker logs '<container-name>'` says `Tico side jobs: started connectors (mail, calendar)`. The first start builds
+### Set up Google in Settings
+
+Settings > Google first asks an admin **How do you want to connect Google?**, until one way is set up:
+
+- **One account at a time**: each person signs in with Google, starting with you.
+- **Whole Workspace**: a Google admin connects every mailbox in the domain at once.
+
+Only the way picked shows; **Use the other way** switches. Once a way is set up, Settings > Google opens on it, and
+**Also set up …** adds the other. With both set up, Whole Workspace shows first, since it covers the mailboxes. Someone
+who isn't an admin never sees the question or the setup: only **Connect your account**, or, before an admin has set
+Google up, a line asking them to.
+
+Each way's setup offers **Have my agent do it** (the default) and **Set it up myself**. The first shows a prompt to copy
+into your own coding agent (Claude Code, Codex, or any agent with a browser or `gcloud`); the second shows the steps
+below.
+
+**What Tico may do** shows once for the company, above both ways, for an admin:
+
+- **Read mail and calendar**: always on.
+- **Organize mail** (label, archive, drafts), **Send mail** and **Create and change calendar events**: on until an admin
+  turns them off. Each box saves on its own.
+
+Organize mail and Send mail both need Google's `gmail.modify`, so Tico holds each box itself too: the mail connector
+refuses a label, archive or draft with Organize mail off, a send with Send mail off, and a calendar write with Change
+calendar off, whichever credential it holds (a server token, a computer's own service-account key, or a standalone
+grant). A draft is the first step of a send, so Send mail on allows one, and Tico's own markers on the thread
+(`hub/drafted`, `hub/handled/<bot>`) go with the draft or send they record. With Send mail off no bot sends mail, whatever
+its own **Mail sending** switch says (and no approval lifts it), and an automation's send becomes a draft. With it on,
+each bot still needs its own switch (Settings > Bots > Edit > Mail sending; see [Turning sending on](#turning-sending-on)).
+These settings apply to everyone who acts through Tico: bots, automations, the runner's own calendar bookings, people
+and the Assistant. An admin who wants Tico to send turns Send mail on. The connector reads the boxes from Tico for each
+run: a bot's from its mail setting, a person's from their `GET /api/v2/mail/access` answer, and the runner's connector
+job's (`--as connector`, which its sync, mail actions and calendar bookings use) from the runner's own read
+(`GET /api/v2/connectors/mail/targets`), never from the run itself. The connector reads the mailboxes its computer
+syncs and writes only the actions the server leased it, each checked against the automation owner's level. When Tico
+cannot be asked, writes are refused ("Tico couldn't check the company's mail settings; try again") and reads go on; a
+run without the runner's registration can't ask, so it only reads. Change calendar needs `calendar.events`.
+
+Organize mail, Send mail and Change calendar turned off take effect on the next token: Connect Google asks Google only
+for what is ticked, each refresh leaves out a write turned off (the grant keeps it, so turning it back on needs no new
+sign-in), and Whole Workspace tokens are
+minted read only for it (`gmail.readonly`, `calendar.readonly`). Domain-wide delegation takes only scopes authorized by
+name, so step 2 below authorizes the read-only scopes too, and Check records which ones Google accepted. A Workspace
+authorized before them keeps minting its write scopes (Tico still holds each box off) and shows **Redo step 2 to narrow
+Google access.**; redo step 2, then click Check. A box turned on that a person's grant lacks shows **Connect Google again** on their card. Both agent
+prompts say what Tico will ask Google for. Only an admin acting as themselves changes these settings: never a bot,
+BotOps or the Assistant.
+
+**What these settings enforce.** Where Google allows it, Tico narrows the token itself: Organize mail and Send mail both
+off gives read-only mail, and Change calendar off gives a read-only calendar. Otherwise Tico's mail tool enforces them,
+and the server refuses a calendar booking while Change calendar is off (one already queued fails rather than lands
+later). On a computer where bots run as the runner's own user (a Mac today), a bot that deliberately works around the
+tool is not stopped; each bot's **Mail sending** switch has the same limit.
+
+**Whole Workspace** lets Tico read the mailboxes of your Google Workspace through one service account. A Workspace admin does this once:
+
+1. **Run one command in Cloud Shell.** Click **New command**, click **Open Cloud Shell**, and paste the command there (or click **Make prompt** to hand the same command to your agent, with what to do after it). If you belong to more than one organization, Cloud Shell asks which one to use. The command makes a service account in a Google Cloud project for Tico, turns on Gmail and Calendar for it, and sends its key to Tico. It never shows the key. If an organization policy blocks service account keys, the command turns that rule off for that project only. A setup command works once and expires after 30 minutes; each New command or Make prompt makes a new one, and an older one stops working. **Or upload a key file** takes a key you made yourself.
+2. **Authorize in Google Admin.** Back in Tico, click **Open Google Admin**. Add the client ID and scopes shown in Tico, then click **Authorize**. An admin clicks this themselves; an agent can't.
+3. **Check.** Under **Mailbox to check**, enter one covered mailbox and click **Check**. When Google accepts the key, Tico shows the mailbox as connected. If Google hasn't accepted it yet, Tico lists what to check and keeps checking every 20 seconds for 10 minutes.
+
+To change the key later, click **Replace key**. **Disconnect** stops Tico reading every covered mailbox.
+
+**One account at a time** lets each person connect their own mailbox ([Connect your Google account](#connect-your-google-account)), in three steps:
+
+1. **Set up Google sign-in (once)**, for everyone on the server. The agent prompt names the redirect URI and this page, and has the agent ask you before it agrees to Google's API Services User Data Policy; Google has no `gcloud` command for these OAuth web clients, so the agent needs a browser. By hand:
+   1. Enter the Google Cloud project ID (a project under your Google organization, for the Internal audience), then turn on the **Gmail API** and the **Google Calendar API** in it. Without them, Google's calls fail.
+   2. Open **Auth overview** and fill in the app name, support email and audience.
+   3. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
+   4. Copy the client ID and client secret from the dialog Google shows after Create (it shows the secret only once), paste them, then click **Save**.
+2. **Connect your account**: **Connect Google** for your own mailbox.
+3. **Your team**: everyone else with a mailbox, as Connected, Not connected, Connecting, Failing or Covered by Workspace. **Copy link** copies the link to Settings > Google to send them yourself; Tico sends nothing. Each person connects their own mailbox.
+
+Choose the audience in step 1:
+- **Internal**: only accounts in your domain. Gmail needs no Google verification. It needs a project in your organization.
+- **External**: any Google account, but Gmail is a restricted scope, so Google's verification applies.
+
+**Remove Google app** turns it off for everyone. A server's Google app can also come from its environment; see [Manual or self-hosted](#manual-or-self-hosted).
+
+### Start the sync on the runner
+
+With Whole Workspace set, the `connectors` job on the runner reads the mailboxes below. It gets short-lived tokens from the Tico server, so no key file goes to the runner.
+
+1. Wait a minute. `docker logs '<container-name>'` says `Tico side jobs: started connectors (mail, calendar)`. The first start builds
    the Python environment into the runner's volume (`/home/runner/tools/mail-venv`, or `/var/lib/tico-runner/tools/mail-venv`),
    about a minute, needing outbound access to PyPI once. It is not in the image, so the image stays slim for runners that never sync mail;
    it is rebuilt when `connectors/mail/requirements.txt` changes.
-4. Check: `python -m runner --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
+2. Check: `python -m runner_support --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
    tool health.
 
 ### Which mailboxes the sync covers
 
-The `connectors` job syncs the mailboxes the message bots manage, and nothing else. It does not go through every person on the
-roster. For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
+With **Whole Workspace**, the `connectors` job also syncs every known active personal mailbox linked to a person and
+every shared inbox on the key's domain, even without a message bot. Each has one sync computer: its message bot's
+non-revoked host, else the person's Assistant's online host, else an online isolated company server (owned by a
+company owner or admin), else the person's own online computer. Shared mailboxes
+without a message-bot host use only a company server. Among equally eligible computers, the lowest runner ID wins.
+An isolated server is a Linux Docker runner that supervises its own `connectors` job. Another member's personal
+computer is never chosen just because it is online. A fallback owner is replaced when it has not contacted Tico for
+60 seconds or is revoked. If no eligible computer is online, nothing syncs and Health says the mailbox has no sync computer.
+Stopped mailboxes and mailboxes awaiting a person are excluded from this fallback. A personal Connect Google grant
+keeps its existing ownership rule. Syncing grants no bot access: the person and their Assistant can read their copies;
+other bots still need an explicit mailbox grant, even on the syncing computer.
+
+For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
 identity of its `gmail` entry in `bot.yaml`, which BotOps fills from the `Mailbox: <email>` line in the bot's instructions
 (`{{mailbox}}` in the template). Only when a bot declares none does the sync use its person's email from the roster. A person
 who left, and an archived bot, are skipped.
@@ -453,29 +549,37 @@ a domain the key covers. The issue goes away on its own once the mailbox syncs.
 
 A person can connect their own Google account from Tico, with no service account, no domain-wide delegation, no
 Workspace admin console and no Google Cloud project of their own. It works for an ordinary mailbox user who can sign in.
-Tico supplies the Google app ("Tico") and the consent screen. Google itself enforces what Tico may do: the grant belongs to
+Tico supplies the Google app ("Tico") and the consent screen, unless the company sets its own Google app (below). Google itself enforces what Tico may do: the grant belongs to
 the account that signed in and cannot reach anyone else in the Workspace.
 
-![My Google account tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
+![Google tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
 
-*Synthetic Acme example with Google not configured. Your personal Google connection is under My Google account.*
+*Synthetic Acme example with Google not configured. Your personal Google connection is in Settings > Google.*
 
-1. In Tico, the person opens **Settings > My Google account** and chooses **Connect Google**. Tico names the mailbox it will connect:
+1. In Tico, the person opens **Settings > Google** and chooses **Connect Google**. Tico names the mailbox it will connect:
    the one their message bot manages.
-2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. Nothing that writes or
-   sends is asked for.
+2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. With Tico's shared app,
+   nothing that writes or sends is asked for. With the company's own Google app, see below.
 3. Google returns them to Tico. The computer that runs the mail sync finishes the sign-in and keeps the grant. Settings
-   shows that it is connected, read only, and the sync starts on its next cycle. The server sees a one-time code for a few
+   shows what the grant allows, and the sync starts on its next cycle. The server sees a one-time code for a few
    minutes and never the grant itself.
 
 Tico refuses any other account: if Google says someone else signed in, nothing is stored and that grant is revoked at
 once. Only the person can connect their own mailbox; an owner cannot connect it for them.
 
-What it allows: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy` and
+What it allows with Tico's shared app: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy` and
 `calendar.calendarlist.readonly`. A bot's `read` verb in Tico also covers labelling, archiving and triage, but a
 read-only grant cannot do those at Google, so Tico refuses them before calling Google (exit 2, "connected to Tico
 read-only at Google"). Sending stays off ([Turning sending on](#turning-sending-on)). Tico never asks Google for more on
 its own.
+
+**With the company's own Google app.** An admin can set the company's own Google app in Settings > Google (its OAuth client
+ID and secret, with the redirect address Settings shows). Then Connect Google also asks Google for `gmail.modify`, which
+labels, archives and drafts mail, and for `calendar.events`, which adds calendar events. Google shows them on the same
+consent screen, and the grant keeps only what Google gave. A person whose grant is read only is offered the upgrade in
+Settings: **Connect Google** again adds the access, and nothing is forced. Tico's shared app stays read only, and so does
+a server whose environment sets its own client (`TICO_GOOGLE_OAUTH_CLIENT_ID`), because the environment's client wins over
+the one set in Settings. Sending stays off either way.
 
 When Google says no. A Workspace's admin can block apps for everyone in it. Tico cannot get around that and does not
 try. When Google answers `admin_policy_enforced`, Settings says so in those words: "The Google Workspace for
@@ -488,7 +592,7 @@ Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
   later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
-- **Disconnect** in Settings > My Google account revokes the grant at Google and deletes it from the computer that holds it.
+- **Disconnect** in Settings > Google revokes the grant at Google and deletes it from the computer that holds it.
   A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
   already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
   holds nothing, and Settings shows that instead of "disconnected". If that computer stays offline for 15 minutes,
@@ -520,11 +624,13 @@ The app's client secret never leaves the Tico server, for either kind of app: on
 every team, so no computer holds it. Google refreshes a grant only with the client that issued it, so the server does
 it on the computers' behalf. The computer that holds the grant sends its refresh token to the server
 (`POST /api/v2/connectors/mail/google/token`, with its runner registration). The server adds the secret, asks Google
-for one service's read-only scopes and returns only an hour-long access token and its expiry. It keeps no token
+for one service's scopes, never more than the grant holds, and returns only an hour-long access token and its expiry. It keeps no token
 and logs none: only each grant's SHA-256 fingerprint, which can refresh nothing, so it refreshes only the grant it
 issued for that mailbox and that computer. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
 claimed it), so the grant on the computer has a client id and no secret. Only a computer that holds a Connect Google
-grant from this server may ask, and only for `gmail.readonly` or the calendar read scopes, one service at a time. The
+grant from this server may ask, one service at a time. A grant from Tico's shared app, or one made before scopes were
+recorded, holds only the read scopes (`gmail.readonly` and the calendar read scopes). A grant the company's own app made
+also holds `gmail.modify` and `calendar.events` if Google gave them. The
 computer's runner gives the mail CLI the server's address and its registration for this; a mail CLI run by hand, or
 a bot's turn on a Mac without the runner's credential socket, cannot refresh such a grant and says to use the runner.
 A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
@@ -537,13 +643,6 @@ app avoids verification only for accounts in the Workspace that owns the project
 Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
 use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
 
-For the Tico server's operator: Connect Google needs Tico's OAuth client on the server (`TICO_GOOGLE_OAUTH_CLIENT_ID`,
-`TICO_GOOGLE_OAUTH_CLIENT_SECRET`, a Web application client whose redirect URI is
-`<TICO_PUBLIC_URL>/api/v2/mail/google/callback`). Without it, Settings says Connect Google is not available on this
-server. A self-hosted team may use its own client the same way, or connect from the runner with
-`scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`,
-`google revoke` and `doctor` list, remove and check grants there.
-
 IMAP is not an alternative here: Google's OAuth for IMAP needs full-mail access, it carries no calendar, and a Workspace
 that blocks apps usually blocks IMAP as well.
 
@@ -551,11 +650,13 @@ that blocks apps usually blocks IMAP as well.
 
 The key can act as any mailbox in the team, so bots must not be able to read it.
 
-- **Docker runner with the two-user layout** (the current `runner.compose.yaml`): the key is in the runner's state directory,
+- **Key set in Settings > Google**: the key is sealed on the Tico server, and no computer gets it. A computer gets short-lived tokens for the mailboxes it may use, and nothing else.
+- **Docker runner with the two-user layout** (the current `runner.compose.yaml`) with a key you made yourself: the key is in the runner's state directory,
   closed to the bots' user. The `connectors` job reads it there. A message bot's run gets, from the runner over its credential
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
-  one the bot declares (its human's own email only if it declares none). Those of the humans below that human in the
-  team chart are added only when that mailbox's `gmail` entry sets `org_read: true`. Calendar tokens come from the same
+  ones it holds a level on in Tico (`mailbox_levels` on its turn; a message bot gets its grant when it is set as a
+  person's message bot). The server checks the level again on every mint, and a Read level gets the read-only scopes,
+  except on the computer that syncs the mailbox, whose connector holds the full scope. Calendar tokens come from the same
   list, so on this layout the mail-local calendar commands reach only those mailboxes' calendars. Any other bot, and any
   other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
@@ -596,6 +697,30 @@ Nothing in the `connectors` job is Mac-only: the key is a file on both (no Keych
 in it. What stays Mac-only is launchd (`scripts/tico install`; Linux uses the runner's own supervisor) and
 `connectors/browser.py`, the signed-in browser tool bots use, which needs a desktop browser.
 
+### Manual or self-hosted
+
+Use these instead of the Settings steps above when you make the Google key yourself, or run the Tico server.
+
+**A key you make yourself**
+
+1. Create the Google service account with domain-wide delegation once (`connectors/mail/README.md`, Setup), and download its JSON key.
+   Without delegation, each person connects their own account instead ([Connect your Google account](#connect-your-google-account)) and you skip step 2.
+2. Put the key on **one** runner, in the runner's own state directory, where only the runner can read it (owner `ticorun`, mode 0600):
+   `docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`.
+   A key left in `workspace/secrets/google-sa.json` (an older install, or an older version of this page) is moved there within
+   a minute. Bots cannot read that place: a message bot's run asks the runner for a short-lived token for one mailbox instead
+   ([Who can read the key](#who-can-read-the-key)).
+   Re-enrollment on the same volume carries the protected key from the previous registration into the new state directory,
+   preserving its permissions. The operator and server must match; another operator's key is never copied, and an existing
+   key in the new registration is kept. Carryover is recorded once per registration after copying, finding an existing
+   key or confirming there is no previous key. Deleting that registration's key later is respected on restart;
+   a missing previous key is quiet, while failed reads or copies can retry. The previous key remains available for rollback.
+   Health warns when an assigned teammate's online Computer reports a missing Tool Credential, naming the Tool and Computer.
+
+**Tico's Google app on a server you run**
+
+The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Google can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
+
 ## Turning sending on
 
 A message bot starts with sending off: everything it writes is a draft for the human. Whether it sends without a
@@ -633,7 +758,8 @@ exactly what its bot.yaml asks.
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox
 and the team roster, never gmail.com and other public providers; `TICO_INTERNAL_DOMAINS` names them outright), the usual
-caps (20 sends a day, one outside recipient, no outside Cc, no attachments), no wait between messages to the same person
+caps (20 sends a day, one outside recipient, no outside Cc), no wait
+between messages to the same person
 (the forward address gets many messages), and an empty blocklist. `mail policy show` prints "built-in defaults". Put a
 `mail-policy.yaml` in the registry and that file is the policy instead. The message bot's template also carries
 `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
@@ -666,6 +792,8 @@ including uncertain outcomes after timeouts. A sender's 2xx means `accepted`, no
 never send again. Unsupported methods return `manual_required`; uncertain requests return
 `unknown`. The rules pass still archives unwanted mail and exposes the unsubscribe result;
 standalone `--archive` archives only after acceptance. No request is made in a dry run.
+
+An automation's `unsubscribe` action (mail only) makes the same request on the mail computer. It refuses starred mail, internal mail, people on the roster and senders the mailbox already writes to, and a refusal or an unconfirmed request fails the step. Mail actions on one message within one automation step run in order: an archive after an unsubscribe waits for it, and is skipped if it failed.
 
 Keep the processing order: scripts and filing rules, then model analysis of unresolved mail.
 Unsubscribe requires choosing unwanted subscription mail; it does not cancel a paid service.

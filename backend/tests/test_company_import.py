@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend import company_file as C
 from backend import market_spend as MS
 from backend import people_remove, views
@@ -16,6 +17,7 @@ from backend.auth import Identity
 from backend.company_file import starter
 from backend.store import H, Problem, encode
 from backend.tests.test_sample_company import OWNER_EMAIL, PEOPLE, SEED, environment, machine, rows, settings_for, signed_in
+from backend import bot_settings as BS
 
 
 def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "accounts-payable")):
@@ -163,6 +165,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"]
     assert '"person":"ana"' in saved and '"person":"ben"' in saved
     invited_from_setup(api, finance[0]["id"])
+    an_older_releases_roster_add_retries_after_the_upgrade(api)
     # A coworker who holds no role still joins in Tico, not by import.
     loose = C.from_yaml(text)
     loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "dept": None, "owner": False, "isNew": True})
@@ -247,8 +250,9 @@ def invited_from_setup(api, finance):
         assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
         # Removed, a repeat of a bound key still answers from its binding and never invites her again. The binding keeps
         # neither the address (its hash) nor the refusal text that named it.
-        bound = rows(api, "SELECT key,state,request_hash,error_detail FROM invite_sends WHERE person=?", (ana["id"],))
-        assert {row["state"] for row in bound} == {"sent", "refused"}
+        bound = rows(api, "SELECT key,state,request_hash,error_detail FROM idempotency WHERE binding='invites' AND subject=?",
+                     (ana["id"],))
+        assert {row["state"] for row in bound} == {"completed", "refused"}
         assert all(row["request_hash"] == "" for row in bound)
         assert not [row for row in bound if "acme.example" in (row["error_detail"] or "")]
         refused_key, = [row["key"] for row in bound if row["state"] == "refused"]
@@ -263,6 +267,60 @@ def invited_from_setup(api, finance):
         api.app.state.auth.proxy = None
 
 
+def an_older_releases_roster_add_retries_after_the_upgrade(api):
+    """An older release's onboarding route stored its roster add as an answer under the request's key before it bound
+    the invite, so a refusal (or a crash) between the two left an answer with no binding and nothing sent. Migration
+    0050 removes it: the retry after the upgrade sends once and answers, and its repeat sends nothing more."""
+    import sqlite3
+    from contextlib import closing
+
+    from backend.store import digest
+
+    url, key, body = "/api/v2/onboarding/company/people/ben/invite", "legacy-ben", {"email": "ben@acme.example"}
+    refused = api.post(url, json=body, headers={**signed_in(), "Idempotency-Key": key})   # no sign-in mail here
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
+    ben, = [p for p in api.get("/api/people", headers=signed_in()).json()["people"] if p["email"] == body["email"]]
+    settings = api.app.state.store.settings
+    with closing(sqlite3.connect(settings.db_path)) as c, c:
+        assert not c.execute("SELECT 1 FROM idempotency WHERE key=?", (key,)).fetchone()
+        # The older layout: the answers alone in `idempotency`, the invite bindings in invite_sends.
+        c.execute("CREATE TABLE idempotency_legacy(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+                  "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, "
+                  "PRIMARY KEY(actor,operation,key))")
+        c.execute("INSERT INTO idempotency_legacy SELECT actor,operation,key,request_hash,response,created_at "
+                  "FROM idempotency WHERE binding IS NULL")
+        c.execute("CREATE TABLE invite_sends(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+                  "request_hash TEXT NOT NULL, person TEXT NOT NULL, state TEXT NOT NULL, error_code TEXT, "
+                  "error_detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))")
+        c.execute("INSERT INTO invite_sends SELECT actor,operation,key,request_hash,subject,"
+                  "CASE state WHEN 'pending' THEN 'sending' WHEN 'completed' THEN 'sent' ELSE state END,"
+                  "error_code,error_detail,created_at,coalesce(updated_at,created_at) FROM idempotency "
+                  "WHERE binding='invites'")
+        actor = c.execute("SELECT actor FROM invite_sends LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO idempotency_legacy VALUES(?,?,?,?,?,?)",
+                  (actor, url, key, digest(encode(body)), encode({"id": ben["id"]}), H.now()))
+        c.execute("DROP TABLE idempotency")
+        c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
+        restore_config(c)
+        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
+
+    class Issuer:
+        name, calls = "oidc", []
+
+        def invite(self, email):
+            self.calls.append(email)
+            return 202, {"status": "sent"}
+    with TestClient(create_app(settings), follow_redirects=False) as upgraded:
+        upgraded.app.state.auth.proxy = Issuer()
+        for _ in range(2):
+            again = upgraded.post(url, json=body, headers={**signed_in(), "Idempotency-Key": key})
+            assert again.status_code == 200, again.text
+            assert Issuer.calls == ["ben@acme.example"]
+        with upgraded.app.state.store.read() as c:
+            row = c.execute("SELECT binding,subject,state FROM idempotency WHERE key=?", (key,)).fetchone()
+        assert tuple(row) == ("invites", ben["id"], "completed")
+
+
 def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(environment):
     api = environment()
     body = {"company_yaml": company_text()}
@@ -275,7 +333,7 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     assert done.json()["names"]["company_name"] == "Acme Finance"
     assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
     assert seat_lines(api) == {"Head of Finance": "human:owner", "Acme Payables": "Head of Finance"}
-    templates = rows(api, "SELECT json_extract(config,'$.template') AS template FROM bot_config")
+    templates = rows(api, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN}")
     assert sum(r["template"] == "assistant" for r in templates) == 1
     assert sum(r["template"] == "botops" for r in templates) == 1
     assert "model_choices" in done.json()["company_import"]["deferred"]
@@ -323,13 +381,13 @@ def test_import_never_replaces_an_existing_paused_employee(environment):
     config = {"name": "accounts-payable", "status": "paused", "instructions": "Keep the existing employee unchanged"}
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {**SEED, "accounts-payable": config}, PEOPLE)
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                  ("accounts-payable", encode(config), "owner", "emp-bookkeeping"))
-    original = rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'")
+        c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', ('accounts-payable', 'owner', 'emp-bookkeeping'))
+        BS.write(c, 'accounts-payable', config)
+    original = rows(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='accounts-payable'")
     body = {"company_yaml": company_text()}
     body["fingerprint"] = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in()).json()["fingerprint"]
     assert api.post("/api/v2/setup/company/import", json=body, headers=signed_in()).status_code == 409
-    assert rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'") == original
+    assert rows(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='accounts-payable'") == original
 
 
 @pytest.mark.parametrize("through_new_parent", [False, True], ids=["reverse-builtins", "new-parent-chain"])
@@ -481,9 +539,9 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, seed, PEOPLE)
         for slug, config in seed.items():
-            c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                      (slug, encode(config), "owner", "bot-" + slug))
-    before = rows(api, "SELECT bot,config FROM bot_config ORDER BY bot")
+            c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
+            BS.write(c, slug, config)
+    before = rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot")
     draft = C.from_yaml(company_text())
     draft["bots"] = [b for b in draft["bots"] if b["template"] != "coo"]
     employee = next(b for b in draft["bots"] if b["template"] == "accounts-payable")
@@ -495,8 +553,8 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
         assert preview.status_code == 422 and "conflicts" in preview.text
         result = api.post("/api/v2/setup/company/import", json={**body, "fingerprint": "0" * 64}, headers=signed_in())
         assert result.status_code == 422 and "conflicts" in result.text
-        assert rows(api, "SELECT bot,config FROM bot_config ORDER BY bot") == before
-    assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config,'$.template')='assistant'")) == 1
+        assert rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot") == before
+    assert len(rows(api, f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template='assistant'")) == 1
 
 
 def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(environment):
@@ -634,8 +692,8 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
         with api.app.state.store.transaction() as c:
             H.sync_registry(c, seed, PEOPLE)
             for slug, config in seed.items():
-                c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
-                          (slug, encode(config), "owner", "bot-" + slug))
+                c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
+                BS.write(c, slug, config)
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
         done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview["fingerprint"]},

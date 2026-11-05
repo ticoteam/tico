@@ -30,7 +30,7 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?',
                   (H.shift(now, hours=1), attempt['id']))
         # Bulk fixture loading must not queue actual runs or construct message links.
-        for trigger in ('message_links_insert', 'queue_bot_message', 'wake_preset_hold', 'message_links_update'):
+        for trigger in ('message_links_insert', 'wake_preset_hold', 'message_links_update'):
             c.execute('DROP TRIGGER IF EXISTS ' + trigger)
         c.executemany('INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) '
                       "VALUES(?,'Synthetic task','bot:ops','human:ana',0,'done',?,?)",
@@ -68,22 +68,16 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
             'message_id': f'fixture-messages-{i}', 'state': 'completed', 'attempt_id': None})
         copies('attempts', attempt['id'], count, lambda i: {
             'job_id': f'fixture-jobs-{i}', 'token_hash': f'fixture-token-hash-{i}',
-            'state': 'completed', 'lane': f'fixture-lane-{i}',
-            'created_at': now if i < recent else H.shift(now, hours=-72)})
-        copies('turns', attempt['id'], count, lambda i: {
-            'id': f'fixture-attempts-{i}', 'message_id': f'fixture-messages-{i}',
+            'state': 'completed', 'lane': f'fixture-lane-{i}', 'message_id': f'fixture-messages-{i}', 'trigger': 'message',
             'task_id': public_tasks[i % rooms],
-            'started_at': now if i < recent else H.shift(now, hours=-72)})
+            'created_at': now if i < recent else H.shift(now, hours=-72)})
         print('synthetic sizes:', {table: c.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
-                                   for table in ('tasks', 'conversations', 'messages', 'jobs', 'attempts', 'turns', 'events')},
+                                   for table in ('tasks', 'conversations', 'messages', 'jobs', 'attempts', 'events')},
               flush=True)
 
     queries = [
-        'SELECT id FROM turns LIMIT 1',
         'SELECT id FROM attempts LIMIT 1',
-        "SELECT count(*) FROM turns WHERE started_at>=:day AND started_at<:tomorrow",
         "SELECT count(*) FROM attempts WHERE created_at>=:day AND created_at<:tomorrow",
-        "SELECT count(*) FROM turns WHERE started_at >= datetime('now','-1 day')",
         "SELECT count(*) FROM attempts WHERE created_at >= datetime('now','-1 day')",
         'SELECT count(*) FROM messages',
     ]

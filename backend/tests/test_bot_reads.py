@@ -12,6 +12,7 @@ from backend import groups as G
 from backend.tests.test_api import api, setup_attempt  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from clients import hubcli
+from backend import bot_settings as BS
 
 
 def hub(live, token, *argv):
@@ -37,12 +38,13 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
         for slug, boss, template in (("cpo", "human:ana", "support-lead"), ("ops", "cpo", "support"),
                                      ("finance", "cpo", None), ("doc-updater", "cpo", None),
                                      ("product-design", "doc-updater", None), ("coo", "human:ana", None)):
-            c.execute("UPDATE bot_config SET reports_to=?, config=json_set(config, '$.template', ?) WHERE bot=?",
-                      (boss, template, slug))
+            c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (boss, slug))
+            BS.update(c, slug, {'template': template})
         c.execute("UPDATE bot_config SET access=? WHERE bot='doc-updater'", (hidden,))
         # A department is a group now (first start made every bot name "" for none): cpo names its group,
         # and ops and finance, naming none, are in their manager's.
-        c.execute("UPDATE bot_config SET config=json_remove(config, '$.team') WHERE bot IN ('ops', 'finance')")
+        for bot in ("ops", "finance"):
+            BS.remove(c, bot, "team")
         roster = G._roster(c)
         G._set_bot(c, "cpo", G.ensure(roster, "customer-support", "Customer Support"))
         G._save(c, roster)

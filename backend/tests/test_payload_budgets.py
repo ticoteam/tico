@@ -10,6 +10,8 @@ from backend import hubdb as H
 from backend import threads as CORE
 from backend.store import encode
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_batch import approval_for_ana
+from backend.tests.hold_rows import set_holds
 
 KB = 1024
 MARKER = "TOOL-OUTPUT-MARKER-7f3a"
@@ -29,6 +31,69 @@ def clone(c, table, row, n, **changes):
 
 def size(value):
     return len(encode(value).encode())
+
+
+def test_folded_needs_changes_stay_under_the_live_event_budget(api):
+    store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
+    _, _, attempt = setup_attempt(api, "ops")
+    approvals = [approval_for_ana(api, bot="ops", token=attempt["token"],
+                                 payload={"amount": 1200 + i, "account": "ads", "what": f"Offsite ads {i}"})
+                 for i in range(2)]
+    with store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
+        waits = [parent["id"]] + [H.task_create(c, "human:ana", f"Prepare offsite part {i}", "x", "bot:ops",
+                                              parent_id=parent["id"])["id"] for i in range(249)]
+        H.task_create(c, "bot:ops", "Pick the offsite venue", "x", "human:ana", parent_id=parent["id"])
+        c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", [(tid,) for tid in waits])
+    folded = sorted(waits)
+    assert get(api, "needs-you")["folded_task_ids"] == get(api, "needs-you?limit=1")["folded_task_ids"] == folded
+    who = auth.authenticate({"authorization": "Bearer ana-test"})
+    with store.read() as c:
+        held, after = E.needs_baseline(c, auth, who, view), E.latest(c)
+
+    def change():
+        nonlocal after
+        base = held["version"]
+        with store.read() as c:
+            event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+            after = E.latest(c)
+        assert event["base"] == base and event["version"] == held["version"]
+        assert size(event) <= 8 * KB
+        return event
+
+    # An unrelated approval leaves all 250 waits folded into one card: do not resend their UUIDs.
+    post(api, f"approvals/{approvals[0]['id']}", {"decision": "declined"})
+    event = change()
+    assert event["changed"] == [] and event["removed"] == [approvals[0]["id"]]
+    assert "folded_task_ids" not in event
+
+    # A single unfolded wait still leaves a replacement too large for a live event.
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", (waits[-1],))
+    assert change()["folded_task_ids"] is None
+    assert get(api, "needs-you?limit=1")["folded_task_ids"] == sorted(waits[:-1])
+
+    # The stream advances its folding baseline even when it sends null.
+    post(api, f"approvals/{approvals[1]['id']}", {"decision": "declined"})
+    assert "folded_task_ids" not in change()
+
+    # The set is sent whole, so an empty one is small enough to send, however many ids left it.
+    with store.transaction() as c:
+        c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
+    assert change()["folded_task_ids"] == []
+    assert get(api, "needs-you?limit=1")["folded_task_ids"] == []
+
+    # The folded ids share one cap with the changed and removed ids: a set that fits beside them is sent, one past
+    # the cap with them uses the whole-read path.
+    for n in (E.NEEDS_CHANGES_MAX // 2, E.NEEDS_CHANGES_MAX + 1):
+        with store.transaction() as c:
+            c.executemany("UPDATE tasks SET status='open', waiting_on=NULL WHERE id=?", [(tid,) for tid in waits])
+            c.executemany("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?",
+                          [(tid,) for tid in waits[:n]])
+        event = change()
+        named = len(event["changed"] or []) + len(event["removed"] or [])
+        assert named < E.NEEDS_CHANGES_MAX // 2
+        assert event["folded_task_ids"] == (sorted(waits[:n]) if n == E.NEEDS_CHANGES_MAX // 2 else None)
 
 
 def test_payloads_stay_under_their_budgets(api):
@@ -297,8 +362,8 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     with store.transaction() as c:
         row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
         clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
-        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_note=? WHERE title LIKE 'Snoozed %'",
-                  (H.shift(H.now(), days=5), note))
+        for (snoozed,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Snoozed %'").fetchall():
+            set_holds(c, snoozed, snoozed_until=H.shift(H.now(), days=5), snoozed_note=note)
     board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
     rows = board.json()["tasks"]
     assert len(rows) == 500
@@ -306,31 +371,3 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     whole = get(api, "tasks/" + task["id"])["task"]
     assert whole["holds"][0]["reason"] == note, "the task's own view keeps the note whole"
 
-
-def test_the_federation_status_pages_its_peerings_and_shared_threads(api):
-    """GET /api/v2/federation: one page of peerings and one of shared threads at a time, each with its cursor."""
-    other = "gi_" + "b" * 24
-    with api.app.state.store.transaction() as c:
-        for i in range(130):
-            thread = CORE.create(c, H.KEEPER, title=f"Shared {i}", audience="members", members=["human:ana"])["id"]
-            install = f"gi_{i:024x}"
-            c.execute("INSERT INTO federation_peerings(id,hq_peering_id,peer_install,direction,status,peer_company,created_at,"
-                      "updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                      (f"fp_{i:04d}", f"hq_{i:04d}", install, "outgoing", "active", f"Acme {i} " + "x" * 100, H.now(), H.now()))
-            c.execute("INSERT INTO federation_threads(id,thread_id,home_install,origin_id,applied_through,high_seq,"
-                      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                      (uuid.uuid4().hex, thread, other, f"origin-{i:04d}", 1, 1, H.now(), H.now()))
-    first = get(api, "federation?limit=100")
-    assert len(first["peerings"]) == 100 and first["next_cursor"] and len(first["threads"]) == 100
-    assert first["threads_next_cursor"]
-    assert size(first) < 64 * KB
-    rest = get(api, f"federation?limit=100&cursor={first['next_cursor']}&threads_cursor={first['threads_next_cursor']}")
-    assert len(rest["peerings"]) == 30 and rest["next_cursor"] is None
-    assert len(rest["threads"]) == 30 and rest["threads_next_cursor"] is None
-    seen = [p["id"] for p in first["peerings"] + rest["peerings"]]
-    assert len(set(seen)) == 130
-    threads = [t["thread_id"] for t in first["threads"] + rest["threads"]]
-    assert len(set(threads)) == 130
-    assert first["peerings"][0]["company"].startswith("Acme 129 ")         # newest first
-    assert api.get("/api/v2/federation?limit=101", headers=headers()).status_code == 422
-    assert api.get("/api/v2/federation?cursor=nope", headers=headers()).status_code == 422

@@ -27,7 +27,7 @@ refused the key) and `unreachable`.
 
 Hosted servers (paused-start, d8f8efaa): a hosted company's Tico server and bot computers, each on or stopped, with a
 Start for a stopped one. HQ decides each start (Billing 4/5 `may_start`): while the company is paused for credit it
-answers `paused`, shown as PAUSED with a link to its account page (`credit_url`, https only) to ask for more credit. A
+answers `paused`, shown as PAUSED with a link to its account page (`credit_url`, https only), named Contact support for more credit. A
 company staff shut down answers `deactivated`. An install HQ hosts nothing for answers `none`, and the section stays
 hidden.
 """

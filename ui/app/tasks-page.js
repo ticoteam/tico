@@ -36,7 +36,10 @@ function pageTasks(forced, openId = '') {
     tasksTypeCheck(state);
   };
   if (keptPref) { prefApply(keptPref); state.migrate = false; }
-  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true});
+  // A kept list read to its end keeps its cursor too, so coming back asks only for what changed since (a delta read),
+  // and the 15-minute clock (refresh.js tasksFreshen) runs on from its last full read.
+  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true,
+    since: kept.since || null, fullAt: kept.since ? kept.fullAt || 0 : 0, activeComplete: !!kept.since});
   const main = $('#main');
   main.classList.add('tasks-layout');
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
@@ -223,7 +226,8 @@ function tasksRemember(state) {
 // way when leaving still keeps the last one).
 function tasksKeep(state) {
   if (!state?.read && !state?.kept) return;
-  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered};
+  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
+    since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
 }
 function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
   const people = (S.people || []).filter(p => !p.hidden)
@@ -340,10 +344,29 @@ function formFocus(root) {
 }
 const mergeTaskRows = (...groups) => [...new Map(groups.flat().map(task => [task.id, task])).values()];
 // Snoozed tasks too: the Snoozed view shows them and every other view leaves them out (taskItems).
-const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=100&offset=${offset}`;
+// The first page is short so the list paints soon; the rest come 500 at a time (the server's most), so a full read of a
+// thousand open tasks is three requests, not eleven.
+const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=${offset ? 500 : 100}&offset=${offset}`;
 // Every status: a task that finished comes back as finished (as a live event brings it), not as gone.
 const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
-async function tasksLoad(state, opts = {}) {
+// One full read at a time (state.fullRead), the first one on opening the page included. A load asked for while one is
+// on its way never starts the list over: the 2-minute poll shares it, and a load after a save waits for it and then
+// reads what changed since its cursor, which takes in the save. A list with a cursor reads only what changed.
+function tasksLoad(state, opts = {}) {
+  if (state.fullRead) {
+    if (opts.poll) return state.fullRead;
+    return state.loadAfter ||= state.fullRead.then(() => {
+      state.loadAfter = null;
+      return TASKS_ST === state ? tasksLoad(state, opts) : false;
+    });
+  }
+  return state.since ? tasksRead(state, opts) : tasksFullStart(state, opts);
+}
+function tasksFullStart(state, opts) {
+  const read = state.fullRead = tasksRead(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
+  return read;
+}
+async function tasksRead(state, opts = {}) {
   const seq = ++state.loadSeq;
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
@@ -359,10 +382,10 @@ async function tasksLoad(state, opts = {}) {
   if (cursor) {
     [changed, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    if (!changed || changed.reset) { changed = null; state.since = null; state.activeComplete = false; }
+    // The server says to read in full again: that read is the one full read (tasksLoad).
+    if (!changed || changed.reset) { state.since = null; state.activeComplete = false; return tasksLoad(state, opts); }
   }
   if (!changed) {
-    if (cursor) tasksRender(state);
     [active, lab] = await Promise.all([v2Get(activeTasksPath()), ...others()]);
     // A first read that lands after the page was left is kept for the next visit, as leaving would have kept it.
     if (TASKS_ST !== state && state.loadSeq === seq && active && !state.read && !state.kept && !S.lastRead.tasks)
@@ -445,8 +468,7 @@ function tasksReadFull(state, opts = {}) {
   state.since = null;
   getForget();
   getForgetTagged(p => p.startsWith('/v2/tasks'));
-  const read = state.fullRead = tasksLoad(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
-  return read;
+  return tasksFullStart(state, opts);
 }
 // Pulled down at the top on a touch screen (pull-refresh.js): the list, Needs you and the counts read again.
 async function tasksPulled(state) {

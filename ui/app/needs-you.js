@@ -11,13 +11,14 @@ const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
 function needsIndex() {
-  const list = S.v2?.needs || [];
-  if (NEEDS_MEMO?.list !== list) {
+  const list = S.v2?.needs || [], foldedIds = S.v2?.needsFoldedIds;
+  if (NEEDS_MEMO?.list !== list || NEEDS_MEMO?.foldedIds !== foldedIds) {
     const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
     // A bot's task folded into the card that asks the person the same thing is not listed again, nor a task the
     // Strategy Bot merged into an item of its own (backend/strategy_merge.py): the server leaves both out of Needs you.
-    const folded = new Set(list.flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
-    NEEDS_MEMO = {list, byId, folded};
+    // The whole-list ids also cover unread cards; their titles and asks stay on their own pages.
+    const folded = new Set((foldedIds || list.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])])).map(String));
+    NEEDS_MEMO = {list, byId, folded, foldedIds};
   }
   return NEEDS_MEMO;
 }
@@ -74,7 +75,7 @@ async function needsRecommend(button, ask, version) {
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
 // The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
 const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
-                           thread_held: 'Held', thread_capped: 'Paused', thread_unsent: 'Not sent'};
+                           thread_held: 'Held', thread_capped: 'Paused'};
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
@@ -101,7 +102,16 @@ function needRowHTML(it, ctx = {}) {
 // thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy'].includes(it.kind) && !decideGone(decideItemKey(it)));
+const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
+const needsExtras = () => (S.v2?.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && !decideGone(decideItemKey(it)));
+// The Tasks count includes these on unread pages too, less cards just answered here. The whole attention count also
+// includes Inbox's items and other task types; switching to it while paging makes the number depend on scrolling.
+function needsExtrasCount() {
+  const counts = S.v2?.needsByKind;
+  if (!counts) return needsExtras().length;
+  const gone = (S.v2.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && decideGone(decideItemKey(it))).length;
+  return Math.max(0, NEEDS_EXTRA_KINDS.reduce((n, kind) => n + (counts[kind] || 0), 0) - gone);
+}
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
@@ -204,6 +214,7 @@ function approvalTitle(it) {
   if (it?.kind !== 'approval') return it?.title || '';
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
+  if (it.what === 'mail_alert') return `Mail sending: ${approvalWho(p.bot)}`;
   return it.title || '';
 }
 function approvalFacts(what, p, it = {}) {
@@ -238,6 +249,11 @@ function approvalFacts(what, p, it = {}) {
     rows = [['For', p.pool ? shown(p.pool) : approvalWho(p.bot)], ['30 min', approvalUsd(p.per_30m_usd)], ['Day', approvalUsd(p.daily_usd)],
       ['Week', approvalUsd(p.weekly_usd)], ['Month', approvalUsd(p.monthly_usd)]];
     named = ['bot', 'pool', 'per_30m_usd', 'daily_usd', 'weekly_usd', 'monthly_usd'];
+  } else if (what === 'mail_alert') {
+    // A bot's mail sending, as it asks for it now (backend/maintenance_steps/check_health.py _mail_payload). Approving turns it on.
+    rows = [['Bot', approvalWho(p.bot)], ['Sends mail', p.outbound_send ? 'Yes' : 'No'],
+      ['Forward to', Array.isArray(p.forward_to) && p.forward_to.length ? p.forward_to.map(String).join(', ') : 'Nobody']];
+    named = ['bot', 'outbound_send', 'forward_to'];
   } else if (what === 'finance') {
     // A Finance action waiting on this person (backend/finance/actions.py): its summary, and for a budget change that
     // needs room above it, which budget is raised and to what (backend/finance/handlers.py _raise_note).
@@ -363,8 +379,7 @@ async function staleDecide(button, path, body) {
   }
 }
 // Filtered for you: what the ask filter kept off your plate today (backend/ask_ingest.py), folded at the foot of Needs
-// you. In Rehearsal it lists what On would have done and changes nothing; with the filter On, Let it through puts an
-// item on your plate in one click and tells the bot that asked.
+// you. Let it through puts an item on your plate in one click and tells the bot that asked.
 const ASK_FILTER_WHY = {
   status: 'A progress note: nothing to decide', covered: 'Same as one you already have open',
   unclear: 'Doesn\u2019t say what to decide', own_work: 'Work a bot can do itself',
@@ -382,26 +397,23 @@ async function askFilteredLoad(state) {
   tasksRender(state);
 }
 function askFilteredRow(it) {
-  const rehearsal = it.mode !== 'on', done = !!it.let_through_at;
+  const done = !!it.let_through_at;
   const what = ASK_FILTER_OUTCOME[it.would] || 'Filtered';
   const title = it.task ? `<a href="#/task/${encodeURIComponent(it.task)}">${esc(it.title || 'Untitled')}</a>` : esc(it.title || 'A question');
   const act = done ? '<span class="muted">Let through</span>'
-    : rehearsal ? `<span class="muted">Would have: ${esc(what.toLowerCase())}</span>`
     : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
   return `<div class="tl-filtered-row" role="listitem">
     <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
+      <span class="muted">${esc(what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
     <span class="tl-filtered-act">${act}</span></div>`;
 }
 function askFilteredHTML(state) {
   const items = state?.filtered || [];
   if (!items.length) return '';
-  const rehearsal = items.every(it => it.mode !== 'on');
-  const label = rehearsal ? 'Filtered for you (rehearsal)' : 'Filtered for you';
-  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">${esc(label)}</span>
+  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">Filtered for you</span>
       <span class="tl-gcount tnum">${items.length}</span><span class="spacer"></span>
       <a class="tl-gchat" href="#/settings/tasks" data-ask-filter-settings>What bots may put on you</a></summary>
-    <div class="tl-rows" role="list" aria-label="${esc(label)}">${items.map(askFilteredRow).join('')}</div></details>`;
+    <div class="tl-rows" role="list" aria-label="Filtered for you">${items.map(askFilteredRow).join('')}</div></details>`;
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest?.('[data-let-through]');

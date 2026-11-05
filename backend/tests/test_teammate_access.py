@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (fixture)
 from backend.tests.test_bot_access import bot
+from backend import bot_settings as BS
 
 EVERYONE = {"everyone": True}
 NOBODY = {"everyone": False}
@@ -416,8 +417,8 @@ def test_hub_sql_masks_bot_identities_and_message_recipients(acme):
     post(api, f"tasks/{task['id']}/comments", {"text": "Clause 4 looks odd."}, token="dee-test")
     conversation = get(api, "tasks/" + task["id"], "ana-test")["task"]["conversation_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET owner_id='cara', bot_owners='[\"cara\",\"ana\"]', "
-                  "created_by='human:cara', config=json_set(config,'$.reports_to','cara') WHERE bot='counsel'")
+        c.execute('UPDATE bot_config SET owner_id=\'cara\', bot_owners=\'["cara","ana"]\', created_by=\'human:cara\' WHERE bot=\'counsel\'')
+        BS.update(c, 'counsel', {'reports_to': 'cara'})
         c.execute("UPDATE messages SET recipient_id='human:cara' WHERE conversation_id=?", (conversation,))
     hide(api, "humans/cara", "dee", "fay")
     hide(api, "groups/contracts", "fay")
@@ -425,7 +426,7 @@ def test_hub_sql_masks_bot_identities_and_message_recipients(acme):
           "WHERE bot='counsel'"
     assert sql_column(api, row, "eve-test") == ['|["ana"]||-']
     assert sql_column(api, row, "fay-test") == ['cara|["cara","ana"]|human:cara|contracts']
-    config = sql_column(api, "SELECT config FROM bot_config WHERE bot='counsel'", "eve-test")[0]
+    config = sql_column(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='counsel'", "eve-test")[0]
     assert '"team"' not in config and '"reports_to"' not in config and '"Counsel"' in config
     recipients = f"SELECT DISTINCT recipient_id FROM messages WHERE conversation_id='{conversation}'"
     assert sql_column(api, recipients, "eve-test") == [""]
