@@ -41,6 +41,7 @@ from urllib.parse import quote
 from fastapi import Request, Response
 
 from . import hubdb as H
+from . import step_flow
 from .batch_work import isolated
 from .store import Problem
 from . import bot_settings as BS
@@ -247,22 +248,26 @@ def register_worktree_pr(c, pr):
     return made
 
 
-def health_wait_reason(link, detail):
-    """The PR condition whose age Health measures, from the already synced link only."""
+def health_wait_reason(link, detail, *, check_flow=False):
+    """The PR condition whose age Health measures, from the already synced link only.
+
+    A ticket with step flow still needs its next move after a review; Health reads its Tico verdicts to name it.
+    """
     if link.get("state") not in ("open", "draft"):
         return ""
     if link.get("mergeable") == "conflict":
         return "conflict"
     reviewed = (detail.get("health_reviewed_head") == detail.get("head_sha")
                 if "health_reviewed_head" in detail else bool(link.get("review_state")))
-    if link.get("state") == "open" and link.get("mergeable") == "clean" and link.get("checks") == "passing" and not reviewed:
+    if (link.get("state") == "open" and link.get("mergeable") == "clean"
+            and link.get("checks") == "passing" and (check_flow or not reviewed)):
         return "review"
     return ""
 
 
-def record_health_wait(link, detail):
+def record_health_wait(link, detail, *, check_flow=False):
     """Keep the first observation through refreshes; a resolved condition clears its clock."""
-    reason = health_wait_reason(link, detail)
+    reason = health_wait_reason(link, detail, check_flow=check_flow)
     old = detail.get("health_wait") or {}
     head = detail.get("head_sha") or ""
     if not reason:
@@ -343,7 +348,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         elif mergeable == "clean":
             detail.pop("conflict_head", None)
         record_health_wait({**link, "state": state, "mergeable": mergeable,
-                            **({"checks": "pending"} if new_head else {})}, detail)
+                            **({"checks": "pending"} if new_head else {})}, detail,
+                           check_flow=step_flow.has_flow(c, task.get("type_id")))
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
             # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
@@ -632,7 +638,8 @@ def apply_checks(c, link_id, head, checks, since=None):
     _set_dropped(detail, dropped)
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
-    record_health_wait({**link, "checks": state}, detail)
+    record_health_wait({**link, "checks": state}, detail,
+                       check_flow=step_flow.has_flow(c, task.get("type_id")))
     c.execute("UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?",
               (state, json.dumps(detail), H.now(), link_id))
     if state != link.get("checks"):
@@ -753,7 +760,7 @@ def pr_signal(c, event, payload):
         if event in ("pull_request_review", "pull_request_review_comment"):
             fields["activity_at"] = H.now()      # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
-        record_health_wait({**link, **fields}, detail)
+        record_health_wait({**link, **fields}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
         fields.update(detail=json.dumps(detail), updated_at=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))

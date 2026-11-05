@@ -18,6 +18,28 @@ row. A card with an open blocker says **Blocked by** it across its top; click th
 card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
 When a Dev ticket's bot owner or a bot assigned the optional `builder` task role is quarantined, its card, column and ticket page show
 when the builder resumes in UTC, or that a person must clear it. The notice clears when the quarantine lifts.
+When repeated refusals all come from one task, only that bot's work on the task is held. A quiet task note explains
+the hold and its cooldown; the bot continues its other tasks. A person who manages the bot can clear the hold with
+quarantine clear, and the task keeps its existing status and other holds.
+The held task does not consume the bot's optional limit on tasks in progress.
+Every task change by that bot, including an external agent's snoozes, relations and waits, respects the hold.
+Its task-scoped validation refusals count against that task throughout the write, including after rollback.
+Posts in the task's native thread and file uploads, imports and links also respect the task hold; publishing
+files from a held attempt stays refused even when the bot is active. Updating an existing file checks its stored
+task too, even if the request omits the task.
+Messages, replies, acknowledgements and reactions check both the message's stored task reference and its thread's
+own task; naming a different task cannot bypass either hold. The bot can still read feedback on the held task;
+these reads record no refusal. Thread changes and read marks, task-linked pages,
+file reviews, and pins or cards on the task also respect the hold. Approval requests, replacement of an existing
+request and consumption of an approved request check the approval's task before changing it. A status update that
+keeps its stored task checks that task; the bot may still switch its status to unrelated work.
+Withdrawing or appealing a rule hold also checks its stored review task. Pinning a page checks the page's own task
+as well as the task it is pinned to.
+Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
+stay pending and unread until release; their task references use the same whitespace and list normalization
+as claims. Other tasks' runs carry only notes from sources that are free.
+The cooldown still releases a hold if its bot has been archived or its release notice cannot be sent.
+Each release runs independently, so a failed release does not hold up other cooldowns or scheduled work.
 Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
@@ -70,6 +92,22 @@ new title as its subject.
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
+Click the title, or focus it and press Enter, to edit it; **Edit** opens the details editor.
+The task window saves title, details and public text edits on blur or after 700 ms without typing, one write at a time.
+Due date and size changes use the same field revisions. Leaving an unchanged field never saves it.
+Only changed fields are sent with the revision their displayed text came from, including a focused field held
+through a live change. A conflict keeps the draft and adopts the current values for untouched fields; **Not saved · Retry** retries the edited fields against that version. Live changes
+keep every form's input, focus and caret. Edited fields keep their base revision across reloads
+and reopening, scoped to the signed-in org and person. A clean window cannot clear another window’s unsaved draft.
+Sign-out clears local drafts; sign-in recovery restores text only for the same org and person.
+A reworded question clears its earlier answer note and ticks. A pending or failed save prompts before leaving the page. The editor line
+names the latest title, details, owner or due-date change.
+
+Other viewers appear beside the editor line. Each visible window heartbeats every 15 seconds; closing or hiding
+one leaves only that window's session, and sessions expire after 30 seconds. Task and presence events use current
+task read permissions. Losing access closes the task window within 60 seconds, including bot-access revocation.
+The open task refetches on invalidations, with a three-minute safety refresh.
+
 ## Managers acting on tasks
 
 A bot or person above a task's owner or requester on the org chart inherits that
@@ -104,7 +142,9 @@ Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can
 
 When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. The model company is the Builder's company as its runs on the ticket actually ran (the Builder's configured company only while none of them is known), and a bot's company is the one a check given to it runs on: its task model's when it has one that can run now, else its configured model's, or what its last few such runs ran on. Each check step has an **Another model company** setting (`other_company` in its flow, see Step flow), `prefer` by default, and it decides what a bot of the Builder's company may do. With `prefer`, that bot takes the check only when no other pool bot is free, rather than the check waiting, for a review and a QA check alike, and a bot whose company Tico can't name comes after one of another company it can. With `require`, a bot of the Builder's company is never given the check, not even when it is the only free one: the check waits when every free bot runs on that company (the reason says so), and a bot of the Builder's company that finishes its own check does not take it. Require also never gives the check to a bot whose company Tico can't name (a model it doesn't know or a reseller picks, such as Cursor's auto, or part of a recent run on one), and while any part of the Builder's runs on the ticket is of unknown company the check waits for every bot. The bot is woken at once.
 
-With no free pool bot, the check waits on the ticket: its page shows **Waiting for a reviewer** (or **Waiting for QA**) with the reason, and the first bot in the pool to finish a check takes it. A pool member only takes checks this way. An empty pool waits the same way. A Builder that files the same check meanwhile is told it already exists. The wait ends when the check is filed or the ticket leaves the step.
+With no free pool bot, the check waits on the ticket: its page shows **Waiting for a reviewer** (or **Waiting for QA**) with the reason, and the first bot in the pool to finish a check takes it. Tico also retries every minute, up to 20 waits per pass, so a bot coming online or gaining room can take a waiting check. Offline or full pools do not consume that batch. Pools take turns across passes, with the oldest waits first within each pool, so ineligible waits cannot keep another pool waiting. The retry reads a bounded part of each pool's queue through an index, skips past ineligible tickets on later passes, and leaves unchanged waits unwritten. Retry chooses the head once, from the latest saved PR links under the write lock. The gate, request and check record use that same head, even if a PR refresh changed it after the wait began. An older saved link cannot cancel a newer head's wait. When GitHub is connected, every retry, including QA and checks after release, first reads the PR head outside the write lock. That read must still match the saved link when the check is filed. A changed head or failed read leaves the check waiting for the next pass. Without a configured GitHub App, the saved links supply the head and review still needs a passing receipt for it. Review retries also read current CI, so fresh green checks can admit a waiting review without a written receipt, just as on entry. A gate that still refuses a wait leaves it alone without taking the write lock or recording another refusal. Each wait is checked again before filing to avoid duplicates. A pool member only takes checks this way. An empty pool waits the same way. A Builder that files the same check meanwhile is told it already exists. The wait ends when the check is filed or the ticket leaves the step.
+
+Health names the next move by calling the ticket flow's ticket, merge and verdict rules at the PR's current head, including closed checks. Held or finished tickets get no advice to merge or move on. When check steps share a Fixes target, both use the newest relevant event at the current head: failed feedback, a verdict move or a manual return. Events are ordered by time. A return after approval or before capture counts too; an old failure at an old head cannot replace a newer return. After a push, the last return still identifies which check judged the earlier head. Green CI can move the ticket on only at a head newer than the one that check judged. Health checks merge readiness first, including step skip tags such as `skip-qa`. Otherwise changes name the Builder; a check that passes names the Builder to merge or move on only when those rules allow it. Without an explicit skip, a later QA pass at a failed head still calls for fixes, even after the ticket returns to QA Fixes. The check must have been filed at a check step, not just titled for one. A verdict at an old head needs a new review. An open check names its owner; a check with no reviewer names its pool and wait reason. Private checks stay hidden.
 
 A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` clause anywhere in its note, comment or final reply fills the same fields when no flag is given; the latest one wins. A Review 1, Review 2, QA or Security subtask of someone else's ticket that a bot owns, marked done with no verdict since it was last reopened, is refused with the `--verdict` hint; reopening a check clears its verdict. A person's own subtask with one of those titles is an ordinary task and finishes without a verdict. Tico waits for the exact judging run's usage record, records the configured and executed model families on the check, and accepts the verdict even when the run used a fallback or its family is unknown. Duplicate delivery does not move the ticket or wake the Builder twice.
 
@@ -597,6 +637,26 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 
 ### When nobody answers a bot's ask
 
+`keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
+asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
+Bot states use the runner's claim check. An onboarding manager cannot take a report's question, so Tico tries
+the next manager. Synced bots qualify only with desktop delivery; their sync inbox takes only their person's chat messages.
+Each candidate must pass the same checks as a send: Nearby reach, access to the task, every source and the room,
+contact policy, Write access, onboarding limits, and a way to receive the question. If any check refuses a
+candidate, Tico tries the next manager, then the company owner.
+These active-state and answer checks apply only when Tico picks the recipient. An ask sent to a named paused bot
+is saved and queued with a warning, and runs when the bot resumes.
+Org rules check the person or bot who will receive the ask, including a comment's question with no named recipient.
+Tico records the checked route even when no rule matches, and compares it again before sending.
+If it changed, nothing is sent; send the question again to check the new route.
+**Send anyway** checks that same route. If it now goes to someone else, it stays held; send a new question to check it.
+The send says who received it. An existing open system ask already in its task room is re-sent there once,
+keeping its text, files, reviews and meeting limits. An ask in another room stays there with its meeting limits
+and files. The task gets a fresh notice asking the recipient to have the owner restate the question there.
+The old ask links to its replacement, and the hold names the new recipient.
+A failed repair leaves that ask for Health and continues with the others.
+Health names a task waiting on a recipient who cannot read or answer.
+
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
 --default-kind reversible [--by <date>]`; MCP `if_no_answer: {do, kind, by}`), and the card says it: "If you don't
 answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and internal and the person has said
@@ -988,9 +1048,10 @@ including with `--all`/`all`, and support `number` lookup.
 `GET /api/v2/pipeline` (`hub pipeline`, `hub_pipeline`) is a board's numbers in one read, counted over the same
 tickets the board shows the caller: per working step the count, how many are snoozed, the oldest and median time
 since tickets entered the step, owners, whom they wait on (a bot, a person, something external or nothing) and their
-open pull requests. It also gives each bot the caller may read its running, queued, held, `dead` and uncertain jobs
+open pull requests. It also gives each bot the caller may read its running, queued, held, `quarantine_held`, `dead` and uncertain jobs
 (a dead job is queued behind an interrupted run nobody has reviewed, so it never runs until that run is resumed or
-dismissed; a bot's page and Health's queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
+dismissed; `quarantine_held` jobs resume after the refusal cooldown or quarantine clear; a bot's page and Health's
+queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
 5000 readable failures it stops, sets `truncated` and says in `complete_after` from when the counts are whole. Filters:
 `type` (default the engineering board), `owner`, `label`, `updated_since`, `snoozed=all|hide|only` (default all),
 `bot`, and `since` up to 7 days. Each bot also lists, in `decisions`, its stopped runs with a resume or dismiss

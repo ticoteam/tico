@@ -44,6 +44,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/messaging.css">
 <link rel="stylesheet" href="/tico/ui/styles/inbound.css">
 <link rel="stylesheet" href="/tico/ui/styles/settings.css">
+<link rel="stylesheet" href="/tico/ui/styles/inboxes.css">
 <link rel="stylesheet" href="/tico/ui/styles/tags.css">
 <link rel="stylesheet" href="/tico/ui/styles/bot-branches.css">
 <link rel="stylesheet" href="/tico/ui/styles/bot-learnings.css">
@@ -198,6 +199,7 @@
           <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
           <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
+          <a class="nav-link" id="account-administration" target="_blank" rel="noopener noreferrer" hidden><span class="nav-icon" aria-hidden="true">manage_accounts</span>Admin</a>
           <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
           <button class="nav-link" id="org-switch" type="button" hidden><span class="nav-icon" aria-hidden="true">swap_horiz</span>Switch organization</button>
           <button class="nav-link" id="org-add" type="button" hidden><span class="nav-icon" aria-hidden="true">add</span>Add organization</button>
@@ -299,6 +301,7 @@
 <script src="/tico/ui/app/chat-goal.js"></script>
 <script src="/tico/ui/app/chat-outline.js"></script>
 <script src="/tico/ui/app/slash-commands.js"></script>
+<script src="/tico/ui/app/shared-edit.js"></script>
 <script src="/tico/ui/app/meetings.js"></script>
 <script src="/tico/ui/app/live-meetings.js"></script>
 <script src="/tico/ui/app/meetings-granola.js"></script>
@@ -324,6 +327,7 @@
 <script src="/tico/ui/app/task-board.js"></script>
 <script src="/tico/ui/app/question-card.js"></script>
 <script src="/tico/ui/app/task-meetings.js"></script>
+<script src="/tico/ui/app/task-live.js"></script>
 <script src="/tico/ui/app/task-modal.js"></script>
 <script src="/tico/ui/app/org-rule-holds.js"></script>
 <script src="/tico/ui/app/roadmaps.js"></script>
@@ -345,7 +349,6 @@
 <script src="/tico/ui/app/messaging.js"></script>
 <script src="/tico/ui/app/sql.js"></script>
 <script src="/tico/ui/app/integrations.js"></script>
-<script src="/tico/ui/app/inbound.js"></script>
 <script src="/tico/ui/app/settings.js"></script>
 <script src="/tico/ui/app/settings-recurring.js"></script>
 <script src="/tico/ui/app/settings-tasks.js"></script>
@@ -361,9 +364,13 @@
 <script src="/tico/ui/app/settings-company.js"></script>
 <script src="/tico/ui/app/settings-billing.js"></script>
 <script src="/tico/ui/app/settings-gateway.js"></script>
-<script src="/tico/ui/app/settings-mail.js"></script>
-<script src="/tico/ui/app/mailboxes.js"></script>
-<script src="/tico/ui/app/mailbox.js"></script>
+<script src="/tico/ui/app/inboxes.js"></script>
+<script src="/tico/ui/app/inboxes-email.js"></script>
+<script src="/tico/ui/app/inboxes-texts.js"></script>
+<script src="/tico/ui/app/inboxes-letters.js"></script>
+<script src="/tico/ui/app/inboxes-sending.js"></script>
+<script src="/tico/ui/app/inboxes-alerts.js"></script>
+<script src="/tico/ui/app/inboxes-outbox.js"></script>
 <script src="/tico/ui/app/settings-hosted.js"></script>
 <script src="/tico/ui/app/settings-strategy-bot.js"></script>
 <script src="/tico/ui/app/settings-bot-editor.js"></script>
@@ -392,6 +399,7 @@
 <script src="/tico/ui/app/automations-editors.js"></script>
 <script src="/tico/ui/app/automations-runs.js"></script>
 <script src="/tico/ui/app/automations-overview.js"></script>
+<script src="/tico/ui/app/automations-maintenance.js"></script>
 <script src="/tico/ui/app/automations-new.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>

@@ -402,9 +402,8 @@ fn run(argv: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Instantaneous high-level reading: one-minute load per core, memory, and active turns. No process scan.
-pub fn load_snapshot(active: usize) -> Value {
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+/// Memory available to this runner, including a Docker memory limit. No process scan or diagnostics post.
+pub fn memory_percent() -> Option<f64> {
     let mut mem = memory();
     if crate::follow::kind() == "docker" {
         if let Some((used, limit)) = cgroup_memory().filter(|(_, limit)| mem.total == 0 || *limit < mem.total) {
@@ -412,8 +411,26 @@ pub fn load_snapshot(active: usize) -> Value {
             mem.available = limit.saturating_sub(used);
         }
     }
+    (mem.total > 0).then(|| 100.0 * mem.total.saturating_sub(mem.available) as f64 / mem.total as f64)
+}
+
+/// Linux start waiters share a memory reading for at most a second, independently of diagnostics.
+pub async fn start_memory() -> Option<f64> {
+    static SAMPLE: std::sync::OnceLock<tokio::sync::Mutex<Option<(Instant, Option<f64>)>>> = std::sync::OnceLock::new();
+    let mut kept = SAMPLE.get_or_init(Default::default).lock().await;
+    if let Some((at, value)) = *kept {
+        if at.elapsed() < Duration::from_secs(1) { return value; }
+    }
+    let value = tokio::task::spawn_blocking(memory_percent).await.ok().flatten();
+    *kept = Some((Instant::now(), value));
+    value
+}
+
+/// Instantaneous high-level reading: one-minute load per core, memory, and active turns. No process scan.
+pub fn load_snapshot(active: usize) -> Value {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
     json!({"at": unix_now(), "cpu_pct": load_average().map(|l| round1(100.0 * l[0] / cores)),
-           "mem_pct": (mem.total > 0).then(|| round1(100.0 * mem.total.saturating_sub(mem.available) as f64 / mem.total as f64)),
+           "mem_pct": memory_percent().map(round1),
            "running_turns": active})
 }
 

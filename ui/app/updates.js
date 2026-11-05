@@ -361,7 +361,7 @@ function updEditor(u, n, state, kids = '') {
         <textarea rows="3" data-upd-slide="${key}">${esc((s[key] || []).join('\n'))}</textarea></label>`).join('')}
       <label class="upd-field">KPIs <span class="muted">optional, one per line as Name: value</span>
         <textarea rows="2" data-upd-slide="kpis">${esc((s.kpis || []).map(updKpiLine).join('\n'))}</textarea></label>`
-    : `<textarea rows="4" aria-label="Your update" placeholder="- One to five bullets: what you did, do next, or wait on">${esc(u?.body || '')}</textarea>`;
+    : `<textarea rows="4" aria-label="Your update" placeholder="- Three bullets: what you did, do next, or wait on (plus Blocked: lines)">${esc(u?.body || '')}</textarea>`;
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}

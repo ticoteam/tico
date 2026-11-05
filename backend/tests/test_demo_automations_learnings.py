@@ -4,14 +4,22 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import demo, demo_content as D
 from backend.app import create_app
 from backend.demo_sections.schedules import SETTLE
 from backend.scheduler import next_due
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -50,6 +58,18 @@ def test_each_automation_shows_its_runs_and_drops(built):
         assert len(reviews) == 2 and sum(day["dropped"] for day in daily) == 4
 
 
+def test_review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        runs, _ = runs_of(api, automation_ids(api)["1-star reviews to reputation"])
+        assert len(runs) == 2
+        for run in runs:
+            tasks = [api.get(f"/api/v2/tasks/{step['outputs']['task']}").json()["task"]
+                     for step in run["steps"] if (step.get("outputs") or {}).get("task")]
+            assert {task["owner_id"]: task["status"] for task in tasks} == {
+                "bot:reputation": "done", "human:ben": "open"}
+
+
 def test_the_run_guard_held_a_loop_and_ben_dropped_it(built):
     _, settings = built
     with signed_in(settings) as api:
@@ -84,7 +104,7 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
         last = nights[0]
         assert last["night"] == "2026-09-25" and last["updates"] == 1
         detail = api.get(f"/api/v2/learnings/{last['id']}").json()
-        [bot] = detail["sections"]["bots"]
+        bot = next(row for row in detail["sections"]["bots"] if row["id"] == "technical-support")
         assert bot["id"] == "technical-support" and "1 task" in bot["saw"]
         [entry] = bot["entries"]
         assert "flat surface" in entry["title"]
@@ -98,7 +118,8 @@ def test_the_night_before_saves_a_smaller_change(built):
     with signed_in(settings) as api:
         night = next(n for n in api.get("/api/v2/learnings").json()["nights"] if n["night"] == "2026-09-23")
         assert night["updates"] == 1
-        [bot] = api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+        bot = next(row for row in api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+                   if row["id"] == "technical-support")
         [entry] = bot["entries"]
         assert "hold the phone still" in entry["title"].lower()
         [source] = [s for s in entry["sources"] if "hold the phone still" in s["quote"].lower()]
@@ -211,6 +232,16 @@ def test_the_packet_runs_leave_technical_support_its_focus(built):
         assert status["technical-support"]["focus"] == "Calibration callbacks"
 
 
+def test_learning_deliveries_leave_later_assignments_unstarted(built):
+    _, settings = built
+    expected = {title: status for key, title, _body, _owner, _requester, status, *_rest in D.TASKS
+                if key in ("support-week-review", "esc-repeat")}
+    with sqlite3.connect(settings.db_path) as db:
+        rows = db.execute("SELECT title,status,updated_at FROM tasks WHERE title IN (?,?)", tuple(expected)).fetchall()
+    assert {title: status for title, status, _updated in rows} == expected
+    assert all(at_time(updated) > NOW - timedelta(days=1) for _title, _status, updated in rows)
+
+
 def test_two_bots_hear_each_tico_release_after_the_first(built):
     directory, settings = built
     with sqlite3.connect(settings.db_path) as db:
@@ -228,7 +259,8 @@ FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "check_back_at"}
 @pytest.fixture(scope="module")
 def early(tmp_path_factory):
     directory = tmp_path_factory.mktemp("demo_automations_early")
-    return directory, demo.build(directory, now=EARLY)
+    with time_machine.travel(EARLY, tick=False):
+        yield directory, demo.build(directory, now=EARLY)
 
 
 def test_nothing_is_dated_after_an_early_build(early):

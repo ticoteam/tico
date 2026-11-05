@@ -6,16 +6,22 @@ that can put the old code back when the new code does not come up. Nothing here 
 a checkout with changes is left alone and the reason goes to Health.
 """
 import argparse
+import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
+
+from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
@@ -23,7 +29,12 @@ STATUS_FILE = "update-status.json"
 HEALTH_S = 180
 LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under follow.rs STALE_UPDATING_S
 LOCK_FILE = "tico-update.lock"
-BINARY_WAIT_S = 3600         # for a release's runner binary published after it (binary_pending), then a failed update
+PROCESS_LOCK = "update-process.lock"  # follow.rs probes this before starting an updater or declaring one stale
+GIT_BUSY = "repository copy needs attention: Git work is busy or its lock cannot be checked"
+MAX_DEFERRALS = 3           # repeats of the same non-transient cause before Health asks for help
+DEFERRAL_DELAYS_S = (120, 300, 900, 1800, 3600)
+DEFERRAL_LIMIT_S = 2 * 3600
+DEFERRAL_FIELDS = ("deferrals", "deferred_since", "deferral_cause", "cause_count")
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
 
@@ -47,8 +58,141 @@ def kind(env=os.environ, exists=os.path.exists):
 
 
 def git(root, *args, run=subprocess.run, timeout=60):
-    return run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=timeout,
-               stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    from . import git_locks
+    command = ["git", "-C", str(root), *args]
+    kwargs = dict(capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                  env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    try:
+        with git_locks.command_lock(root, wait=min(timeout, 10)) as common:
+            done = run(command, **kwargs)
+            if done.returncode:
+                note = git_locks.report(root, done.stderr or "", common)
+                if note:
+                    done.stderr = note
+            return done
+    except BlockingIOError:
+        return subprocess.CompletedProcess(command, 1, "", GIT_BUSY)
+    except OSError as exc:
+        return subprocess.CompletedProcess(command, 1, "", str(exc))
+
+
+def repair_instruction_links(root, g):
+    """Repair dereferenced instruction links only when they contain exactly the repository's own bytes.
+
+    A filename is not proof of runner ownership: staged changes, edits to the target, and different contents stay.
+    Some copy/archive tools flatten the tracked AGENTS.md/CLAUDE.md links in an installed checkout.
+    """
+    root = Path(root).resolve()
+    metadata = g("rev-parse", "--absolute-git-dir")
+    git_dir = Path(metadata.stdout.rstrip("\n"))
+    if metadata.returncode or not git_dir.is_absolute() or not git_dir.is_dir() or git_dir.is_symlink():
+        return
+    listing = g("ls-files", "--stage", "-z", "--", "AGENTS.md", "CLAUDE.md",
+                ":(glob)**/AGENTS.md", ":(glob)**/CLAUDE.md")
+    if listing.returncode:
+        return
+    for entry in listing.stdout.split("\0"):
+        info, sep, name = entry.partition("\t")
+        if not sep or not info.startswith("120000 ") or not info.endswith(" 0"):
+            continue
+        path = root / name
+        try:
+            before = path.lstat()
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or path.parent.resolve() != path.parent:
+                continue
+            if g("diff", "--cached", "--quiet", "HEAD", "--", name).returncode:
+                continue
+            link = g("cat-file", "blob", info.split()[1])
+            if link.returncode or not link.stdout or "\n" in link.stdout:
+                continue
+            target = (path.parent / link.stdout).resolve()
+            if not target.is_relative_to(root) or not target.is_file():
+                continue
+            relative = target.relative_to(root).as_posix()
+            content = read_regular(path)
+            accepted = read_regular(target)
+            if content != link.stdout.encode():
+                original = g("show", "HEAD:" + relative)
+                if original.returncode or g("diff", "--quiet", "HEAD", "--", relative).returncode:
+                    continue
+                if content != original.stdout.encode() or content != accepted:
+                    continue
+            # Keep open writers attached to a named inode in metadata, even after the link is restored.
+            digest = hashlib.sha256(accepted).hexdigest()
+            backup = git_dir / "tico-instruction-backups" / Path(name).parent / (Path(name).name + f".tico-backup-{int(time.time())}-{uuid.uuid4().hex}-sha256-{digest}")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            if backup.parent.resolve() != backup.parent:
+                continue
+            after = path.lstat()
+            if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or read_regular(path) != content:
+                continue
+            path.rename(backup)
+            saved = backup.lstat()
+            if (saved.st_dev, saved.st_ino) != (before.st_dev, before.st_ino):
+                # The replacement and the raced file both stay available for review.
+                with contextlib.suppress(OSError):
+                    os.link(backup, path, follow_symlinks=False)
+                continue
+            try:
+                path.symlink_to(link.stdout)
+            except OSError:
+                # Never replace another writer's new path; the backup still holds the original.
+                with contextlib.suppress(OSError):
+                    os.link(backup, path, follow_symlinks=False)
+        except (OSError, ValueError):
+            continue
+    return instruction_backup_note(root, git_dir)
+
+
+def instruction_backup_note(root, git_dir):
+    """Recheck retained backups on every update so a late write is named in the next Health report."""
+    saved = git_dir / "tico-instruction-backups"
+    names = []
+    if saved.is_symlink():
+        note = "repository copy needs attention: cannot inspect instruction backups: " + os.path.relpath(saved, root)
+        print(note, file=sys.stderr)
+        return note
+    try:
+        for backup in saved.rglob("*.tico-backup-*"):
+            relative = backup.relative_to(saved)
+            name = relative.with_name(relative.name.rsplit(".tico-backup-", 1)[0])
+            try:
+                before = backup.lstat()
+                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or backup.parent.resolve() != backup.parent:
+                    names.append(os.path.relpath(backup, root))
+                    continue
+                _, marked, digest = backup.name.rpartition("-sha256-")
+                if marked and not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    names.append(os.path.relpath(backup, root))
+                    continue
+                if not marked:
+                    target = (root / name).resolve(strict=True)
+                    if not target.is_relative_to(root):
+                        raise OSError("instruction target is outside checkout")
+                    digest = hashlib.sha256(read_regular(target)).hexdigest()
+                if hashlib.sha256(read_regular(backup)).hexdigest() != digest:
+                    names.append(os.path.relpath(backup, root))
+                    continue
+                # Keep the inode: a writer can still hold it after the link is restored.
+                after = backup.lstat()
+                if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or hashlib.sha256(read_regular(backup)).hexdigest() != digest:
+                    names.append(os.path.relpath(backup, root))
+                elif not marked:
+                    # Accept a legacy backup only while it still equals the checkout; preserve its inode.
+                    baseline = backup.with_name(backup.name + "-sha256-" + digest)
+                    if baseline.exists() or baseline.is_symlink():
+                        names.append(os.path.relpath(backup, root))
+                    else:
+                        backup.rename(baseline)
+            except OSError:
+                names.append(os.path.relpath(backup, root))
+    except OSError:
+        names.append(os.path.relpath(saved, root))
+    if names:
+        note = "repository copy needs attention: bot instruction edit to review: " + ", ".join(names[:3])
+        print(note, file=sys.stderr)
+        return note
+    return ""
 
 
 def checkout_release(root=ROOT, run=subprocess.run):
@@ -72,19 +216,70 @@ def disk_error_message(error):
             "the update retries when space frees.") if disk_space_error(error) else error
 
 
-def read_status(directory):
+def read_status(directory, *, strict=False):
     try:
-        data = json.loads((Path(directory) / STATUS_FILE).read_text())
+        data = json.loads(read_regular(Path(directory) / STATUS_FILE, SMALL))
+        if strict and not isinstance(data, dict):
+            raise ValueError("update status must be an object")
         return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
     except (OSError, ValueError):
+        if strict:
+            raise
         return {}
 
 
 def write_status(directory, **fields):
+    if fields.get("state") == "updating":
+        # Waiting on a shared lock must not erase the deferral history before this attempt can defer again.
+        before = read_status(directory)
+        if before.get("target") == fields.get("target"):
+            fields.update({name: before[name] for name in DEFERRAL_FIELDS if name in before})
     path = Path(directory) / STATUS_FILE
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(fields))
     os.replace(tmp, path)
+
+
+def defer_update(directory, version, reason, *, clock=time.time, transient=False):
+    """Release claims until the next try; old followers need failed because they ignore not_before."""
+    target = version.lstrip("v")
+    reason = " ".join(str(reason).split())[:250]
+    try:
+        before = read_status(directory)
+    except Exception:
+        # A failed status read must not prevent replacing it with a retry time.
+        before = {}
+    before = before if before.get("target") == target else {}
+    now = clock()
+    count = before.get("deferrals", 0)
+    count = count if type(count) is int and count >= 0 else 0
+    count = min(count + 1, len(DEFERRAL_DELAYS_S))
+    repeats = before.get("cause_count", 0)
+    repeats = repeats if type(repeats) is int and repeats >= 0 else 0
+    since = before.get("deferred_since", now) if repeats else now
+    since = since if type(since) in (int, float) and 0 <= since <= now else now
+    if transient:
+        repeats = 0
+    elif before.get("deferral_cause") == reason:
+        repeats = min(repeats + 1, MAX_DEFERRALS)
+    else:
+        repeats = 1
+    blocked = not transient and (repeats == MAX_DEFERRALS or now - since >= DEFERRAL_LIMIT_S)
+    short = os.environ.get("TICO_UPDATE_RETRY") == "short"
+    delay = DEFERRAL_DELAYS_S[count - 1] if short else 6 * 3600
+    state = "blocked" if blocked else "idle" if short else "failed"
+    prefix = "update paused: "
+    if blocked:
+        prefix = f"update blocked after {repeats} tries: " if repeats == MAX_DEFERRALS else "update blocked after two hours: "
+    error = prefix + reason
+    error = error[:250] + (f"; retrying in {delay // 60} minutes" if short else "; retrying in six hours")
+    timer = {"not_before": now + delay} if short else {}
+    write_status(directory, state=state, target=target, error=error, at=now, deferrals=count,
+                 deferred_since=now if transient else since, deferral_cause="" if transient else reason,
+                 cause_count=repeats, **timer)
+    return {"state": state, "target": target, "error": error}
 
 
 # -- the update itself (a checkout) ---------------------------------------------------------------
@@ -152,10 +347,10 @@ def binary_pending(root, old, target, version, run=subprocess.run, listed=None, 
 def in_flight(directory):
     import sqlite3
     try:
-        c = sqlite3.connect("file:" + str(Path(directory) / "runner.sqlite") + "?mode=ro", uri=True)
-        return c.execute("SELECT count(*) FROM attempts WHERE phase IN ('claimed','running')").fetchone()[0]
-    except sqlite3.Error:
-        return 0
+        with contextlib.closing(sqlite3.connect("file:" + str(Path(directory) / "runner.sqlite") + "?mode=ro", uri=True)) as c:
+            return c.execute("SELECT count(*) FROM attempts WHERE phase IN ('claimed','running')").fetchone()[0]
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"cannot check running work: {exc}") from exc
 
 
 def systemd_unit(env=os.environ):
@@ -282,25 +477,26 @@ def read_json(path):
 
 
 def lock_path(root, run=subprocess.run):
-    """The update lock of a checkout, in git's common directory so every worktree of it shares one; None if git cannot say."""
-    try:
-        done = git(root, "rev-parse", "--git-common-dir", run=run, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+    """The checkout's shared update lock; None for a busy Git gate, an error for other lookup failures."""
+    done = git(root, "rev-parse", "--git-common-dir", run=run, timeout=10)
+    if done.returncode and done.stderr == GIT_BUSY:
         return None
     common = done.stdout.strip()
-    return Path(root) / common / LOCK_FILE if not done.returncode and common else None
+    if done.returncode or not common:
+        raise OSError(done.stderr.strip() or "the checkout's update lock cannot be found")
+    return Path(root) / common / LOCK_FILE
 
 
 def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S, clock=time.time, **kw):
     """`update` (below) under the checkout's update lock. Runners of several company environments may share one checkout,
     and their updates must not interleave: one's rollback would move the checkout under another that already restarted.
     The second waits, saying "updating" so its runner does not start another, then sees where the first left the checkout.
-    After `lock_wait` seconds it gives up with "waiting" and its runner tries again later."""
+    If the lock cannot be found, or after `lock_wait` seconds, it defers and releases claims until the next retry."""
     path = lock_path(root, run)
-    if path is None:
-        return update(root, version, directory, run=run, clock=clock, **kw)
     target = version.lstrip("v")
-    with open(path, "a") as handle:
+    if path is None:
+        return defer_update(directory, target, "the checkout is busy or its update lock cannot be checked", clock=clock, transient=True)
+    with open_regular_lock(path) as handle:
         deadline, said = time.time() + lock_wait, False
         while True:
             try:
@@ -308,8 +504,7 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
                 break
             except BlockingIOError:
                 if time.time() >= deadline:
-                    write_status(directory, state="waiting", target=target, error="", at=clock())
-                    return {"state": "waiting", "target": target, "error": ""}
+                    return defer_update(directory, target, "another update still holds the checkout lock", clock=clock, transient=True)
                 if not said:
                     write_status(directory, state="updating", target=target, error="", at=clock())
                     said = True
@@ -318,8 +513,6 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
             result = update(root, version, directory, run=run, clock=clock, **kw)
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
-    if said and result["state"] == "waiting":     # not left saying "updating" while nothing is under way
-        write_status(directory, state="waiting", target=target, error="", at=clock())
     return result
 
 
@@ -332,7 +525,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     `started` is the commit the runner process started on. A checkout that is already on the release while the
     runner still runs other code (another runner sharing the checkout moved it, or a person did) only needs
     the restart.
-    Returns the status written: healthy, waiting, blocked, failed or rolled_back."""
+    Returns the status written: healthy, blocked, failed or rolled_back."""
     tag = "v" + version.lstrip("v")
     version = tag[1:]
 
@@ -357,7 +550,11 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     branch = g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if branch not in ("main", "HEAD"):        # HEAD: detached, which is where a release update leaves it
         return say("blocked", f"the checkout is on branch {branch}; switch it to main to follow releases")
+    instruction_note = repair_instruction_links(root, g)
     dirty = [line for line in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line]
+    if instruction_note:
+        names = ", ".join(line[3:] for line in dirty[:3])
+        return say("blocked", instruction_note + (f"; changed files: {names}" if names else ""))
     if dirty:
         # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
         named = ", ".join(line[3:] for line in dirty[:3])
@@ -367,27 +564,19 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
                               f"commit or stash them and the runner updates itself: {named}{more}")
     fetched = g("fetch", "--quiet", "origin", f"refs/tags/{tag}:refs/tags/{tag}", timeout=120)
     if fetched.returncode:
-        return say("failed", fetched.stderr if disk_space_error(fetched.stderr) else
+        return say("failed", fetched.stderr if fetched.stderr.startswith("repository copy needs attention:") or disk_space_error(fetched.stderr) else
                    f"release {tag} was not found on the public repository, or a local tag of that name differs")
     target = g("rev-parse", "--verify", "--quiet", tag + "^{commit}").stdout.strip()
     if not target:
         return say("failed", f"release {tag} does not name a commit")
     if busy and busy():
-        return {"state": "waiting", "target": version, "error": ""}
+        return defer_update(directory, version, "this computer still has work running", clock=clock, transient=True)
     if target == old and started in ("", target):
         return say("healthy")
     if target != old:
         pending = binary_pending(root, old, target, version, run=run, listed=listed, which=which)
         if pending:
-            # A waiting runner takes no new work (follow.rs drains for a pending update), so the wait has an end:
-            # a Mac build that failed is a failed update, tried again later, while the runner works on.
-            before = read_status(directory)
-            since = before.get("binary_wait_since") if before.get("state") == "waiting" and before.get("target") == version else None
-            since = since if isinstance(since, (int, float)) else clock()
-            if clock() - since >= BINARY_WAIT_S:
-                return say("failed", f"release {tag} still has no runner binary for this computer after "
-                                     f"{BINARY_WAIT_S // 60} minutes")
-            return say("waiting", pending, binary_wait_since=since)
+            return defer_update(directory, version, pending, clock=clock)
     say("updating")
 
     def restarted_helpers():
@@ -425,7 +614,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
 
     switched = g("checkout", "--quiet", "--detach", target)
     if switched.returncode:
-        return say("failed", switched.stderr if disk_space_error(switched.stderr) else f"could not switch to {tag}: local files are in the way")
+        return say("failed", switched.stderr if switched.stderr.startswith("repository copy needs attention:") or disk_space_error(switched.stderr) else f"could not switch to {tag}: local files are in the way")
     error = install(root, old, target) or prepare(root)
     if error:
         return back_out(error)
@@ -438,6 +627,21 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     return result
 
 
+@contextlib.contextmanager
+def updater_lock(directory):
+    """One updater per runner, including its drain and checkout-lock waits; a duplicate leaves its status alone."""
+    with open_regular_lock(Path(directory) / PROCESS_LOCK) as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m runner_support.release_update")
     parser.add_argument("--root", default=str(ROOT))
@@ -445,10 +649,45 @@ def main(argv=None):
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
-    args = parser.parse_args(argv)
+    args = argparse.Namespace()
+    try:
+        args = parser.parse_args(argv, namespace=args)
+        with updater_lock(args.state_dir) as acquired:
+            if not acquired:
+                print("Tico update: an updater is already running for this computer", flush=True)
+                return 0
+            read_status(args.state_dir, strict=True)
+            from . import git_locks
+            # Older updaters ignore this environment setting when a shared checkout moves back.
+            roots = json.loads(os.environ.get("TICO_GIT_OWNED_ROOTS", "[]"))
+            if not isinstance(roots, list) or any(not isinstance(root, str) for root in roots):
+                raise ValueError("TICO_GIT_OWNED_ROOTS must be a list of paths")
+            git_locks.OWNED_ROOTS = (Path(args.root), Path(args.state_dir), *map(Path, roots))
+            git_locks.register_checkout(args.root)
+            return run_update(args)
+    except BaseException as exc:
+        # Every stopped attempt needs an outcome, including exits before apply can write one.
+        if not getattr(args, "version", None) or not getattr(args, "state_dir", None):
+            raise  # There is no runner status to write for help or an incomplete command.
+        if isinstance(exc, SystemExit) and (exc.code is None or isinstance(exc.code, int)):
+            cause = f"the update stopped before it finished (exit {exc.code or 0})"
+        elif isinstance(exc, KeyboardInterrupt):
+            cause = str(exc) or "the update was interrupted"
+        else:
+            cause = str(exc) or type(exc).__name__
+        result = defer_update(args.state_dir, args.version, cause)
+        print(json.dumps(result))
+        return 1
+
+
+def run_update(args):
     deadline = time.time() + 600
     while in_flight(args.state_dir) and time.time() < deadline:   # the runner waits for quiet first; this is the second look
         time.sleep(10)
+    if in_flight(args.state_dir):
+        result = defer_update(args.state_dir, args.version, "this computer still has work running", transient=True)
+        print(json.dumps(result))
+        return 1
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
     result = apply(args.root, args.version, args.state_dir, busy=lambda: in_flight(args.state_dir),
                    restart=lambda: restart_runner(args.pid),

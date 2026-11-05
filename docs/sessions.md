@@ -72,7 +72,9 @@ A resumed session is sent only what is new: what was said since its last turn, t
 notices. On a harness that says when it compacts (the `compaction_events` capability: Claude Code and pi), the bot's standing
 instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
 is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
-session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes
+runner cannot safely read and hash AGENT.md, including when it is a symlink, it sends the full standing instructions
+each turn so the bot is told to read the rules again. If the session compacts during a shortened turn anyway, the turn
+is given the lines it left out at once. The whole prompt goes
 again on a new session, after any compaction (the harness's own or `compact_first`), after a side session or an
 interrupted turn, and after a turn that did not complete; the repo rules go again after a compaction or a turn that did
 not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the

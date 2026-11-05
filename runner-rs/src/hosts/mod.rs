@@ -35,6 +35,31 @@ use crate::env::Env;
 
 pub type Events = UnboundedSender<Value>;
 
+/// A host may prepare threads without a process. Only a successful spawn or reuse of a live process
+/// crosses memory admission; the turn keeps that boundary through host shutdown and fallback.
+#[derive(Default)]
+pub struct Allocation(std::sync::Mutex<AllocationState>);
+
+#[derive(Default)]
+struct AllocationState {
+    allocated: bool,
+    turn: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Allocation {
+    fn track(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        let mut state = self.0.lock().unwrap();
+        if state.allocated { turn.store(true, std::sync::atomic::Ordering::SeqCst); }
+        state.turn = Some(turn);
+    }
+
+    fn mark(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.allocated = true;
+        if let Some(turn) = &state.turn { turn.store(true, std::sync::atomic::Ordering::SeqCst); }
+    }
+}
+
 #[derive(Debug)]
 pub enum HostError {
     /// The runtime refused a call, or died while answering one.
@@ -267,6 +292,8 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
 /// this list and the CLI differ, so a command added or renamed there is added here too.
 const HUB_PATHS: &[&str] = &[
     "ack", "agent", "agent pair", "agent pair approve", "agent pair decline", "agent pair show", "answer",
+    "alerts", "alerts company", "alerts confirm", "alerts remove", "alerts set", "alerts show", "alerts test",
+    "alerts verify",
     "api", "approval", "approval approve", "approval decline", "approval list", "approval read-back",
     "approval request", "approval show", "approvals", "approvals approve", "approvals decline",
     "approvals list", "approvals read-back", "approvals request", "approvals show", "ask", "assistant",
@@ -305,7 +332,8 @@ const HUB_PATHS: &[&str] = &[
     "credential request", "credential revoke", "credential set", "db", "decision", "decision ask",
     "decision outcome", "decision readout", "decisions", "doc", "doc archive", "doc ask", "doc ask-status",
     "doc fetch", "doc history", "doc link-list", "doc list", "doc read", "doc search", "doc write", "docs",
-    "docs links", "editions", "editions list", "editions show", "event-types", "external", "external sync",
+    "docs links", "editions", "editions list", "editions show", "email", "email inbox", "email mailboxes",
+    "email message", "email search", "email thread", "event-types", "external", "external sync",
     "feedback", "feedback give", "feedback list", "feedback markers", "feedback reasons", "feedback remove",
     "feedback rule", "feedback rule-draft", "file", "file approved", "file archive", "file delete",
     "file import", "file link", "file list", "file publish", "file read", "file review", "file search",
@@ -807,6 +835,20 @@ pub enum Host {
 }
 
 impl Host {
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        match self {
+            Host::Claude(h) => h.track_allocation(turn),
+            Host::Codex(h) => h.track_allocation(turn),
+            Host::Gemini(h) => h.track_allocation(turn),
+            Host::Antigravity(h) => h.track_allocation(turn),
+            Host::MuseCode(h) => h.track_allocation(turn),
+            Host::Pi(h) => h.track_allocation(turn),
+            Host::Cursor(h) => h.track_allocation(turn),
+            Host::Grok(h) => h.track_allocation(turn),
+            Host::AppDriver(h) => h.track_allocation(turn),
+        }
+    }
+
     /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
     pub fn set_capture(&self, capture: &std::sync::Arc<crate::capture::Capture>) -> bool {
         match self {

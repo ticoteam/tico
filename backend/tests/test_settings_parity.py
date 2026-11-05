@@ -63,6 +63,7 @@ SAMPLES = {
     "release.times": "09:30",
     "release.bot": "finance",
     "release.writer": "finance",
+    "mail.legal_bot": {"legal_bot_id": "finance"},
     "rules.task_rule": {"on": False},
     "rules.task_rule.create": {"name": "Parity rule", "when": {}, "then": {}},
     "rules.system": {"enabled": True},
@@ -173,12 +174,13 @@ def _saved_subscription(api, objects):
 
 
 def _target(e, objects, person):
-    target = {"bot": "finance", "computer": objects["computers"], "person": "cara" if e.target == "person" else ""}
-    if e.target == "id":
-        target["id"] = next((v for k, v in objects.items() if e.route.startswith(k + "/")), "parity-missing")
+    target = {"bot": "finance", "computer": objects["computers"], "person": "cara"}
+    if "{id}" in e.route:
+        target["id"] = ("all" if e.route.startswith("postal/addresses/") else
+                        next((v for k, v in objects.items() if e.route.startswith(k + "/")), "parity-missing"))
     if e.who == "self" and e.target == "person":
         target["person"] = person
-    return {k: v for k, v in target.items() if v and (k == e.target)}
+    return {k: v for k, v in target.items() if v and "{" + k + "}" in e.route}
 
 
 def _allowed(c, e, role, person):
