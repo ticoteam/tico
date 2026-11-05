@@ -776,14 +776,15 @@ provider message id and delivery status. `/email/sends/{id}` supplies the author
 
 Calendar creation is silent and checks inbox-level Never first. Invitations are frozen calendar attachments in the same queued email as their confirmation, so approval, undo and dispatch checks apply before any invitation is sent. Before freezing, the connector waits up to 15 polls for a generated conference link; if it is still unavailable it returns a retryable error and queues no invitation. The frozen invitation and visible body include the join URL, location and description. Canceling a queued invitation leaves the silent calendar hold in place. A verified canceled, blocked, declined or failed send releases the scheduling fence for a new intent; pending, sent and uncertain sends remain fenced. A rebooking checks every calendar conflict and reuses an unchanged hold from a verified definite non-send. Every unchanged hold with a trusted insert snapshot is excluded from the availability check, the newest is reused, and extra holds are left untouched. Polls are checked against the original insert snapshot: only conference status, entry points and the join link may change. Any other edit or a legacy hold without a trusted snapshot requires reviewing the calendar hold and stays busy. Moved or edited holds and unrelated events remain busy. Repeated conference-preparation failures reuse the same silent hold. A failed conference request is restarted on that event with a version check and a fresh request id, without sending invitations.
 
-**After upgrading.** Existing explicitly enabled bot recipient scopes and existing automation versions retain their
-previous authorization, marked **kept from before**. Existing legal inbox approvals stay approvals. New automation
-ids and edited automation versions start under the shared default. Saving a company or inbox sending policy applies
-its safeguards to grandfathered paths too. A bot's old registry recipient restrictions remain enforced until a person
-sets its new policy. The older `hub bot mail` / `/bots/{bot}/mail-settings` controls remain compatible; setting their
-switch now sets the bot's new mode. `bot.yaml` carries no sending setting, and the mail tool reads no
-`registry/mail-policy.yaml`: every computer, Mac or Docker, asks Tico. The message bot's template also carries
-`questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
+**After upgrading.** Nothing keeps an older permission: every send, including older automations and recipient scopes,
+goes through the one sending policy. A bot whose older mail switch was off moves to **Ask first** (a bot already at
+Ask first or Never keeps it); its forward addresses and standing allowances are dropped, since they only lifted asks.
+An older daily cap stays as the bot's cap. A retired `registry/mail-policy.yaml` is read once into the company and
+inbox policies (blocked recipients, owner-handled addresses, sending off, paused inboxes, caps) and never again.
+Existing legal inbox approvals stay approvals. The older `hub bot mail` / `/bots/{bot}/mail-settings` controls remain
+compatible: their switch sets the bot's mode, and forward addresses are refused. `bot.yaml` carries no sending
+setting, and the mail tool reads no `registry/mail-policy.yaml`: every computer, Mac or Docker, asks Tico. The message
+bot's template also carries `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
 
 **The decision model.** `mail.sh inbox --decisions` and the spam and injection check (`hub classify`) ask the
 server's decision model. It asks the Tico AI Gateway first, with the gateway key in the server's `.env`
