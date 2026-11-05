@@ -201,7 +201,10 @@ following the final symlink. FIFOs, devices and oversized files stay untouched; 
 backups remain for review, without holding up the updater on a file read.
 Retained backups are compared with their accepted content hash, so later releases can change or
 remove the target without blocking updates. A late write to a backup still blocks the update and
-names the saved file in Health.
+names the saved file in Health. Instruction backups stay in place even when unchanged, so an open
+writer can finish safely. Git lock files also stay in place: once a lock is 30 minutes old, the updater
+reports its full path, age and one removal command. Check no Git is running for that repository
+before running that command on the Computer.
 Settings > Health and Computers name the changed files until someone commits or stashes them.
 The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
 to it. `scripts/tico update` still works by hand and still follows `main`.

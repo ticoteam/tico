@@ -1,6 +1,5 @@
-//! Recover only in runner-owned data/work roots. These copies must be private to one runner's PID
-//! namespace, never bind-mounted into a sibling container or shared with a host. Filesystem type
-//! cannot cheaply prove this deployment assumption. Uncertainty keeps the lock for Health to name.
+//! Serialize the runner's Git commands and report old locks. Other Git writers do not use this gate,
+//! so age never authorizes removing or moving their locks.
 
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
@@ -11,11 +10,10 @@ use std::time::Duration;
 const OLD: Duration = Duration::from_secs(30 * 60);
 static OWNED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-// Exiting Git from another fixture can be temporarily unreadable to the live-owner safety check.
 #[cfg(test)]
 pub static TEST_FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Only registration paths, never an arbitrary Git command's cwd, authorize recovery.
+/// Only registered runner paths receive a gate or lock report.
 pub fn own(roots: &[PathBuf]) {
     OWNED.lock().unwrap().extend(roots.iter().filter(|r| !r.as_os_str().is_empty()).cloned());
 }
@@ -25,7 +23,7 @@ pub fn owned(path: &Path) -> bool {
     OWNED.lock().unwrap().iter().filter_map(|r| r.canonicalize().ok()).any(|r| path.starts_with(r))
 }
 
-/// The file is never unlinked: every engine must flock the same inode.
+/// The file is never unlinked: both engines must flock the same inode.
 pub fn recovery_lock(common: &Path) -> Option<std::fs::File> {
     if !owned(common) { return None; }
     let file = crate::regular_file::open(&common.join("tico-lock-recovery"),
@@ -37,168 +35,13 @@ pub fn recovery_lock(common: &Path) -> Option<std::fs::File> {
 
 pub fn owned_roots() -> Vec<PathBuf> { OWNED.lock().unwrap().clone() }
 
-fn old_file(path: &Path) -> Option<std::fs::Metadata> {
+fn stale_note(path: &Path) -> Option<String> {
     let m = path.symlink_metadata().ok()?;
-    (m.is_file() && m.nlink() == 1 && m.modified().ok()?.elapsed().ok()? >= OLD).then_some(m)
-}
-
-#[cfg(target_os = "linux")]
-fn inaccessible_git(process: &Path) -> bool {
-    match std::fs::read_to_string(process.join("comm")) {
-        Ok(name) => name.trim().starts_with("git"),
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-    }
-}
-
-fn related(cwd: &Path, args: &[String], environment: &[String], roots: &[PathBuf]) -> Option<bool> {
-    let inside = |p: &Path| -> Option<bool> {
-        let p = p.canonicalize().ok()?;
-        Some(roots.iter().any(|r| p.starts_with(r)))
-    };
-    if inside(cwd)? { return Some(true); }
-    let mut at = cwd.to_path_buf();
-    let mut args = args.iter().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "-C" {
-            at = at.join(args.next()?).canonicalize().ok()?;
-            if inside(&at)? { return Some(true); }
-        } else if let Some(path) = arg.strip_prefix("-C") {
-            at = at.join(path).canonicalize().ok()?;
-            if inside(&at)? { return Some(true); }
-        } else if arg == "--git-dir" || arg == "--work-tree" {
-            if inside(&at.join(args.next()?))? { return Some(true); }
-        } else if let Some(path) = arg.strip_prefix("--git-dir=").or_else(|| arg.strip_prefix("--work-tree=")) {
-            if inside(&at.join(path))? { return Some(true); }
-        } else {
-            // init/clone and path-valued options can name the repository without -C.
-            let path = arg.split_once('=').map_or(arg.as_str(), |(_, value)| value);
-            match at.join(path).canonicalize() {
-                Ok(path) if roots.iter().any(|r| path.starts_with(r)) => return Some(true),
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return None,
-                _ => {},
-            }
-        }
-    }
-    for entry in environment {
-        if let Some(path) = entry.strip_prefix("GIT_DIR=").or_else(|| entry.strip_prefix("GIT_COMMON_DIR=")).or_else(|| entry.strip_prefix("GIT_WORK_TREE=")) {
-            if inside(&at.join(path))? { return Some(true); }
-        }
-    }
-    Some(false)
-}
-
-#[cfg(target_os = "linux")]
-fn exited(process: &Path) -> bool {
-    if !process.exists() { return true; }
-    // A zombie has released its descriptors and cwd; an unreadable live process still blocks recovery.
-    std::fs::read_to_string(process.join("stat")).ok()
-        .and_then(|s| s.rsplit_once(") ").map(|(_, rest)| matches!(rest.chars().next(), Some('Z' | 'X'))))
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "linux")]
-fn git_related(process: &Path, roots: &[PathBuf]) -> Option<bool> {
-    let cwd = std::fs::read_link(process.join("cwd")).ok()?;
-    let args = std::fs::read_to_string(process.join("cmdline")).ok()?;
-    let environment = std::fs::read_to_string(process.join("environ")).ok()?;
-    if args.is_empty() { return None; }
-    related(&cwd, &args.trim_end_matches('\0').split('\0').map(String::from).collect::<Vec<_>>(),
-        &environment.split('\0').map(String::from).collect::<Vec<_>>(), roots)
-}
-
-#[cfg(target_os = "linux")]
-async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf], strict: bool) -> bool {
-    let Ok(processes) = std::fs::read_dir("/proc") else { return false };
-    for process in processes {
-        let Ok(process) = process else { return false };
-        if !process.file_name().to_string_lossy().bytes().all(|c| c.is_ascii_digit()) { continue; }
-        if inaccessible_git(&process.path()) && git_related(&process.path(), roots) != Some(false) {
-            if !exited(&process.path()) { return false; }
-            continue;
-        }
-        let files = match std::fs::read_dir(process.path().join("fd")) {
-            Ok(files) => files,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) if !strict && !inaccessible_git(&process.path()) => continue,
-            Err(_) => return false,
-        };
-        for file in files {
-            let Ok(file) = file else { return false };
-            match std::fs::metadata(file.path()) {
-                Ok(m) if m.dev() == lock.dev() && m.ino() == lock.ino() => return false,
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound && (strict || inaccessible_git(&process.path())) => return false,
-                _ => {}
-            }
-        }
-    }
-    true
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn output(program: &str, args: &[&str]) -> Option<std::process::Output> {
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args).kill_on_drop(true);
-    tokio::time::timeout(Duration::from_secs(5), cmd.output()).await.ok()?.ok()
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf], strict: bool) -> bool {
-    // lsof may silently omit another user's descriptors. Instruction backups keep their inode on macOS.
-    if strict { return false; }
-    let Some(out) = output("/usr/sbin/lsof", &["-F", "p", "--", &path.to_string_lossy()]).await else { return false };
-    if out.status.code() != Some(1) || !out.stdout.is_empty() || !out.stderr.is_empty() { return false; }
-    let Some(out) = output("ps", &["-axo", "pid=,comm="]).await else { return false };
-    if !out.status.success() || !out.stderr.is_empty() { return false; }
-    let Ok(processes) = String::from_utf8(out.stdout) else { return false };
-    for line in processes.lines() {
-        let Some((pid, name)) = line.trim().split_once(char::is_whitespace) else { return false };
-        if !Path::new(name.trim()).file_name().is_some_and(|n| n.to_string_lossy().starts_with("git")) { continue; }
-        let Some(cwd) = output("/usr/sbin/lsof", &["-a", "-p", pid, "-d", "cwd", "-Fn"]).await else { return false };
-        let Some(args) = output("ps", &["eww", "-p", pid, "-o", "command="]).await else { return false };
-        if !cwd.status.success() || !args.status.success() || !cwd.stderr.is_empty() || !args.stderr.is_empty() { return false; }
-        let (Ok(cwd), Ok(args)) = (String::from_utf8(cwd.stdout), String::from_utf8(args.stdout)) else { return false };
-        let names: Vec<_> = cwd.lines().filter_map(|s| s.strip_prefix('n')).collect();
-        if names.len() != 1 || args.trim().is_empty() || args.contains(['\'', '"', '\\']) { return false; }
-        let words: Vec<String> = args.split_whitespace().map(String::from).collect();
-        if related(Path::new(names[0]), &words, &words, roots) != Some(false) { return false; }
-        // ps does not preserve argv/environment boundaries; path arguments may contain spaces.
-        if words.iter().any(|w| w.contains("GIT_DIR=") || w.contains("GIT_COMMON_DIR=") || w == "-C" || w.starts_with("--git-dir")) { return false; }
-    }
-    true
-}
-
-pub async fn no_open_file(path: &Path, metadata: &std::fs::Metadata) -> bool { unused(path, metadata, &[], true).await }
-
-fn quarantine(path: &Path, before: &std::fs::Metadata, archive: Option<&Path>) -> Result<bool, String> {
-    let directory = archive.unwrap_or_else(|| path.parent().unwrap());
-    if std::fs::create_dir_all(directory).is_err() || directory.canonicalize().ok().as_deref() != Some(directory) { return Ok(false); }
-    // The caller holds the repository gate and has ruled out live Git owners. Do not move a
-    // replacement observed since that scan: restoring it afterwards cannot protect Git's rename.
-    if !path.symlink_metadata().is_ok_and(|m|
-        (m.dev(), m.ino(), m.mtime(), m.mtime_nsec()) == (before.dev(), before.ino(), before.mtime(), before.mtime_nsec())) {
-        return Ok(false);
-    }
-    let backup = directory.join(format!("{}.stale-{}-{}", path.file_name().unwrap().to_string_lossy(),
-        crate::util::epoch_s() as u64, uuid::Uuid::new_v4().simple()));
-    if std::fs::rename(path, &backup).is_err() { return Ok(false); }
-    if !backup.symlink_metadata().is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino()) {
-        // An exclusion violation is an error, never proof that retrying Git is safe.
-        if std::fs::hard_link(&backup, path).is_ok() { let _ = std::fs::remove_file(&backup); }
-        return Err(format!("repository copy needs attention: Git lock changed during recovery; inspect {} and {}", path.display(), backup.display()));
-    }
-    Ok(true)
-}
-
-/// Called under the common directory's sidecar, including the first stat and all process inspection.
-async fn move_abandoned(path: &Path, roots: &[PathBuf], common: &Path) -> Result<bool, String> {
-    // lsof/ps remain useful for non-lock repairs, but cannot authorize moving a Git lock.
-    if !cfg!(target_os = "linux") { return Ok(false); }
-    let Some(before) = old_file(path) else { return Ok(false) };
-    if !path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| roots.iter().any(|r| p.starts_with(r)))
-        || !unused(path, &before, roots, false).await { return Ok(false); }
-    let Some(after) = old_file(path) else { return Ok(false) };
-    if (before.dev(), before.ino(), before.mtime(), before.mtime_nsec()) != (after.dev(), after.ino(), after.mtime(), after.mtime_nsec()) { return Ok(false); }
-    quarantine(path, &before, Some(&common.join("tico-lock-backups")))
+    if !m.is_file() { return None; }
+    let age = m.modified().ok()?.elapsed().ok()?;
+    if age < OLD { return None; }
+    let quoted = format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    Some(format!("repository copy needs attention: Git lock is {} minutes old. Check no Git is running, then run: rm -- {quoted}", age.as_secs() / 60))
 }
 
 fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, PathBuf)> {
@@ -224,36 +67,8 @@ fn metadata_roots(argv: &[String], cwd: Option<&Path>) -> Option<(Vec<PathBuf>, 
     Some((roots, at))
 }
 
-fn process_roots(metadata: &[PathBuf], at: &Path) -> Option<Vec<PathBuf>> {
-    let mut roots = metadata.to_vec();
-    roots.push(at.to_path_buf());
-    let common = metadata.last()?;
-    if common.file_name().is_some_and(|n| n == ".git") {
-        let main = common.parent()?;
-        let (verified, _) = metadata_roots(&[], Some(main))?;
-        if verified.as_slice() != std::slice::from_ref(common) { return None; }
-        // Prepared ref transactions close their lock descriptors but still belong to this checkout.
-        roots.push(main.to_path_buf());
-    } else if at != common {
-        // A nonstandard common directory does not establish where its main checkout lives.
-        return None;
-    }
-    let worktrees = common.join("worktrees");
-    match std::fs::read_dir(worktrees) {
-        Ok(entries) => for entry in entries {
-            let entry = entry.ok()?;
-            let pointer = crate::regular_file::text(entry.path().join("gitdir"), crate::regular_file::SMALL).ok()?;
-            roots.push(Path::new(pointer.trim()).parent()?.canonicalize().ok()?);
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-        Err(_) => return None,
-    }
-    Some(roots)
-}
-
-/// Every runner Git command holds this gate through recovery and the retry, across both engines.
+/// The runner and updater share this gate; ordinary Git writers use Git's own locks.
 pub struct CommandLock {
-    common: PathBuf,
     _file: std::fs::File,
 }
 
@@ -263,7 +78,7 @@ pub async fn command_lock(argv: &[String], cwd: Option<&Path>, timeout_s: u64) -
     let until = std::time::Instant::now() + Duration::from_secs(timeout_s.min(10));
     loop {
         if let Some(file) = recovery_lock(common) {
-            return Ok(Some(CommandLock { common: common.clone(), _file: file }));
+            return Ok(Some(CommandLock { _file: file }));
         }
         if std::time::Instant::now() >= until {
             return Err("repository copy needs attention: Git work is busy or its lock cannot be checked".into());
@@ -272,20 +87,10 @@ pub async fn command_lock(argv: &[String], cwd: Option<&Path>, timeout_s: u64) -
     }
 }
 
-#[cfg(test)]
-async fn recover(argv: &[String], cwd: Option<&Path>, stderr: &str) -> Result<bool, String> {
-    let Some((roots, _)) = metadata_roots(argv, cwd) else { return Ok(false) };
-    let common = roots.last().unwrap();
-    let Some(file) = recovery_lock(common) else { return Ok(false) };
-    recover_locked(argv, cwd, stderr, Some(&CommandLock { common: common.clone(), _file: file })).await
-}
-
-/// Only the lock Git reports is eligible, and only while the same repository gate excludes launches.
-pub async fn recover_locked(argv: &[String], cwd: Option<&Path>, stderr: &str, guard: Option<&CommandLock>) -> Result<bool, String> {
-    if argv.first().is_none_or(|s| Path::new(s).file_name().is_none_or(|n| n != "git")) || !stderr.contains("File exists") { return Ok(false); }
-    let Some((roots, at)) = metadata_roots(argv, cwd) else { return Ok(false) };
-    if guard.is_none_or(|g| Some(&g.common) != roots.last()) { return Ok(false); }
-    let Some(processes) = process_roots(&roots, &at) else { return Ok(false) };
+/// Add a useful error without changing the lock or retrying the failed command.
+pub fn report(argv: &[String], cwd: Option<&Path>, stderr: &str) -> Option<String> {
+    if argv.first().is_none_or(|s| Path::new(s).file_name().is_none_or(|n| n != "git")) || !stderr.contains("File exists") { return None; }
+    let (roots, at) = metadata_roots(argv, cwd)?;
     let re = regex::Regex::new(r"'([^'\n]+\.lock)'").unwrap();
     let mut paths: Vec<_> = re.captures_iter(stderr).map(|c| PathBuf::from(&c[1])).collect();
     let config = regex::Regex::new(r"could not lock config file ([^\n]+): File exists").unwrap();
@@ -293,9 +98,9 @@ pub async fn recover_locked(argv: &[String], cwd: Option<&Path>, stderr: &str, g
     for path in paths {
         let path = if path.is_absolute() { path } else { at.join(path) };
         if !path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| roots.iter().any(|r| p.starts_with(r))) { continue; }
-        if move_abandoned(&path, &processes, roots.last().unwrap()).await? { return Ok(true); }
+        if let Some(note) = stale_note(&path) { return Some(note); }
     }
-    Ok(false)
+    None
 }
 
 fn instruction_temporary(root: &Path, path: &Path) -> bool {
@@ -305,39 +110,41 @@ fn instruction_temporary(root: &Path, path: &Path) -> bool {
     in_metadata && name.len() == 32 && name.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
-/// A private config may be repaired only while no Git lock is owned or recent.
-pub async fn idle(root: &Path) -> bool {
-    let Some(_guard) = recovery_lock(root) else { return false };
-    idle_locked(root).await
+pub fn check(root: &Path) -> Result<(), String> {
+    let _guard = recovery_lock(root).ok_or_else(|| format!("repository copy needs attention: {}: Git work is busy or its lock cannot be checked", root.display()))?;
+    check_locked(root)
 }
 
-pub async fn idle_locked(root: &Path) -> bool {
-    let Ok(root) = root.canonicalize() else { return false };
-    if !owned(&root) { return false; }
-    let at = if root.file_name().is_some_and(|s| s == ".git") { root.parent().unwrap() } else { &root };
-    let Some(roots) = process_roots(std::slice::from_ref(&root), at) else { return false };
-    let Ok(metadata) = root.metadata() else { return false };
-    if !unused(&root, &metadata, &roots, false).await { return false; }
+/// Refuse repair at every Git lock, including old ones. This is a snapshot, not writer exclusion.
+pub fn check_locked(root: &Path) -> Result<(), String> {
+    let inspect = || format!("repository copy needs attention: {}: Git metadata cannot be checked", root.display());
+    let root = root.canonicalize().map_err(|_| inspect())?;
+    if !owned(&root) { return Err(inspect()); }
     let mut pending = vec![root.clone()];
     while let Some(dir) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(dir) else { return false };
-        for entry in entries {
-            let Ok(entry) = entry else { return false };
-            let path = entry.path();
-            let Ok(m) = path.symlink_metadata() else { return false };
+        for entry in std::fs::read_dir(dir).map_err(|_| inspect())? {
+            let path = entry.map_err(|_| inspect())?.path();
+            let m = path.symlink_metadata().map_err(|_| inspect())?;
             if m.file_type().is_symlink() {
                 if instruction_temporary(&root, &path) { continue; }
-                return false;
+                return Err(inspect());
             }
             if m.is_dir() { pending.push(path); }
-            else if path.extension().is_some_and(|s| s == "lock") && !move_abandoned(&path, &roots, &root).await.unwrap_or(false) { return false; }
+            else if path.extension().is_some_and(|s| s == "lock") {
+                return Err(stale_note(&path).unwrap_or_else(|| format!("repository copy needs attention: {}: Git lock {} is present; retry when Git has finished", root.display(), path.display())));
+            }
         }
     }
-    true
+    Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn age(path: &Path) {
+        std::fs::File::open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - OLD * 2)).unwrap();
+    }
 
     #[tokio::test]
     async fn registration_and_recovery_sidecar_access_refuse_special_files() {
@@ -354,13 +161,11 @@ mod tests {
         let pointers = [(task.join(".git"), format!("gitdir: {}\n", admin.display())),
             (admin.join("gitdir"), format!("{}\n", task.join(".git").display())), (admin.join("commondir"), "../..\n".into())];
         for (path, content) in &pointers { std::fs::write(path, content).unwrap(); }
-        let (metadata, at) = metadata_roots(&[], Some(&task)).unwrap();
-        assert!(process_roots(&metadata, &at).is_some());
+        assert!(metadata_roots(&[], Some(&task)).is_some());
         for (path, content) in &pointers {
             std::fs::remove_file(path).unwrap();
             crate::regular_file::fifo(path);
             assert!(metadata_roots(&[], Some(&task)).is_none());
-            if path == &admin.join("gitdir") { assert!(process_roots(&metadata, &at).is_none()); }
             std::fs::remove_file(path).unwrap();
             std::fs::write(path, content).unwrap();
         }
@@ -370,49 +175,42 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn age(path: &Path) {
-        std::fs::File::open(path).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - OLD * 2)).unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn inaccessible_bot_git_writers_block_recovery_but_model_processes_do_not() {
-        let root = std::env::temp_dir().join(format!("tico-git-owner-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("comm"), "model-host\n").unwrap();
-        assert!(!inaccessible_git(&root));
-        std::fs::write(root.join("comm"), "git\n").unwrap();
-        assert!(inaccessible_git(&root));
-        std::fs::remove_file(root.join("comm")).unwrap();
-        std::fs::create_dir(root.join("comm")).unwrap();
-        assert!(inaccessible_git(&root), "unknown process names cannot authorize deleting a Git lock");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn an_abandoned_config_or_index_lock_is_preserved_and_git_retried() {
+    async fn old_config_index_and_ref_locks_stay_and_the_failed_git_command_reports_them() {
         let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&root).unwrap();
         own(std::slice::from_ref(&root));
         let env = crate::safegit::clean_environment(&crate::env::process_environment());
         assert!(crate::gitrun::git(&root, &env, &["init", "-q"], 10).await.unwrap().ok());
-        for (name, args) in [("config.lock", vec!["config", "test.recovered", "yes"]), ("index.lock", vec!["add", "draft"])] {
+        assert!(crate::gitrun::git(&root, &env, &["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "initial"], 10).await.unwrap().ok());
+        for (name, args) in [("config.lock", vec!["config", "test.recovered", "yes"]), ("index.lock", vec!["add", "draft"]),
+            ("refs/heads/blocked.lock", vec!["update-ref", "refs/heads/blocked", "HEAD"])] {
             std::fs::write(root.join("draft"), "work").unwrap();
             let lock = root.join(".git").join(name);
-            std::fs::write(&lock, "abandoned").unwrap();
+            std::fs::write(&lock, "still owned").unwrap();
             age(&lock);
-            let out = crate::gitrun::git(&root, &env, &args, 10).await.unwrap();
-            assert!(out.ok(), "{}", out.stderr);
-            assert!(!lock.exists());
+            let before = lock.metadata().unwrap();
+            // A closed descriptor is no reason to take another writer's lock, either.
+            for open in [true, false] {
+                let writer = open.then(|| std::fs::File::open(&lock).unwrap());
+                let out = crate::gitrun::git(&root, &env, &args, 10).await.unwrap();
+                assert!(!out.ok(), "{}", out.stderr);
+                assert!(out.stderr.contains("minutes old") && out.stderr.contains("Check no Git is running, then run: rm --"), "{}", out.stderr);
+                assert!(out.stderr.contains(&root.display().to_string()) && out.stderr.contains(&lock.display().to_string()));
+                assert_eq!(lock.metadata().unwrap().ino(), before.ino());
+                assert_eq!(std::fs::read_to_string(&lock).unwrap(), "still owned");
+                assert!(check(&root.join(".git")).unwrap_err().contains(&lock.display().to_string()));
+                drop(writer);
+            }
+            std::fs::remove_file(lock).unwrap();
         }
+        assert!(!root.join(".git/tico-lock-backups").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn a_task_worktrees_abandoned_index_lock_recovers_without_touching_the_base_index() {
+    async fn linked_worktree_lock_stays_and_base_index_is_unchanged() {
         let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
         let base = root.join("base");
@@ -428,178 +226,52 @@ mod tests {
         let index = std::fs::read(base.join(".git/index")).unwrap();
         let found = crate::gitrun::git(&task, &env, &["rev-parse", "--git-path", "index.lock"], 10).await.unwrap();
         let lock = PathBuf::from(found.stdout.trim());
-        std::fs::write(&lock, "abandoned").unwrap();
+        std::fs::write(&lock, "worktree writer").unwrap();
         age(&lock);
+        let before = lock.metadata().unwrap();
         std::fs::write(task.join("draft"), "task work\n").unwrap();
         let out = crate::gitrun::git(&task, &env, &["add", "draft"], 10).await.unwrap();
-        assert!(out.ok(), "{}", out.stderr);
-        assert!(!lock.exists());
+        assert!(!out.ok() && out.stderr.contains("minutes old"), "{}", out.stderr);
+        assert!(out.stderr.contains(&lock.display().to_string()));
+        let error = crate::worktrees::git(&task, &env, &["add", "draft"], true).await.unwrap_err().text();
+        assert!(error.contains(&lock.display().to_string()) && error.contains("run: rm --"), "{error}");
+        assert_eq!(lock.metadata().unwrap().ino(), before.ino());
         assert_eq!(std::fs::read(base.join(".git/index")).unwrap(), index);
         assert_eq!(std::fs::read_to_string(task.join("draft")).unwrap(), "task work\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
-    async fn linked_recovery_keeps_a_prepared_main_checkout_transaction() {
+    async fn reports_are_read_only_and_recheck_a_replaced_lock() {
         let _guard = TEST_FIXTURES.lock().await;
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        use std::process::Stdio;
-        let root = std::env::temp_dir().join(format!("tico-prepared-ref-{}", uuid::Uuid::new_v4().simple()));
-        let base = root.join("base");
-        let task = root.join("task");
-        std::fs::create_dir_all(&base).unwrap();
-        own(std::slice::from_ref(&root));
-        let env = crate::safegit::clean_environment(&crate::env::process_environment());
-        assert!(crate::gitrun::git(&base, &env, &["init", "-q"], 10).await.unwrap().ok());
-        assert!(crate::gitrun::git(&base, &env, &["-c", "user.name=Fixture", "-c", "user.email=fixture@acme.example", "commit", "--allow-empty", "-qm", "initial"], 10).await.unwrap().ok());
-        assert!(crate::gitrun::git(&base, &env, &["worktree", "add", "--detach", task.to_str().unwrap()], 10).await.unwrap().ok());
-        let head = crate::gitrun::git(&base, &env, &["rev-parse", "HEAD"], 10).await.unwrap().stdout;
-        let mut owner = tokio::process::Command::new("git").args(["update-ref", "--stdin"]).current_dir(&base)
-            .env_clear().envs(&env).stdin(Stdio::piped()).stdout(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
-        let mut input = owner.stdin.take().unwrap();
-        let mut lines = BufReader::new(owner.stdout.take().unwrap()).lines();
-        input.write_all(format!("start\nupdate refs/heads/prepared {}\nprepare\n", head.trim()).as_bytes()).await.unwrap();
-        for expected in ["start: ok", "prepare: ok"] {
-            assert_eq!(tokio::time::timeout(Duration::from_secs(5), lines.next_line()).await.unwrap().unwrap().as_deref(), Some(expected));
-        }
-        let lock = base.join(".git/refs/heads/prepared.lock");
-        age(&lock);
-        let before = lock.metadata().unwrap();
-        #[cfg(target_os = "linux")]
-        for fd in std::fs::read_dir(format!("/proc/{}/fd", owner.id().unwrap())).unwrap() {
-            let metadata = std::fs::metadata(fd.unwrap().path());
-            assert!(!metadata.is_ok_and(|m| m.dev() == before.dev() && m.ino() == before.ino()), "prepare must close the ref lock descriptor");
-        }
-        let argv = vec!["git".into(), "-C".into(), task.display().to_string(), "update-ref".into()];
-        assert!(!recover(&argv, None, &format!("Unable to create '{}': File exists", lock.display())).await.unwrap());
-        assert_eq!(lock.metadata().unwrap().ino(), before.ino());
-        assert!(!base.join(".git/tico-lock-backups").exists());
-        input.write_all(b"abort\n").await.unwrap();
-        drop(input);
-        assert!(tokio::time::timeout(Duration::from_secs(5), owner.wait()).await.unwrap().unwrap().success());
-        assert!(!lock.exists());
-        // Unverified common directories cannot rule out a main-checkout owner.
-        assert!(process_roots(&[root.join("nonstandard")], &task).is_none());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_fresh_or_open_lock_and_a_lock_outside_git_metadata_stay() {
-        let _guard = TEST_FIXTURES.lock().await;
-        let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
+        let root = std::env::temp_dir().join(format!("tico-git-report-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(root.join(".git")).unwrap();
         own(std::slice::from_ref(&root));
-        let lock = root.join(".git/config.lock");
-        let argv = vec!["git".into(), "-C".into(), root.display().to_string(), "config".into()];
-        let error = format!("Unable to create '{}': File exists", lock.display());
+        let lock = root.join(".git/index.lock");
         std::fs::write(&lock, "recent").unwrap();
-        assert!(!recover(&argv, None, &error).await.unwrap());
+        let argv = vec!["git".into(), "-C".into(), root.display().to_string(), "add".into()];
+        let error = format!("Unable to create '{}': File exists", lock.display());
+        assert!(report(&argv, None, &error).is_none());
         age(&lock);
-        let writer = std::fs::File::open(&lock).unwrap();
-        assert!(!recover(&argv, None, &error).await.unwrap());
-        assert!(!idle(&root.join(".git")).await);
-        drop(writer);
-        assert_eq!(recover(&argv, None, &error).await.unwrap(), cfg!(target_os = "linux"));
-        if lock.exists() { std::fs::remove_file(&lock).unwrap(); }
+        assert!(report(&argv, None, &error).is_some());
+        std::fs::rename(&lock, root.join("old")).unwrap();
+        std::fs::write(&lock, "replacement writer").unwrap();
+        assert!(report(&argv, None, &error).is_none());
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "replacement writer");
+        assert!(!root.join(".git/tico-lock-recovery").exists());
         let outside = root.join("draft.lock");
         std::fs::write(&outside, "bot work").unwrap();
         age(&outside);
-        assert!(!recover(&argv, None, &format!("Unable to create '{}': File exists", outside.display())).await.unwrap());
-        std::os::unix::fs::symlink(&outside, &lock).unwrap();
-        assert!(!recover(&argv, None, &error).await.unwrap());
-        assert_eq!(std::fs::read_to_string(outside).unwrap(), "bot work");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-    #[tokio::test]
-    async fn an_old_lock_outside_the_runners_roots_is_never_touched() {
-        let _guard = TEST_FIXTURES.lock().await;
-        let root = std::env::temp_dir().join(format!("tico-outside-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        let lock = root.join(".git/index.lock");
-        std::fs::write(&lock, "outside work").unwrap();
-        age(&lock);
-        let argv = vec!["git".into(), "-C".into(), root.display().to_string(), "add".into()];
-        assert!(!recover(&argv, None, &format!("Unable to create '{}': File exists", lock.display())).await.unwrap());
-        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "outside work");
-        assert!(!root.join(".git/tico-lock-recovery").exists());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_git_process_owns_closed_locks_by_cwd_arguments_and_environment() {
-        let root = std::env::temp_dir().join(format!("tico-process-{}", uuid::Uuid::new_v4().simple()));
-        let repo = root.join("repo");
-        let admin = repo.join(".git");
-        let process = root.join("123");
-        std::fs::create_dir_all(&admin).unwrap();
-        std::fs::create_dir(&process).unwrap();
-        std::fs::write(process.join("environ"), "").unwrap();
-        let roots = vec![repo.clone(), admin.clone()];
-        std::os::unix::fs::symlink(&repo, process.join("cwd")).unwrap();
-        std::fs::write(process.join("cmdline"), "git\0commit\0").unwrap();
-        assert_eq!(git_related(&process, &roots), Some(true));
-        std::fs::remove_file(process.join("cwd")).unwrap();
-        std::os::unix::fs::symlink(&root, process.join("cwd")).unwrap();
-        for args in [format!("git\0-C\0{}\0commit\0", repo.display()), format!("git\0-C{}\0commit\0", repo.display()),
-            format!("git\0--work-tree={}\0commit\0", repo.display()), format!("git\0init\0{}\0", repo.display()), format!("git\0--git-dir\0{}\0commit\0", admin.display()), format!("git\0--git-dir={}\0commit\0", admin.display())] {
-            std::fs::write(process.join("cmdline"), args).unwrap();
-            assert_eq!(git_related(&process, &roots), Some(true));
-        }
-        std::fs::write(process.join("cmdline"), "git\0commit\0").unwrap();
-        std::fs::write(process.join("environ"), format!("GIT_DIR={}\0", admin.display())).unwrap();
-        assert_eq!(git_related(&process, &roots), Some(true));
-        std::fs::write(process.join("environ"), "").unwrap();
-        assert_eq!(git_related(&process, &roots), Some(false));
-        std::fs::remove_file(process.join("environ")).unwrap();
-        assert_eq!(git_related(&process, &roots), None);
-        assert!(!exited(&process), "unreadable live Git remains a possible owner");
-        std::fs::write(process.join("stat"), "123 (git) Z 1 0 0\n").unwrap();
-        assert!(exited(&process), "a zombie cannot own a closed lock");
-        std::fs::write(process.join("stat"), "123 (git) S 1 0 0\n").unwrap();
-        assert!(!exited(&process));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn pythons_sidecar_lock_blocks_rust_recovery_and_the_stale_inode_is_kept() {
-        let _guard = TEST_FIXTURES.lock().await;
-        use std::io::{BufRead, BufReader};
-        use std::process::{Command, Stdio};
-        let root = std::env::temp_dir().join(format!("tico-sidecar-{}", uuid::Uuid::new_v4().simple()));
-        let metadata = root.join(".git");
-        std::fs::create_dir_all(&metadata).unwrap();
-        own(std::slice::from_ref(&root));
-        let lock = metadata.join("index.lock");
-        std::fs::write(&lock, "preserved").unwrap();
-        let argv = vec!["git".into(), "-C".into(), root.display().to_string(), "add".into()];
-        let error = format!("Unable to create '{}': File exists", lock.display());
-        std::fs::File::open(&lock).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - Duration::from_secs(600))).unwrap();
-        assert!(!recover(&argv, None, &error).await.unwrap(), "ten minutes is not abandoned");
-        age(&lock);
-        let inode = lock.metadata().unwrap().ino();
-        let mut python = Command::new("python3").args(["-c", "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f,fcntl.LOCK_EX); print('held',flush=True); sys.stdin.read()"])
-            .arg(metadata.join("tico-lock-recovery")).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-        let mut line = String::new();
-        BufReader::new(python.stdout.take().unwrap()).read_line(&mut line).unwrap();
-        assert_eq!(line.trim(), "held");
-        assert!(!recover(&argv, None, &error).await.unwrap());
-        drop(python.stdin.take());
-        python.wait().unwrap();
-        assert!(recover(&argv, None, &error).await.unwrap());
-        let stale: Vec<_> = std::fs::read_dir(metadata.join("tico-lock-backups")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("index.lock.stale-")).collect();
-        assert_eq!(stale.len(), 1);
-        assert_eq!(stale[0].metadata().unwrap().ino(), inode);
-        assert_eq!(std::fs::read_to_string(stale[0].path()).unwrap(), "preserved");
+        assert!(report(&argv, None, &format!("Unable to create '{}': File exists", outside.display())).is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
-    async fn runner_git_and_recovery_share_the_common_repository_gate() {
+    async fn runner_git_and_updater_share_the_common_repository_gate() {
         let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-git-gate-{}", uuid::Uuid::new_v4().simple()));
-        let root = { std::fs::create_dir(&root).unwrap(); root.canonicalize().unwrap() };
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let base = root.join("base");
         let common = base.join(".git");
         let task = root.join("task");
@@ -611,49 +283,19 @@ mod tests {
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
         own(std::slice::from_ref(&root));
         let argv = vec!["git".into(), "-C".into(), task.display().to_string(), "config".into()];
-        let lock = common.join("config.lock");
-        std::fs::write(&lock, "abandoned").unwrap();
-        age(&lock);
-        let error = format!("Unable to create '{}': File exists", lock.display());
-        assert!(!recover_locked(&argv, None, &error, None).await.unwrap());
         let gate = command_lock(&argv, None, 0).await.unwrap().unwrap();
         assert!(recovery_lock(&common).is_none(), "the base and its linked worktrees must use one gate");
         let env = crate::safegit::clean_environment(&crate::env::process_environment());
         assert!(matches!(crate::gitrun::git(&base, &env, &["config", "test.blocked", "yes"], 0).await, Err(crate::gitrun::Fault::Io(_))));
-        assert!(lock.exists());
         drop(gate);
+        let mut python = tokio::process::Command::new("python3").args(["-c", "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f,fcntl.LOCK_EX); print('held',flush=True); sys.stdin.read()"])
+            .arg(common.join("tico-lock-recovery")).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        assert_eq!(BufReader::new(python.stdout.take().unwrap()).lines().next_line().await.unwrap().as_deref(), Some("held"));
+        assert!(command_lock(&argv, None, 0).await.is_err());
+        drop(python.stdin.take());
+        assert!(python.wait().await.unwrap().success());
         assert!(command_lock(&argv, None, 0).await.unwrap().is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
-
-    #[cfg(not(target_os = "linux"))]
-    #[tokio::test]
-    async fn a_platform_without_proc_visibility_never_reclaims_a_lock() {
-        let root = std::env::temp_dir().join(format!("tico-no-proc-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir(&root).unwrap();
-        let lock = root.join("index.lock");
-        std::fs::write(&lock, "owner unknown").unwrap();
-        age(&lock);
-        assert!(!move_abandoned(&lock, std::slice::from_ref(&root), &root).await.unwrap());
-        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "owner unknown");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn an_inode_changed_between_stat_and_move_is_left_alone() {
-        let root = std::env::temp_dir().join(format!("tico-race-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir(&root).unwrap();
-        let root = root.canonicalize().unwrap();
-        let lock = root.join("index.lock");
-        std::fs::write(&lock, "old lock").unwrap();
-        let before = lock.metadata().unwrap();
-        std::fs::rename(&lock, root.join("old")).unwrap();
-        std::fs::write(&lock, "new writer").unwrap();
-        assert!(!quarantine(&lock, &before, None).unwrap());
-        assert!(!std::fs::read_dir(&root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains(".stale-")));
-        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "new writer");
-        assert_eq!(std::fs::read_to_string(root.join("old")).unwrap(), "old lock");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
 }

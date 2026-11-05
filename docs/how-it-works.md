@@ -718,37 +718,30 @@ any error. A base clone failure does not change a bot's readiness. A clone that 
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.
 
-An interrupted Git command can leave a lock behind. Recovery is limited to the runner's registered
-work and data roots. **These repository copies must be private to one runner and its PID namespace**:
-do not share them with another container or the host. Filesystem checks cannot cheaply establish that
-no owner exists outside the namespace. User checkouts outside these roots are never recovered.
+An interrupted Git command can leave a lock behind. Tico never removes or moves another Git
+writer's lock, on any platform. The runner and Python updater hold the repository's
+`tico-lock-recovery` flock through their own Git commands; the main checkout and linked worktrees
+share this gate. Other tools and bot Git commands may bypass it, so it cannot prove a lock is unused.
 
-Automatic lock recovery is Linux-only. The runner holds the repository's `tico-lock-recovery`
-`flock` through each Git command, recovery and retry. Rust and the Python updater use the same gate;
-the main checkout and its linked worktrees share it. This keeps the runner's other Git calls out
-while recovery checks and moves a lock.
-
-The lock must be at least 30 minutes old. A `/proc` scan must find no open descriptor for its inode
-and no live Git process whose working directory, arguments or environment point into the verified
-main checkout, registered worktrees, mirror or Git metadata. A prepared ref transaction still owns
-its lock after closing the descriptor. Missing process visibility or an unverified checkout stops
-recovery. macOS and other platforms keep the lock for a person or BotOps; `lsof` and `ps` cannot
-establish writer exclusion.
-
-The inode and modification time must still match just before the move. An eligible lock moves to
-the common Git directory's `tico-lock-backups/` as `<name>.stale-<timestamp>-*`; it stays out of `refs/`
-so Git cannot read it as another ref. Retained locks keep the failed Git command and lock path in
-Health or the link detail for review. Quarantined locks are retained; none are cleaned up within a
-day of quarantine.
+A lock at least 30 minutes old stays in place and the failed command is not retried. Health, the
+worktree link detail or the runner error names its full path, including the repository, and its age.
+It gives one command, `rm -- '<full lock path>'`, for BotOps or a person to run on that Computer
+**after checking no Git is running for that repository**. A recent lock also stays in place; retry
+when Git has finished. Config and mirror repair stop at any Git lock. Tico does not scan processes
+or keep moved lock files.
 
 A broken mirror is renamed to `<mirror>.broken-<timestamp>-*` before a fresh copy is built, only
 when it has no registered worktrees, no runner repository uses its objects through an alternates
-file, and every local ref has the same SHA on the remote. Unknown refs or an unreachable remote
-stop repair. One broken copy is retained for review; another repair waits for that review instead
+file, every local ref has the same SHA on the remote, and its config proves the default repository
+format with no extensions. Unknown refs, an unreadable format or an unreachable remote stop repair. One broken copy is retained for review; another repair waits for that review instead
 of deleting it. Refusals say `repository copy needs attention: <reason>` in Health. Retiring a
 repository keeps its mirror too. On a same-user computer, if a base clone's config cannot be written,
-the runner recreates that config from a fresh clone. It takes Git's exclusive `config.lock` and checks
-the old config again under that lock. A changed config or another writer's lock stops repair.
+the runner can stage a copy of the verified config. It preserves `core.repositoryformatversion` and
+all `extensions.*` settings, including `refStorage`, `objectFormat` and `worktreeConfig`. A malformed,
+missing or included config cannot establish the format reliably, so replacement is refused and the
+original stays in place for manual repair. This also protects reftable repositories. Staging does not
+clone another repository or borrow its default format. Repair takes Git's exclusive `config.lock` and
+checks the old config again under that lock. A changed config or another writer's lock stops repair.
 It copies the old config to `.git/tico-config-backup-*`, keeps its permissions, then renames the
 completed lock file over the config in one step. The original stays readable until that rename.
 An adopted checkout requires a readable config with a verified GitHub `origin` that can be preserved;
@@ -768,11 +761,10 @@ its relative path and a `.tico-backup-<timestamp>-*-sha256-<accepted-content-has
 creating the symlink. The hash records the accepted target contents at repair time, so a later
 release changing or removing that target does not turn an unchanged backup into a bot edit.
 Legacy backups gain a baseline only while they still match the checkout; differing or unknown
-copies remain for review. An open writer continues writing to this named backup. Identical backups
-are removed only when no process
-has them open (macOS retains them because `lsof` can omit other users' descriptors); differing or
-unreadable backups stay, block updates, and are named as a bot edit to
-review in Health and the update log. Each update rechecks retained backups to catch late writes.
+copies remain for review. An open writer continues writing to this named backup. All instruction
+backups are retained so a later write cannot be lost. Unchanged backups do not block updates;
+differing or unreadable backups block updates and are named as a bot edit to review in Health and
+the update log. Each update rechecks retained backups to catch late writes.
 Git failure details are scrubbed before reaching Health.
 
 Outside source failures are isolated by computer, login profile and runtime. The provider's absolute reset time wins over a later status refresh, and a claim releases an expired reset hold even between scheduler ticks. Repeated observations update one durable source incident; only its start and recovery send quiet notices to Engineering and Health, with the since time, waiter count and expected return. Waiting automatic notices use the existing history/digest batching, while interrupted jobs retain their own checkpoint. Human bulk finish/close writes one count-only next-run note per recipient; task details remain on their original tasks, including for paused recipients.

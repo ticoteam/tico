@@ -155,6 +155,9 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
         Fault::Io(e) => WtErr::Os(format!("OSError ({e})")),
     })?;
     if check && !done.ok() {
+        if done.stderr.starts_with("repository copy needs attention:") {
+            return Err(WtErr::msg(done.stderr));
+        }
         let detail = ["push", "fetch", "ls-remote"].contains(&args[0]).then(|| if done.stderr.is_empty() { format!("exit {}", done.code) } else { done.stderr.clone() });
         return Err(WtErr::Msg(format!("Git {} failed (exit {}); check access, network, disk space and repository state", args[0], done.code), detail));
     }

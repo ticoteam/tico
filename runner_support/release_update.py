@@ -61,11 +61,9 @@ def git(root, *args, run=subprocess.run, timeout=60):
         with git_locks.command_lock(root, wait=min(timeout, 10)) as common:
             done = run(command, **kwargs)
             if done.returncode:
-                try:
-                    if git_locks.recover_locked(root, done.stderr or "", common):
-                        done = run(command, **kwargs)
-                except git_locks.RecoveryConflict as error:
-                    done.stderr = f"{error}; {done.stderr or ''}"
+                note = git_locks.report(root, done.stderr or "", common)
+                if note:
+                    done.stderr = note
             return done
     except OSError:
         return subprocess.CompletedProcess(command, 1, "", "repository copy needs attention: Git work is busy or its lock cannot be checked")
@@ -168,14 +166,10 @@ def instruction_backup_note(root, git_dir):
                 if hashlib.sha256(read_regular(backup)).hexdigest() != digest:
                     names.append(os.path.relpath(backup, root))
                     continue
-                from . import git_locks
-                unused = git_locks.unused(backup, before, strict=True)
-                # A writer may have written and closed while the fd scan was in progress.
+                # Keep the inode: a writer can still hold it after the link is restored.
                 after = backup.lstat()
                 if (before.st_dev, before.st_ino, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_mtime_ns) or hashlib.sha256(read_regular(backup)).hexdigest() != digest:
                     names.append(os.path.relpath(backup, root))
-                elif unused:
-                    backup.unlink()
                 elif not marked:
                     # Accept a legacy backup only while it still equals the checkout; preserve its inode.
                     baseline = backup.with_name(backup.name + "-sha256-" + digest)

@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import threading
 import time
 
 import pytest
@@ -100,7 +99,7 @@ admin = metadata / "worktrees/task"
 admin.mkdir(parents=True)
 os.mkfifo(admin / "gitdir")
 git_locks.OWNED_ROOTS = (root,)
-assert not git_locks.recover(root, f"fatal: Unable to create '{metadata}/index.lock': File exists")
+assert not git_locks.report(root, f"fatal: Unable to create '{metadata}/index.lock': File exists", metadata)
 ''', str(tmp_path)], check=True, timeout=10)
 
 
@@ -266,44 +265,28 @@ def test_instruction_link_repair_preserves_edits_to_its_target_and_external_targ
 
 
 @pytest.mark.slow
-def test_updater_retries_an_abandoned_index_lock_but_keeps_fresh_and_open_locks(repos):
+def test_updater_reports_old_index_config_and_ref_locks_without_retry_or_removal(repos):
     from runner_support import git_locks
     _, checkout, _ = repos
-    for name, command in [("index.lock", ("add", "app.py")), ("config.lock", ("config", "--local", "repair.test", "yes"))]:
+    for name, command in [("index.lock", ("add", "app.py")), ("config.lock", ("config", "--local", "repair.test", "yes")),
+                          ("refs/heads/blocked.lock", ("update-ref", "refs/heads/blocked", "HEAD"))]:
         lock = checkout / ".git" / name
-        lock.write_text("recent")
+        lock.write_text("still owned")
         assert ru.git(checkout, *command).returncode != 0 and lock.exists()
         old = time.time() - git_locks.OLD_S * 2
         os.utime(lock, (old, old))
+        before = lock.stat()
         with lock.open():
-            assert ru.git(checkout, *command).returncode != 0 and lock.exists()
-        assert ru.git(checkout, *command).returncode == 0 and not lock.exists()
+            result = ru.git(checkout, *command)
+            assert result.returncode != 0 and lock.exists()
+        result = ru.git(checkout, *command)
+        assert result.returncode != 0
+        assert str(checkout) in result.stderr and str(lock) in result.stderr
+        assert "minutes old" in result.stderr and "Check no Git is running, then run: rm --" in result.stderr
+        assert lock.stat().st_ino == before.st_ino and lock.read_text() == "still owned"
+        lock.unlink()
+    assert not (checkout / ".git/tico-lock-backups").exists()
 
-
-def test_inaccessible_bot_descriptors_block_lock_recovery_only_for_git_or_unknown_processes(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    process = tmp_path / "123"
-    process.mkdir()
-    lock = tmp_path / "config.lock"
-    lock.write_text("old")
-    original = Path.iterdir
-
-    def processes(path):
-        if path == Path("/proc"):
-            return iter([process])
-        if path == process / "fd":
-            raise PermissionError("another OS user")
-        return original(path)
-
-    monkeypatch.setattr(Path, "iterdir", processes)
-    (process / "comm").write_text("model-host\n")
-    assert git_locks.unused(lock, lock.stat())
-    assert not git_locks.unused(lock, lock.stat(), strict=True), "an unreadable model process may be an instruction writer"
-    (process / "comm").write_text("git\n")
-    assert not git_locks.unused(lock, lock.stat())
-    (process / "comm").unlink()
-    # A vanished process no longer holds a file.
-    assert git_locks.unused(lock, lock.stat())
 
 
 def test_a_blocked_update_names_the_first_three_changed_files(repos):
@@ -626,12 +609,9 @@ def test_instruction_backup_keeps_different_link_text_and_names_it_in_health(rep
 
 
 @pytest.mark.slow
-def test_retained_instruction_baseline_survives_release_target_changes_and_removal(repos, monkeypatch):
-    from runner_support import git_locks
+def test_retained_instruction_baseline_survives_release_target_changes_and_removal(repos):
     _, checkout, _ = repos
     instruction_links(checkout)
-    # Simulate macOS retaining a backup because complete descriptor visibility is unavailable.
-    monkeypatch.setattr(git_locks, "unused", lambda *args, **kwargs: False)
     path = checkout / "AGENTS.md"
     path.unlink()
     path.write_text("Repository rules\n")
@@ -650,15 +630,13 @@ def test_retained_instruction_baseline_survives_release_target_changes_and_remov
     assert backup.read_text() == "Late bot edit\n"
 
 
-def test_legacy_instruction_backup_gets_a_baseline_only_while_unchanged(tmp_path, monkeypatch):
-    from runner_support import git_locks
+def test_legacy_instruction_backup_gets_a_baseline_only_while_unchanged(tmp_path):
     metadata = tmp_path / ".git"
     saved = metadata / "tico-instruction-backups"
     saved.mkdir(parents=True)
     (tmp_path / "AGENTS.md").write_text("accepted rules\n")
     backup = saved / "AGENTS.md.tico-backup-1"
     backup.write_text("accepted rules\n")
-    monkeypatch.setattr(git_locks, "unused", lambda *args, **kwargs: False)
     assert not ru.instruction_backup_note(tmp_path, metadata)
     retained, = saved.iterdir()
     assert "-sha256-" in retained.name and not backup.exists()
@@ -701,137 +679,12 @@ def test_lock_outside_runner_root_is_never_touched(tmp_path, monkeypatch):
     old = time.time() - git_locks.OLD_S * 2
     os.utime(lock, (old, old))
     monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path / "runner",))
-    assert not git_locks.recover(checkout, f"Unable to create '{lock}': File exists")
+    assert not git_locks.report(checkout, f"Unable to create '{lock}': File exists", None)
     assert lock.read_text() == "unpublished"
     assert not (metadata / "tico-lock-recovery").exists()
 
 
-def test_closed_git_lock_is_owned_by_cwd_arguments_or_environment(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    checkout = tmp_path / "repo"
-    metadata = checkout / ".git"
-    metadata.mkdir(parents=True)
-    lock = metadata / "index.lock"
-    lock.write_text("closed by git, still owned")
-    old = time.time() - git_locks.OLD_S * 2
-    os.utime(lock, (old, old))
-    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (checkout,))
-    error = f"Unable to create '{lock}': File exists"
-    process = tmp_path / "123"
-    process.mkdir()
-    (process / "comm").write_text("git\n")
-    (process / "fd").mkdir()
-    original = Path.iterdir
-    monkeypatch.setattr(Path, "iterdir", lambda p: iter([process]) if p == Path("/proc") else original(p))
-    cases = [(checkout, ["git", "commit"], []),
-             (tmp_path, ["git", "-C", str(checkout), "commit"], []),
-             (tmp_path, ["git", "-C" + str(checkout), "commit"], []),
-             (tmp_path, ["git", "--work-tree=" + str(checkout), "commit"], []),
-             (tmp_path, ["git", "init", str(checkout)], []),
-             (tmp_path, ["git", "--git-dir", str(metadata), "commit"], []),
-             (tmp_path, ["git", "--git-dir=" + str(metadata), "commit"], []),
-             (tmp_path, ["git", "commit"], ["GIT_DIR=" + str(metadata)])]
-    for cwd, args, environ in cases:
-        (process / "cwd").unlink(missing_ok=True)
-        (process / "cwd").symlink_to(cwd)
-        (process / "cmdline").write_bytes("\0".join(args).encode() + b"\0")
-        (process / "environ").write_bytes("\0".join(environ).encode())
-        assert not git_locks.unused(lock, lock.stat(), (checkout, metadata))
-        assert not git_locks.recover(checkout, error)
-        assert lock.read_text() == "closed by git, still owned"
-        assert not (metadata / "tico-lock-backups").exists()
-    (process / "cmdline").write_bytes(b"git\0status\0")
-    (process / "environ").write_bytes(b"")
-    assert git_locks.unused(lock, lock.stat(), (checkout, metadata))
-    (process / "environ").unlink()
-    assert not git_locks.unused(lock, lock.stat(), (checkout, metadata))
-    (process / "stat").write_text("123 (git) Z 1 0 0\n")
-    assert git_locks.unused(lock, lock.stat(), (checkout, metadata))
-    (process / "stat").write_text("123 (git) S 1 0 0\n")
-    assert not git_locks.unused(lock, lock.stat(), (checkout, metadata))
-    monkeypatch.setattr(Path, "iterdir", lambda p: iter([]) if p == Path("/proc") else original(p))
-    assert git_locks.recover(checkout, error)
-    assert not lock.exists()
-    assert next((metadata / "tico-lock-backups").iterdir()).read_text() == "closed by git, still owned"
-
-
-def test_recovery_sidecar_serializes_and_keeps_the_stale_inode(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    metadata = tmp_path / ".git"
-    metadata.mkdir()
-    lock = metadata / "index.lock"
-    lock.write_text("preserved")
-    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
-    error = f"Unable to create '{lock}': File exists"
-    old = time.time() - 10 * 60
-    os.utime(lock, (old, old))
-    assert not git_locks.recover(tmp_path, error)
-    old = time.time() - git_locks.OLD_S * 2
-    os.utime(lock, (old, old))
-    inode = lock.stat().st_ino
-    with (metadata / "tico-lock-recovery").open("w") as sidecar:
-        fcntl.flock(sidecar, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert not git_locks.recover(tmp_path, error)
-    assert git_locks.recover(tmp_path, error)
-    stale = list(metadata.rglob("index.lock.stale-*"))
-    assert len(stale) == 1 and stale[0].stat().st_ino == inode and stale[0].read_text() == "preserved"
-
-
-def test_recovery_race_restores_the_new_lock_without_discarding_it(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    lock = tmp_path / "index.lock"
-    lock.write_text("abandoned")
-    before = lock.stat()
-    rename = Path.rename
-
-    def replace_before_rename(path, destination):
-        rename(path, tmp_path / "original")
-        path.write_text("new writer's lock")
-        return rename(path, destination)
-
-    monkeypatch.setattr(Path, "rename", replace_before_rename)
-    with pytest.raises(git_locks.RecoveryConflict, match="Git lock changed during recovery"):
-        git_locks.quarantine(lock, before)
-    assert lock.read_text() == "new writer's lock"
-    assert (tmp_path / "original").read_text() == "abandoned"
-
-
-def test_two_recoveries_cannot_move_each_others_lock(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    metadata = tmp_path / ".git"
-    metadata.mkdir()
-    lock = metadata / "index.lock"
-    lock.write_text("old lock")
-    old = time.time() - git_locks.OLD_S * 2
-    os.utime(lock, (old, old))
-    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
-    inspecting, release = threading.Event(), threading.Event()
-
-    def unused(*args):
-        inspecting.set()
-        assert release.wait(10)
-        return True
-
-    monkeypatch.setattr(git_locks, "unused", unused)
-    error = f"Unable to create '{lock}': File exists"
-    results = []
-    first = threading.Thread(target=lambda: results.append(git_locks.recover(tmp_path, error)))
-    first.start()
-    try:
-        assert inspecting.wait(10)
-        assert not git_locks.recover(tmp_path, error)
-        assert lock.read_text() == "old lock"
-    finally:
-        release.set()
-        first.join(10)
-    assert results == [True]
-    lock.write_text("new writer's lock")
-    assert not git_locks.recover(tmp_path, error)
-    assert lock.read_text() == "new writer's lock"
-    assert len(list(metadata.rglob("index.lock.stale-*"))) == 1
-
-
-def test_an_inode_changed_between_stat_and_move_is_left_alone(tmp_path, monkeypatch):
+def test_updater_git_holds_the_repository_gate_and_never_retries_a_locked_command(tmp_path, monkeypatch):
     from runner_support import git_locks
     metadata = tmp_path / ".git"
     metadata.mkdir()
@@ -840,43 +693,6 @@ def test_an_inode_changed_between_stat_and_move_is_left_alone(tmp_path, monkeypa
     old = time.time() - git_locks.OLD_S * 2
     os.utime(lock, (old, old))
     monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
-
-    def replace_during_scan(*args):
-        lock.rename(metadata / "original")
-        lock.write_text("live replacement")
-        os.utime(lock, (old, old))
-        return True
-
-    monkeypatch.setattr(git_locks, "unused", replace_during_scan)
-    assert not git_locks.recover(tmp_path, f"Unable to create '{lock}': File exists")
-    assert lock.read_text() == "live replacement"
-    assert (metadata / "original").read_text() == "abandoned"
-    assert not (metadata / "tico-lock-backups").exists()
-
-
-def test_quarantine_refuses_an_inode_replaced_after_the_scan(tmp_path):
-    from runner_support import git_locks
-    lock = tmp_path / "index.lock"
-    lock.write_text("abandoned")
-    before = lock.stat()
-    lock.rename(tmp_path / "original")
-    lock.write_text("new writer")
-    assert not git_locks.quarantine(lock, before)
-    assert lock.read_text() == "new writer"
-    assert not list(tmp_path.glob("index.lock.stale-*"))
-
-
-def test_updater_git_holds_the_repository_gate_through_its_retry(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    metadata = tmp_path / ".git"
-    metadata.mkdir()
-    lock = metadata / "index.lock"
-    lock.write_text("abandoned")
-    old = time.time() - git_locks.OLD_S * 2
-    os.utime(lock, (old, old))
-    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
-    original = Path.iterdir
-    monkeypatch.setattr(Path, "iterdir", lambda p: iter([]) if p == Path("/proc") else original(p))
     attempts = []
 
     def run(command, **kwargs):
@@ -886,9 +702,10 @@ def test_updater_git_holds_the_repository_gate_through_its_retry(tmp_path, monke
         attempts.append(command)
         return subprocess.CompletedProcess(command, int(lock.exists()), "", f"Unable to create '{lock}': File exists")
 
-    assert ru.git(tmp_path, "add", "draft", run=run).returncode == 0
-    assert len(attempts) == 2
-    assert not lock.exists()
+    result = ru.git(tmp_path, "add", "draft", run=run)
+    assert result.returncode == 1 and "minutes old" in result.stderr
+    assert len(attempts) == 1
+    assert lock.read_text() == "abandoned"
 
 
 def test_instruction_backup_cleanup_never_follows_a_metadata_symlink(tmp_path):
@@ -904,41 +721,36 @@ def test_instruction_backup_cleanup_never_follows_a_metadata_symlink(tmp_path):
     assert backup.read_text() == "same bytes"
 
 
-def test_instruction_writer_closing_during_fd_scan_cannot_lose_its_edit(tmp_path, monkeypatch):
-    from runner_support import git_locks
-    metadata = tmp_path / ".git"
-    saved = metadata / "tico-instruction-backups"
-    saved.mkdir(parents=True)
-    (tmp_path / "AGENTS.md").write_text("same bytes")
-    backup = saved / "AGENTS.md.tico-backup-1"
-    backup.write_text("same bytes")
-
-    def write_and_close(path, before, **kwargs):
-        path.write_text("late edit, writer now closed")
-        return True
-
-    monkeypatch.setattr(git_locks, "unused", write_and_close)
-    assert backup.name in ru.instruction_backup_note(tmp_path, metadata)
-    assert backup.read_text() == "late edit, writer now closed"
-
-
-@pytest.mark.parametrize("platform", ["darwin", "unknown"])
-def test_platforms_without_proc_scan_leave_old_locks_for_review(tmp_path, monkeypatch, platform):
+def test_lock_reporting_is_read_only_and_rechecks_replacement_locks(tmp_path, monkeypatch):
     from runner_support import git_locks
     metadata = tmp_path / ".git"
     metadata.mkdir()
     lock = metadata / "index.lock"
-    lock.write_text("old but owner unknown")
+    lock.write_text("recent")
+    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
+    error = f"Unable to create '{lock}': File exists"
+    assert not git_locks.report(tmp_path, error, metadata)
     old = time.time() - git_locks.OLD_S * 2
     os.utime(lock, (old, old))
-    inode = lock.stat().st_ino
-    monkeypatch.setattr(git_locks, "OWNED_ROOTS", (tmp_path,))
-    monkeypatch.setattr(git_locks.sys, "platform", platform)
-    assert not git_locks.unused(lock, lock.stat(), (tmp_path,))
-    assert not git_locks.unused(lock, lock.stat(), strict=True)
-    error = f"Unable to create '{lock}': File exists"
-    assert not git_locks.recover(tmp_path, error)
-    result = ru.git(tmp_path, "add", "draft", run=lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", error))
-    assert result.returncode == 1 and str(lock) in result.stderr
-    assert lock.stat().st_ino == inode
+    assert "minutes old" in git_locks.report(tmp_path, error, metadata)
+    lock.rename(metadata / "original")
+    lock.write_text("replacement writer")
+    assert not git_locks.report(tmp_path, error, metadata)
+    assert lock.read_text() == "replacement writer"
+    assert not (metadata / "tico-lock-recovery").exists()
     assert not (metadata / "tico-lock-backups").exists()
+
+
+def test_old_lock_command_quotes_shell_paths(tmp_path):
+    import shlex
+    from runner_support import git_locks
+    root = tmp_path / "repo with spaces"
+    metadata = root / ".git"
+    metadata.mkdir(parents=True)
+    lock = metadata / "config.lock"
+    lock.write_text("old")
+    old = time.time() - git_locks.OLD_S * 2
+    os.utime(lock, (old, old))
+    note = git_locks.report(root, "error: could not lock config file .git/config: File exists", metadata)
+    assert shlex.split(note.split("run: ", 1)[1]) == ["rm", "--", str(lock)]
+    assert lock.read_text() == "old"

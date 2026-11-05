@@ -148,6 +148,9 @@ pub fn machine_error(name: &str, detail: &str, env: &Env) -> String {
 }
 
 fn git_error(what: &str, name: &str, done: &Out, env: &Env) -> String {
+    if done.stderr.starts_with("repository copy needs attention:") {
+        return redact::scrub_credentials(&done.stderr, &redact::env_secrets(env));
+    }
     let reason = redact::git_failure(&done.stderr, &redact::env_secrets(env), 240);
     let reason = if reason.is_empty() { format!("exit {}", done.code) } else { reason };
     format!("{what} of {name} failed: {reason}")
@@ -740,7 +743,7 @@ impl Repositories {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
             Err(_) => return Err(attention("cannot inspect registered worktrees")),
         }
-        if !crate::gitlocks::idle_locked(&mirror).await { return Err(attention("mirror has an active, recent or uncertain Git owner")); }
+        crate::gitlocks::check_locked(&mirror).map_err(msg)?;
         no_alternate_users(&[self.root.parent().unwrap().to_path_buf(), self.mirrors.parent().unwrap().to_path_buf()], &mirror)?;
         let before = mirror_refs(&mirror)?;
         // Query outside the mirror: neither its malformed config nor its HTTP settings receive a token.
@@ -764,10 +767,17 @@ impl Repositories {
                 return Err(attention(format!("previous broken mirror {} still needs review", entry.path().display())));
             }
         }
-        // The advisory lock serializes recoverers; a non-cooperating Git writer still makes us refuse.
-        if mirror_refs(&mirror)? != before || !crate::gitlocks::idle_locked(&mirror).await {
+        // A rebuild uses the clone's format. Keep any non-default format for manual repair.
+        let config = mirror.join("config");
+        let original = regular_file::read(&config, CONTENT).map_err(|_| attention("mirror config cannot be read; repair it manually"))?;
+        let format = repository_format(&config, env).await?;
+        if format.len() != 1 || format.get("core.repositoryformatversion").map(Vec::as_slice) != Some(&["0".to_string()][..]) {
+            return Err(attention(format!("{}: mirror format cannot be kept during rebuild; repair its config manually", mirror.display())));
+        }
+        if mirror_refs(&mirror)? != before || regular_file::read(&config, CONTENT)? != original {
             return Err(attention("mirror changed during inspection"));
         }
+        crate::gitlocks::check_locked(&mirror).map_err(msg)?;
         let backup = mirror.with_file_name(format!("{broken_prefix}{}-{}", epoch_s() as u64, uuid::Uuid::new_v4().simple()));
         std::fs::rename(&mirror, &backup)?;
         crate::util::log(&format!("Preserved broken repository copy at {}", backup.display()));
@@ -967,7 +977,7 @@ impl Repositories {
                 (format!("branch.{branch}.merge"), format!("refs/heads/{branch}")),
             ]);
         }
-        configure_base(&path, &mirror_uri, &branch, &settings, &local, &trusted, &full).await?;
+        configure_base(&path, &settings, &local, &trusted, &full).await?;
         let fetch_args_owned = [format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"), format!("+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}")];
         let fetch_args = ["-C", &path_s, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--", &mirror_uri, &fetch_args_owned[0], &fetch_args_owned[1]];
         let mut done = run_as_bot(&local, &fetch_args, &trusted, timeout).await?;
@@ -1107,10 +1117,44 @@ impl Repositories {
     }
 }
 
+/// Parse outside the repository so a broken format cannot silently select Git's defaults.
+/// Includes are refused because another file could change the effective format during repair.
+async fn repository_format(config: &Path, env: &Env) -> Result<std::collections::BTreeMap<String, Vec<String>>, Fail> {
+    let refuse = || attention(format!("{}: repository format cannot be read safely; config left intact; repair it manually", config.display()));
+    let bytes = regular_file::read(config, CONTENT).map_err(|_| refuse())?;
+    struct Snapshot(PathBuf);
+    impl Drop for Snapshot {
+        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+    }
+    let snapshot = Snapshot(std::env::temp_dir().join(format!("tico-config-read-{}", uuid::Uuid::new_v4().simple())));
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = regular_file::open(&snapshot.0, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
+        file.write_all(&bytes)?;
+    }
+    let parsed = run(&[], &["config", "--file", &snapshot.0.display().to_string(), "--no-includes", "--null", "--list"], env, 10).await?;
+    if !parsed.ok() { return Err(refuse()); }
+    let text = String::from_utf8(parsed.raw).map_err(|_| refuse())?;
+    let mut format = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for entry in text.split('\0').filter(|s| !s.is_empty()) {
+        let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+        let key = key.to_ascii_lowercase();
+        if key.starts_with("include.") || key.starts_with("includeif.") { return Err(refuse()); }
+        if key == "core.repositoryformatversion" || key.starts_with("extensions.") {
+            format.entry(key).or_default().push(value.to_string());
+        }
+    }
+    if !format.get("core.repositoryformatversion").and_then(|v| v.last()).is_some_and(|v| v == "0" || v == "1") {
+        return Err(refuse());
+    }
+    Ok(format)
+}
+
 /// Rebuild only a broken base's config on a same-user computer. Refs, index, stash, files and worktree
 /// registrations stay in place; an adopted base also needs a verifiable origin in its preserved config.
 async fn configure_base(
-    path: &Path, source: &str, branch: &str, settings: &[(String, String)], local: &[String], env: &Env, full: &str,
+    path: &Path, settings: &[(String, String)], local: &[String], env: &Env, full: &str,
 ) -> Result<(), Fail> {
     async fn configure(path: &Path, settings: &[(String, String)], local: &[String], env: &Env) -> Result<Out, Fail> {
         for (key, value) in settings {
@@ -1118,6 +1162,9 @@ async fn configure_base(
             if !done.ok() { return Ok(done); }
         }
         Ok(Out::default())
+    }
+    if path.join(".git/config").symlink_metadata().is_err() {
+        return Err(attention(format!("{}: base config is missing or unreadable; repository format is unknown; repair it manually", path.display())));
     }
     let first = configure(path, settings, local, env).await?;
     if first.ok() { return Ok(()); }
@@ -1128,9 +1175,10 @@ async fn configure_base(
     }
     let git = path.join(".git");
     let config = git.join("config");
-    if !real_dir(&git) || is_symlink(&config) || !crate::gitlocks::idle(&git).await {
-        return Err(msg(format!("{reason}; config left intact because its Git metadata is linked or locked")));
+    if !real_dir(&git) || is_symlink(&config) {
+        return Err(msg(format!("{reason}; config left intact because its Git metadata is linked")));
     }
+    crate::gitlocks::check(&git).map_err(msg)?;
     let old = match regular_file::read(&config, CONTENT) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -1144,28 +1192,38 @@ async fn configure_base(
             return Err(attention(format!("{reason}; adopted base config left intact because its original GitHub origin cannot be verified and preserved; repair the config manually")));
         }
     }
+    // An unparseable config cannot prove that extensions or format settings are absent.
+    let format = repository_format(&config, env).await?;
     struct Scratch(PathBuf);
     impl Drop for Scratch {
         fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
     }
     let scratch = Scratch(path.with_file_name(format!(".tico-base-repair-{}", uuid::Uuid::new_v4().simple())));
-    crate::isolation::mkdir(&scratch.0, 0o755)?;
-    let fresh = run_as_bot(local, &["clone", "--quiet", "--no-checkout", "--no-hardlinks", "--single-branch", "--branch", branch, "--", source, &scratch.0.display().to_string()], env, CLONE_TIMEOUT).await?;
-    if !fresh.ok() {
-        return Err(msg(format!("{reason}; {}", git_error("Rebuilding base config", full, &fresh, env))));
+    crate::isolation::mkdir(&scratch.0, 0o700)?;
+    let rebuilt = scratch.0.join("config");
+    let bytes = old.as_deref().ok_or_else(|| attention("base config is missing; repository format is unknown; repair it manually"))?;
+    stage_base_config(&rebuilt, bytes, settings, local, env).await?;
+    if repository_format(&rebuilt, env).await? != format {
+        return Err(attention(format!("{}: repository format changed during config repair; left intact", path.display())));
     }
-    // Valid custom branch/upstream settings survive a permissions repair. Invalid config is retained as a backup.
-    if readable.ok() {
-        if let Some(bytes) = &old { regular_file::write(scratch.0.join(".git/config"), bytes, CONTENT, false)?; }
-    }
-    let done = configure(&scratch.0, settings, local, env).await?;
-    if !done.ok() { return Err(msg(git_error("Configuring rebuilt base", full, &done, env))); }
-    if !crate::gitlocks::idle(&git).await {
-        return Err(msg(format!("{reason}; Git metadata changed during repair; left intact for the next retry")));
-    }
-    // The idle check is only a snapshot: Git writers must share this lock through the atomic install.
+    crate::gitlocks::check(&git).map_err(msg)?;
+    // The metadata check is only a snapshot: Git writers must share this lock through the atomic install.
     let lock = BaseConfigLock::acquire(&config).map_err(|e| msg(format!("{reason}; could not lock base config for repair: {e}")))?;
-    lock.install(old.as_deref(), &scratch.0.join(".git/config"))
+    lock.install(old.as_deref(), &rebuilt)
+}
+
+/// Stage the complete config without discovering a scratch repository with a different format.
+async fn stage_base_config(rebuilt: &Path, bytes: &[u8], settings: &[(String, String)], local: &[String], env: &Env) -> Result<(), Fail> {
+    regular_file::write(rebuilt, bytes, CONTENT, true)?;
+    let before = repository_format(rebuilt, env).await?;
+    for (key, value) in settings {
+        let done = run(local, &["config", "--file", &rebuilt.display().to_string(), "--replace-all", key, value], env, 10).await?;
+        if !done.ok() { return Err(msg(format!("Could not stage base config: {}", done.stderr.trim()))); }
+    }
+    if repository_format(rebuilt, env).await? != before {
+        return Err(attention("repository format changed while staging config; original left intact"));
+    }
+    Ok(())
 }
 
 struct BaseConfigLock {
@@ -1647,13 +1705,10 @@ async fn instruction_backup_note(root: &Path, git_dir: &Path) -> Option<String> 
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
                 continue;
             }
-            let unused = crate::gitlocks::no_open_file(&path, &m).await;
-            // A writer may have written and closed between our first read and the fd scan.
+            // Keep every accepted backup: an open writer may still hold its inode.
             if !path.symlink_metadata().is_ok_and(|after| after.dev() == m.dev() && after.ino() == m.ino() && after.mtime() == m.mtime() && after.mtime_nsec() == m.mtime_nsec())
                 || !unchanged() {
                 names.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
-            } else if unused {
-                let _ = std::fs::remove_file(&path);
             } else if !marked {
                 // Give a retained legacy backup a baseline only while it still equals the checkout.
                 let baseline = path.with_file_name(format!("{filename}-sha256-{digest}"));
@@ -1793,48 +1848,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_mirror_config_is_rebuilt_from_the_remote_but_locked_mirrors_stay() {
+    async fn malformed_mirrors_and_old_ref_locks_are_reported_without_replacement() {
         let f = RepoFixture::new().await;
         let manager = f.manager();
         let mirror = manager.mirror_path("acme/web").ok().unwrap();
         std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();
         sh(&f.root, &["init", "--bare", "-q", mirror.to_str().unwrap()]);
+        let original = std::fs::read(mirror.join("config")).unwrap();
         std::fs::write(mirror.join("config"), "[broken\n").unwrap();
         let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
         let lock = mirror.join("config.lock");
-        std::fs::write(&lock, "active").unwrap();
+        std::fs::write(&lock, "still owned").unwrap();
+        std::fs::File::open(&lock).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))).unwrap();
         let filled = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await;
-        assert!(filled.is_err());
+        assert!(matches!(filled, Err(Fail::Msg(m)) if m.contains("minutes old") && m.contains("run: rm --")));
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "still owned");
+        std::fs::remove_file(&lock).unwrap();
+        let filled = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await;
+        assert!(matches!(filled, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")));
         assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
-        assert!(lock.exists());
-        std::fs::remove_file(lock).unwrap();
-        if let Err(problem) = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await {
-            let reason = match problem { Fail::Msg(m) => m, Fail::Timeout(s) => format!("timeout: {s}"), Fail::Disk => "disk full".into(), Fail::Other => "I/O error".into() };
-            panic!("mirror repair failed: {reason}");
-        }
-        assert_eq!(sh(&mirror, &["rev-parse", "main"]), sh(&f.seed, &["rev-parse", "HEAD"]));
-        assert!(mirror.join("tico-fetched-at").exists());
-        let broken: Vec<_> = std::fs::read_dir(&manager.mirrors).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("acme__web.git.broken-")).collect();
-        assert_eq!(broken.len(), 1);
-        assert_eq!(std::fs::read_to_string(broken[0].path().join("config")).unwrap(), "[broken\n");
-        let again = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &prefix, &f.env, 10).await;
-        assert!(matches!(again, Err(Fail::Msg(m)) if m.contains("previous broken mirror")));
+        assert_eq!(std::fs::read_dir(&manager.mirrors).unwrap().count(), 1);
+        // Once a person repairs the config, normal fetching can proceed.
+        std::fs::write(mirror.join("config"), original).unwrap();
+        assert!(manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await.is_ok());
         let ref_lock = mirror.join("refs/heads/main.lock");
-        std::fs::write(&ref_lock, "abandoned").unwrap();
+        std::fs::write(&ref_lock, "still owned").unwrap();
         std::fs::File::open(&ref_lock).unwrap().set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))).unwrap();
-        std::fs::write(mirror.join("not-rebuilt"), "keep").unwrap();
+        let inode = std::os::unix::fs::MetadataExt::ino(&ref_lock.metadata().unwrap());
         sh(&f.seed, &["commit", "-q", "--allow-empty", "-m", "later"]);
         sh(&f.seed, &["push", "-q"]);
-        if let Err(problem) = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await {
-            let reason = match problem { Fail::Msg(m) => m, Fail::Timeout(s) => format!("timeout: {s}"), Fail::Disk => "disk full".into(), Fail::Other => "I/O error".into() };
-            panic!("mirror repair failed: {reason}");
-        }
-        assert!(!ref_lock.exists() && mirror.join("not-rebuilt").exists());
-        assert_eq!(sh(&mirror, &["rev-parse", "main"]), sh(&f.seed, &["rev-parse", "HEAD"]));
+        let failed = manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await;
+        assert!(matches!(failed, Err(Fail::Msg(m)) if m.contains("minutes old") && m.contains(&ref_lock.display().to_string())));
+        assert_eq!(std::os::unix::fs::MetadataExt::ino(&ref_lock.metadata().unwrap()), inode);
+        assert_eq!(std::fs::read_to_string(&ref_lock).unwrap(), "still owned");
+        assert!(!mirror.join("tico-lock-backups").exists());
     }
 
     #[tokio::test]
-    async fn rebuilding_base_config_preserves_unpushed_branches_stash_index_files_and_worktrees() {
+    async fn a_verified_default_format_mirror_is_preserved_before_rebuild() {
+        let f = RepoFixture::new().await;
+        let manager = f.manager();
+        let mirror = manager.mirror_path("acme/web").ok().unwrap();
+        std::fs::create_dir_all(&manager.mirrors).unwrap();
+        sh(&f.root, &["clone", "--bare", "-q", f.remote.to_str().unwrap(), mirror.to_str().unwrap()]);
+        assert!(manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await.is_ok());
+        assert!(!mirror.exists());
+        let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
+        assert!(manager.fill_mirror("acme/web", &mirror, &prefix, "main", f.remote.to_str().unwrap(), "acme/web", &f.env, &f.env, 10, epoch_s(), true).await.is_ok());
+        assert_eq!(sh(&mirror, &["rev-parse", "main"]), sh(&f.seed, &["rev-parse", "HEAD"]));
+        let again = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &prefix, &f.env, 10).await;
+        assert!(matches!(again, Err(Fail::Msg(m)) if m.contains("previous broken mirror")));
+    }
+
+    #[tokio::test]
+    async fn unreadable_base_format_preserves_unpushed_branches_stash_index_files_and_worktrees() {
         let f = RepoFixture::new().await;
         sh(&f.base, &["checkout", "-qb", "bot-work"]);
         std::fs::write(f.base.join("feature"), "unpublished\n").unwrap();
@@ -1855,12 +1922,16 @@ mod tests {
         let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
         std::fs::write(f.base.join(".git/config.lock"), "recent").unwrap();
         let original = std::fs::read(f.base.join(".git/config")).unwrap();
-        let blocked = configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await;
-        assert!(matches!(blocked, Err(Fail::Msg(m)) if m.contains("config") && m.contains("File exists")));
+        let blocked = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(blocked, Err(Fail::Msg(m)) if m.contains("config.lock") && m.contains("Git lock")));
         assert_eq!(std::fs::read(f.base.join(".git/config")).unwrap(), original);
         std::fs::remove_file(f.base.join(".git/config.lock")).unwrap();
         std::fs::write(f.base.join(".git/config"), "[broken\n").unwrap();
-        assert!(configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await.is_ok());
+        let refused = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
+        assert!(matches!(refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")));
+        assert_eq!(std::fs::read_to_string(f.base.join(".git/config")).unwrap(), "[broken\n");
+        std::fs::write(f.base.join(".git/config"), &original).unwrap();
+        assert!(configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await.is_ok());
         assert_eq!(sh(&f.base, &["show-ref"]), refs);
         assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
         assert_eq!(std::fs::read_to_string(f.base.join("feature")).unwrap(), "unstaged\n");
@@ -1868,8 +1939,68 @@ mod tests {
         assert_eq!(std::fs::read_to_string(tree.join("draft")).unwrap(), "task work\n");
         assert_eq!(sh(&tree, &["branch", "--show-current"]), "task-work");
         let backups: Vec<_> = std::fs::read_dir(f.base.join(".git")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("tico-config-backup-")).collect();
-        assert_eq!(backups.len(), 1);
-        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "[broken\n");
+        assert!(backups.is_empty(), "an unreadable format must never be replaced");
+    }
+
+    #[tokio::test]
+    async fn reftable_base_format_is_preserved_or_repair_is_refused() {
+        let f = RepoFixture::new().await;
+        sh(&f.base, &["branch", "bot-work"]);
+        std::fs::write(f.base.join("CLAUDE.md"), "stashed work\n").unwrap();
+        sh(&f.base, &["stash", "-q"]);
+        sh(&f.base, &["refs", "migrate", "--ref-format=reftable"]);
+        sh(&f.base, &["config", "extensions.worktreeConfig", "true"]);
+        let task = f.root.join("task");
+        sh(&f.base, &["worktree", "add", "-q", "-b", "task-work", task.to_str().unwrap()]);
+        std::fs::write(task.join("draft"), "task work\n").unwrap();
+        let refs = sh(&f.base, &["show-ref"]);
+        let config = f.base.join(".git/config");
+        let original = std::fs::read(&config).unwrap();
+        let index = std::fs::read(f.base.join(".git/index")).unwrap();
+        let settings = vec![("remote.origin.url".into(), f.remote.display().to_string()), ("remote.tico-mirror.url".into(), file_uri(&f.remote))];
+        let mut malformed = original.clone();
+        malformed.extend_from_slice(b"\n[broken\n");
+        std::fs::write(&config, &malformed).unwrap();
+        let refused = configure_base(&f.base, &settings, &[], &f.env, "acme/web").await;
+        assert!(matches!(refused, Err(Fail::Msg(m)) if m.contains("repository format cannot be read safely")));
+        assert_eq!(std::fs::read(&config).unwrap(), malformed);
+        assert!(f.base.join(".git/reftable").is_dir());
+        assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
+        assert!(!f.base.join(".git/config.lock").exists());
+        // With a verified config, stage and install through the same path used by config repair.
+        std::fs::write(&config, &original).unwrap();
+        let before = repository_format(&config, &f.env).await.ok().unwrap();
+        let staged = f.root.join("staged-config");
+        assert!(stage_base_config(&staged, &original, &settings, &[], &f.env).await.is_ok());
+        assert!(BaseConfigLock::acquire(&config).unwrap().install(Some(&original), &staged).is_ok());
+        assert_eq!(repository_format(&config, &f.env).await.ok().unwrap(), before);
+        assert_eq!(sh(&f.base, &["config", "core.repositoryformatversion"]), "1");
+        assert_eq!(sh(&f.base, &["config", "extensions.refStorage"]), "reftable");
+        assert_eq!(sh(&f.base, &["config", "extensions.worktreeConfig"]), "true");
+        assert_eq!(sh(&f.base, &["show-ref"]), refs);
+        assert_eq!(sh(&task, &["branch", "--show-current"]), "task-work");
+        assert_eq!(std::fs::read_to_string(task.join("draft")).unwrap(), "task work\n");
+    }
+
+    #[tokio::test]
+    async fn config_staging_keeps_all_extensions_and_refuses_unknown_formats() {
+        let f = RepoFixture::new().await;
+        let config = f.root.join("format-config");
+        let original = b"[core]\nrepositoryFormatVersion = 1\n[extensions]\nobjectFormat = sha256\nrefStorage = reftable\nworktreeConfig = true\npreciousObjects = true\nfutureFormat = retained\n";
+        let settings = vec![("remote.tico-mirror.url".into(), file_uri(&f.remote))];
+        assert!(stage_base_config(&config, original, &settings, &[], &f.env).await.is_ok());
+        let format = repository_format(&config, &f.env).await.ok().unwrap();
+        for (key, value) in [("core.repositoryformatversion", "1"), ("extensions.objectformat", "sha256"), ("extensions.refstorage", "reftable"),
+            ("extensions.worktreeconfig", "true"), ("extensions.preciousobjects", "true"), ("extensions.futureformat", "retained")] {
+            assert_eq!(format.get(key).unwrap(), &[value.to_string()]);
+        }
+        std::fs::remove_file(&config).unwrap();
+        let changes_format = vec![("extensions.objectFormat".into(), "sha1".into())];
+        assert!(stage_base_config(&config, original, &changes_format, &[], &f.env).await.is_err());
+        for bytes in [b"[broken\n".as_slice(), b"[core]\nrepositoryFormatVersion = 2\n", b"[core]\nrepositoryFormatVersion = 1\n[include]\npath = extra-config\n"] {
+            std::fs::write(&config, bytes).unwrap();
+            assert!(repository_format(&config, &f.env).await.is_err());
+        }
     }
 
     #[tokio::test]
@@ -1884,7 +2015,7 @@ mod tests {
         replacement.extend_from_slice(b"\n[repair]\n\tinstalled = true\n");
         std::fs::write(&rebuilt, &replacement).unwrap();
 
-        // A writer starting after the idle check must fail while repair holds config.lock.
+        // A writer starting after the metadata check must fail while repair holds config.lock.
         let lock = BaseConfigLock::acquire(&config).unwrap();
         let writer = run_as_bot(&[], &["-C", f.base.to_str().unwrap(), "config", "--local", "owner.edit", "concurrent"], &f.env, 10).await.ok().unwrap();
         assert!(!writer.ok(), "a concurrent Git writer acquired repair's lock");
@@ -1952,7 +2083,7 @@ mod tests {
         let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
         let failed = run_as_bot(&prefix, &["-C", f.base.to_str().unwrap(), "config", "--local", "remote.origin.url", "https://github.com/acme/web.git"], &f.env, 10).await.ok().unwrap();
         assert!(!failed.ok() && failed.stderr.contains("Permission denied"), "{}", failed.stderr);
-        let result = configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await;
+        let result = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
         assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("repository copy needs attention") && m.contains("separate user")));
         assert_eq!(std::fs::read(git.join("config")).unwrap(), original);
         assert!(!std::fs::read_dir(&f.root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-base-repair-")),
@@ -1972,7 +2103,7 @@ mod tests {
         let index = std::fs::read(f.base.join(".git/index")).unwrap();
         let settings = vec![("remote.tico-mirror.url".into(), file_uri(&f.remote)), ("remote.tico-mirror.fetch".into(), "+refs/heads/main:refs/remotes/tico-mirror/main".into())];
         let prefix = vec!["-c".into(), "protocol.file.allow=always".into()];
-        let result = configure_base(&f.base, &file_uri(&f.remote), "main", &settings, &prefix, &f.env, "acme/web").await;
+        let result = configure_base(&f.base, &settings, &prefix, &f.env, "acme/web").await;
         assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("original GitHub origin cannot be verified and preserved")));
         assert_eq!(std::fs::read(config).unwrap(), original);
         assert_eq!(std::fs::read(f.base.join(".git/index")).unwrap(), index);
@@ -2050,7 +2181,7 @@ mod tests {
         }
         assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
         assert_eq!(sh(&f.base, &["status", "--porcelain"]), "");
-        assert!(crate::gitlocks::idle(&f.base.join(".git")).await, "an interrupted instruction repair cannot block config recovery");
+        assert!(crate::gitlocks::check(&f.base.join(".git")).is_ok(), "an interrupted instruction repair cannot block config recovery");
         std::fs::remove_file(f.base.join("AGENTS.md")).unwrap();
         std::fs::write(f.base.join("AGENTS.md"), "A bot's real instruction edit\n").unwrap();
         // Even an exact copy is work when staged deliberately as a new regular file.
