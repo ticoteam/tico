@@ -545,9 +545,6 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
             + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head.")
     if step.get("detached"):
         body += "\n" + step["pr"]["url"]
-        selected = {p["id"]: {"error": True} for p in _prs(c, ticket, step)}
-        selected[step["pr"]["id"]] = (snapshots or {}).get(step["pr"]["id"]) or H._json(step["pr"].get("detail"), {}) or {}
-        snapshots = selected
     c.execute("SAVEPOINT check_pool_file")
     try:
         actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
@@ -562,7 +559,7 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     if heads:
         recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                              "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
-        if step.get("detached") or not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
+        if not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
             # Add merged PRs for checks after release; never replace the head child admission recorded.
             H._task_event(c, child["id"], ticket["owner_id"], "review_head", None, ",".join(heads), "")
     label = (H.bot(c, slug) or {}).get("slug", slug)
@@ -661,10 +658,11 @@ def wait_for_pr(c, wait, pr):
 
 
 def _unboard(c, ticket, snapshots=None):
-    from . import step_flow as F, verdict_moves as V
+    from . import review_gate, step_flow as F, verdict_moves as V
     if ticket.get("status") not in (*H.ACTIVE_STATUSES, "done") or ticket.get("blocked_since"):
         return None
     board = F.pr_checks(c, ticket)
+    review_gate.bind_existing_prs(c, ticket)
     waiting_result = None
     for pr in sorted(_prs(c, ticket, board[0]), key=lambda p: (p["created_at"], p["id"])):
         if pr.get("state") != "open" or not bot_pr(c, ticket, pr):
@@ -714,13 +712,10 @@ def _unboard(c, ticket, snapshots=None):
                 continue
             found = pool(c, step["id"])
             slugs, limit = (found[1], found[2]) if found else ([], DEFAULT_LIMIT)
-            # Admission records only this PR's head, even when its task links several PRs.
-            selected = {p["id"]: {"error": True} for p in _prs(c, ticket, step)}
-            selected[pr["id"]] = (snapshots or {}).get(pr["id"]) or detail
             if ticket["status"] == "done":
                 ticket = H.task_update(c, H.KEEPER, ticket["id"], status="review", strict=False,
                                        note="The open PR still needs review and merge.")
-            result = _dispatch(c, ticket, step, slugs, limit, [pr], selected)
+            result = _dispatch(c, ticket, step, slugs, limit, [pr], snapshots)
             if result:
                 if result.get("owner_id"):
                     return result
@@ -805,11 +800,16 @@ def _admission_problem(c, wait, plan, snapshots):
     if plan["head_problem"]:
         return "the current PR head needs fresh evidence"
     if review_gate.is_review(c, plan["ticket"], wait["title"]):
-        return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
+        prs = [plan["step"]["pr"]] if plan["step"].get("detached") else None
+        return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True, prs=prs)
 
 
 def _take(c, wait, only=None, snapshots=None):
     """Give a wait to `only` or its best free member; drop it if its ticket moved on or already has a check."""
+    from . import review_gate
+    ticket = H.task(c, wait["ticket_id"])
+    if ticket:
+        review_gate.bind_existing_prs(c, ticket)
     plan = _take_plan(c, wait, only, snapshots)
     if "drop" in plan:
         c.execute("UPDATE check_waits SET state='dropped',reason=?,updated_at=? WHERE id=?",

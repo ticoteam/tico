@@ -388,6 +388,120 @@ def test_pr_1_and_12_each_need_their_own_review(api, second_head):
     assert len(handoffs(api, task, "merge")) == 2
 
 
+def engineering_pr_pair(api):
+    from backend import review_gate, step_flow
+    setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Dev", [{"name": "Build", "status": "doing"}])
+        c.execute("UPDATE tasks SET type_id=?,step_id=? WHERE id=?", (typ["id"], typ["steps"][0]["id"], task["id"]))
+        task = H.task(c, task["id"])
+        assert review_gate.engineering(c, task) and not step_flow.checks(c, typ["id"])
+        first = H.task_links(c, task["id"])[0]
+        second = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/atlas/pull/13")
+        c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
+                  (json.dumps({**H._json(first["detail"], {}), "head_sha": OLD}), second["id"]))
+        return task, H.task_links(c, task["id"])
+
+
+@pytest.mark.parametrize("queued", [False, True], ids=["direct", "queued"])
+def test_engineering_without_check_steps_reviews_each_green_pr_once(api, monkeypatch, queued):
+    from backend import review_gate
+    task, prs = engineering_pr_pair(api)
+    snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
+    monkeypatch.setattr(review_gate, "snapshot", lambda service, links: snapshots)
+    if queued:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runner_states SET last_seen_at=?", (H.shift(H.now(), minutes=-10),))
+        P.retry(api.app.state.store, service=api.app.state.github_app)
+        with api.app.state.store.transaction() as c:
+            assert len(P.waiting(c, task["id"])) == 2
+            c.execute("UPDATE runner_states SET last_seen_at=?", (H.now(),))
+    filed = P.retry(api.app.state.store, service=api.app.state.github_app)
+    assert len(filed) == 2
+    reviews = children(api, task)
+    assert len(reviews) == 2
+    with api.app.state.store.read() as c:
+        for pr in prs:
+            [child] = [r for r in reviews if PR.matches(r, pr)]
+            heads = [r[0] for r in c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
+                                            (child["id"],))]
+            assert heads == [H._json(pr["detail"], {})["head_sha"]]
+    assert P.retry(api.app.state.store, service=api.app.state.github_app) == []
+    assert {r["id"] for r in children(api, task)} == set(filed)
+    assert all(not detail.get("error") for detail in snapshots.values())
+
+
+@pytest.mark.parametrize("queued", [False, True], ids=["direct", "queued"])
+def test_detached_review_gate_checks_its_own_pr_and_keeps_other_evidence(api, monkeypatch, queued):
+    from backend import review_gate
+    task, prs = engineering_pr_pair(api)
+    snapshots = {p["id"]: {**H._json(p["detail"], {}), "at": H.now()} for p in prs}
+    broken = next(p for p in prs if p["number"] == 13)
+    snapshots[broken["id"]]["checks"] = {"required": "failing"}
+    monkeypatch.setattr(review_gate, "snapshot", lambda service, links: snapshots)
+    if queued:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runner_states SET last_seen_at=?", (H.shift(H.now(), minutes=-10),))
+        P.retry(api.app.state.store, service=api.app.state.github_app)
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runner_states SET last_seen_at=?", (H.now(),))
+    P.retry(api.app.state.store, service=api.app.state.github_app)
+    [child] = children(api, task)
+    assert PR.matches(child, next(p for p in prs if p["number"] == 12))
+    assert not PR.matches(child, broken)
+    assert P.retry(api.app.state.store, service=api.app.state.github_app) == []
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused, match="CI failing"):
+            H.task_create(c, "human:ana", "Review 1: PR #13", broken["url"], "bot:rev-b",
+                          parent_id=task["id"], review_prs=snapshots)
+    assert snapshots[broken["id"]]["checks"] == {"required": "failing"}
+
+
+def test_legacy_number_only_review_is_bound_before_backfill_or_hand_filing(api):
+    setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        body = f"Check PR #12 at head {HEAD}."
+        legacy = H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-a", parent_id=task["id"])
+        c.execute("UPDATE tasks SET body=? WHERE id=?", (body, legacy["id"]))
+    assert dispatch(api) == []
+    [bound] = children(api, task)
+    assert bound["id"] == legacy["id"]
+    assert PR.matches(bound, "https://github.com/Acme/atlas/pull/12")
+    assert dispatch(api) == []
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_id=? AND kind='review_pr'",
+                         (bound["id"],)).fetchone()[0] == 1
+        # A hand-filed check must bind old children before applying the same duplicate rule.
+        c.execute("UPDATE tasks SET body=? WHERE id=?", (body, bound["id"]))
+        with pytest.raises(H.Refused, match="already open"):
+            H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-b", parent_id=task["id"])
+
+
+def test_ambiguous_legacy_number_is_logged_and_bound_review_is_reused(api, caplog):
+    setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        first = H.task_links(c, task["id"])[0]
+        body = f"Check PR #12 at head {HEAD}."
+        legacy = H.task_create(c, "human:ana", "Review 1: PR #12", body, "bot:rev-a", parent_id=task["id"])
+        c.execute("UPDATE tasks SET body=? WHERE id=?", (body, legacy["id"]))
+        other = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/other/pull/12")
+        c.execute("UPDATE task_links SET state='open',repo='Acme/other',checks='passing',mergeable='clean',detail=? WHERE id=?",
+                  (first["detail"], other["id"]))
+        bound = H.task_create(c, "human:ana", "Review 1: PR #12", first["url"], "bot:rev-b", parent_id=task["id"])
+    filed = dispatch(api)
+    assert len(filed) == 1
+    reviews = children(api, task)
+    assert [r["id"] for r in reviews if PR.matches(r, first)] == [bound["id"]]
+    assert [r["id"] for r in reviews if PR.matches(r, other)] == filed
+    with api.app.state.store.read() as c:
+        assert H.task(c, legacy["id"])["body"] == body
+    assert any(record.name == "tico.review_gate" and legacy["id"] in record.message for record in caplog.records)
+    assert dispatch(api) == []
+
+
 @pytest.mark.parametrize("reviews", [1, 2], ids=["merge-next", "review-2-next"])
 @pytest.mark.parametrize("case,head", [("backfill", HEAD), ("backfill-done", HEAD), ("hold", HEAD), ("old-head", OLD)])
 def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, reviews, case, head):

@@ -1,5 +1,6 @@
 """Deterministic review handoff gate; runs before any step change or review child wake."""
 import json
+import logging
 import re
 from urllib.parse import quote
 
@@ -8,6 +9,8 @@ from jwt.exceptions import InvalidKeyError
 
 from . import test_receipts
 from . import pr_identity as PR
+
+log = logging.getLogger("tico.review_gate")
 
 
 
@@ -69,6 +72,36 @@ def bind_prs(c, actor, parent, title, body):
                                      if not PR.matches({"title": title, "body": body}, p))
 
 
+def bind_existing_prs(c, parent):
+    """Bind legacy number-only checks before routing can mistake them for missing reviews."""
+    from . import hubdb as H, step_flow
+    from . import task_relations as TR
+    if not step_flow.pr_checks(c, parent):
+        return
+    prs = [p for p in H.task_links(c, parent["id"]) if p["kind"] == "pr"]
+    for child_id in TR.child_ids(c, parent["id"]):
+        child = H.task(c, child_id)
+        if not child or not check_of(c, parent, child["title"]) or PR.references(child):
+            continue
+        if not re.search(r"#\d+\b", child["title"]):
+            continue
+        selected = PR.requested(child, prs)
+        if len(selected) != 1:
+            log.warning("Legacy review PR reference is not unique: task=%s child=%s", parent["id"], child_id)
+            continue
+        body = str(child.get("body") or "") + "\n" + selected[0]["url"]
+        c.execute("UPDATE tasks SET body=?,updated_at=?,version=version+1 WHERE id=?", (body, H.now(), child_id))
+        H._task_event(c, child_id, H.KEEPER, "review_pr", None, selected[0]["url"], "")
+
+
+def request_prs(c, parent, title, body):
+    """A detached check judges its own PR; a board check still judges the whole ticket."""
+    step = check_of(c, parent, title)
+    if step and step.get("detached"):
+        return [p for p in links(c, parent) if PR.matches({"title": title, "body": body}, p)]
+    return None
+
+
 def refuse_second(c, actor, parent, title, snapshots=None, *, body=""):
     """One open Review 1, Review 2 or QA subtask per ticket and pull request head: a second request for the same
     check on the same head (or one whose head is unknown) points at the one already open instead of buying a
@@ -78,6 +111,8 @@ def refuse_second(c, actor, parent, title, snapshots=None, *, body=""):
     step = check_of(c, parent, title)
     if not step:
         return
+    if step.get("detached"):
+        bind_existing_prs(c, parent)
     from . import step_flow
     kind = step_flow.label(step)
     requested = {"title": title, "body": body}
@@ -340,10 +375,10 @@ def evidence(c, row, actor, receipt_owner=None):
     return result
 
 
-def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=None, receipt_owner=None):
+def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=None, receipt_owner=None, *, prs=None):
     from . import hubdb as H
     try:
-        if notice := problem(c, row, actor, snapshots, note, require_pr, receipt_owner, reader=reader):
+        if notice := problem(c, row, actor, snapshots, note, require_pr, receipt_owner, reader=reader, prs=prs):
             reject(c, actor, row, *notice)
     except H.Refused as exc:
         # The mover a refused move is retried as (backend/move_retry.py): the actor the move was made as, which can
@@ -353,13 +388,13 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=Non
         raise
 
 
-def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_owner=None, reader=None):
+def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_owner=None, reader=None, *, prs=None):
     """Read the current gate without writing refusals; shared by automatic hold clearing."""
     from . import hubdb as H
     if not engineering(c, row):
         return
     writers = "The owner, a manager above the owner, or a person who may edit this ticket"
-    prs = links(c, row)
+    prs = links(c, row) if prs is None else prs
     if not prs:
         if require_pr:
             return ("receipt", "unknown", {"url": "no linked PR"},
@@ -372,7 +407,7 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
     if note is not None:
         facts["note"] = note
         facts["updated_at"] = H.now()
-    # CI is checked across all linked PRs before looking at any receipt.
+    # Check CI for every PR this request judges before looking at any receipt.
     for pr in prs:
         detail = snapshots.get(pr["id"], {"error": True}) if snapshots is not None else (H._json(pr.get("detail"), {}) or {})
         head = detail.get("head_sha") or "unknown"

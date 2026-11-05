@@ -74,6 +74,9 @@ Add `--check-model` only when asking for a check on another model.
 
 Each PR head has one open request per review. Reviews match the full PR link: host, owner, repo and number.
 PR #1 and PR #12, or equal numbers in different repos, keep their own reviews even at the same head.
+On this route, each review checks the evidence for its own PR, so other linked PRs do not block it.
+Before dispatch, Tico adds the full PR link to an older number-only request when the number names just one
+linked PR. If the number is unclear, Tico leaves the request as it is and logs it for review.
 A push closes the old request as superseded and gets a new review;
 an old-head approval never clears the new head. Changes wake the owner with the findings. Once the current head
 has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.

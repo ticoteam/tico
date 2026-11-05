@@ -6418,7 +6418,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if parent:
         body = review_gate.bind_prs(conn, actor, parent, title, body)
     if parent and review_gate.is_review(conn, parent, title):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
+        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
+                          prs=review_gate.request_prs(conn, parent, title, body))
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
