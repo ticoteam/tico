@@ -12,6 +12,7 @@ The rules are not ours to soften (policies/shared-rules.md):
 """
 
 from datetime import datetime, timedelta
+import copy
 import hashlib
 import re
 import time
@@ -31,6 +32,10 @@ MAX_EVENTS_PER_CALENDAR = 100
 
 class ConferencePending(Failure):
     """No invitation has been frozen; the caller can retry conference preparation."""
+
+    def __init__(self, msg, hint="", status=None, event=None):
+        super().__init__(msg, hint, status)
+        self.event = copy.deepcopy(event)
 
 
 MEETING_URL = re.compile(
@@ -133,7 +138,9 @@ class Calendar:
                         bounds.append(iso(value, zone(part.get("timeZone") or str(start.tzinfo))))
                     if bounds[0] >= bounds[1]:
                         raise ValueError("invalid event")
-                    if exclude_hold and event.get("id") == exclude_hold["id"] and tuple(bounds) == exclude_hold["bounds"]:
+                    holds = ([exclude_hold] if isinstance(exclude_hold, dict) else exclude_hold) or []
+                    if any(event.get("id") == hold["id"] and tuple(bounds) == hold["bounds"]
+                           and (not hold.get("event") or unchanged_hold(event, hold["event"])) for hold in holds):
                         continue
                     spans.append(tuple(bounds))
                 except (KeyError, TypeError, ValueError):
@@ -204,6 +211,51 @@ class Calendar:
         return self.ready_conference(self._exec(self.service.events().insert(calendarId="primary", body=body,
                             sendUpdates="none", conferenceDataVersion=1), "events.insert"))
 
+    def scheduling_hold(self, event_id, start, end, attendee, description, summary, snapshot=None):
+        """Read only a known non-sent booking's hold, retaining all material edits as busy."""
+        try:
+            event = self._exec(self.service.events().get(calendarId="primary", eventId=event_id), "events.get hold")
+        except Failure as exc:
+            if exc.status == 404:
+                return None
+            raise
+        if snapshot:
+            matches = unchanged_hold(event, snapshot)
+        else:
+            # Older receipts predate snapshots. Accept only the exact original booking shape.
+            allowed = EVENT_METADATA | {"id", "summary", "status", "start", "end", "attendees", "description",
+                                        "conferenceData", "hangoutLink", "reminders"}
+            conference = (event.get("conferenceData") or {}).get("createRequest") or {}
+            matches = (not (set(event) - allowed) and event.get("summary") == summary
+                       and event.get("description") == description and event.get("status") == "confirmed"
+                       and event.get("attendees") in ([{"email": attendee}], [{"email": attendee, "responseStatus": "needsAction"}])
+                       and event.get("reminders") in (None, {"useDefault": True})
+                       and conference.get("requestId") == event_id)
+        try:
+            matches = matches and event["id"] == event_id and tuple(iso(event[k]["dateTime"]) for k in ("start", "end")) == (start, end)
+        except (KeyError, ValueError, TypeError):
+            matches = False
+        return copy.deepcopy(event) if matches and event.get("status") == "confirmed" else None
+
+    def reuse_scheduling_event(self, snapshot):
+        event = self._exec(self.service.events().get(calendarId="primary", eventId=snapshot["id"]), "events.get reused hold")
+        if not unchanged_hold(event, snapshot):
+            raise Failure("The calendar hold changed; review it before rescheduling.")
+        ready = self.ready_conference(event)
+        if not unchanged_hold(ready, snapshot):
+            raise Failure("The calendar hold changed during conference preparation.")
+        return ready
+
+    def delete_scheduling_hold(self, event):
+        """An ETag prevents cleanup from deleting a hold edited after verification."""
+        oauth.require(self.granted, "calendar-write", self.mailbox, "delete calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "delete calendar events")
+        if not event.get("etag"):
+            raise Failure("The stale calendar hold has no version; review it before rescheduling.")
+        request = self.service.events().delete(calendarId="primary", eventId=event["id"], sendUpdates="none")
+        request.headers["If-Match"] = event["etag"]
+        return self._exec(request, "events.delete stale hold")
+
     def create_hub_event(self, start, end, summary, attendees, event_id, description="",
                          add_meet=True):
         """Create the deterministic event claimed from the Hub connector queue."""
@@ -236,8 +288,8 @@ class Calendar:
             try:
                 event = self._exec(self.service.events().get(calendarId="primary", eventId=event["id"]), "events.get conference")
             except Failure as exc:
-                raise ConferencePending("Could not read the meeting link; retry this booking before sending its invitation.", status=503) from exc
-        raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503)
+                raise ConferencePending("Could not read the meeting link; retry this booking before sending its invitation.", status=503, event=event) from exc
+        raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503, event=event)
 
     def get_event(self, event_id, calendar_id="primary"):
         """Get one normalized event by ID."""
@@ -256,6 +308,28 @@ class Calendar:
 
 
 # ---------------------------------------------------------------- pure
+
+EVENT_METADATA = frozenset(("kind", "etag", "created", "updated", "htmlLink", "iCalUID", "sequence", "creator", "organizer"))
+
+
+def unchanged_hold(event, snapshot):
+    def material(value):
+        return {key: part for key, part in value.items() if key not in EVENT_METADATA}
+    before, after = material(snapshot), material(event)
+    # Conference creation may finish asynchronously; no other writable field may change.
+    request = (snapshot.get("conferenceData") or {}).get("createRequest") or {}
+    if (request.get("status") or {}).get("statusCode") in ("pending", "failure"):
+        current = (event.get("conferenceData") or {}).get("createRequest") or {}
+        if (not request.get("requestId") or {k: v for k, v in request.items() if k != "status"}
+                != {k: v for k, v in current.items() if k != "status"}):
+            return False
+        if any((event.get("conferenceData") or {}).get(k) != v for k, v in (snapshot.get("conferenceData") or {}).items()
+               if k != "createRequest") or (snapshot.get("hangoutLink") and snapshot["hangoutLink"] != event.get("hangoutLink")):
+            return False
+        for value in (before, after):
+            value.pop("conferenceData", None)
+            value.pop("hangoutLink", None)
+    return before == after
 
 def iso(text, tz=None):
     dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))

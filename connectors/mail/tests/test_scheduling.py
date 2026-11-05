@@ -150,6 +150,23 @@ def test_rebooking_excludes_only_the_unchanged_canceled_hold_and_keeps_other_bus
     assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == [(changed, changed+s.DURATION)]
 
 
+def test_hold_cleanup_refuses_an_event_edited_after_verification():
+    import copy
+    from connectors.mail.tests.fake import FakeCalendarService
+    service = FakeCalendarService(calendars=['primary'])
+    calendar = cal.Calendar(service, 'ana@acme.example')
+    start = datetime(2030, 1, 8, 10, tzinfo=s.TZ)
+    event = calendar.create_scheduling_event(start, start+s.DURATION, 'guest@vendor.example', 'hold', 'Agenda')
+    verified = copy.deepcopy(event)
+    event['etag'], event['summary'] = '"changed"', 'Edited meeting'
+    with pytest.raises(Failure) as refused:
+        calendar.delete_scheduling_hold(verified)
+    assert refused.value.status == 412 and not service.deleted and 'hold' in service.created_events
+    # A changed event with the same times remains busy even if a prior scan excluded its snapshot.
+    assert calendar.busy(start, start+s.DURATION, exclude_hold=[{'id': 'hold', 'bounds': (start, start+s.DURATION),
+                                                               'event': verified}]) == [(start, start+s.DURATION)]
+
+
 class PermissionGrant(unittest.TestCase):
     def setUp(self):
         self.manifest={'scheduling_send':True,'outbound_send':False,'access':[

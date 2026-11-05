@@ -69,27 +69,30 @@ def parsed(raw):
     return BytesParser(policy=policy.default).parsebytes(data)
 
 
-def body_parts(msg):
-    """Alternative representations are bodies; mixed/related siblings are files, even when unnamed."""
-    if msg.get_content_disposition() == "attachment" or msg.get_filename():
+def body_parts(msg, primary=True):
+    """Structure and disposition identify bodies; an inline filename never hides visible text."""
+    if msg.get_content_disposition() == "attachment":
         return []
     if not msg.is_multipart():
-        return [msg]
+        return [msg] if primary or msg.get_content_maintype() == "text" else []
+    if msg.get_content_maintype() != "multipart":
+        return [msg] if primary else []
     children = list(msg.iter_parts())
     if msg.get_content_subtype() not in ("mixed", "related", "alternative"):
-        return [msg]
+        return [msg] + [part for child in children for part in body_parts(child)]
     if msg.get_content_subtype() == "alternative":
         return [part for child in children for part in body_parts(child)]
     if msg.get_content_subtype() == "related":
         start = msg.get_param("start")
         root = next((child for child in children if start and child.get("Content-ID") == start), None)
-        return body_parts(root if root is not None else children[0]) if children else []
-    return body_parts(children[0]) if children else []
+        root = root if root is not None else children[0] if children else None
+        return [part for child in children for part in body_parts(child, primary=child is root)]
+    return [part for index, child in enumerate(children) for part in body_parts(child, primary=index == 0)]
 
 
 def file_parts(msg):
     leaves = [p for p in msg.walk() if not p.is_multipart()]
-    nested = [p for p in msg.walk() if p.is_multipart() and (p.get_content_type() == "message/rfc822" or p.get_filename() or p.get_content_disposition() == "attachment")]
+    nested = [p for p in msg.walk() if p.is_multipart() and (p.get_content_type() == "message/rfc822" or p.get_content_disposition() == "attachment")]
     return leaves + nested
 
 
@@ -124,24 +127,18 @@ def snapshot(raw, mailbox):
             payload = part_bytes(part)
             is_body = any(part is body for body in bodies)
             supported = part.get_content_type() in ("text/plain", "text/html")
-            unsupported_body = not supported and (is_body or (part.get_content_maintype() == "text"
-                and not part.get_filename() and part.get_content_disposition() != "attachment"))
+            unsupported_body = not supported and is_body
             if unsupported_body:
                 complete = False
-            if not is_body or not supported:
+            if not is_body:
                 name = str(part.get_filename() or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin"))[:255]
                 files.append({"name": name, "sha256": digest(payload), "size": len(payload),
                               "type": part.get_content_type(), "part": index})
-                if not supported:
-                    if unsupported_body and part.get_content_maintype() == "text":
-                        try:
-                            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-                        except LookupError:
-                            text = payload.decode("utf-8", errors="replace")
-                        visible.append({"type": part.get_content_type(), "text": text})
-                    continue
-                if part.get_content_disposition() == "attachment" or part.get_filename():
-                    continue
+                continue
+            if not supported and part.get_content_maintype() != "text":
+                # An opaque primary body still needs an inert, complete representation for review.
+                visible.append({"type": part.get_content_type(), "text": base64.b64encode(payload).decode()})
+                continue
             try:
                 text = payload.decode(part.get_content_charset() or "utf-8", errors="strict")
             except (UnicodeDecodeError, LookupError):
@@ -150,13 +147,15 @@ def snapshot(raw, mailbox):
                 if is_body:
                     texts.append(text)
                 visible.append({"type": "text/plain", "text": text})
-            else:
+            elif part.get_content_type() == "text/html":
                 html = VisibleHTML()
                 html.feed(text)
                 html.close()
                 complete = complete and html.complete
                 # Unknown rendering stays inert in the preview, with no discarded body or attribute bytes.
                 visible.append({"type": "text/html", "text": "".join(html.text) if html.complete else text})
+            else:
+                visible.append({"type": part.get_content_type(), "text": text})
         if len(str(msg.get("subject", ""))) > 1000 or len(files) > 50 or sum(len(p["text"]) for p in visible) > MAX_PREVIEW:
             raise ValueError("The email cannot be previewed in full")
     except (ValueError, TypeError, LookupError) as exc:

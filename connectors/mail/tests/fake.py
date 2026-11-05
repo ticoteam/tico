@@ -51,6 +51,7 @@ def message(mid="m1", thread=None, headers=None, body=None, parts=None,
 class _Req:
     def __init__(self, fn):
         self.fn = fn
+        self.headers = {}
 
     def execute(self):
         return self.fn()
@@ -412,7 +413,7 @@ class FakeCalendarService:
                 raise Boom(409, "calendar event already exists")
             if not (body or {}).get("id"):
                 self._next += 1
-            ev = dict(body or {}, id=eid, sendUpdates=sendUpdates, **kwargs)
+            ev = dict(body or {}, id=eid, etag='"' + eid + '"', sendUpdates=sendUpdates, **kwargs)
             if ev.get("conferenceData"):
                 ev["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
                 ev["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
@@ -430,10 +431,14 @@ class FakeCalendarService:
 
     def delete(self, calendarId="primary", eventId=None, sendUpdates="none"):
         def go():
+            if request.headers.get("If-Match") and request.headers["If-Match"] != self.created_events.get(eventId, {}).get("etag"):
+                raise Boom(412, "calendar event changed")
             self.created_events.pop(eventId, None)
+            self.events_by_calendar[calendarId] = [event for event in self.events_by_calendar.get(calendarId, []) if event.get("id") != eventId]
             self.deleted.append(eventId)
             return {}
-        return _Req(go)
+        request = _Req(go)
+        return request
 
 
 # ---------------------------------------------------------------- Tico's mail access answer

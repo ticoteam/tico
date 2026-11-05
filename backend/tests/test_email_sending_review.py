@@ -53,7 +53,37 @@ def test_unsupported_recipient_visible_bodies_always_ask(inbox, form, legal_prom
     assert response["classification"]["legal_or_money"] is None
     assert response["state"] == "waiting_approval"
     preview = inbox.get("/api/v2/email/sends/" + response["id"], headers=headers()).json()
-    assert preview["preview_complete"] and preview["send"]["attachments"]
+    assert preview["preview_complete"] and preview["bodies"]
+
+
+@pytest.mark.parametrize("form", ["inline_enriched", "no_disposition", "inline_html", "primary_plain", "named_container"])
+def test_named_inline_bodies_cannot_hide_commitments_from_classification(inbox, form):
+    autonomous(inbox, ask_attachments=False, ask_legal_money=True)
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = BOX, CONTACT, "Named body " + form
+    commitment = "We accept the contract and agree to pay $100000."
+    message.set_content(commitment if form == "primary_plain" else "Thanks for the update.")
+    if form != "primary_plain":
+        message.add_alternative("<p>" + commitment + "</p>", subtype="html" if form in ("inline_html", "named_container") else "enriched")
+    part = message if form in ("primary_plain", "named_container") else message.get_payload()[-1]
+    if form == "no_disposition":
+        part.set_param("name", "answer.enriched", header="Content-Type")
+    else:
+        part["Content-Disposition"] = 'inline; filename="answer.txt"'
+    snap = S.snapshot(raw(message), BOX)
+    assert not snap["attachments"]
+    assert commitment in "\n".join(body["text"] for body in snap["visible_bodies"])
+    supported = form in ("inline_html", "primary_plain", "named_container")
+    assert snap["classification_complete"] is supported
+    def classify(engine, context, *args):
+        assert commitment in context["body"]
+        return {"answers": {"legal_or_money": {"value": "yes"}}}
+    with mock.patch.object(judge, "server_engine", return_value=object()), \
+            mock.patch.object(judge, "ask", side_effect=classify) as ask, mock.patch.object(judge, "audit_detail", return_value={}):
+        result = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
+    assert ask.call_count == int(supported)
+    assert result["classification"]["legal_or_money"] is (True if supported else None)
+    assert result["state"] == "waiting_approval" and claim(inbox) is None
 
 
 def test_new_old_format_approval_cannot_authorize_an_added_internal_bcc(inbox):
@@ -118,16 +148,37 @@ def test_retained_daily_cap_counts_the_union_of_history_and_queue(inbox, synced,
         assert post(inbox, "connectors/email/sends/" + third["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
 
 
-def test_standing_booking_cancel_reconciles_and_queues_a_new_intent(inbox):
+@pytest.mark.parametrize("scenario", ["cancel_twice", "conference_twice", "legacy_duplicates", "changed_hold", "moved_hold", "unrelated"])
+def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario):
     from contextlib import nullcontext
-    from connectors.mail import __main__ as cli, scheduling
+    from connectors.mail import __main__ as cli, scheduling, calendar as cal
+    from connectors.mail.tests.fake import FakeCalendarService
     message = {"id": "inbound", "from": CONTACT, "to": [BOX], "cc": [], "labels": [], "epoch": 1,
                "subject": "Meeting", "headers": {"message-id": "<inbound@vendor.example>"}}
     args = SimpleNamespace(thread="thread", category="influencer", bd_confirmation="", mode="book",
                            slot="2030-01-08T10:00:00-08:00", acceptance_message="inbound")
+    service = FakeCalendarService(calendars=["primary"])
+    calendar = cal.Calendar(service, BOX)
+    original_query, original_insert, original_exec = service.query, service.insert, calendar._exec
+    def execute(request, what):
+        if scenario == "conference_twice" and what == "events.get conference":
+            raise cal.Failure("Transient conference read failure", status=503)
+        return original_exec(request, what)
+    def query(body=None):
+        service.busy = [(e["start"]["dateTime"], e["end"]["dateTime"]) for e in service.events_by_calendar.get("primary", [])]
+        return original_query(body=body)
+    def insert(**kwargs):
+        request = original_insert(**kwargs)
+        execute = request.execute
+        def pending():
+            event = execute()
+            event.pop("hangoutLink", None)
+            event["conferenceData"]["createRequest"]["status"] = {"statusCode": "pending"}
+            return event
+        if scenario == "conference_twice":
+            request.execute = pending
+        return request
     with closing(sqlite3.connect(":memory:")) as connection:
-        calendar = mock.MagicMock()
-        calendar.create_scheduling_event.side_effect = lambda start, end, attendee, event_id, *rest: {"id": event_id, "hangoutLink": "https://meet.google.com/abc-defg-hij"}
         ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock(),
                               policy={"defaults": {"max_sends_per_day": 20}})
         def submit(mailbox, raw, thread_id, reply_id):
@@ -138,14 +189,56 @@ def test_standing_booking_cancel_reconciles_and_queues_a_new_intent(inbox):
             return response.json()
         with mock.patch.object(cli, "thread_context", return_value=([message], "", "", "", [])), \
                 mock.patch.object(scheduling, "permission"), mock.patch.object(scheduling, "review_thread", return_value={}), \
-                mock.patch.object(scheduling, "check_free"), mock.patch.object(scheduling, "mailbox_lock", side_effect=lambda _: nullcontext()), \
-                mock.patch.object(scheduling.pl, "queue_send", side_effect=submit), mock.patch.object(scheduling.pl, "HUB_GET", side_effect=read):
+                mock.patch.object(scheduling, "mailbox_lock", side_effect=lambda _: nullcontext()), \
+                mock.patch.object(scheduling.pl, "queue_send", side_effect=submit) as enqueue, \
+                mock.patch.object(scheduling.pl, "HUB_GET", side_effect=read), \
+                mock.patch.object(service, "query", side_effect=query), mock.patch.object(service, "insert", side_effect=insert), \
+                mock.patch.object(calendar, "_exec", side_effect=execute), mock.patch.object(cal.time, "sleep"):
             first = scheduling.run(ctx, args)
-            post(inbox, "email/sends/" + first["send_id"] + "/cancel", {})
-            second = scheduling.run(ctx, args)
-            assert second["queued"] and second["send_id"] != first["send_id"] and second["state"] == "waiting_approval"
-            assert connection.execute("SELECT count(*) FROM scheduling_actions WHERE status='canceled'").fetchone()[0] == 1
-            assert scheduling.run(ctx, args)["send_id"] == second["send_id"]
+            if scenario == "conference_twice":
+                assert first["retry"] and not first["queued"]
+                second = scheduling.run(ctx, args)
+                assert second["retry"] and not second["queued"]
+                enqueue.assert_not_called()
+                event = next(iter(service.created_events.values()))
+                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
+            else:
+                post(inbox, "email/sends/" + first["send_id"] + "/cancel", {})
+                if scenario in ("changed_hold", "moved_hold", "unrelated"):
+                    event = service.created_events[first["event"]]
+                    if scenario == "changed_hold":
+                        event["summary"] = "A person changed this meeting"
+                    elif scenario == "moved_hold":
+                        event["start"]["dateTime"] = "2030-01-08T10:15:00-08:00"
+                    else:
+                        service.events_by_calendar["primary"].append({**event, "id": "unrelated"})
+                    with pytest.raises(scheduling.Refused, match="calendar blocks"):
+                        scheduling.run(ctx, args)
+                    assert enqueue.call_count == 1 and not service.deleted
+                    return
+                if scenario == "legacy_duplicates":
+                    # Model the older implementation's second definitely-unsent hold without a stored snapshot.
+                    receipt = json.loads(connection.execute("SELECT result FROM scheduling_actions").fetchone()[0])
+                    duplicate = calendar.create_scheduling_event(scheduling.datetime.fromisoformat(args.slot),
+                        scheduling.datetime.fromisoformat(args.slot)+scheduling.DURATION, CONTACT, "older-duplicate", receipt["body"])
+                    duplicate.pop("sendUpdates")
+                    duplicate.pop("conferenceDataVersion")
+                    receipt.update(event=duplicate["id"], expected_event_id=duplicate["id"], state="canceled", queued=False)
+                    receipt.pop("hold")
+                    connection.execute("INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)",
+                        ("retired:old", BOX, "thread", "book", "2030-01-01", "canceled", json.dumps(receipt)))
+                    connection.commit()
+                second = scheduling.run(ctx, args)
+                assert second["queued"] and second["send_id"] != first["send_id"]
+                post(inbox, "email/sends/" + second["send_id"] + "/cancel", {})
+            third = scheduling.run(ctx, args)
+            assert third["queued"] and third["state"] == "waiting_approval"
+            assert first["expected_event_id"] == second["expected_event_id"] == third["expected_event_id"] or scenario == "legacy_duplicates"
+            assert len(service.created_events) == len(service.events_by_calendar["primary"]) == 1
+            assert all(event["sendUpdates"] == "none" for event in service.created_events.values() if "sendUpdates" in event)
+            assert len(service.deleted) == int(scenario == "legacy_duplicates")
+            assert scheduling.run(ctx, args)["send_id"] == third["send_id"]
 
 
 def test_negative_chat_cannot_approve_a_different_large_send_through_the_api(inbox):

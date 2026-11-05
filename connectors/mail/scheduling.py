@@ -223,6 +223,28 @@ def reconcile(ctx, thread):
                              (status, json.dumps(result), key))
 
 
+def reusable_holds(ctx, thread, starts, attendee, body, summary):
+    """Every verified definite non-send can own a reusable, unchanged hold for this booking."""
+    if not ctx.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduling_actions'").fetchone():
+        return []
+    holds, seen = [], set()
+    rows = ctx.conn.execute("SELECT result FROM scheduling_actions WHERE mailbox=? AND thread=? "
+                            "AND mode='book' AND status='canceled' ORDER BY rowid DESC", (ctx.mailbox, thread)).fetchall()
+    for (value,) in rows:
+        result = json.loads(value or '{}')
+        definite = result.get('state') in ('canceled', 'blocked', 'failed', 'declined') if result.get('send_id') else result.get('retry') is True
+        event_id = result.get('event') or result.get('expected_event_id')
+        if (not definite or not event_id or event_id in seen or result.get('to') != attendee
+                or result.get('body') != body or result.get('times') != [start.isoformat() for start in starts]):
+            continue
+        seen.add(event_id)
+        event = ctx.calendar.scheduling_hold(event_id, starts[0], starts[0]+DURATION, attendee, body, summary,
+                                             snapshot=result.get('hold'))
+        if event:
+            holds.append({'id': event_id, 'bounds': (starts[0], starts[0]+DURATION), 'event': event})
+    return holds
+
+
 def run(ctx, args):
     # Import lazily to keep the CLI dependency one-way during module import.
     from . import __main__ as cli
@@ -241,19 +263,11 @@ def run(ctx, args):
     settings = ctx.policy.get('scheduling') or {}
     key = hashlib.sha256(f'{ctx.mailbox}:{args.thread}:{latest["id"]}:{args.mode}'.encode()).hexdigest()
     reconcile(ctx, args.thread)
-    previous = None
     if ctx.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduling_actions'").fetchone():
         old = ctx.conn.execute('SELECT status, result FROM scheduling_actions WHERE key=?', (key,)).fetchone()
         if old and old[0] != 'canceled':
             return dict(json.loads(old[1] or '{}'), ok=old[0] in ('sent','queued'), status=old[0], already_attempted=True,
                         dry_run=ctx.dry)
-        if old:
-            previous = json.loads(old[1] or '{}')
-        if previous is None:
-            canceled = ctx.conn.execute("SELECT result FROM scheduling_actions WHERE mailbox=? AND thread=? "
-                                        "AND mode='book' AND status='canceled' ORDER BY rowid DESC LIMIT 1",
-                                        (ctx.mailbox, args.thread)).fetchone()
-            previous = json.loads(canceled[0] or '{}') if canceled else None
         booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','queued','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
         if booked:
             raise Refused('This thread already has a booking or an uncertain attempt; review it before rescheduling.')
@@ -278,10 +292,9 @@ def run(ctx, args):
                 ('\n\nIf neither works, you can book another time here:\n' + settings['booking_url']
                  if settings.get('booking_url') else '') +
                 '\n\n' + signer(ctx))
-    exclude_hold = None
-    if previous and (previous.get('event') or previous.get('expected_event_id')) and previous.get('times') == [start.isoformat() for start in starts]:
-        exclude_hold = {'id': previous.get('event') or previous['expected_event_id'], 'bounds': (starts[0], starts[0] + DURATION)}
-    check_free(ctx.calendar, starts, exclude_hold=exclude_hold)
+    summary = settings.get('meeting_title') or 'Meeting'
+    holds = reusable_holds(ctx, args.thread, starts, attendee, body, summary) if args.mode == 'book' else []
+    check_free(ctx.calendar, starts, exclude_hold=holds)
     verdict = review_thread(msgs, attendee, args.category, args.mode, starts)
     ctx.audit('scheduling-review', args.thread, {'mode':args.mode, 'category':args.category, **verdict})
     # The same action key is checked again under the mailbox lock before delivery.
@@ -308,19 +321,27 @@ def run(ctx, args):
         if not fresh or fresh[-1]['id'] != latest['id']:
             raise Refused('The conversation changed during review; read it again.')
         permission(ctx, args.category, attendee, args.thread, args.bd_confirmation)
-        check_free(ctx.calendar, starts, exclude_hold=exclude_hold)  # notice, calendars and buffers immediately before action
-        event_id = hashlib.sha256((key + uuid.uuid4().hex).encode()).hexdigest()
+        holds = reusable_holds(ctx, args.thread, starts, attendee, body, summary) if args.mode == 'book' else []
+        check_free(ctx.calendar, starts, exclude_hold=holds)  # notice, calendars and buffers immediately before action
+        # Remove only duplicates verified against their non-sent receipt, with conditional deletes.
+        for stale in holds[1:]:
+            ctx.calendar.delete_scheduling_hold(stale['event'])
+        intent_id = hashlib.sha256((key + uuid.uuid4().hex).encode()).hexdigest()
+        event_id = holds[0]['id'] if holds else intent_id
         payload['expected_event_id'] = event_id if args.mode == 'book' else None
+        if holds:
+            payload['hold'] = holds[0]['event']
         with ctx.conn:
             if old:
-                ctx.conn.execute("UPDATE scheduling_actions SET key=? WHERE key=?", ('retired:' + event_id, key))
+                ctx.conn.execute("UPDATE scheduling_actions SET key=? WHERE key=?", ('retired:' + intent_id, key))
             ctx.conn.execute('INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)',
                              (key,ctx.mailbox,args.thread,args.mode,day,'pending',json.dumps(payload)))
         try:
             if args.mode == 'book':
-                event = ctx.calendar.create_scheduling_event(starts[0], starts[0]+DURATION,
-                                                             attendee, event_id, body,
-                                                             settings.get('meeting_title') or 'Meeting')
+                event = (ctx.calendar.reuse_scheduling_event(holds[0]['event']) if holds else
+                         ctx.calendar.create_scheduling_event(starts[0], starts[0]+DURATION,
+                                                              attendee, event_id, body, summary))
+                payload['hold'] = event
                 raw = compose.build([attendee], subject, body, from_addr=ctx.mailbox,
                                     in_reply_to=reply_id, references=refs)
                 raw = compose.with_invitation(raw, event, ctx.mailbox, [attendee], starts[0], starts[0]+DURATION,
@@ -337,6 +358,8 @@ def run(ctx, args):
             status = 'queued'
         except cal.ConferencePending as exc:
             status = 'canceled'
+            if exc.event:
+                payload['hold'] = exc.event
             result = dict(payload, ok=False, sent=False, queued=False, retry=True, reason=str(exc))
         except Exception:
             # A network failure may occur after delivery. Never automatically retry or claim rollback.
