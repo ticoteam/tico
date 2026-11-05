@@ -252,10 +252,126 @@ def test_an_updater_releases_its_process_lock_when_it_fails(tmp_path, monkeypatc
         raise RuntimeError("update failed")
 
     monkeypatch.setattr(ru, "run_update", fail)
-    with pytest.raises(RuntimeError, match="update failed"):
-        ru.main(["--version", "0.2.0", "--state-dir", str(tmp_path), "--pid", "42"])
+    assert ru.main(["--version", "0.2.0", "--state-dir", str(tmp_path), "--pid", "42"]) == 1
+    assert "update failed" in ru.read_status(tmp_path)["error"]
     with ru.updater_lock(tmp_path) as acquired:
         assert acquired
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("policy", ["short", "legacy"])
+@pytest.mark.parametrize("step", [
+    "process_open", "process_size", "process_symlink", "process_flock", "config_json", "config_shape",
+    "registration", "drain_read", "drain_sleep", "kind", "systemd_unit", "git_lookup", "git_gate",
+    "checkout_open", "checkout_size", "checkout_symlink", "checkout_flock", "status_read", "status_write",
+    "early_exit", "interrupt",
+])
+def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkeypatch, policy, step):
+    from runner_support import git_locks
+
+    follower, now = old_follower
+    now[0] = time.time()
+    state = follower.directory
+    root = state / "checkout"
+    metadata = root / ".git"
+    metadata.mkdir(parents=True)
+    process = state / ru.PROCESS_LOCK
+    checkout = metadata / ru.LOCK_FILE
+    unsafe = process if step.startswith("process_") else checkout
+    target = state / "keep"
+    target.write_text("keep this inode and content")
+    if step.endswith("_open"):
+        unsafe.mkdir()
+    elif step.endswith("_size"):
+        unsafe.write_bytes(b"x" * 4097)
+    elif step.endswith("_symlink"):
+        unsafe.symlink_to(target)
+    before = unsafe.lstat() if unsafe.exists() else None
+    applied = []
+    original_git, original_read, original_write = ru.git, ru.read_status, ru.write_status
+    original_flock, original_defer = fcntl.flock, ru.defer_update
+    cause = f"cannot finish {step}"
+
+    def fail(*a, **kw):
+        raise OSError(cause)
+
+    for attempt in range(1, ru.MAX_DEFERRALS + 1):
+        with monkeypatch.context() as patch:
+            patch.setenv("TICO_UPDATE_RETRY", policy)
+            patch.setenv("TICO_GIT_OWNED_ROOTS", "[]")
+            patch.setattr(git_locks, "OWNED_ROOTS", ())
+            patch.setattr(git_locks, "register_checkout", lambda root: None)
+            patch.setattr(ru, "in_flight", lambda directory: False)
+            patch.setattr(ru, "kind", lambda: "linux")
+            patch.setattr(ru, "systemd_unit", lambda: "")
+            patch.setattr(ru, "git", lambda *a, **kw: subprocess.CompletedProcess([], 0, ".git\n", ""))
+            patch.setattr(ru, "update", lambda *a, **kw: applied.append(True))
+            patch.setattr(ru, "defer_update", lambda *a, **kw: original_defer(*a, clock=lambda: now[0], **kw))
+            if step == "config_json":
+                patch.setenv("TICO_GIT_OWNED_ROOTS", "[")
+            elif step == "config_shape":
+                patch.setenv("TICO_GIT_OWNED_ROOTS", '{"bad": "paths"}')
+            elif step == "registration":
+                patch.setattr(git_locks, "register_checkout", fail)
+            elif step == "drain_read":
+                patch.setattr(ru, "in_flight", fail)
+            elif step == "drain_sleep":
+                patch.setattr(ru, "in_flight", lambda directory: True)
+                patch.setattr(ru.time, "sleep", fail)
+            elif step in ("kind", "systemd_unit", "git_lookup"):
+                patch.setattr(ru, "git" if step == "git_lookup" else step, fail)
+            elif step == "git_gate":
+                patch.setattr(ru, "git", original_git)
+                patch.setattr(git_locks, "command_lock", fail)
+            elif step in ("early_exit", "interrupt"):
+                def exit_early(*a, **kw):
+                    raise SystemExit(cause) if step == "early_exit" else KeyboardInterrupt(cause)
+                patch.setattr(ru, "in_flight", exit_early)
+            if step.endswith("_flock") or step.startswith("status_"):
+                def flock(handle, operation):
+                    selected = process if step == "process_flock" else checkout
+                    if operation != fcntl.LOCK_UN and selected.exists() and os.fstat(handle.fileno()).st_ino == selected.stat().st_ino:
+                        if step.startswith("status_"):
+                            raise BlockingIOError("checkout lock held")
+                        fail()
+                    return original_flock(handle, operation)
+                patch.setattr(fcntl, "flock", flock)
+            if step == "status_read":
+                reads = []
+                def read(directory, **kw):
+                    reads.append(True)
+                    if len(reads) == 1:
+                        fail()
+                    return original_read(directory, **kw)
+                patch.setattr(ru, "read_status", read)
+            elif step == "status_write":
+                def write(directory, **fields):
+                    if fields.get("state") == "updating":
+                        fail()
+                    return original_write(directory, **fields)
+                patch.setattr(ru, "write_status", write)
+            assert ru.main(["--root", str(root), "--version", "v0.3.45", "--state-dir", str(state),
+                            "--pid", "42"]) == 1
+        status = original_read(state)
+        assert status["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "idle" if policy == "short" else "failed")
+        assert status["cause_count"] == attempt and status["deferrals"] == attempt
+        assert status["deferral_cause"] in status["error"] and len(status["error"]) <= 300
+        if step not in ("config_json", "config_shape") and not step.endswith(("_open", "_size", "_symlink")):
+            assert cause in status["deferral_cause"]
+        if policy == "short":
+            assert status["not_before"] > now[0]
+        else:
+            follower.pending_since = now[0] - 21 * 60
+            follower.decide()
+            assert follower.pending is None and not follower.running
+            assert not follower.blocks_claims(True) and not follower.blocks_claims(False)
+        if not step.startswith("process_") or step == "process_flock":
+            with ru.updater_lock(state) as acquired:
+                assert acquired
+        assert applied == [] and target.read_text() == "keep this inode and content"
+        if before:
+            assert unsafe.lstat().st_ino == before.st_ino
+        now[0] += 1
 
 
 def sh(cwd, *args):
@@ -745,7 +861,7 @@ def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeyp
                     "--pid", "42"]) == 1
     status = ru.read_status(tmp_path)
     assert status["state"] == paused and status["target"] == "0.2.0" and status["at"] > 1
-    assert "update lock cannot be checked" in status["error"]
+    assert "cannot read Git metadata" in status["error"] and status["cause_count"] == 1
 
 
 def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):

@@ -30,6 +30,8 @@ const DRAIN_S: u64 = 20 * 60; // older servers retain their claim window
 const DRAIN_WAIT_S: u64 = 10 * 60; // release_update.py waits this long for a drain to settle
 const RETRY_AFTER_S: f64 = 6.0 * 3600.0;
 const DEFERRAL_DELAYS_S: &[u64] = &[120, 300, 900, 1800, 3600]; // release_update.py DEFERRAL_DELAYS_S
+const MAX_DEFERRALS: u64 = 3;
+const DEFERRAL_LIMIT_S: f64 = 2.0 * 3600.0;
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
@@ -228,13 +230,18 @@ fn adopt_revision(directory: &Path, head: &str) {
     let _ = std::fs::write(path, data.to_string());
 }
 
+fn try_read_status(directory: &Path) -> Result<Value, String> {
+    let text = match crate::regular_file::text(directory.join(STATUS_FILE), crate::regular_file::SMALL) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
+        Err(e) => return Err(format!("cannot read update status: {e}")),
+    };
+    let value: Value = serde_json::from_str(&text).map_err(|e| format!("cannot read update status: {e}"))?;
+    if value.is_object() { Ok(value) } else { Err("update status must be an object".into()) }
+}
+
 fn read_status(directory: &Path) -> Value {
-    let v: Value = std::fs::read_to_string(directory.join(STATUS_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    if v.is_object() {
-        v
-    } else {
-        json!({})
-    }
+    try_read_status(directory).unwrap_or_else(|_| json!({}))
 }
 
 /// The saved Docker update hold: None when there is none, an error when one is there but cannot be read.
@@ -263,9 +270,39 @@ fn write_status(directory: &Path, fields: Value) {
     }
 }
 
+/// The same bounded retry and cause history as release_update.py, also for failures before Python starts.
+fn defer_update(directory: &Path, want: &str, reason: &str, transient: bool) -> (String, String) {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(250).collect::<String>();
+    let before = read_status(directory);
+    let before = if before["target"] == want { before } else { json!({}) };
+    let now = epoch_s();
+    let count = before["deferrals"].as_u64().unwrap_or(0).saturating_add(1).min(DEFERRAL_DELAYS_S.len() as u64);
+    let repeats = before["cause_count"].as_u64().unwrap_or(0);
+    let since = before["deferred_since"].as_f64().filter(|s| repeats > 0 && *s >= 0.0 && *s <= now).unwrap_or(now);
+    let repeats = if transient { 0 } else if before["deferral_cause"] == reason { repeats.saturating_add(1).min(MAX_DEFERRALS) } else { 1 };
+    let blocked = !transient && (repeats == MAX_DEFERRALS || now - since >= DEFERRAL_LIMIT_S);
+    let prefix = if repeats == MAX_DEFERRALS { format!("update blocked after {repeats} tries: ") }
+        else if blocked { "update blocked after two hours: ".into() } else { "update paused: ".into() };
+    let delay = DEFERRAL_DELAYS_S[count as usize - 1];
+    let error = format!("{}; retrying in {} minutes", format!("{prefix}{reason}").chars().take(250).collect::<String>(), delay / 60);
+    let state = if blocked { "blocked" } else { "idle" };
+    write_status(directory, json!({"state": state, "target": want, "error": error, "at": now,
+        "not_before": now + delay as f64, "deferrals": count, "deferred_since": if transient { now } else { since },
+        "deferral_cause": if transient { "" } else { &reason }, "cause_count": repeats}));
+    (state.into(), error)
+}
+
+fn deferred_outcome(status: &Value, want: &str) -> Option<(String, String)> {
+    (status["target"] == want && matches!(status["state"].as_str(), Some("idle" | "waiting" | "busy" | "blocked"))
+        && status["not_before"].as_f64().is_some_and(|t| epoch_s() < t))
+        .then(|| (text_of(&status["state"]), text_of(&status["error"])))
+}
+
 fn updater_running(directory: &Path) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt;
     use std::os::unix::io::AsRawFd;
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(directory.join(PROCESS_LOCK)).map_err(|e| e.to_string())?;
+    let file = crate::regular_file::open(&directory.join(PROCESS_LOCK), std::fs::OpenOptions::new().create(true).append(true), crate::regular_file::SMALL).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.nlink() != 1 { return Err("not a regular update lock file".into()); }
     // SAFETY: flock acts on this open file; the guard releases a successful probe even across concurrent forks.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         let _guard = crate::lock::FileLock::from_locked(file);
@@ -285,7 +322,7 @@ fn one_line(text: &str) -> String {
 
 fn update_log(path: &Path, message: &str) {
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = crate::regular_file::open(path, std::fs::OpenOptions::new().create(true).append(true), u64::MAX) {
         let _ = writeln!(file, "Tico update: {message}");
     }
 }
@@ -528,12 +565,17 @@ impl Follower {
                 _ => None,
             };
         }
+        let status = try_read_status(&self.directory);
         match updater_running(&self.directory) {
             Ok(true) => return Some(("updating".into(), String::new())),
-            Err(e) => return Some(("failed".into(), format!("cannot check the updater: {e}"))),
+            Err(e) => return Some(status.as_ref().ok().and_then(|s| deferred_outcome(s, want))
+                .unwrap_or_else(|| defer_update(&self.directory, want, &format!("cannot check the updater: {e}"), false))),
             Ok(false) => {}
         }
-        let status = read_status(&self.directory);
+        let status = match status {
+            Ok(status) => status,
+            Err(e) => return Some(defer_update(&self.directory, want, &e, false)),
+        };
         if text_of(&status["target"]) != want {
             return None;
         }
@@ -709,22 +751,15 @@ impl Follower {
         };
         if !active {
             self.launch(&pending).await;
-            return true;
+            return self.draining();
         }
         if self.kind != "docker" && since.is_some_and(|t| t.elapsed() >= if drain { self.drain_timeout } else { Duration::from_secs(DRAIN_S + DRAIN_WAIT_S) }) {
             // Preparation can outlast the turn cap. Give claims back instead of draining without an end.
-            let before = read_status(&self.directory);
-            let count = if before["target"] == pending { before["deferrals"].as_u64().unwrap_or(0) } else { 0 };
-            let count = count.saturating_add(1).min(DEFERRAL_DELAYS_S.len() as u64);
-            let delay = DEFERRAL_DELAYS_S[count as usize - 1];
-            let error = format!("update paused: this computer still has work running; retrying in {} minutes", delay / 60);
-            let now = epoch_s();
-            write_status(&self.directory, json!({"state": "idle", "target": pending, "error": error,
-                "at": now, "not_before": now + delay as f64, "deferrals": count}));
+            let (state, error) = defer_update(&self.directory, &pending, "this computer still has work running", true);
             let mut s = self.inner.lock().unwrap();
             s.pending = None;
             s.pending_since = None;
-            s.state = "idle".into();
+            s.state = state;
             s.error = error;
             return false;
         }
@@ -742,8 +777,15 @@ impl Follower {
         } else {
             self.spawn(want)
         };
+        self.launched(want, started);
+    }
+
+    fn launched(&self, want: &str, started: Result<(), String>) {
+        let deferred = started.as_ref().err().filter(|_| self.kind != "docker")
+            .map(|why| defer_update(&self.directory, want, why, false));
         let mut s = self.inner.lock().unwrap();
         s.pending = None;
+        s.pending_since = None;
         match started {
             Ok(()) => {
                 log(&format!("Tico runner: updating to {want}"));
@@ -751,10 +793,16 @@ impl Follower {
                 s.running = true;
             }
             Err(why) => {
-                s.state = "failed".into();
-                s.error = format!("could not start the update: {why}");
+                s.running = false;
+                if let Some((state, error)) = deferred {
+                    s.state = state;
+                    s.error = error;
+                } else {
+                    s.state = "failed".into();
+                    s.error = format!("could not start the update: {why}");
+                    write_status(&self.directory, json!({"state": "failed", "target": want, "error": s.error, "at": epoch_s(), "launcher": crate::BUILD_ID}));
+                }
                 update_log(&self.directory.join("update.log"), &s.error);
-                write_status(&self.directory, json!({"state": "failed", "target": want, "error": s.error, "at": epoch_s(), "launcher": crate::BUILD_ID}));
             }
         }
     }
@@ -810,8 +858,8 @@ impl Follower {
             }
         }
         use std::os::unix::process::CommandExt;
-        let out = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
-        let err = out.try_clone().map_err(|e| e.to_string())?;
+        let out = crate::regular_file::open(&log_path, std::fs::OpenOptions::new().create(true).append(true), u64::MAX).map_err(|e| format!("cannot open update.log: {e}"))?;
+        let err = out.try_clone().map_err(|e| format!("cannot copy update.log handle: {e}"))?;
         let mut cmd = Command::new(&python);
         cmd.args(&args).env("TICO_GIT_OWNED_ROOTS", &owned).env("TICO_UPDATE_RETRY", "short").current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
         if unit.ends_with(".service") && !unit.contains('/') {
@@ -1141,6 +1189,79 @@ scope['main'](sys.argv[1:])
         write_status(&f.directory, status);
         assert!(f.outcome("0.3.45").await.is_none());
         std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_native_prelaunch_failure_defers_and_releases_claims() {
+        if !crate::regular_file::in_child("follow::tests::every_native_prelaunch_failure_defers_and_releases_claims").await { return; }
+        std::env::set_var("TICO_SUPERVISED", "1");
+        for step in ["process_open", "process_size", "process_symlink", "process_fifo", "status_read", "status_shape", "status_symlink", "status_fifo",
+            "log_open", "log_symlink", "log_fifo", "systemd_start", "systemd_missing", "systemd_bus", "detach"] {
+            let f = checkout_follower();
+            let target = f.directory.join("keep");
+            std::fs::write(&target, "keep this inode and content").unwrap();
+            let path = f.directory.join(if step.starts_with("process_") { PROCESS_LOCK } else if step.starts_with("status_") { STATUS_FILE } else { "update.log" });
+            match step {
+                "process_open" | "log_open" => std::fs::create_dir(&path).unwrap(),
+                "process_size" => std::fs::File::create(&path).unwrap().set_len(crate::regular_file::SMALL + 1).unwrap(),
+                "process_symlink" | "status_symlink" | "log_symlink" => std::os::unix::fs::symlink(&target, &path).unwrap(),
+                "process_fifo" | "status_fifo" | "log_fifo" => crate::regular_file::fifo(&path),
+                "status_read" => std::fs::write(&path, "{").unwrap(),
+                "status_shape" => std::fs::write(&path, "[]").unwrap(),
+                _ => {}
+            }
+            for attempt in 1..=MAX_DEFERRALS {
+                {
+                    let mut s = f.inner.lock().unwrap();
+                    s.desired = Some("0.3.45".into());
+                    s.pending = Some("0.3.45".into());
+                    s.pending_since = Some(Instant::now());
+                    s.features = json!({"runner_drain": true});
+                }
+                if step.starts_with("status_") {
+                    f.decide().await;
+                } else {
+                    let env = if step.starts_with("systemd_") { systemd_env() } else { crate::env::Env::new() };
+                    let mut detached = false;
+                    let result = f.spawn_with("0.3.45", &env, |cmd| {
+                        if cmd.get_program() == "systemctl" { return command_output(0, "control-group", ""); }
+                        match step {
+                            "systemd_start" => command_output(1, "", "Failed to start transient service unit: denied"),
+                            "systemd_missing" => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "systemd-run missing")),
+                            "systemd_bus" => command_output(1, "", "Failed to connect to bus: denied"),
+                            _ => panic!("unexpected systemd launch at {step}"),
+                        }
+                    }, |_| {
+                        detached = true;
+                        assert_eq!(step, "detach");
+                        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "detached launch denied"))
+                    });
+                    let cause = result.as_ref().unwrap_err().clone();
+                    assert_eq!(detached, step == "detach");
+                    f.launched("0.3.45", result);
+                    assert!(read_status(&f.directory)["deferral_cause"] == cause);
+                }
+                let status = read_status(&f.directory);
+                assert_eq!(status["state"], if attempt == MAX_DEFERRALS { "blocked" } else { "idle" }, "{step}");
+                assert_eq!(status["deferrals"], attempt, "{step}");
+                assert_eq!(status["cause_count"], attempt, "{step}");
+                assert!(status["not_before"].as_f64().unwrap() > epoch_s(), "{step}");
+                assert!(text_of(&status["error"]).contains(&text_of(&status["deferral_cause"])), "{step}");
+                assert!(!f.draining() && !f.blocks_claims(true).await && !f.blocks_claims(false).await, "{step}");
+                for _ in 0..2 {
+                    f.decide().await;
+                    assert!(!f.draining() && !f.blocks_claims(false).await, "{step}");
+                    assert_eq!(read_status(&f.directory), status, "a poll must keep the retry time at {step}");
+                }
+                assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep this inode and content");
+                if !step.starts_with("process_") { assert_eq!(updater_running(&f.directory), Ok(false)); }
+                if step.starts_with("status_") { break; } // The deferral replaces the unreadable status.
+                let mut due = status;
+                due["not_before"] = json!(epoch_s() - 1.0);
+                write_status(&f.directory, due);
+            }
+            std::fs::remove_dir_all(f.directory).unwrap();
+        }
     }
 
     #[tokio::test]

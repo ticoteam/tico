@@ -21,7 +21,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .regular_file import read as read_regular, lock as open_regular_lock
+from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
@@ -30,6 +30,7 @@ HEALTH_S = 180
 LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under follow.rs STALE_UPDATING_S
 LOCK_FILE = "tico-update.lock"
 PROCESS_LOCK = "update-process.lock"  # follow.rs probes this before starting an updater or declaring one stale
+GIT_BUSY = "repository copy needs attention: Git work is busy or its lock cannot be checked"
 MAX_DEFERRALS = 3           # repeats of the same non-transient cause before Health asks for help
 DEFERRAL_DELAYS_S = (120, 300, 900, 1800, 3600)
 DEFERRAL_LIMIT_S = 2 * 3600
@@ -69,8 +70,10 @@ def git(root, *args, run=subprocess.run, timeout=60):
                 if note:
                     done.stderr = note
             return done
-    except OSError:
-        return subprocess.CompletedProcess(command, 1, "", "repository copy needs attention: Git work is busy or its lock cannot be checked")
+    except BlockingIOError:
+        return subprocess.CompletedProcess(command, 1, "", GIT_BUSY)
+    except OSError as exc:
+        return subprocess.CompletedProcess(command, 1, "", str(exc))
 
 
 def repair_instruction_links(root, g):
@@ -213,11 +216,17 @@ def disk_error_message(error):
             "the update retries when space frees.") if disk_space_error(error) else error
 
 
-def read_status(directory):
+def read_status(directory, *, strict=False):
     try:
-        data = json.loads((Path(directory) / STATUS_FILE).read_text())
+        data = json.loads(read_regular(Path(directory) / STATUS_FILE, SMALL))
+        if strict and not isinstance(data, dict):
+            raise ValueError("update status must be an object")
         return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
     except (OSError, ValueError):
+        if strict:
+            raise
         return {}
 
 
@@ -236,7 +245,12 @@ def write_status(directory, **fields):
 def defer_update(directory, version, reason, *, clock=time.time, transient=False):
     """Release claims until the next try; old followers need failed because they ignore not_before."""
     target = version.lstrip("v")
-    before = read_status(directory)
+    reason = " ".join(str(reason).split())[:250]
+    try:
+        before = read_status(directory)
+    except Exception:
+        # A failed status read must not prevent replacing it with a retry time.
+        before = {}
     before = before if before.get("target") == target else {}
     now = clock()
     count = before.get("deferrals", 0)
@@ -463,13 +477,14 @@ def read_json(path):
 
 
 def lock_path(root, run=subprocess.run):
-    """The update lock of a checkout, in git's common directory so every worktree of it shares one; None if git cannot say."""
-    try:
-        done = git(root, "rev-parse", "--git-common-dir", run=run, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+    """The checkout's shared update lock; None for a busy Git gate, an error for other lookup failures."""
+    done = git(root, "rev-parse", "--git-common-dir", run=run, timeout=10)
+    if done.returncode and done.stderr == GIT_BUSY:
         return None
     common = done.stdout.strip()
-    return Path(root) / common / LOCK_FILE if not done.returncode and common else None
+    if done.returncode or not common:
+        raise OSError(done.stderr.strip() or "the checkout's update lock cannot be found")
+    return Path(root) / common / LOCK_FILE
 
 
 def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S, clock=time.time, **kw):
@@ -615,7 +630,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
 @contextlib.contextmanager
 def updater_lock(directory):
     """One updater per runner, including its drain and checkout-lock waits; a duplicate leaves its status alone."""
-    with open(Path(directory) / PROCESS_LOCK, "a") as handle:
+    with open_regular_lock(Path(directory) / PROCESS_LOCK) as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -635,16 +650,26 @@ def main(argv=None):
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
     args = parser.parse_args(argv)
-    from . import git_locks
-    # Older updaters ignore this environment setting when a shared checkout moves back.
-    roots = json.loads(os.environ.get("TICO_GIT_OWNED_ROOTS", "[]"))
-    git_locks.OWNED_ROOTS = (Path(args.root), Path(args.state_dir), *map(Path, roots))
-    git_locks.register_checkout(args.root)
-    with updater_lock(args.state_dir) as acquired:
-        if not acquired:
-            print("Tico update: an updater is already running for this computer", flush=True)
-            return 0
-        return run_update(args)
+    try:
+        with updater_lock(args.state_dir) as acquired:
+            if not acquired:
+                print("Tico update: an updater is already running for this computer", flush=True)
+                return 0
+            read_status(args.state_dir, strict=True)
+            from . import git_locks
+            # Older updaters ignore this environment setting when a shared checkout moves back.
+            roots = json.loads(os.environ.get("TICO_GIT_OWNED_ROOTS", "[]"))
+            if not isinstance(roots, list) or any(not isinstance(root, str) for root in roots):
+                raise ValueError("TICO_GIT_OWNED_ROOTS must be a list of paths")
+            git_locks.OWNED_ROOTS = (Path(args.root), Path(args.state_dir), *map(Path, roots))
+            git_locks.register_checkout(args.root)
+            return run_update(args)
+    except BaseException as exc:
+        # Every stopped attempt needs an outcome, including exits before apply can write one.
+        cause = str(exc) or type(exc).__name__
+        result = defer_update(args.state_dir, args.version, cause)
+        print(json.dumps(result))
+        return 1
 
 
 def run_update(args):

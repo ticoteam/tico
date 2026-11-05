@@ -182,6 +182,11 @@ Active work and busy locks never count as blocked. Other causes report `blocked`
 three times in a row, or after two hours of such delays. Active work or a busy lock resets that cause history.
 Blocked deferrals keep the short retry schedule, with the cause in Settings > Computers and Health. Lock waits
 preserve the retry history; a new target release or a completed update clears it.
+An error before the update starts uses the same wait and releases new work. This includes bad settings,
+failed status reads, and locks that cannot be opened or checked. These errors count toward `blocked` and
+show the plain cause. A lock that is a link, a special file, or larger than 4 KiB stays refused and untouched.
+The Rust runner also saves this wait when its own lock check or updater launch fails. Polls keep the saved
+retry time; they do not start a fresh wait on each check.
 
 The Rust follower sets `TICO_UPDATE_RETRY=short` for the updater, including under systemd. Older Python followers,
 including v0.3.45, ignore `not_before` and treat `waiting` and `busy` as due at once. For them alone, the updater
