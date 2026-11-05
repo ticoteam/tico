@@ -161,7 +161,7 @@ fn assemble(attempt: &Value, lines: &[(Part, String)], run: &str, seen: &Seen, c
         String::new()
     };
     let full = lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n\n");
-    let short_standing = !seen.standing.is_empty() && seen.standing == standing;
+    let short_standing = !attempt["make_page"]["task"].is_object() && !seen.standing.is_empty() && seen.standing == standing;
     let short_task = !seen.task.is_empty() && seen.task == task_digest;
     let repo_rules = s(&attempt["_repo_rules"]);
     let rules = !repo_rules.is_empty() && lines.iter().any(|(_, l)| *l == repo_rules);

@@ -1612,6 +1612,11 @@ impl Runner {
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
+            if attempt["make_page"]["task"].is_object() {
+                for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
+                    env.insert(key.into(), execution_path.display().to_string());
+                }
+            }
             memory_before = redact::head(&execution_path);
             if packet_only {
                 if !crate::harness_tools::caps_of(&config).packet_only {
