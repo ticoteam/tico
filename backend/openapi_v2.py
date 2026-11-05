@@ -3238,7 +3238,7 @@ SCHEMAS["LetterOutPage"] = obj({"items": items(ref("LetterOut")), "next_before":
 SCHEMAS["LettersSettings"] = obj({"id": "s", "mode": "s", "return_address": {"type": ["object", "null"]},
     "monthly_cap_micros": {"type": ["integer", "null"]}, "availability": "s", "checked_at": "n", "created_at": "s", "updated_at": "s"})
 SCHEMAS["LettersAccess"] = obj({"send": "b", "outbox_id": "s"})
-SCHEMAS["LettersGrants"] = obj({"grants": items(obj({"outbox_id": "s", "grantee_type": "s", "grantee_id": "s",
+SCHEMAS["LettersGrants"] = obj({"outbox_id": "s", "next": "n", "grants": items(obj({"id": "s", "outbox_id": "s", "grantee_type": "s", "grantee_id": "s",
     "level": "s", "granted_by_id": "s", "created_at": "s"}))})
 SCHEMAS["LettersGrant"] = obj({"grantee_type": "s", "grantee_id": "s", "level": "s"})
 SCHEMAS["LettersRevoked"] = obj({"revoked": "b"})

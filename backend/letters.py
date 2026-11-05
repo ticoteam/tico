@@ -604,12 +604,22 @@ def install(app, config, store, auth, mutate):
             return {"send": can_send(c, auth, request.state.identity), "outbox_id": "company"}
 
     @app.get("/api/v2/letters/outboxes/{outbox_id}/grants")
-    def grants(request: Request, outbox_id: Literal["company"]):
+    def grants(request: Request, outbox_id: Literal["company"], after: str = Query(default="", max_length=128),
+               limit: int = Query(default=100, ge=1, le=100)):
         with store.read() as c:
             require_admin(auth, request.state.identity)
-            return {"grants": [dict(r) for r in c.execute("SELECT g.*,s.mode,s.monthly_cap_micros FROM letter_outbox_grants g "
+            rows = c.execute("SELECT g.*,s.mode,s.monthly_cap_micros FROM letter_outbox_grants g "
                 "LEFT JOIN letter_bot_settings s ON g.grantee_type='bot' AND s.bot_id=g.grantee_id WHERE g.outbox_id=? "
-                "ORDER BY g.grantee_type,g.grantee_id LIMIT 101", (outbox_id,))]}
+                "AND g.id>? ORDER BY g.id LIMIT ?", (outbox_id, after, limit + 1)).fetchall()
+            shown, used = [], 0
+            for row in rows:
+                entry = dict(row)
+                size = len(dump(entry).encode())
+                if len(shown) >= limit or used + size > 60 * 1024:
+                    return {"outbox_id": outbox_id, "grants": shown, "next": shown[-1]["id"] if shown else after}
+                shown.append(entry)
+                used += size
+            return {"outbox_id": outbox_id, "grants": shown, "next": None}
 
     @app.put("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}")
     def grant(request: Request, outbox_id: Literal["company"], grantee_type: Literal["bot", "person"],
