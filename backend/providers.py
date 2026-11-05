@@ -86,6 +86,12 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "gpt-6.1-sol", "context_tokens": 1_050_000, "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
+    # Gated (Dev 693): priced, not offered. `held` rows are never listed or picked, and `deprecated` gives them the
+    # refusals every retired row gets (a bot cannot choose them, the cloud and memory pickers skip them). Product
+    # opens customer availability separately; until then this row stays held, even if Tico HQ publishes a tier for the id.
+    {"id": "gpt-6.1-terra", "context_tokens": 1_050_000, "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
+     "efforts": ("low", "medium", "high", "xhigh", "max"), "default_effort": "medium",
+     "deprecated": True, "held": True},
     {"id": "gpt-6-sol", "context_tokens": 1_050_000, "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium", "deprecated": True},
@@ -203,8 +209,7 @@ class _ById(dict):
 MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
-# output), except where a row says otherwise (gpt-6.1-terra is Tico's approved rate, below). Usage
-# (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
+# output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
 # threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
 # counted as input). A bot that names a model by another id than these gets no estimate.
@@ -213,7 +218,7 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
-#              gpt-6.1-terra's list rate, read 2026-11-03, is not used: Tico bills its approved rate (see PRICES)
+#              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
@@ -257,7 +262,7 @@ PRICES = _Priced({
     "gpt-6-sol": (2.0, 0.20, 10.0),
     "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.0, 0.10, 10.0),
-    "gpt-6.1-terra": (1.25, 0.062, 6.25),  # Tico's approved rate (Chris, 2026-10-28): OpenAI standard +25%, not the list price; cached input rounded down to 0.062 (ruling 2026-11-03)
+    "gpt-6.1-terra": (1.25, 0.062, 6.25),    # Tico's approved rate (Chris, 2026-10-28): OpenAI standard +25%, not OpenAI's list price; cached input rounded down to 0.062 (ruling 2026-11-03)
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
@@ -356,7 +361,7 @@ def serves(provider, row):
 def provider_models(provider, *, current=True, meeting=False):
     """The catalog models a provider serves. A bot's picks leave out the meeting models unless `meeting` asks for them."""
     return [row for row in MODEL_CATALOG
-            if serves(provider, row) and not (current and row.get("deprecated"))
+            if serves(provider, row) and not row.get("held") and not (current and row.get("deprecated"))
             and bool(row.get("meeting")) == meeting]
 
 
@@ -404,7 +409,7 @@ def complete_choice(enabled, runtime="", model="", kept=""):
         return "", ""
     if model:
         row = MODEL_BY_ID.get(model)
-        if not row or not row["provider"]:
+        if not row or not row["provider"] or row.get("held"):
             raise ProviderError("model", f"Unknown default model {model!r}", 422)
         if runtime and runtime != row["runtime"]:
             raise ProviderError("model", f"{model} runs on {row['runtime']}, not {runtime}", 422)
@@ -495,7 +500,8 @@ def meeting_choice(record, model):
     if not model:
         return ""
     row = MODEL_BY_ID.get(model)
-    if not row or not row["provider"] or row.get("deprecated") or not runtime_enabled(row["runtime"], record["enabled"], row):
+    if not row or not row["provider"] or row.get("deprecated") or row.get("held") \
+            or not runtime_enabled(row["runtime"], record["enabled"], row):
         raise ProviderError("meeting_model", "Choose one of the models this company can run for meetings", 422)
     return model
 

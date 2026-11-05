@@ -2983,7 +2983,7 @@ def create_app(settings=None):
         with store.read() as c:
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
-        return {"models": list(MODEL_CATALOG), "harnesses": list(HARNESS_CATALOG),
+        return {"models": [row for row in MODEL_CATALOG if not row.get("held")], "harnesses": list(HARNESS_CATALOG),
                 "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
