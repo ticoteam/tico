@@ -36,7 +36,7 @@ def _cutover_roundup(conn):
             conn.execute("UPDATE registry_metadata SET value=? WHERE key='system_routines'",
                          (json.dumps(stored, sort_keys=True),))
     if H._has_table(conn, "automations"):
-        # Plain SQL, as 0096 retires health_scan's mirror: a migration never calls app code that may change later.
+        # Plain SQL, as 0091 retires health_scan's mirror: a migration never calls app code that may change later.
         when = H.now()
         conn.execute("UPDATE automations SET enabled=0, deleted_at=?, updated_at=? WHERE deleted_at IS NULL AND builtin=1 "
                      "AND json_extract(flow,'$.readonly')=1 "

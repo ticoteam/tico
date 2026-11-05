@@ -204,6 +204,12 @@ async function auMaintRunsLoad(state, more = false) {
     }
   } catch (e) { r.error = e.message; }
   r.loading = false;
+  // A run tapped on the overview that is older than the page loaded: the pages before it are read too, a few at most.
+  if (!r.error && r.next && [...r.open].some(id => !r.rows.some(x => x.id === id)) && (r.seek = (r.seek || 0) + 1) <= 10) {
+    void auMaintRunsLoad(state, true);
+    return;
+  }
+  r.seek = 0;
   if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
 }
 
