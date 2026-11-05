@@ -413,6 +413,10 @@ async fn report_not_synced(client: &Client, row: &Row) {
 
 /// The one call after a completed turn. Never fails the turn: a report that cannot be published is logged.
 pub async fn after_turn(state: &State, client: &Client, attempt: &Value, root: &Path, pushed: bool, skip: &[String]) {
+    // Make page publishes as its person; the shared checkout is outside that turn's source list.
+    if attempt["make_page"]["task"].is_object() {
+        return;
+    }
     let bot = crate::util::text_of(&attempt["bot"]);
     let config = if attempt["config"].is_object() { attempt["config"].clone() } else { Value::Object(Default::default()) };
     // The scan stats and reads the checkout and asks git about each file: blocking work, kept off the async workers.
@@ -520,6 +524,24 @@ mod tests {
             }
         });
         (url, seen)
+    }
+
+    #[tokio::test]
+    async fn make_page_does_not_publish_shared_reports_with_runner_credentials() {
+        let dir = checkout();
+        let state = State::open(&dir.join("state")).unwrap();
+        std::fs::write(dir.join("reports/private.txt"), "Earlier private report").unwrap();
+        std::fs::write(dir.join("reports/page.html"), "<h1>Shared page</h1>").unwrap();
+        let (url, seen) = hub(vec![200, 200]).await;
+        let client = Client::new(&url, "t", 5, 0).unwrap();
+        let attempt = json!({"id": "make-1", "bot": "coo", "make_page": {"task": {"id": "t1"}}});
+        after_turn(&state, &client, &attempt, &dir, false, &[]).await;
+        let queued: i64 = state.with(|c| c.query_row("SELECT count(*) FROM file_outbox", [], |r| r.get(0))).unwrap();
+        assert_eq!(queued, 0);
+        assert!(seen.lock().unwrap().is_empty());
+        after_turn(&state, &client, &json!({"id": "ordinary", "bot": "coo"}), &dir, false, &[]).await;
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
