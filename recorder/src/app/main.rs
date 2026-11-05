@@ -430,6 +430,13 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Focus decides when a downloaded update may install unattended (see update.rs).
         .on_window_event(move |_window, event| window_focus.window_event(event))
+        // The app menu gets "Check for Updates…" (see update.rs). No menu bar item.
+        .menu(update::app_menu)
+        .on_menu_event(|app, event| {
+            if event.id() == update::MENU_CHECK {
+                update::from_menu(app);
+            }
+        })
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
@@ -493,9 +500,11 @@ fn main() {
             set_visible,
             update::update_check,
             update::update_install,
+            update::move_to_applications,
         ])
         .build(tauri::generate_context!())
         .expect("Start Tico Recorder");
+    updates.locate(app.package_info().version.to_string());
     ticker(app.handle().clone(), &recorder);
     update::start(app.handle().clone(), recorder.clone(), updates);
     app.run(|handle: &tauri::AppHandle, event: RunEvent| match event {
