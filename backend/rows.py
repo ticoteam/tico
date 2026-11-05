@@ -40,6 +40,26 @@ class MeetingTaskLinkRow(TypedDict):
     created_at: str
 
 
+class SuggestionRow(TypedDict):
+    id: str
+    fingerprint: str
+    owner_role: str
+    owner_bot_id: str | None
+    title: str
+    body: str
+    condition: str
+    cooldown_days: int
+    status: str
+    update_batch_id: str | None
+    message_id: str | None
+    delivered_at: str | None
+    cooldown_until: str | None
+    outcome: str | None
+    outcome_reported_at: str | None
+    created_at: str
+    updated_at: str
+
+
 class TaskRow(TypedDict):
     """One `tasks` row (SELECT *)."""
     id: str
@@ -52,6 +72,7 @@ class TaskRow(TypedDict):
     check_back_at: str | None
     check_back_note: str | None
     conversation_id: str | None
+    live_meeting_id: str | None
     created_at: str | None
     updated_at: str | None
     done_at: str | None
@@ -95,6 +116,15 @@ class TaskRow(TypedDict):
     acceptance: str
 
 
+class PresenceRow(TypedDict):
+    """One open window at a task or meeting; expires without heartbeats."""
+    id: str
+    place: str
+    actor: str
+    session_id: str
+    seen_at: str
+
+
 class TaskCheckBackWakeRow(TypedDict):
     """A reminder occurrence; jobs and attempts retain all execution state."""
     task_id: str
@@ -115,6 +145,18 @@ class TaskHoldRow(TypedDict):
     from_status: str | None
     gate: str | None
     cleared_at: str | None
+    created_at: str
+    released_at: str | None
+
+
+class QuarantineHoldRow(TypedDict):
+    """One bot's refusal-count hold on a task or chat (migration 0094)."""
+    id: int
+    bot_id: str
+    task_id: str | None
+    conversation_id: str | None
+    reason: str
+    refusal: str
     created_at: str
     released_at: str | None
 

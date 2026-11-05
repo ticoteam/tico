@@ -2863,8 +2863,33 @@ export type Item = {
   unit: string;
 };
 
+export type ItemCreate = {
+  at_ms?: number | null;
+  detail?: Record<string, unknown>;
+  quote?: string;
+  result_ref?: string | null;
+  section: "doc" | "task" | "feature";
+  status?: "proposed" | "pushed";
+  text: string;
+};
+
+export type ItemEdit = {
+  detail?: Record<string, unknown> | null;
+  status?: "dismissed" | null;
+  text?: string | null;
+  version?: number;
+};
+
 export type ItemOne = {
   item: Item;
+};
+
+export type ItemPush = {
+  detail?: Record<string, unknown> | null;
+  force?: boolean;
+  result_ref?: string | null;
+  text?: string | null;
+  version?: number;
 };
 
 export type Items = {
@@ -5066,6 +5091,7 @@ export type TaskCreate = {
   labels?: Array<string>;
   lane?: "company" | "product" | null;
   links?: Array<string>;
+  live_meeting_id?: string | null;
   model?: string | null;
   next_run?: boolean;
   number?: number | null;
@@ -6082,6 +6108,12 @@ export type backend__inbound__Edit = {
   used_for?: string | null;
 };
 
+export type backend__presence__Heartbeat = {
+  gone?: boolean;
+  place: string;
+  session_id: string;
+};
+
 /** POST /api/v2/stale-review/accept-all */
 export type AcceptAllStaleSuggestionsParams = {
   "Idempotency-Key": string;
@@ -6180,6 +6212,14 @@ export type AddMailboxAccessParams = {
 };
 export type AddMailboxAccessBody = MailboxAccessCreate;
 export type AddMailboxAccessResponse = MailboxDetail;
+
+/** POST /api/v2/meetings/{rid}/items */
+export type AddMeetingItemParams = {
+  "Idempotency-Key": string;
+  rid: string;
+};
+export type AddMeetingItemBody = ItemCreate;
+export type AddMeetingItemResponse = unknown;
 
 /** POST /api/v2/model-subscriptions */
 export type AddModelSubscriptionParams = {
@@ -6950,6 +6990,15 @@ export type EditInboundInboxParams = {
 export type EditInboundInboxBody = backend__inbound__Edit;
 export type EditInboundInboxResponse = unknown;
 
+/** POST /api/v2/meetings/{rid}/items/{iid} */
+export type EditMeetingItemParams = {
+  "Idempotency-Key": string;
+  iid: string;
+  rid: string;
+};
+export type EditMeetingItemBody = ItemEdit;
+export type EditMeetingItemResponse = unknown;
+
 /** PATCH /api/v2/messages/{message_id} */
 export type EditMessageParams = {
   "Idempotency-Key": string;
@@ -7714,6 +7763,13 @@ export type GetPostalMailSettingsParams = Record<string, never>;
 export type GetPostalMailSettingsBody = never;
 export type GetPostalMailSettingsResponse = PostalMailSettings;
 
+/** GET /api/v2/presence */
+export type GetPresenceParams = {
+  place: string;
+};
+export type GetPresenceBody = never;
+export type GetPresenceResponse = unknown;
+
 /** GET /api/v2/projects/{project_id} */
 export type GetProjectParams = {
   project_id: string;
@@ -7992,6 +8048,13 @@ export type HandBackGoalStatusParams = {
 };
 export type HandBackGoalStatusBody = Empty;
 export type HandBackGoalStatusResponse = GoalResult;
+
+/** POST /api/v2/presence */
+export type HeartbeatPresenceParams = {
+  "Idempotency-Key": string;
+};
+export type HeartbeatPresenceBody = backend__presence__Heartbeat;
+export type HeartbeatPresenceResponse = unknown;
 
 /** POST /api/v2/seats/{seat_id}/hire */
 export type HireSeatParams = {
@@ -8731,6 +8794,13 @@ export type ListMaintenanceRunsParams = {
 };
 export type ListMaintenanceRunsBody = never;
 export type ListMaintenanceRunsResponse = unknown;
+
+/** GET /api/v2/meetings/{rid}/items */
+export type ListMeetingItemsParams = {
+  rid: string;
+};
+export type ListMeetingItemsBody = never;
+export type ListMeetingItemsResponse = unknown;
 
 /** GET /api/v2/meetings/{rid}/tasks */
 export type ListMeetingTasksParams = {
@@ -10144,6 +10214,15 @@ export type SendAssistantMessageParams = {
 export type SendAssistantMessageBody = AssistantMessage;
 export type SendAssistantMessageResponse = AssistantSent;
 
+/** POST /api/v2/meetings/{rid}/items/{iid}/push */
+export type SendMeetingItemParams = {
+  "Idempotency-Key": string;
+  iid: string;
+  rid: string;
+};
+export type SendMeetingItemBody = ItemPush;
+export type SendMeetingItemResponse = unknown;
+
 /** POST /api/v2/messages */
 export type SendMessageParams = {
   "Idempotency-Key": string;
@@ -10568,8 +10647,10 @@ export type StreamEventsParams = {
   after?: number | null;
   bot?: string | null;
   conversation?: string | null;
+  meeting?: string | null;
   needs?: string | null;
   party?: string | null;
+  place?: string | null;
   task?: string | null;
   thread?: string | null;
   topics?: string | null;
