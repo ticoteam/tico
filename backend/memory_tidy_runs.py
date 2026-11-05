@@ -38,14 +38,20 @@ def refresh_costs(c):
     # segments or replace an existing estimate with zero cash billing.
     from .usage_records import RUNS
     for p in c.execute("SELECT id,check_task_id,cost_usd FROM memory_tidy_passes WHERE check_task_id IS NOT NULL").fetchall():
-        rows = c.execute("SELECT est_cost_usd,model,input_tokens,cached_tokens,output_tokens FROM " + RUNS +
+        rows = c.execute("SELECT est_cost_usd,est_cost_low,model,input_tokens,cached_tokens,output_tokens FROM " + RUNS +
                          " u WHERE task_id=?", (p['check_task_id'],)).fetchall()
         total = 0.0
         for r in rows:
-            # The run's tokens are one request, so a prompt over the long-prompt limit pays that tier.
+            stored = float(r['est_cost_usd'] or 0)
+            if stored > 0 and r['est_cost_low'] == 0:
+                # Priced when the run finished, each request on its own (the host listed them): keep that figure.
+                total += stored
+                continue
+            # No per-request counts are kept here, so the run's tokens are priced as one request: a prompt over the
+            # long-prompt limit pays that tier. A row the host did not price per request may be low, so keep the larger.
             estimate = providers.estimate_cost(r['model'], r['input_tokens'], r['cached_tokens'], r['output_tokens'],
                                                [(r['input_tokens'], r['cached_tokens'], r['output_tokens'])])
-            total += max(float(r['est_cost_usd'] or 0), float(estimate or 0))
+            total += max(stored, float(estimate or 0))
         c.execute("UPDATE memory_tidy_passes SET cost_usd=max(cost_usd,?) WHERE id=?", (total, p['id']))
     return c.execute("SELECT coalesce(sum(cost_usd),0) FROM memory_tidy_passes").fetchone()[0]
 
