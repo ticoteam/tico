@@ -361,6 +361,8 @@ Litestream backup, `litestream restore -o <file>` first and pass that file. The 
   Granola and meeting-bot connections, calendar actions, usage alerts, stored request replies (`EMPTY` in
   `backend/devcopy.py`). Every table is listed as `KEEP`, `HISTORY` or `EMPTY`; one in none of them (added later)
   is emptied and named in the output;
+- empties `cloud_machine_deletions` and `cloud_machine_enrollment_failures`: these belong to live HQ machines,
+  so a copy never carries deletion retries or enrollment failure counts for real machines;
 - keeps tasks, docs, people and bots, the last `--days` of messages and events (0 keeps all), and the finished runs
   in that window with their steps, so run details and replay work. Unfinished jobs and runs are removed;
 - has no way in: bot tokens cleared, external agents and computers revoked, run tokens and leases ended;
