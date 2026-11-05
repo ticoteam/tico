@@ -146,9 +146,11 @@ def test_aged_review_reads_stay_constant_as_tickets_grow(environment):
     api = setup(environment)
     def measured():
         queries = []
+        api.app.state.store.roster_rows.clear()
         with api.app.state.store.read_transaction() as c:
+            who = api.app.state.auth.owner_identity(c)
             c.set_trace_callback(queries.append)
-            checks = health._aged_pr_checks(c, api.app.state.auth.owner_identity(c), api.app.state.auth, True, 'human')
+            checks = health._aged_pr_checks(c, who, api.app.state.auth, True, 'human')
             c.set_trace_callback(None)
         return len(queries), len(checks[0]['items'])
     for number in (206, 207):
