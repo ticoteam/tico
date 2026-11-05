@@ -121,13 +121,15 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
              "pages/" + allowed, "files/" + allowed + "/meta", "files/" + allowed + "/versions",
              "files/" + allowed + "/activity", "bots/cpo/files", "meetings/search", "recordings/search",
              "meetings/transcript?id=" + shared]
-    if assistant:
-        paths.append("assistant")
     for path in paths:
         response = api.get("/api/v2/" + path, headers=headers(token))
         assert response.status_code == 200, (path, response.status_code, response.text)
         no_sources(response.json(), secrets)
         assert int(response.headers["content-length"]) == len(response.content)
+    if assistant:
+        response = api.get("/api/v2/assistant", headers=headers(token))
+        assert response.status_code == 403
+        no_sources(response.json(), secrets)
     for path in ("pages/" + hidden, "files/" + hidden + "/meta", "files/" + hidden + "/versions",
                  "files/" + hidden + "/activity", "files/" + hidden, "files/" + bid,
                  "meetings/transcript?id=" + mid):

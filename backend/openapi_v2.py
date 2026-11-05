@@ -53,6 +53,7 @@ TAGS = {
 }
 
 EVENTS_DESCRIPTION = (
+    "Task-scoped bot turns and Make-page attempts receive 403; the runner work stream uses its separate runner identity. "
     "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
     "(who made it, when the viewer may know) and `at`:\n"
     "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "

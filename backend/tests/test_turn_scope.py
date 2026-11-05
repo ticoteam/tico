@@ -211,7 +211,15 @@ def test_context_is_bounded_metadata_and_claims_include_it(api):
             c.execute("INSERT INTO meeting_task_links VALUES(?,?,?,'linked','human:ana',?)",
                       (H.new_id(), mid, t["id"], H.now()))
     for i in range(12):
-        seed_page(api, "ops", title="P" * 400, task=t["id"])
+        fid = seed_page(api, "ops", title="P" * 400, task=t["id"])
+        content = f"<html><body>Context {i}</body></html>".encode()
+        digest = api.app.state.blobs.put(content, "text/html")
+        with api.app.state.store.transaction() as c:
+            asset = blobs.register(c, Identity("bot:ops", "bot"), digest, len(content), "context.html", "text/html")
+            c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+                      "VALUES(?,1,?,?,?,'context.html','text/html','bot:ops',?)",
+                      (fid, asset["id"], digest, len(content), H.now()))
+            c.execute("UPDATE bot_files SET current_version=1 WHERE id=?", (fid,))
     result = get(api, "tasks/" + t["id"] + "/context")
     assert len(result["pages"]) == len(result["meetings"]) == 10
     assert [r["id"] for r in result["meetings"]] == [f"meeting-{i:02}" for i in range(11, 1, -1)]
