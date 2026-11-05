@@ -22,7 +22,7 @@ def no_sources(value, secrets):
         assert secret not in wire, (secret, wire[:4000])
 
 
-def sources(api, title="Restricted source", *, multi=False):
+def sources(api, title="Restricted source"):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -32,7 +32,7 @@ def sources(api, title="Restricted source", *, multi=False):
                        data=HTML + b"<p>Restricted unique bytes</p>")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
-               parent=t["id"], private=False, multi=multi)
+               parent=t["id"], private=False)
     label = made["question"]["refs"]["questions"][0]["options"][0]["label"]
     answered = answer(api, made, [label])
     meeting = record(api, {"private": False, "title": "Restricted meeting"})
@@ -255,7 +255,9 @@ def test_unknown_saved_file_ref_survives_the_real_message_writer(api):
 
 
 def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api, botops):
-    _, attempt = task_turn(api, bot="botops")
+    task = post(api, "tasks", {"owner": "botops", "title": "Review the deployment task", "body": "Review its files."})
+    attempt = claim(api, botops, "botops")
+    assert attempt["task"]["id"] == task["id"]
     token = attempt["token"]
     for path in ("bots/ops/repositories", "automations", "inbox", "tico/fleet", "bots/ops/turns",
                  "turns/" + attempt["id"] + "/steps"):
@@ -269,10 +271,16 @@ def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api, b
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_passed_labels_also_remove_the_generated_answer_body(api, legacy):
-    data = sources(api, multi=True)
-    answered = answer(api, data["made"], ["Allowed source"])
+    data = sources(api)
+    question = post(api, "tasks/" + data["task"]["id"] + "/comments", {
+        "text": "Which source should we use?", "ask": {"who": "ana", "questions": [{
+            "id": "decision", "header": "Sources", "question": "Which source should we use?", "multi": True,
+            "options": [{"label": data["source_label"], "file": data["hidden"] + "@1"},
+                        {"label": "Allowed source", "file": data["allowed"] + "@1"}]}]}},
+        data["publisher"]["token"])["comment"]
+    answered = answer(api, {"task": data["task"], "question": question}, ["Allowed source"])
     assert data["source_label"] in answered["comment"]["body"]
-    assert answered["answer"]["not"]["decision"] == [data["source_label"], "Request changes"]
+    assert answered["answer"]["not"]["decision"] == [data["source_label"]]
     if legacy:
         with api.app.state.store.transaction() as c:
             refs = H.message(c, answered["comment"]["id"])["refs"]
@@ -280,7 +288,8 @@ def test_passed_labels_also_remove_the_generated_answer_body(api, legacy):
             refs["answer"].pop("label_sources")
             c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), answered["comment"]["id"]))
     _, attempt = scoped(api, data, False)
-    narrow(api, data)
+    archived = api.patch("/api/v2/files/" + data["hidden"], json={"archived": True}, headers=headers())
+    assert archived.status_code == 200, archived.text
     shown = get(api, "messages/" + answered["comment"]["id"], attempt["token"])
     no_sources(shown, secrets(data))
     assert shown["refs"]["answer"]["answers"]["decision"] == ["Allowed source"]
