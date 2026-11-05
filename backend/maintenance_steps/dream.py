@@ -22,7 +22,12 @@ def run(c, ctx):
         return _skip('"Most bots per run" is 0')
     report = {}
     started = dream_auto.run(store, ctx["auth"], H.parse_ts(ctx["now"]), limit=limit, report=report)
-    return {"status": "ran", "reason": report.get("reason", ""), "checked": report.get("judged", 0),
+    # Only limiter refusals leave the daily attempt unused. A start or any other refusal still counts for the day.
+    limited = report.get("limited", [])
+    retry = bool(limited) and not started and len(limited) == len(report.get("held", []))
+    return {"status": "skipped" if retry else "ran",
+            "reason": "maintenance wake limits" if retry else report.get("reason", ""), "checked": report.get("judged", 0),
             "found": report.get("due", 0), "woke": len(started), "cost_usd": 0.0,
             "details": {"started": report.get("started", []), "held": report.get("held", []),
+                        "limited": limited,
                         "over": report.get("over", 0), "limit": limit}}

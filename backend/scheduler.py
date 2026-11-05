@@ -168,32 +168,9 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
-def run_task_roundup(store, auth, at, failures=None):
-    # Three times a day by default (6am, noon and 6pm company time), each active bot gets at most one list of its tasks:
-    # a follow-up time that came, an unanswered question, a task to restate, a late Dev ticket, a manager's engineering
-    # exceptions, a step's backlog, a missed update or a task gone quiet (backend/task_roundup.py). Plain code: no model call,
-    # and nothing to list is a quiet run. The run is the schedule's time at or before this tick, and a bot already sent a
-    # list since that time gets no more. The lists are read in one read transaction; each bot is then sent in its own short
-    # transaction, which rebuilds its list from the live database.
-    from . import task_roundup
-    with SR.recording(store, "task_roundup", failures) as run:
-        with store.read_transaction() as c:
-            run_at = SR.occurrence(SR.config_of(c, "task_roundup"), at)
-            plans = task_roundup.discover(c, stamp(run_at))
-        woke, listed = [], 0
-        for plan in plans:
-            with store.transaction() as c:
-                count = task_roundup.send(c, plan)
-            if count:
-                woke.append(plan["slug"])
-                listed += count
-        run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
-
-
 QUICK = {"kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "bookkeeper_check": run_bookkeeper_check,
-         "task_roundup": run_task_roundup}
+         "bookkeeper_check": run_bookkeeper_check}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # a person switches). The Bookkeeper's pause is their off switch.

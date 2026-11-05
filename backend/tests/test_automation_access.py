@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import automations
+from backend import automations, mailbox_access
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
@@ -34,8 +34,13 @@ def test_a_mail_trigger_is_its_owners_own_mailbox_on_save(api):
     assert "may not read ben@acme.example" in refused["error"]["detail"]
     post(api, "automations", flow(owner="person:ben", trigger=on_ben, steps=[
         {**WAKE, "args": {"bot": "cpo", "text": "{{message.subject}}"}}]), token="ben-test")
-    # A bot hears its operator's mail: ops is Ana's.
-    post(api, "automations", flow(owner="bot:ops", trigger={"type": "message", "inbox": "ana@acme.example"}))
+    # A bot hears a mailbox only with a grant on it: Ana's operator role gives ops nothing by itself.
+    on_ana = {"type": "message", "inbox": "ana@acme.example"}
+    post(api, "automations", flow(owner="bot:ops", trigger=on_ana), expected=403)
+    with api.app.state.store.transaction() as c:
+        mailbox_access.grant(c, "person:ana", mailbox_access.ensure_mailbox(c, "ana@acme.example")["id"],
+                             "bot", "ops", "read")
+    post(api, "automations", flow(owner="bot:ops", trigger=on_ana))
     post(api, "automations", flow(owner="bot:cpo", trigger={"type": "message", "inbox": "ana@acme.example"}),
          expected=403)
 
