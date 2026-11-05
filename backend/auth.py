@@ -1093,7 +1093,7 @@ class Auth:
 
 def bot_reads_task(c, bot, row):
     """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+    answer sent to it may carry. The read policy uses stored access, without the server's sign-in settings.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
     policy = Auth.read_policy(c)

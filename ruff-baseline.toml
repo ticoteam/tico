@@ -121,7 +121,7 @@
 "backend/slack_app.py" = ["BLE001"]
 "backend/slack_gateway.py" = ["B023", "BLE001", "F401", "S110"]
 "backend/sleep_idle.py" = ["BLE001", "S110"]
-"backend/sql.py" = ["BLE001", "F401"]
+"backend/sql.py" = ["BLE001"]
 "backend/stale_review.py" = ["BLE001"]
 "backend/stall_triage.py" = ["S110"]
 "backend/strategy_setup.py" = ["B018", "BLE001", "DTZ011"]

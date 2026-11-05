@@ -157,7 +157,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     ordinary = page(api, attempt, task=tid, name="ordinary.html", title="Ordinary folio", data=HTML).json()["page"]["file_id"]
     question = ask("reader")
     question["questions"][0]["options"][0]["file"] = fid + "@1"
-    comment = post(api, f"tasks/{tid}/comments", {"text": "Review the folio", "attachments": [fid + "@1"], "ask": question})["comment"]
+    comment = post(api, f"tasks/{tid}/comments", {"text": "Review the folio", "attachments": [fid + "@1"], "ask": question}, token="cara-test")["comment"]
     patched = api.patch(f"/api/v2/files/{fid}/versions/1", json={"note": "Review", "ask": ask("reader")}, headers=headers(attempt["token"]))
     assert patched.status_code == 200, patched.text
     answered = post(api, f"tasks/{tid}/answers", {"target": {"file": fid, "version": 1}, "answers": {"verdict": ["Approve"]}}, token="reader-test")
@@ -210,7 +210,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             failures.append((label, found))
 
     def response(label, result):
-        assert result.status_code in (200, 403, 404), (label, result.status_code, result.text)
+        if result.status_code not in (200, 403, 404):
+            failures.append((label, result.status_code, result.text))
         clean(label, {"body": result.text, "headers": dict(result.headers)})
 
     common = ["pages", "pages?ids=" + fid, "pages?task=" + tid, "pages/" + fid,
@@ -222,7 +223,10 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
               "conversations", "conversations/" + cid + "/messages", "conversations/" + cid + "/outline",
               "threads", "threads/search?q=Review", "threads/search?q=Canary", "context/search?q=Canary",
               "threads/" + cid, "threads/" + cid + "/timeline", "threads/" + cid + "/members",
-              "rules?status=any", "rules/" + rid, "inbox", "answers", "status", "live/brief"]
+              "rules?status=any", "rules/" + rid, "rules/counts", "bots/ops/rules", "bots/finance/rules", "audit",
+              "needs-you", "updates", "updates/unread", "updates/tree", "inbox", "answers?ids=" + comment["id"], "status", "live/brief",
+              "bots/ops/history", "bots/finance/history", "bots/ops/turns", "bots/finance/turns",
+              "threads/catch-up", "threads/rail", "threads/browse", "threads/home/bot:finance"]
     for ident in (fid, bid):
         common.extend("files/" + ident + suffix for suffix in ("", "/meta", "/versions", "/versions/1", "/activity", "/thumb", "/poster"))
     sql_queries = ["SELECT * FROM " + table for table in ("bot_files", "bot_file_versions", "blobs", "messages", "events", "history_events", "task_assets", "task_file_reviews")]
@@ -258,7 +262,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             clean(state + ":SSE:" + token, {"frames": stream.seen, "headers": stream.response.getheaders()})
             stream.close()
             with api.app.state.store.read() as c:
-                delivered, _, reset, _ = events.read(c, api.app.state.auth, who, before, topics=("tasks", "messages", "bots", "runs"))
+                delivered, _, _, _ = events.read(c, api.app.state.auth, who, before, topics=("tasks", "messages", "bots", "runs"))
                 clean(state + ":events.read:" + token, delivered)
                 for record in c.execute("SELECT * FROM events WHERE target IN (?,?)", (fid, tid)):
                     if task_privacy.event_readable(c, who.actor, record):
