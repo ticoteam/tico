@@ -16,7 +16,9 @@ builder's own request gets.
 
 With no pool member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the first
 pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed,
-or the ticket leaves the step or finishes. A pool member only ever takes checks this way, never other work.
+or the ticket leaves the step or finishes. The scheduler also retries waits every minute, so a reviewer coming
+online or gaining room can take one without another check finishing. A pool member only ever takes checks this way,
+never other work.
 """
 import json
 import logging
@@ -528,6 +530,12 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
         H._task_event(c, ticket["id"], H.KEEPER, "check_not_filed", None, slug, f"{title}: {exc.detail}"[:500])
         return None
     c.execute("RELEASE check_pool_file")
+    if heads:
+        recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
+                             "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
+        if not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
+            # Add merged PRs for checks after release; never replace the head child admission recorded.
+            H._task_event(c, child["id"], ticket["owner_id"], "review_head", None, ",".join(heads), "")
     label = (H.bot(c, slug) or {}).get("slug", slug)
     H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {label} ({why})")
     return child
@@ -603,25 +611,28 @@ def TR_parent(c, task_id):
     return TR.parent_of(c, task_id)
 
 
-def _take(c, wait, only=None):
-    """Give one waiting check to `only` (a bot that just finished one) or to the best free member. The child, else
-    None. A wait whose ticket left the step, finished or was checked meanwhile ends here."""
+def _take_plan(c, wait, only=None, snapshots=None):
+    """Read what taking a wait would do, so idle retries need no writer transaction."""
     ticket = H.task(c, wait["ticket_id"])
     if not ticket or ticket.get("step_id") != wait["step_id"] or ticket["status"] not in H.ACTIVE_STATUSES:
-        c.execute("UPDATE check_waits SET state='dropped',reason='the ticket moved on',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "the ticket moved on"}
     found = pool(c, wait["step_id"])
     if not found:
-        c.execute("UPDATE check_waits SET state='dropped',reason='the step has no pool',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+        return {"drop": "the step has no pool"}
     step, slugs, limit = found
-    heads = [h for h in wait["heads"].split(",") if h]
-    if has_open_check(c, ticket, step, heads):
-        c.execute("UPDATE check_waits SET state='dropped',reason='a check was filed',updated_at=? WHERE id=?",
-                  (H.now(), wait["id"]))
-        return None
+    # Admission and filing use the same saved links, read again under the writer. A wait can precede a refresh,
+    # or already know a head whose webhook is late; an older saved link cannot consume that newer wait.
+    prs = _prs(c, ticket, step)
+    heads = _heads(prs, None)
+    waited = set(filter(None, wait["heads"].split(",")))
+    head_problem = bool(waited and waited != set(heads) and
+                        any((pr.get("updated_at") or "") <= wait["created_at"] for pr in prs))
+    if snapshots is not None:
+        head_problem = any((snapshots.get(pr["id"]) or {}).get("error") or
+                           _heads([pr], snapshots) != _heads([pr], None) or
+                           not (snapshots.get(pr["id"]) or {}).get("head_sha") for pr in prs)
+    if not head_problem and has_open_check(c, ticket, step, heads):
+        return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
     if only is not None:
         builder = builder_makers(c, ticket)
@@ -630,6 +641,31 @@ def _take(c, wait, only=None):
         # The bot that just finished takes the wait, unless a free bot ranks ahead of it by model company: then the
         # best free one does, as `ranked` orders them.
         free = [] if only not in free else [only] if rank(only) <= rank(free[0]) else free
+    return {"ticket": ticket, "step": step, "heads": heads, "free": free, "reason": reason,
+            "head_problem": head_problem}
+
+
+def _admission_problem(c, wait, plan, snapshots):
+    """Read the same gate as child creation, without recording a refusal for an idle wait."""
+    from . import review_gate
+    if "drop" in plan or not plan["free"]:
+        return None
+    if plan["head_problem"]:
+        return "the current PR head needs fresh evidence"
+    if review_gate.is_review(c, plan["ticket"], wait["title"]):
+        return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
+
+
+def _take(c, wait, only=None, snapshots=None):
+    """Give a wait to `only` or its best free member; drop it if its ticket moved on or already has a check."""
+    plan = _take_plan(c, wait, only, snapshots)
+    if "drop" in plan:
+        c.execute("UPDATE check_waits SET state='dropped',reason=?,updated_at=? WHERE id=?",
+                  (plan["drop"], H.now(), wait["id"]))
+        return None
+    ticket, step, heads, free, reason = (plan[k] for k in ("ticket", "step", "heads", "free", "reason"))
+    if _admission_problem(c, wait, plan, snapshots):
+        return None
     for slug in free:
         # Taken before the request is filed, so the one-check-per-head rule does not see its own wait.
         c.execute("UPDATE check_waits SET state='filed',updated_at=? WHERE id=?", (H.now(), wait["id"]))
@@ -638,10 +674,10 @@ def _take(c, wait, only=None):
             child = H.task_update(c, ticket["owner_id"], child["id"], owner="bot:" + slug, status="open",
                                   note="Tico routed this waiting check to the first available reviewer.")
         else:
-            child = _file(c, ticket, step, slug, wait["title"], heads, None,
+            child = _file(c, ticket, step, slug, wait["title"], heads, snapshots,
                           "it finished a check and took the next waiting one" if slug == only else _why(c, slug))
         if child:
-            c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (child["id"], wait["id"]))
+            c.execute("UPDATE check_waits SET child_id=?,heads=? WHERE id=?", (child["id"], ",".join(heads), wait["id"]))
             return child
         c.execute("UPDATE check_waits SET state='waiting' WHERE id=?", (wait["id"],))
     if reason and reason != wait["reason"]:
@@ -682,4 +718,84 @@ def drain(c):
         child = _take(c, wait)
         if child:
             out.append(child)
+    return out
+
+
+RETRY_LIMIT = 20
+
+
+RETRY_WAITS_SQL = ("SELECT id,step_id,created_at FROM check_waits WHERE step_id=? AND state='waiting' "
+                   "AND (created_at,id)>(?,?) "
+                   "ORDER BY created_at,id LIMIT ?")
+
+
+def _retry_waits(c, limit, after, after_step=None):
+    """Seek bounded queues for steps with room, taking turns across pools and oldest first within each queue."""
+    capacity, queues = {}, {}
+    for raw in c.execute("SELECT id,check_pool,check_limit FROM task_steps WHERE check_pool IS NOT NULL"):
+        slugs = members(raw["check_pool"]) or []
+        if not slugs:
+            continue
+        # Capacity depends on the bot, not on how many tickets are waiting for its pool.
+        for slug in slugs:
+            if slug not in capacity:
+                capacity[slug] = open_checks(c, slug) if online(c, slug) else None
+        if not any(capacity[s] is not None and capacity[s] < int(raw["check_limit"] or DEFAULT_LIMIT) for s in slugs):
+            continue
+        cursor = after.get(raw["id"], ("", ""))
+        rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], *cursor, limit))]
+        if not rows and cursor != ("", ""):
+            rows = [dict(r) for r in c.execute(RETRY_WAITS_SQL, (raw["id"], "", "", limit))]
+        if rows:
+            queues[raw["id"]] = rows
+    # Keep the next pool's turn across passes, even when one pool has a whole batch of unplaceable waits.
+    order = sorted(queues, key=lambda sid: (sid <= (after_step or ""), sid))
+    waits = []
+    for n in range(limit):
+        for sid in order:
+            if n < len(queues[sid]):
+                waits.append(queues[sid][n])
+                if len(waits) == limit:
+                    return waits
+    return waits
+
+
+def retry(store, limit=RETRY_LIMIT, *, service=None):
+    """Read fresh admission evidence outside the writer; a gate that still refuses a wait needs no writes."""
+    from . import review_gate
+    limit = max(0, min(limit, RETRY_LIMIT))
+    if not limit:
+        return []
+    # Advance past ineligible tickets without rewriting idle waits. A restart starts again at the oldest wait.
+    after = getattr(store, "_check_retry_after", {})
+    store._check_retry_after = after
+    with store.read_transaction() as c:
+        if not _ready(c):
+            return []
+        waits = _retry_waits(c, limit, after, getattr(store, "_check_retry_step", None))
+    out = []
+    for wait in waits:
+        wid = wait["id"]
+        after[wait["step_id"]] = (wait["created_at"], wid)
+        store._check_retry_step = wait["step_id"]
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if not row:
+                continue
+            plan = _take_plan(c, dict(row))
+            if "drop" not in plan and not plan["free"] and (not plan["reason"] or plan["reason"] == row["reason"]):
+                continue
+            prs = _prs(c, plan["ticket"], plan["step"]) if "drop" not in plan and plan["free"] else []
+        snapshots = review_gate.snapshot(service, prs) if prs and service else None
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if not row or _admission_problem(c, dict(row), _take_plan(c, dict(row), snapshots=snapshots), snapshots):
+                continue
+        with store.transaction() as c:
+            # A completion, pool edit or another pass may have taken it since the read above.
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if row:
+                child = safely(c, _take, dict(row), None, snapshots)
+                if child:
+                    out.append(child["id"])
     return out

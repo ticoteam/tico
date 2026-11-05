@@ -286,7 +286,7 @@ def create_app(settings=None):
             install_signals(recorder_thread.folder, recorder_thread.file)
         async def schedule_loop():
             from .scheduler import Scheduler
-            scheduler = Scheduler(store, execution, onboarding=onboarding, auth=auth)
+            scheduler = Scheduler(store, execution, onboarding=onboarding, auth=auth, github_app=app.state.github_app)
             def github_wakes():
                 from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks, refresh_pending_checks
                 with store.transaction() as c:
