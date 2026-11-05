@@ -1283,6 +1283,9 @@ fn an_update_waits_while_a_live_meeting_is_connected_and_is_free_when_idle() {
         ..Default::default()
     });
     assert_eq!(app.update_hold(), Some("After the live meeting ends"));
+    // A paused live meeting is still shared: no install, no banner.
+    app.records[0].live_state = "paused".into();
+    assert_eq!(app.update_hold(), Some("After the live meeting ends"));
     app.records[0].live_state = "ended".into();
     assert_eq!(app.update_hold(), None);
 }
