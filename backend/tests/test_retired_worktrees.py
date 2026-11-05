@@ -164,3 +164,18 @@ def test_a_recovered_tree_released_on_the_current_computer_reuses_local_history(
     assert reused.status_code == 200, reused.text
     assert reused.json()['branch'] == moved['branch'] and 'recovery' not in reused.json()
     assert reused.json()['retired_worktree']['ahead'] == 2
+
+
+def test_idle_recovery_rechecks_the_task_owner_and_current_computer(prepared):
+    api, tid, _ = prepared
+    leave_on_old_computer(api, tid)
+    moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (moved['link_id'],)).fetchone())
+        detail = json.loads(row['detail'])
+        assert W.preparable(c, row, detail)
+        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))
+        assert not W.preparable(c, row, detail)
+        c.execute("UPDATE tasks SET owner_id='bot:cmo' WHERE id=?", (tid,))
+        c.execute("DELETE FROM assignments WHERE bot='cmo'")
+        assert not W.preparable(c, row, detail)

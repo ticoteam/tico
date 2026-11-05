@@ -439,18 +439,23 @@ def holdings(c, owner):
 
 def preparable(c, row, detail):
     """An idle computer prepares a reserved wait or a requested recovery with the same checkout proof."""
+    if (row['state'] != 'pending' or detail.get('error') or detail.get('pending_expired')
+            or detail.get('checkout_state') not in ('queued', 'initializing', 'checkout_ready', 'setup_running')):
+        return False
     recovery = bool(detail.get('recovery'))
     if recovery:
+        task = H.task(c, row['task_id'])
+        owner = detail.get('owner')
+        if task['owner_id'] != owner or not c.execute('SELECT 1 FROM assignments WHERE bot=? AND runner_id=?',
+                                                      (H.actor_id(owner), row['computer_id'])).fetchone():
+            return False
         computer = c.execute('SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL',
                              (row['computer_id'],)).fetchone()
         if not computer or not readiness_document(computer['readiness']).get('worktree_recovery'):
             return False
-        if start_refusal(c, H.task(c, row['task_id'])):
+        if start_refusal(c, task):
             return False
-    return (row['state'] == 'pending' and bool(detail.get('wait_id') or detail.get('recovery')) and not detail.get('error')
-            and not detail.get('pending_expired')
-            and detail.get('checkout_state') in ('queued', 'initializing', 'checkout_ready', 'setup_running')
-            and (recovery or bool(waits.preparing(c, row['id']))))
+    return recovery or bool(detail.get('wait_id') and waits.preparing(c, row['id']))
 
 
 def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
