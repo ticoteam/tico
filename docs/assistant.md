@@ -24,6 +24,16 @@ The Ask panel is only the Assistant. Talking to the people at Tico is a separate
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
+**Your requests**, beside Loop in Support, opens Support's list of your requests over the page; the Ask panel stays where
+it was. Its label counts the replies you have not read, as in **Your requests (2)**, and has no count when there are none.
+It shows only when Support is available on this Tico (not in a demo or rehearsal, or with `TICO_SUPPORT=off`).
+
+When Loop in Support opens a new request for the chat, the thread adds two lines: "Delivered to Tico support. We usually
+reply within 1 business day (Monday to Friday). The reply will appear here.", and "Diagnostics weren't sent." with an
+**Attach diagnostics** link. The link opens
+that request in Support with **Review and edit**; nothing is sent until you press **Send** there. Looping in again to the
+same request does not add these lines again.
+
 A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
 never who asked. Tap it and the DM opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
