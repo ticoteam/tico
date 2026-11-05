@@ -505,6 +505,7 @@ def test_cached_make_page_claim_requires_the_current_person_and_computer(api):
     post(api, "access/people/ben", {"sign_in": False})
     post(api, "jobs/claim", body, machine["token"], key, expected=403)
     post(api, "access/people/ben", {"sign_in": True})
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     other = runner(api)
     assign(api, other, "coo", generation=attempt["generation"])
     post(api, "jobs/claim", body, machine["token"], key, expected=403)
