@@ -176,6 +176,7 @@ const path = require('node:path');
         f.a.saved=true; f.a.shared_scope+='-saved';
         f.a.shared={can_send:true,sections:{task:[{...f.adopted,version:1,status:'proposed'}]}};
       });
+      await page.locator('[data-shared-panel]').waitFor();
       await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
       assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
       await page.evaluate(()=>window.pendingFixture.a.shared.sections.task=[window.pendingFixture.adopted]);
