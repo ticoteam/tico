@@ -179,3 +179,15 @@ def test_idle_recovery_rechecks_the_task_owner_and_current_computer(prepared):
         c.execute("UPDATE tasks SET owner_id='bot:cmo' WHERE id=?", (tid,))
         c.execute("DELETE FROM assignments WHERE bot='cmo'")
         assert not W.preparable(c, row, detail)
+
+
+def test_recovery_keeps_both_published_heads_when_the_webhook_lags_the_computer(prepared):
+    api, tid, _ = prepared
+    old = leave_on_old_computer(api, tid)
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (old['link_id'],)).fetchone()[0])
+        detail['ahead'] = 0
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), old['link_id']))
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert response.status_code == 200, response.text
+    assert set(response.json()['recovery']['published_heads']) == {'a' * 40, 'c' * 40}

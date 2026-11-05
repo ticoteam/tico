@@ -323,10 +323,10 @@ def _recover_retired(base, default, link, task, env, client):
     if branch == recovery['branch']:
         remote = remote_branch(base, branch, env)
         if remote:
-            published = recovery.get('published_head')
-            if published and (not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published)
-                              or git(base, 'merge-base', '--is-ancestor', published, remote, env=env, check=False).returncode):
-                raise ValueError('Origin no longer contains the last published head; kept local history unchanged')
+            for published in recovery.get('published_heads') or [recovery.get('published_head')]:
+                if published and (not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published)
+                                  or git(base, 'merge-base', '--is-ancestor', published, remote, env=env, check=False).returncode):
+                    raise ValueError('Origin no longer contains the last published head; kept local history unchanged')
             fast_forward(base, branch, remote, env)
             return
         client.patch(f'tasks/{task}/links/{link["link_id"]}', {'recovery_branch_missing': True})

@@ -830,6 +830,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 head = None
             detail['retired_worktree'] = old
             detail['recovery'] = {'branch': existing['branch'], 'published_head': head,
+                                  'published_heads': [h for h in H.worktree_heads(detail)
+                                                      if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', h)],
                                   'fallback_branch': f'tico/{short}-recovery-{uuid.uuid4().hex[:12]}'}
             # The old report belongs to that computer. New reports describe only the replacement checkout.
             for key in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch',

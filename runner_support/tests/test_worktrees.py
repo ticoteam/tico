@@ -196,6 +196,25 @@ def test_retired_recovery_does_not_treat_remote_failure_as_an_unpublished_branch
 
 
 @pytest.mark.slow
+def test_retired_recovery_checks_the_reported_published_head_when_the_webhook_is_older(trees):
+    workspace, base, remote, row, client = trees
+    older = publish_task_branch(base, row)
+    git(base, 'checkout', '-b', 'later', older)
+    (base / 'file').write_text('later published head')
+    git(base, 'add', 'file')
+    git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-m', 'Later head')
+    later = git(base, 'rev-parse', 'HEAD')
+    git(base, 'checkout', 'main')
+    retired_allocation(row, client, older)
+    client.post.return_value['recovery']['published_heads'] = [older, later]
+    with pytest.raises(ValueError, match='last published head'):
+        W.command(client, 'add', 'org/product')
+    assert not (workspace / row['path']).exists()
+    assert subprocess.run(['git', '-C', str(base), 'show-ref', '--verify', 'refs/heads/' + row['branch']],
+                          capture_output=True).returncode != 0
+
+
+@pytest.mark.slow
 def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])

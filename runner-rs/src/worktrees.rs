@@ -549,9 +549,12 @@ async fn recover_retired(base: &Path, default: &str, link: &mut Map<String, Valu
     let fallback = own(&recovery, "fallback_branch");
     if branch == own(&recovery, "branch") {
         if let Some(remote) = remote_branch(base, &branch, env).await? {
-            let published = own(&recovery, "published_head");
-            if !published.is_empty() && (!is_sha(&published) || !git(base, env, &["merge-base", "--is-ancestor", &published, &remote], false).await?.ok()) {
-                return Err(WtErr::msg("Origin no longer contains the last published head; kept local history unchanged"));
+            let heads = recovery.get("published_heads").and_then(Value::as_array).map(|heads| heads.iter().map(text_of).collect::<Vec<_>>())
+                .filter(|heads| !heads.is_empty()).unwrap_or_else(|| vec![own(&recovery, "published_head")]);
+            for published in heads {
+                if !published.is_empty() && (!is_sha(&published) || !git(base, env, &["merge-base", "--is-ancestor", &published, &remote], false).await?.ok()) {
+                    return Err(WtErr::msg("Origin no longer contains the last published head; kept local history unchanged"));
+                }
             }
             fast_forward(base, &branch, &remote, env).await?;
             return Ok(());
@@ -2149,6 +2152,22 @@ mod tests {
         sh(&base, &["push", "--force", "origin", "main:refs/heads/tico/task"]);
         let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
         let err = recover_retired(&base, "main", &mut retired_link(&head), "task", &test_env(), &client).await.unwrap_err();
+        assert!(err.text().contains("last published head"));
+        assert!(!sh_ok(&base, &["show-ref", "--verify", "refs/heads/tico/task"]));
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_checks_the_computer_head_when_the_push_report_is_older() {
+        let (_folder, base, head) = retired_repository();
+        sh(&base, &["checkout", "-b", "later", &head]);
+        std::fs::write(base.join("file"), "later published head").unwrap();
+        sh(&base, &["commit", "-am", "Later head"]);
+        let later = sh(&base, &["rev-parse", "HEAD"]);
+        sh(&base, &["checkout", "main"]);
+        let mut link = retired_link(&head);
+        link.get_mut("recovery").unwrap()["published_heads"] = json!([head, later]);
+        let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
+        let err = recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap_err();
         assert!(err.text().contains("last published head"));
         assert!(!sh_ok(&base, &["show-ref", "--verify", "refs/heads/tico/task"]));
     }
