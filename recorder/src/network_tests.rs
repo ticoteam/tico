@@ -1199,8 +1199,9 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
         (json!(4), json!("and fiends"))
     );
     assert_eq!(chunks.as_array().unwrap().len(), 2);
-    // A final that arrives after a later one starts no earlier than it (Tico refuses that);
-    // a streamed word the finished transcript won't have still goes now.
+    // The synthetic source supplies a late final: retain its capture time rather than clamping.
+    // Real dual-input capture uses the shared frontier exercised below; a word absent from the
+    // finished transcript still goes provisionally.
     streamed(&store, id, "them", 2_800, "late", "S2");
     streamed(&store, id, "me", 6_000, "uh", "");
     let (result, requests) = pass(vec![Some(json!({"accepted":[5,6]}))]);
@@ -1208,7 +1209,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":5,"speaker":"S2","start_ms":3000,"end_ms":3050,"text":"late"},
+            {"seq":5,"speaker":"Speaker 2","start_ms":2800,"end_ms":3050,"text":"late"},
             {"seq":6,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":"uh"},
         ])
     );
@@ -1232,7 +1233,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     assert!(result.is_err());
     assert_eq!(
         first[0].1["chunks"],
-        json!([{"seq":7,"speaker":"Me","start_ms":7000,"end_ms":8000,"text":"bye"}])
+        json!([{"seq":7,"speaker":"Me","start_ms":7000,"end_ms":7300,"text":"bye"}])
     );
     let (result, requests) = pass(vec![
         Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":true,"event_id":9})),
@@ -4478,7 +4479,7 @@ fn held_microphone_and_remote_turn_share_one_frontier_and_keep_capture_timestamp
         );
         match release {
             "reference" => {
-                streamed(&store, id, "them", 3000, "later", "S1");
+                streamed(&store, id, "them", 5000, "later", "S1");
             }
             "failure" => {
                 store

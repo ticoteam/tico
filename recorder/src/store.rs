@@ -1486,4 +1486,50 @@ mod tests {
         assert_eq!(batch.speaker_labels[&id], "Speaker 1");
         assert_eq!(crate::transcript::lines(&batch)[0].speaker, "Speaker 1");
     }
+    #[test]
+    fn diarization_without_service_turn_ids_cannot_renumber_visible_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Stable local diarization").unwrap();
+        store
+            .save_audio(&record.id, Channel::Meeting, 0, 2000, &[0.2; 1600], 16000)
+            .unwrap();
+        let claimed = store.claim_transcription().unwrap().unwrap();
+        let word = Word {
+            start_ms: 1000,
+            end_ms: 1300,
+            text: "Hello".into(),
+            speaker: "Speaker 1".into(),
+            ..Default::default()
+        };
+        store
+            .transcription_words(
+                &claimed,
+                "Hello",
+                vec![word.clone()],
+                "",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(
+            crate::transcript::lines(&store.get(&record.id).unwrap())[0].speaker,
+            "Speaker 1"
+        );
+        store
+            .label_speakers(
+                &record.id,
+                &[(
+                    claimed.id.clone(),
+                    vec![Word {
+                        speaker: "Speaker 2".into(),
+                        ..word
+                    }],
+                )],
+            )
+            .unwrap();
+        assert_eq!(
+            crate::transcript::lines(&store.get(&record.id).unwrap())[0].speaker,
+            "Speaker 1"
+        );
+    }
 }

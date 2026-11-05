@@ -786,7 +786,7 @@ pub(crate) fn speaker_identity(chunk: &Chunk, word: &Word) -> String {
     if !word.turn.is_empty() {
         format!("chunk:{}:turn:{}", chunk.id, word.turn)
     } else if !word.speaker.is_empty() {
-        word.speaker.clone()
+        format!("chunk:{}:at:{}", chunk.id, word.start_ms)
     } else if !["Meeting audio", "Me"].contains(&chunk.speaker.as_str()) {
         chunk.speaker.clone()
     } else {
