@@ -40,13 +40,13 @@ def scope(c, who):
             tasks = privacy.attempt_tasks(c, who.attempt_id)
             valid = isinstance(task, str) and task in tasks
             return Scope(who.attempt_id, frozenset(tasks) if valid else frozenset(), True, task if valid else "")
-        if who.role == "bot":
+        if who.role == "bot" or who.task_actor and who.via != "assistant":
             tasks = privacy.attempt_tasks(c, who.attempt_id)
             if tasks:
                 return Scope(who.attempt_id, frozenset(tasks))
         return None
 
-    return read_cache.value(c, ("turn_scope", who.attempt_id, who.role), build, shared=True)
+    return read_cache.value(c, ("turn_scope", who.attempt_id, who.role, who.via), build, shared=True)
 
 
 def tasks(c, auth, who, scoped):

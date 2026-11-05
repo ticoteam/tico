@@ -288,3 +288,15 @@ def test_scoped_sql_cannot_name_or_count_a_page_the_file_hook_refuses(api):
     assert answer["rows"] == [[fid, "project.html"]]
     counted = post(api, "sql", {"sql": f"SELECT count(*) FROM bot_files WHERE id='{hidden}'"}, attempt["token"])
     assert counted["rows"] == [[0]]
+
+
+def test_botops_borrowing_a_persons_rights_keeps_its_task_scope(api):
+    _, attempt = task_turn(api)
+    mid = record(api, {"private": True})
+    with api.app.state.store.read() as c:
+        machine = c.execute("SELECT runner_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+    acted = Identity("human:ana", "owner", email="ana@acme.example", runner_id=machine,
+                     attempt_id=attempt["id"], task_actor="bot:ops", via="botops")
+    api.app.state.store.settings.test_identities["acted"] = acted
+    get(api, "meetings/transcript?id=" + mid)
+    get(api, "meetings/transcript?id=" + mid, "acted", expected=404)
