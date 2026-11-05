@@ -80,6 +80,7 @@ EVENTS_DESCRIPTION = (
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
@@ -89,6 +90,10 @@ EVENTS_DESCRIPTION = (
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
+    ("/api/v2/cloud-machines/support", "get", "Computers", "getCloudMachineSupport",
+     "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud", None),
+    ("/api/v2/cloud-machines/support", "put", "Computers", "setCloudMachineSupport",
+     "Let Tico support reach the company's cloud machines, or stop it; owner only", None),
     ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Subscription logins reported by each Computer", "SubscriptionList"),
     ("/api/v2/subscriptions/name", "put", "Subscriptions", "renameSubscription", "Rename a subscription without changing its local login", "SubscriptionIdentity"),
     ("/api/v2/subscriptions/weekly", "put", "Subscriptions", "recordSubscriptionWeekly", "Record or clear a manual weekly allowance observation", "SubscriptionWeeklyResult"),
@@ -1437,6 +1442,8 @@ SCHEMAS["KpiDetail"]["properties"]["links"] = items(_merge(SCHEMAS["KpiLink"], o
 # Tags add rich display data beside the existing task label keys.
 TAGS["Tags"] = "Tags, metadata, markdown checklists and reusable templates."
 STABLE.extend([
+    ('/api/v2/meetings/{rid}/items/{iid}/link', 'post', 'Meetings', 'acceptMeetingTaskProposal',
+     'Accept a readable task proposal without creating a task; the meeting must be shared', 'MeetingTaskProposalAccepted'),
     ("/api/v2/tags", "get", "Tags", "listTags", "Tags and templates", "TagList"),
     ("/api/v2/tags", "post", "Tags", "createTag", "Create a tag or template", "TagResult"),
     ("/api/v2/tags/{tag_id}", "get", "Tags", "getTag", "A tag and its visible tasks", "TagDetail"),
@@ -1444,6 +1451,8 @@ STABLE.extend([
     ("/api/v2/tags/{tag_id}/instances", "post", "Tags", "createTagInstance", "Copy a template into a task tag", "TagResult"),
 ])
 SCHEMAS.update({
+    'MeetingTaskProposalAccepted': obj({'item': obj({'id': 's', 'proposed_task_id': 'n', 'result_ref': 'n',
+                                                    'status': 's'}), 'pushed': 'b'}),
     "Tag": obj({"id": "s", "key": "s", "label": "s", "metadata": "o", "markdown": "s", "is_template": "b",
                 "template_id": "n", "owner": "n", "version": "i", "created_at": "s", "updated_at": "s"}),
     "TagList": obj({"tags": items(ref("Tag"))}),
@@ -2339,7 +2348,7 @@ STABLE.extend([
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
     ("/api/v2/pages/{fid}", "patch", "Pages", "editPage",
-     "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+     "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
      "PageShown"),
     ("/api/v2/files", "get", "Files", "listFiles",
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
@@ -2350,7 +2359,10 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
+    "Page": obj({"audience": {"anyOf": [ref("AccessAudience"), {"type": "null"}],
+                             "description": "Only returned to managers on a single page read or write; null inherits where it is filed"},
+                 "restricted": {"type": "boolean", "description": "Only returned to managers, including on lists and cards"},
+                 "file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
@@ -2858,7 +2870,7 @@ STABLE.extend([
     ('/api/v2/meetings/{rid}/tasks', 'get', 'Meetings', 'listMeetingTasks',
      'Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap', 'MeetingTaskLinks'),
     ('/api/v2/meetings/{rid}/tasks', 'post', 'Meetings', 'linkMeetingTasks',
-     'Link up to 20 readable tasks; sent is only for their requester; links never widen access', 'MeetingTaskLinks'),
+     'Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data', 'MeetingTaskLinkBatch'),
     ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
@@ -2874,6 +2886,8 @@ SCHEMAS.update({
     'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
                             'status': 's', 'kind': {'enum': ['linked', 'sent', 'proposal']}, 'created_by': 's'}),
     'MeetingTaskLinks': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n'}),
+    'MeetingTaskLinkBatch': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n',
+                                 'results': items(obj({'status': {'enum': [200, 404]}}))}),
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
@@ -2904,6 +2918,18 @@ def spec(app):
             responses["200"] = {"description": EVENTS_DESCRIPTION,
                                 "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
+        if path == "/api/v2/cloud-machines/support":
+            op["description"] = ("HQ is the source of the switch and helper states; no local copy is kept. "
+                                 "GET returns available false, on null and an empty machines list off Tico Cloud "
+                                 "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+                                 "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+                                 "Core assigns an increasing revision and keeps it for retries of the same "
+                                 "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+                                 "on in the error. After an uncertain PUT, read HQ again before showing a saved state.")
+            responses["403"] = {"description": "People only; changing the switch needs the owner", **ERROR}
+            responses["502"] = {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR}
+            if method == "put":
+                responses["404"] = {"description": "not_cloud: cloud-machine support is not available", **ERROR}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
                                 "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
@@ -3243,6 +3269,50 @@ STABLE.extend([
      "Take one person's or bot's access away", "MailboxDetail"),
 ])
 
+TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
+SCHEMAS["LetterOutContents"] = obj({
+    **{key: "s" for key in ("id", "requested_by", "mail_class", "currency", "status", "error", "created_at", "updated_at")},
+    **{key: "n" for key in ("acting_bot_id", "automation_id", "task_id", "thread_id", "quote_id", "quote_expires_at",
+                            "approval_id", "approval_hash", "hq_letter_id", "proof")},
+    "recipient": "o", "return_address": "o", "tracking": items(obj({"barcode": "s", "status": "n"})),
+    "page_count": {"type": ["integer", "null"]}, "total_micros": "i", "color": "b", "duplex": "b", "cancel_possible": "b",
+    "letter_id": "s", "approval_reason": "s", "accepted_at": "n", "billing": "s",
+    "charged_micros": {"type": ["integer", "null"]}, "redacted": {"enum": [False]}, "can_cancel": "b"})
+SCHEMAS["LetterOutMetadata"] = obj({**{key: "s" for key in ("id", "mail_class", "currency", "status", "billing", "created_at", "updated_at")},
+    "acting_bot_id": "n", "page_count": {"type": ["integer", "null"]}, "total_micros": "i",
+    "charged_micros": {"type": ["integer", "null"]}, "redacted": {"enum": [True]}, "can_cancel": "b"})
+SCHEMAS["LetterOutMetadata"]["additionalProperties"] = False
+SCHEMAS["LetterOut"] = {"oneOf": [ref("LetterOutContents"), ref("LetterOutMetadata")]}
+SCHEMAS["LetterOutPage"] = obj({"items": items(ref("LetterOut")), "next_before": "n"})
+SCHEMAS["LettersSettings"] = obj({"id": "s", "mode": "s", "return_address": {"type": ["object", "null"]},
+    "monthly_cap_micros": {"type": ["integer", "null"]}, "availability": "s", "checked_at": "n", "created_at": "s", "updated_at": "s"})
+SCHEMAS["LettersAccess"] = obj({"send": "b", "outbox_id": "s"})
+SCHEMAS["LettersGrants"] = obj({"outbox_id": "s", "next": "n", "grants": items(obj({"id": "s", "outbox_id": "s", "grantee_type": "s", "grantee_id": "s",
+    "level": "s", "granted_by_id": "s", "created_at": "s"}))})
+SCHEMAS["LettersGrant"] = obj({"grantee_type": "s", "grantee_id": "s", "level": "s"})
+SCHEMAS["LettersRevoked"] = obj({"revoked": "b"})
+SCHEMAS["LetterBotSettings"] = obj({"bot_id": "s", "mode": "n", "monthly_cap_micros": {"type": ["integer", "null"]}})
+STABLE.extend([
+    ("/api/v2/letters", "get", "Letters out", "listLetters", "Letters the caller may read, paged and byte capped", None),
+    ("/api/v2/letters/quotes", "post", "Letters out", "quoteLetter", "Quote a PDF or rendered text without sending", None),
+    ("/api/v2/letters/{letter_id}", "get", "Letters out", "getLetter", "Letter, approved proof and tracking", None),
+    ("/api/v2/letters/{letter_id}/send", "post", "Letters out", "sendLetter", "Ask first or submit under the sending policy", None),
+    ("/api/v2/letters/{letter_id}/cancel", "post", "Letters out", "cancelLetter", "Request cancellation; pass through the provider's honest refusal", None),
+    ("/api/v2/letters/settings", "get", "Letters out", "getLettersSettings", "Company return address, mode, cap and setup state", None),
+    ("/api/v2/letters/settings", "put", "Letters out", "setLettersSettings", "Owner or admin sets company Letters out policy", None),
+    ("/api/v2/letters/access", "get", "Letters out", "getLettersAccess", "Whether the caller has sending access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants", "get", "Letters out", "listLettersGrants", "Sending grants on the company outbox", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "put", "Letters out", "grantLettersAccess", "Owner or admin grants send access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "delete", "Letters out", "revokeLettersAccess", "Owner or admin revokes send access", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "get", "Letters out", "getBotLettersSettings", "Bot's sending policy override and optional cap", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "put", "Letters out", "setBotLettersSettings", "Bot manager sets a policy that cannot loosen company policy", None),
+])
+_LETTERS_ANSWERS = {"listLetters": "LetterOutPage", "quoteLetter": "LetterOut", "getLetter": "LetterOut",
+    "sendLetter": "LetterOut", "cancelLetter": "LetterOut", "getLettersSettings": "LettersSettings",
+    "setLettersSettings": "LettersSettings", "getLettersAccess": "LettersAccess", "listLettersGrants": "LettersGrants",
+    "grantLettersAccess": "LettersGrant", "revokeLettersAccess": "LettersRevoked", "getBotLettersSettings": "LetterBotSettings",
+    "setBotLettersSettings": "LetterBotSettings"}
+STABLE = [(*entry[:-1], _LETTERS_ANSWERS.get(entry[3], entry[-1])) for entry in STABLE]
 TAGS["Physical mail"] = "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
 SCHEMAS.update({
     "PostalMailGrant": obj({"id": "s", "address_id": "s", "grantee_type": {"enum": ["person", "bot"]},

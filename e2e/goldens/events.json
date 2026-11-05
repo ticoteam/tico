@@ -12,7 +12,8 @@
           "needs",
           "threads",
           "meeting_items",
-          "presence"
+          "presence",
+          "letters"
         ]
       },
       "event": "ready",

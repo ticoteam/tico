@@ -61,6 +61,7 @@ PAGES = {
     "replay": page("replay", "items", **{"from": WEEK_AGO.isoformat(), "to": NOW.isoformat()}),
     "changelog": page("changelog", "entries"),
     "settings": page("bots"),
+    "settings-inboxes-letters-out": page("letters", "items"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
     "settings-alerts": page("alerts/me"),
@@ -108,6 +109,13 @@ def test_page_has_demo_data(api, name):
     assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
 
 
+def test_full_page_audience_editor_has_a_restricted_example(api):
+    pages = api.get('/api/v2/pages?bot=marketing-lead').json()['pages']
+    assert pages
+    shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
+    assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
+
+
 def test_a_demo_task_and_meeting_link_to_each_other(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     linked = []
@@ -120,6 +128,14 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     response = api.get(f'/api/v2/tasks/{task}/meetings')
     assert response.status_code == 200, response.text
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
+
+
+def test_demo_task_has_an_editor_for_the_live_task_page(api):
+    meetings = api.get('/api/v2/meetings').json()['meetings']
+    task = next(row['task_id'] for meeting in meetings for row in
+                api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks'])
+    detail = api.get(f'/api/v2/tasks/{task}').json()
+    assert any(event['field'] == 'due' and event['actor'] == 'human:ana' for event in detail['events'])
 
 
 def test_task_pages_have_demo_data(api):

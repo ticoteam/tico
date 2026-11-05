@@ -1240,7 +1240,9 @@ def checkout_issue(add, row, busy=0):
         add("runner_checkout", row["label"] + " can't update itself",
             f"{behind} commit{'s' if behind != 1 else ''} behind main: {checkout['blocked']}.",
             machine=row["id"], since=checkout.get("checked_at"), severity="warning",
-            action="On that computer: commit or stash the changes (or run pip install and scripts/tico update "
+            action="Tico repairs these links on the next update. No local work needs a decision."
+                   if str(checkout["blocked"]).startswith("only flattened Tico links:") else
+                   "On that computer: commit or stash the changes (or run pip install and scripts/tico update "
                    "for a dependency change); the runner then updates itself.")
     elif behind:
         stamp = checkout.get("behind_since") or checkout.get("checked_at") or ""
@@ -1344,7 +1346,9 @@ def recommendation(ask, me):
     if len(questions) == 1 and not questions[0].get("multi"):
         option = next((o["label"] for o in questions[0].get("options") or []
                        if str(o.get("label") or "").strip().casefold() == do.casefold()), None)
-    return {"do": do, "ask": ask["id"], "option": option, "kind": default.get("kind")}
+    source = default.get("source")
+    return {"do": do, "ask": ask["id"], "option": option, "kind": default.get("kind"),
+            **({"source": source} if source else {})}
 
 
 def _whole_card(c, task, asked, me):
@@ -1386,7 +1390,8 @@ def take_recommendation(c, auth, who, asked, version=None):
         raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
     if not c.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}", (asked["id"],)).fetchone():
         raise Problem("answered", "This question was already answered", 409)
-    text = "Yes, do what you recommend: " + rec["do"]
+    text, text_refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
+    state_text = "Accepted the recommendation." if rec.get("source") else text
     task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
     task = H.task(c, task_id) if task_id else None
     if task and version is not None and task["version"] != version:
@@ -1399,20 +1404,21 @@ def take_recommendation(c, auth, who, asked, version=None):
         answer_task(c, auth, who, task_id, M.TaskAnswer(target=target,
                                                         answers={question["id"]: [rec["option"]]}), wake=True)
     else:
-        H.answer(c, who.actor, asked["id"], text)
+        H.answer(c, who.actor, asked["id"], text, comment_refs=text_refs)
     task = H.task(c, task_id) if task_id else None
     if task and task["status"] in H.ACTIVE_STATUSES:
         if finish:
-            H.task_update(c, who.actor, task_id, status="done", note=text)
+            H.task_update(c, who.actor, task_id, status="done", note=state_text)
         waits = [t for t in [task, *(H.task(c, a) for a in TR.ancestors(c, task_id))]
                  if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
                  and (t is task or t["owner_id"] == asked["sender_id"] and not _another_card_under(c, t, task_id, who.actor))]
         for t in waits:
             c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
-            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, text)
+            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, state_text)
         if waits:
             H._recount(c, who.actor)
-    return {"did": rec["do"], "task": task_id, "done": finish}
+    return {"did": rec["do"], "task": task_id, "done": finish,
+            **({"source": rec["source"]} if rec.get("source") else {})}
 
 
 def _quoted(text, n=90):
@@ -1838,6 +1844,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
+        if row["kind"] == "letter":
+            try:
+                auth.approval(c, who, row["id"])
+            except Problem:
+                continue
         msg = H.message(c, row["message_id"])
         if msg and msg["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
@@ -1904,7 +1915,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         if item["kind"] in ("question", "ask"):
             item["why"] = card_why(item)
         item["tier"] = decide_tier(item, at, own)
-    return sorted(items, key=needs_key)
+    from .files import readable_page_refs
+    return sorted(readable_page_refs(c, auth, who, items), key=needs_key)
 
 
 def _readable(auth, c, who, task_id):
@@ -2157,6 +2169,8 @@ def pending_rows(c, auth, who, task_view):
         if not row or not msg or msg["recipient_id"] != who.actor:
             continue
         try:
+            if row["kind"] == "letter":
+                auth.approval(c, who, aid)
             privacy.require_payload(c, who, row)
             privacy.require_message(c, who, msg)
         except Problem:
@@ -2218,6 +2232,8 @@ def history_rows(c, auth, who, status, from_actor, before, since, need):
                    "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
                    "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
             try:
+                if row["kind"] == "letter":
+                    auth.approval(c, who, row["id"])
                 if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
                     continue
                 privacy.require_payload(c, who, row)

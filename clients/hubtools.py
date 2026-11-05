@@ -442,10 +442,16 @@ def ask_key(args, bot, text, wait, i):
     return "ask:" + hashlib.sha256(json.dumps([bot, text, wait]).encode()).hexdigest()[:48]
 
 
+class PendingAsks(dict):
+    def __init__(self):
+        super().__init__()
+        self.routed = {}
+
+
 def ask_create(api, bots, text, wait, args):
     """Send the ask to each bot: `({message_id: bot}, {bot: {"error": why} or {"warning": why, "message_id": id}})`. Each send is one short request;
     the wait is separate (`ask_wait`), so a wait that ends early never loses an id that was handed out."""
-    pending, failed = {}, {}
+    pending, failed = PendingAsks(), {}
     for i, bot in enumerate(bots):
         try:
             msg = api.post("messages", {"to": bot, "text": text, "kind": "ask", "wait_s": wait},
@@ -458,8 +464,10 @@ def ask_create(api, bots, text, wait, args):
             else:
                 failed[bot] = {"error": f"The question was not delivered: {exc.detail}. Retry, or put it in the task note."}
             continue
+        if msg.get("rerouted"):
+            pending.routed[bot] = {"recipient_id": msg["recipient_id"], "rerouted": msg["rerouted"]}
         if msg.get("warning"):          # over its spend limit: delivered, but no answer comes before it resets
-            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"]}
+            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"], **pending.routed.get(bot, {})}
             continue
         pending[msg["id"]] = bot
     if failed and not pending and not any("warning" in v for v in failed.values()):
@@ -471,6 +479,7 @@ def ask_create(api, bots, text, wait, args):
 def ask_wait(api, pending, wait, args):
     """Poll for the answers until `wait` runs out. An entry that has none yet is `timeout` with its `message_id`,
     also when Tico stops answering the poll: the ask was delivered and its answer reaches the bot later."""
+    routed = getattr(pending, "routed", {})
     pending, result = dict(pending), {}
     deadline = time.monotonic() + wait
     while pending:
@@ -490,7 +499,7 @@ def ask_wait(api, pending, wait, args):
             break
         time.sleep(1)
     result.update({bot: {"timeout": True, "message_id": mid} for mid, bot in pending.items()})
-    return result
+    return {bot: {**item, **routed.get(bot, {})} for bot, item in result.items()}
 
 
 # The Assistant, citing the person's message for something they asked for (`_asked`).
@@ -512,7 +521,7 @@ def answer(api, args):
 
 
 # ----------------------------------------------------------------------------- meetings
-@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Links preserve each resource's access.",
+@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Results match input order; status 404 skips an unavailable task. Links preserve each resource's access.",
       {"id": _s("Meeting id"), "task_ids": {"type": "array", "items": TASK_ID, "minItems": 1, "maxItems": 20},
        "kind": _s("linked (default), or sent for tasks you requested", enum=["linked", "sent"])},
       required=("id", "task_ids"), writes=True)
@@ -771,7 +780,7 @@ def task_create(api, args):
        "check_model": _s("A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
                          "the company's check model, from a provider other than the parent's author when one can run it"),
        "check_role": {"type": "string", "enum": ["review", "check"],
-                      "description": "With check_model: a review of work, or a check of a claim (default check)"}},
+                      "description": "review files a normal review child; with check_model, review work or check a claim"}},
       required=("parent", "title"), writes=True)
 def task_child_create(api, args):
     owner = args.get("owner") or ("me" if args.get("check_model") else None)
@@ -918,7 +927,7 @@ def task_list(api, args):
     return {"tasks": rows, "bots": api.get("bots")} if args.get("all") else rows
 
 
-@tool("hub_task_ask", "Ask the task's requester one question that unblocks you. One open question at a time; wait for its answer before asking another.",
+@tool("hub_task_ask", "Ask the task's requester one question that unblocks you. A system requester routes to your manager or the company owner. One open question at a time; wait for its answer before asking another.",
       {"id": TASK_ID, "text": _s("The question, and only the question")},
       required=("id", "text"), writes=True)
 def task_ask(api, args):
@@ -3059,8 +3068,11 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "How o
 
 
 def _page_fields(args):
-    return {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope", "page", "base_version")
-            if args.get(k) is not None and args.get(k) != ""}
+    fields = {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope", "page", "base_version")
+              if args.get(k) is not None and args.get(k) != ""}
+    if "audience" in args and args["audience"] is not None:
+        fields["audience"] = audience(args["audience"])
+    return fields
 
 
 @tool("hub_page_publish", "Publish a page: one self-contained .html file (inline CSS, SVG charts, no scripts; "
@@ -3068,6 +3080,7 @@ def _page_fields(args):
       "top. Publishing the same name again adds a version. With `task` it shows at the top of that task.",
       {"name": _s("File name ending .html, e.g. weekly-review.html"), "text": _s("The page's HTML"),
        "title": _s("What people see"), "cadence": CADENCE,
+       "audience": _s("everyone, or ben,group:legal,bot:analyst; narrows inherited visibility; omitted keeps it"),
        "as_of": _s("The date the data is from (YYYY-MM-DD) when it differs from today"),
        "task": _s("The task it is for; it shows at the top of that task"),
        "replaces": _s("The id of an older page of yours this one takes the place of"),
@@ -3104,6 +3117,20 @@ def pages_archive(api, args):
     return _as_person(api).patch("pages/" + args["id"], {"archived": not args.get("restore")}, key=_key(args))
 
 
+@tool("hub_page_access", "Show or change who can see a page, within where it is filed. Only its maintainer and "
+      "managers see or change the audience. everyone clears the narrowing.",
+      {"id": _s("Page id"), "audience": _s("everyone, or ben,group:legal,bot:analyst")}, required=("id",), writes=True)
+def pages_access(api, args):
+    client = _as_person(api)
+    path = "pages/" + args["id"]
+    if args.get("audience") is not None:
+        return client.patch(path, {"audience": audience(args["audience"])}, key=_key(args))
+    result = client.get(path)
+    if "audience" not in result.get("page", {}):
+        raise ValueError("Only page managers see access")
+    return {"audience": result["page"]["audience"]}
+
+
 def pages_publish_path(client, args):
     """`hub page publish <path>`: the CLI reads the .html file (inside this checkout only) and sends the bytes."""
     from clients import bot_files as BF
@@ -3112,6 +3139,8 @@ def pages_publish_path(client, args):
     except BF.Refused as exc:
         return {"refused": "page", "detail": str(exc)}
     query = {"name": name, "path": relative, **_page_fields(args)}
+    if "audience" in query:
+        query["audience"] = json.dumps(query["audience"], separators=(",", ":"))
     return client.request("POST", "/api/v2/pages?" + BF.urlencode(query), raw=data, key=_key(args))
 
 
@@ -7022,6 +7051,57 @@ def connections_list(api,args):
     return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
 
 
+# ----------------------------------------------------------------------------- letters out (backend/letters.py)
+LETTER_ADDRESS = {"type": "object", "additionalProperties": False,
+    "properties": {name: _s(name.replace('_', ' ')) for name in
+                   ("name", "line1", "line2", "city", "state", "postal_code")},
+    "required": ["name", "line1", "city", "state", "postal_code"]}
+
+
+@tool("hub_letter_quote", "Quote a physical US letter through Tico's Gateway (print and postage at cost + 25%). "
+      "Provide a PDF already uploaded with hub_file_publish (file_id), or text/markdown printed as clean US Letter text. "
+      "Returns id, page_count, total_micros (USD millionths) and a PDF proof link. Requires Letters out send access "
+      "and a return address. Quotes last 15 minutes. Next use hub_letter_send; quoting never prints a letter. "
+      "Coming soon / Not set up means the service is unavailable; do not retry in a loop.",
+      {"file_id": _s("Uploaded PDF file id"), "text": _s("Text or markdown; use instead of file_id"),
+       "recipient": LETTER_ADDRESS, "mail_class": _s("Postage", enum=["first_class", "certified", "certified_return_receipt"]),
+       "color": {"type": "boolean"}, "duplex": {"type": "boolean"}, "task_id": TASK_ID,
+       "thread_id": _s("The thread this letter belongs to")}, required=("recipient",), writes=True)
+def letter_quote(api, args):
+    return api.post("letters/quotes", {k: args[k] for k in
+        ("file_id", "text", "recipient", "mail_class", "color", "duplex", "task_id", "thread_id") if k in args}, key=_key(args))
+
+
+@tool("hub_letter_send", "Request sending the exact letter returned by hub_letter_quote. Ask first is the default: "
+      "waiting_for_ok means a person must approve the proof, both addresses, class and total in Needs you. "
+      "Approval automatically re-quotes and submits only an unchanged approval hash; a change asks again. "
+      "On their own still asks for certified mail, courts/agencies, uncertain classification and a new address. "
+      "Monthly company and bot caps apply. Retry with the SAME letter_id: never make a replacement after a timeout "
+      "or submission_unknown. Printing has no promised undo window.",
+      {"letter_id": _s("The id from hub_letter_quote")}, required=("letter_id",), writes=True)
+def letter_send(api, args):
+    return api.post("letters/" + quote(args["letter_id"], safe="") + "/send", {}, key=_key(args))
+
+
+@tool("hub_letter_list", "Letters out you may read, with status, tracking and proof. Follow next_before for older letters.",
+      {"before": _s("next_before from the previous page"), "limit": {"type": "integer", "minimum": 1, "maximum": 50}})
+def letter_list(api, args):
+    return api.get("letters", **{k: args[k] for k in ("before", "limit") if k in args})
+
+
+@tool("hub_letter_show", "One letter out: saved proof, addresses, approval, spend and the Gateway's honest status.",
+      {"letter_id": _s("Letter id")}, required=("letter_id",))
+def letter_show(api, args):
+    return api.get("letters/" + quote(args["letter_id"], safe=""))
+
+
+@tool("hub_letter_cancel", "Request cancellation of a letter. The provider may refuse, including User Credit jobs. "
+      "Cancellation and refunds are confirmed only by the Gateway's response; no undo window is promised.",
+      {"letter_id": _s("Letter id")}, required=("letter_id",), writes=True)
+def letter_cancel(api, args):
+    return api.post("letters/" + quote(args["letter_id"], safe="") + "/cancel", {}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- email (backend/mail.py)
 @tool('hub_email_mailboxes', 'The email mailboxes you may read, including shared mailboxes. Whole Workspace reads '
       'go live to Gmail. hub_mail is physical postal mail.', {})
@@ -7853,6 +7933,7 @@ AUDIENCE = {
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "hub_file_delete": ("owner", "botops"),
     "hub_page_archive": PEOPLE + BOTS,
+    "hub_page_access": PEOPLE + BOTS,
     # Reads that go over POST, which the Assistant may not make on its own.
     **{name: NOT_ASSISTANT for name in ("hub_sql", "hub_classify", "hub_decision_ask", "hub_decision_outcome",
                                          "hub_market_ask")},

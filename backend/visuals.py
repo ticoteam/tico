@@ -355,33 +355,39 @@ def _unb64(text):
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def mint(key, actor, fid, version, part="", now=None, *, attempt_id=""):
+def mint(key, actor, fid, version, part="", now=None, *, task_actor="", attempt_id=""):
     """A signed address for one reader, file version and part ("" or "poster"). Tokens are minted per hour bucket and
     live two hours, so the same reader gets the same address while more than half its life remains."""
     now = int(now if now is not None else time.time())
     expires = (now // (LIFE // 2) + 2) * (LIFE // 2)
-    fields = [actor, fid, int(version), part, expires]
+    fields = [actor, fid, int(version), part, expires, task_actor]
     if attempt_id:
         fields.append(attempt_id)
     body = _b64(json.dumps(fields, separators=(",", ":")).encode())
     return body + "." + _b64(hmac.new(key, body.encode(), hashlib.sha256).digest())
 
 
-def read(key, token, now=None):
-    """Reader, file version, part and originating attempt from an unexpired signed token."""
+def read(key, token, now=None, *, principals=False, scoped=False):
+    """Read a signed file address, retaining delegated principals and the originating attempt when requested."""
     try:
         body, mac = token.split(".", 1)
         if not hmac.compare_digest(_unb64(mac), hmac.new(key, body.encode(), hashlib.sha256).digest()):
             return None
-        actor, fid, version, part, expires, *scope = json.loads(_unb64(body))
-        if len(scope) > 1 or scope and (not isinstance(scope[0], str) or not scope[0]):
+        fields = json.loads(_unb64(body))
+        actor, fid, version, part, expires = fields[:5]
+        if len(fields) not in (6, 7):
+            return None
+        task_actor = fields[5]
+        attempt_id = fields[6] if len(fields) == 7 else ""
+        if not isinstance(task_actor, str) or not isinstance(attempt_id, str) or len(fields) == 7 and not attempt_id:
             return None
         expires, version = int(expires), int(version)
     except (ValueError, TypeError):
         return None
     if int(now if now is not None else time.time()) >= int(expires):
         return None
-    return str(actor), str(fid), version, str(part), scope[0] if scope else ""
+    found = (str(actor), str(fid), version, str(part))
+    return (*found, task_actor, attempt_id) if scoped else (*found, task_actor) if principals else found
 
 
 def ancestors(settings):
@@ -554,14 +560,19 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     cache, rows, served = {}, {}, {}
     from . import turn_scope
     attempt_id = who.attempt_id if turn_scope.scope(c, who) is not None else ""
-    # Scoped URLs carry their originating attempt so secondary reads use the same current containment.
-    # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
+    # Secondary reads keep both delegated principals and the originating turn's current containment.
     route = token_reader(c, files.auth, who.actor, attempt_id) if who.role == "bot" or attempt_id else who
     # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
     # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
     from .counsel import is_counsel
     plain = is_counsel(who)
     for message in messages:
+        from .files import readable_page_refs
+        if message:
+            shown = readable_page_refs(c, files.auth, who, message)
+            if shown != message:
+                message.clear()
+                message.update(shown)
         if not message or not message.get("refs"):
             continue
         items = ((message or {}).get("refs") or {}).get("attachments") or []
@@ -601,17 +612,21 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if v is not None:
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
-                inline = full or a["kind"] in MEDIA or bool(hosted and here is not None and hosted(v))
-                view["src"] = here + "/visuals/" + mint(key, actor, fid, number, attempt_id=attempt_id) if inline and here is not None else None
+                page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
+                restricted = bool(page and page["audience"] is not None)
+                inline = full or a["kind"] in MEDIA or bool(not restricted and hosted and here is not None and hosted(v))
+                delegated = getattr(who, "task_actor", "")
+                token_scope = {"task_actor": delegated, "attempt_id": attempt_id}
+                view["src"] = here + "/visuals/" + mint(key, actor, fid, number, **token_scope) if inline and here is not None else None
                 if not inline:
                     view["open"] = True
                     if v["thumb_blob_id"] and here is not None:
-                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview", attempt_id=attempt_id)
+                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview", **token_scope)
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
                 if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
-                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster", attempt_id=attempt_id)
+                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster", **token_scope)
             fresh.append(view)
         refs = {**message["refs"]}
         if "attachments" in refs:
@@ -679,8 +694,9 @@ def token_reader(c, auth, actor, attempt_id=""):
     if not isinstance(actor, str) or actor == H.bot_actor(H.COUNSEL):
         return None             # Counsel reads no visual: its grant is its run's, which a token does not carry
     try:
+        bot = H.bot(c, H.actor_id(actor)) if actor.startswith("bot:") else None
         who = (auth.identity_for_actor(c, actor) if actor.startswith("human:") else
-               Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None)
+               Identity(actor, "bot") if bot and bot.get("state") != "archived" else None)
         if not who or not attempt_id:
             return who
         attempt = c.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
@@ -707,19 +723,25 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
     gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox", "attachment"))
-    found = read(key, token)
+    found = read(key, token, scoped=True)
     if not found:
         return gone
-    actor, fid, number, part, attempt_id = found
+    actor, fid, number, part, task_actor, attempt_id = found
     filled = None
     with store.read_transaction() as c:
         who = token_reader(c, auth, actor, attempt_id)
+        if task_actor:
+            if not token_reader(c, auth, task_actor):
+                return gone
+            who = replace(who, task_actor=task_actor) if who else None
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not who or not row or row["archived"] or row["locator"] != "tico_blob" or not files.visible(c, who, row, {}):
             return gone
         v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
         if not v:
             return gone
+        page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
+        restricted = bool(page and page["audience"] is not None)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"])
         if part in ("poster", "preview"):
@@ -740,8 +762,8 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
         if kind in ("page", "svg") and not part:
             from .tico_storage import visual_link
-            # A page with live blocks never has a hosted copy (tico_storage.make_visual).
-            link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+            # Restricted pages and live blocks are served for this reader alone.
+            link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
             if link:
                 return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
                                                           "Referrer-Policy": "no-referrer"})

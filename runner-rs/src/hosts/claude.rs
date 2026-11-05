@@ -2483,9 +2483,8 @@ mod feature_tests {
         let exe = root.join("claude");
         let log = root.join("spawns.log");
         std::fs::write(&exe, format!("#!/bin/sh\necho \"$*\" >> '{}'\necho '2.1.300 (Claude Code)'\necho '--autocompact'\n", log.display())).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (vec![exe.display().to_string()], log)
+        // Read the script through the shell so parallel forks cannot hold its writable inode open at exec.
+        (vec!["/bin/sh".into(), exe.display().to_string()], log)
     }
 
     fn runs(log: &std::path::Path) -> usize {
@@ -2500,6 +2499,7 @@ mod feature_tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         // The probe passes the version as `installed_version` reads it, which is what a turn's start is keyed by too.
         let version = installed_version(&cmd, "--version").await;
+        assert_eq!(version, "2.1.300 (Claude Code)\n--autocompact", "the version probe runs the fixture");
         let read = runs(&log);
         note_version(&cmd, &version).await;
         assert_eq!(runs(&log), read + 1, "a new version is read once, for --help");

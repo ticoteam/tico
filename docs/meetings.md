@@ -92,7 +92,11 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
 - `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
   removes its transcript, chat and events from Tico; the recording stays on their computer.
-- The same route with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
+  Recorder **This Mac** uses this path and deletes a meeting already filed for review, removing its delivery
+  receipt and task links. The local recording and transcript stay, and tasks already sent remain unchanged.
+  Queued links and Link proposals are cleared; recovery cannot finalize the discarded live share or send its links.
+  An older Tico without discard ends the meeting and reports that its live transcript remains until Tico is updated.
+- `POST /api/v2/meetings/{id}/review` with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a
   dismissed meeting back to Pending. Re-import never shares a pending or dismissed meeting,
@@ -632,3 +636,8 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.
 - `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
   `TICO_PROCESSING_OPERATORS` still names the computers that may run importers and calendar publishers.
+
+Recorder Save replays interrupted item uploads before applying current local fields with the item's version.
+If another teammate has changed or sent the item, the Recorder keeps the local draft with Copy and Close.
+Tasks added after Save go onto the meeting before Create sends them. Link proposals use Link, and queued task
+links are sent last in batches of 20; an interrupted Save resumes the remaining batches.

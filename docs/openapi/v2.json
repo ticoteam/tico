@@ -3,7 +3,7 @@
   "info": {
     "title": "Tico API (v2)",
     "version": "2.0.0",
-    "description": "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. Task-scoped bot turns and Make-page attempts use the method/path allowlist in backend/scoped_routes.py; all other routes return 403, including SQL, CSV/exports, saved run history, admin and event streams. Downloads require an in-scope source id. Allowed JSON responses project structured source references only; free text, unknown references and task/conversation references stay unchanged. Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same key and body returns the first answer). Errors are `{\"error\": {code, detail, retryable}}`. See docs/custom-frontend.md."
+    "description": "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same key and body returns the first answer). Errors are `{\"error\": {code, detail, retryable}}`. See docs/custom-frontend.md."
   },
   "tags": [
     {
@@ -189,6 +189,10 @@
     {
       "name": "Mailboxes",
       "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+    },
+    {
+      "name": "Letters out",
+      "description": "Physical letters sent through the Gateway; approvals bind the saved proof and price."
     },
     {
       "name": "Physical mail",
@@ -7696,6 +7700,148 @@
         ]
       }
     },
+    "/api/v2/cloud-machines/support": {
+      "get": {
+        "summary": "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+        "operationId": "getCloudMachineSupport",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSupportView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ],
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+      },
+      "put": {
+        "summary": "Let Tico support reach the company's cloud machines, or stop it; owner only",
+        "operationId": "setCloudMachineSupport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudSupportChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSupportView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ],
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+      }
+    },
     "/api/v2/company": {
       "get": {
         "summary": "The team's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them. The Vision is the strategy's: the draft's for the owner, the published one for everyone else",
@@ -11905,7 +12051,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Task-scoped bot turns and Make-page attempts receive 403; the runner work stream uses its separate runner identity. text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "x-task-event-schema": {
               "$ref": "#/components/schemas/TaskEvent"
             },
@@ -21857,6 +22003,805 @@
         ]
       }
     },
+    "/api/v2/letters": {
+      "get": {
+        "summary": "Letters the caller may read, paged and byte capped",
+        "operationId": "listLetters",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOutPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/access": {
+      "get": {
+        "summary": "Whether the caller has sending access",
+        "operationId": "getLettersAccess",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LettersAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/bots/{bot_id}/settings": {
+      "get": {
+        "summary": "Bot's sending policy override and optional cap",
+        "operationId": "getBotLettersSettings",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterBotSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      },
+      "put": {
+        "summary": "Bot manager sets a policy that cannot loosen company policy",
+        "operationId": "setBotLettersSettings",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterBotSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/outboxes/{outbox_id}/grants": {
+      "get": {
+        "summary": "Sending grants on the company outbox",
+        "operationId": "listLettersGrants",
+        "parameters": [
+          {
+            "name": "outbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "const": "company",
+              "type": "string",
+              "title": "Outbox Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LettersGrants"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}": {
+      "put": {
+        "summary": "Owner or admin grants send access",
+        "operationId": "grantLettersAccess",
+        "parameters": [
+          {
+            "name": "outbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "const": "company",
+              "type": "string",
+              "title": "Outbox Id"
+            }
+          },
+          {
+            "name": "grantee_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "bot",
+                "person"
+              ],
+              "type": "string",
+              "title": "Grantee Type"
+            }
+          },
+          {
+            "name": "grantee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Grantee Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__letters__Grant"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LettersGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      },
+      "delete": {
+        "summary": "Owner or admin revokes send access",
+        "operationId": "revokeLettersAccess",
+        "parameters": [
+          {
+            "name": "outbox_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "const": "company",
+              "type": "string",
+              "title": "Outbox Id"
+            }
+          },
+          {
+            "name": "grantee_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "bot",
+                "person"
+              ],
+              "type": "string",
+              "title": "Grantee Type"
+            }
+          },
+          {
+            "name": "grantee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Grantee Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LettersRevoked"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/quotes": {
+      "post": {
+        "summary": "Quote a PDF or rendered text without sending",
+        "operationId": "quoteLetter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Quote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/letters/settings": {
+      "get": {
+        "summary": "Company return address, mode, cap and setup state",
+        "operationId": "getLettersSettings",
+        "parameters": [
+          {
+            "name": "check",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Check"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LettersSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      },
+      "put": {
+        "summary": "Owner or admin sets company Letters out policy",
+        "operationId": "setLettersSettings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__letters__Settings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LettersSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/{letter_id}": {
+      "get": {
+        "summary": "Letter, approved proof and tracking",
+        "operationId": "getLetter",
+        "parameters": [
+          {
+            "name": "letter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Letter Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/{letter_id}/cancel": {
+      "post": {
+        "summary": "Request cancellation; pass through the provider's honest refusal",
+        "operationId": "cancelLetter",
+        "parameters": [
+          {
+            "name": "letter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Letter Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
+    "/api/v2/letters/{letter_id}/send": {
+      "post": {
+        "summary": "Ask first or submit under the sending policy",
+        "operationId": "sendLetter",
+        "parameters": [
+          {
+            "name": "letter_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Letter Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LetterOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Letters out"
+        ]
+      }
+    },
     "/api/v2/librarian": {
       "get": {
         "summary": "Whether the Librarian is on, and whether the caller can turn it on",
@@ -24712,16 +25657,6 @@
               "default": 20000,
               "title": "Limit"
             }
-          },
-          {
-            "name": "notes",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Notes"
-            }
           }
         ],
         "responses": {
@@ -25077,6 +26012,86 @@
         ]
       }
     },
+    "/api/v2/meetings/{rid}/items/{iid}/link": {
+      "post": {
+        "summary": "Accept a readable task proposal without creating a task; the meeting must be shared",
+        "operationId": "acceptMeetingTaskProposal",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Iid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingTaskProposalAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/{rid}/items/{iid}/push": {
       "post": {
         "summary": "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience",
@@ -25235,7 +26250,7 @@
         ]
       },
       "post": {
-        "summary": "Link up to 20 readable tasks; sent is only for their requester; links never widen access",
+        "summary": "Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data",
         "operationId": "linkMeetingTasks",
         "parameters": [
           {
@@ -25273,7 +26288,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MeetingTaskLinks"
+                  "$ref": "#/components/schemas/MeetingTaskLinkBatch"
                 }
               }
             }
@@ -27012,18 +28027,20 @@
                   "path": {
                     "type": "string"
                   },
-                  "page": {
-                    "type": "string",
-                    "description": "Add a version to this page filed on the turn's only task"
-                  },
-                  "base_version": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "scope": {
                     "enum": [
                       "task",
                       "bot"
+                    ]
+                  },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/AccessAudience"
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   }
                 }
@@ -27200,7 +28217,7 @@
         ]
       },
       "patch": {
-        "summary": "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+        "summary": "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
         "operationId": "editPage",
         "parameters": [
           {
@@ -36987,58 +38004,6 @@
         ]
       }
     },
-    "/api/v2/tasks/{tid}/context": {
-      "get": {
-        "summary": "Up to 10 pages and 10 meetings shared by the task readers, filtered by current access; metadata only",
-        "operationId": "getTaskContext",
-        "parameters": [
-          {
-            "name": "tid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Tid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskContext"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Tasks"
-        ]
-      }
-    },
     "/api/v2/tasks/{tid}/delete": {
       "post": {
         "summary": "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in as themselves, whatever bots did on it: that work stays in place, hidden until a restore",
@@ -37495,127 +38460,6 @@
                 ],
                 "title": "TaskFile",
                 "type": "object"
-              }
-            }
-          }
-        },
-        "tags": [
-          "Tasks"
-        ]
-      }
-    },
-    "/api/v2/tasks/{tid}/make-page": {
-      "post": {
-        "summary": "Ask the caller's own Assistant to make and pin a page from the task's shared context; 409 at 60 pins",
-        "operationId": "makeTaskPage",
-        "parameters": [
-          {
-            "name": "tid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Tid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MakePage"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AssistantSent"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Tasks"
-        ]
-      },
-      "get": {
-        "summary": "The caller's latest Make page request on this task, or null; making, made or failed",
-        "operationId": "getTaskMakePage",
-        "parameters": [
-          {
-            "name": "tid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Tid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskMakePage"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
               }
             }
           }
@@ -44621,6 +45465,54 @@
         "title": "AccessAudience",
         "description": "One level of a bot's access: everyone, or these people, teams and bots."
       },
+      "Address": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "line1": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Line1"
+          },
+          "line2": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Line2",
+            "default": ""
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "City"
+          },
+          "state": {
+            "type": "string",
+            "pattern": "^[A-Z]{2}$",
+            "title": "State"
+          },
+          "postal_code": {
+            "type": "string",
+            "pattern": "^\\d{5}(-\\d{4})?$",
+            "title": "Postal Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "line1",
+          "city",
+          "state",
+          "postal_code"
+        ],
+        "title": "Address"
+      },
       "AlertCompanyCap": {
         "type": "object",
         "properties": {
@@ -47626,6 +48518,42 @@
         ],
         "additionalProperties": true
       },
+      "BotSettings": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ask_first",
+                  "on_their_own",
+                  "never"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "monthly_cap_micros": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap Micros"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BotSettings"
+      },
       "BotSubscription": {
         "type": "object",
         "properties": {
@@ -49039,6 +49967,100 @@
         "additionalProperties": false,
         "type": "object",
         "title": "CloudAgentRequest"
+      },
+      "CloudSupportChange": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "CloudSupportChange"
+      },
+      "CloudSupportMachine": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "helper": {
+            "type": "string",
+            "enum": [
+              "on",
+              "off",
+              "offline",
+              "none"
+            ],
+            "title": "Helper"
+          },
+          "seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "helper",
+          "seen"
+        ],
+        "title": "CloudSupportMachine"
+      },
+      "CloudSupportView": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          },
+          "machines": {
+            "items": {
+              "$ref": "#/components/schemas/CloudSupportMachine"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Machines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "on",
+          "machines"
+        ],
+        "title": "CloudSupportView"
       },
       "CommentDelivery": {
         "type": "object",
@@ -56863,51 +57885,6 @@
         ],
         "additionalProperties": true
       },
-      "Grant": {
-        "properties": {
-          "full_name": {
-            "type": "string",
-            "title": "Full Name"
-          },
-          "access": {
-            "type": "string",
-            "enum": [
-              "read",
-              "write"
-            ],
-            "title": "Access",
-            "default": "write"
-          },
-          "run_workflows": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Workflows"
-          },
-          "edit_workflows": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Edit Workflows"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "full_name"
-        ],
-        "title": "Grant"
-      },
       "Group": {
         "type": "object",
         "properties": {
@@ -58543,6 +59520,19 @@
             ],
             "title": "At Ms"
           },
+          "proposed_task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Task Id"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -58685,6 +59675,11 @@
               }
             ],
             "title": "Result Ref"
+          },
+          "private": {
+            "type": "boolean",
+            "title": "Private",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -59729,6 +60724,491 @@
         "additionalProperties": false,
         "type": "object",
         "title": "KpiUpdate"
+      },
+      "LetterBotSettings": {
+        "type": "object",
+        "properties": {
+          "bot_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "monthly_cap_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bot_id",
+          "mode",
+          "monthly_cap_micros"
+        ],
+        "additionalProperties": true
+      },
+      "LetterOut": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LetterOutContents"
+          },
+          {
+            "$ref": "#/components/schemas/LetterOutMetadata"
+          }
+        ]
+      },
+      "LetterOutContents": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "mail_class": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "acting_bot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "automation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hq_letter_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recipient": {
+            "type": "object"
+          },
+          "return_address": {
+            "type": "object"
+          },
+          "tracking": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "barcode": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "barcode",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "page_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total_micros": {
+            "type": "integer"
+          },
+          "color": {
+            "type": "boolean"
+          },
+          "duplex": {
+            "type": "boolean"
+          },
+          "cancel_possible": {
+            "type": "boolean"
+          },
+          "letter_id": {
+            "type": "string"
+          },
+          "approval_reason": {
+            "type": "string"
+          },
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "billing": {
+            "type": "string"
+          },
+          "charged_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "redacted": {
+            "enum": [
+              false
+            ]
+          },
+          "can_cancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted_at",
+          "acting_bot_id",
+          "approval_hash",
+          "approval_id",
+          "approval_reason",
+          "automation_id",
+          "billing",
+          "can_cancel",
+          "cancel_possible",
+          "charged_micros",
+          "color",
+          "created_at",
+          "currency",
+          "duplex",
+          "error",
+          "hq_letter_id",
+          "id",
+          "letter_id",
+          "mail_class",
+          "page_count",
+          "proof",
+          "quote_expires_at",
+          "quote_id",
+          "recipient",
+          "redacted",
+          "requested_by",
+          "return_address",
+          "status",
+          "task_id",
+          "thread_id",
+          "total_micros",
+          "tracking",
+          "updated_at"
+        ],
+        "additionalProperties": true
+      },
+      "LetterOutMetadata": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mail_class": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "billing": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "acting_bot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total_micros": {
+            "type": "integer"
+          },
+          "charged_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "redacted": {
+            "enum": [
+              true
+            ]
+          },
+          "can_cancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acting_bot_id",
+          "billing",
+          "can_cancel",
+          "charged_micros",
+          "created_at",
+          "currency",
+          "id",
+          "mail_class",
+          "page_count",
+          "redacted",
+          "status",
+          "total_micros",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "LetterOutPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LetterOut"
+            }
+          },
+          "next_before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "additionalProperties": true
+      },
+      "LettersAccess": {
+        "type": "object",
+        "properties": {
+          "send": {
+            "type": "boolean"
+          },
+          "outbox_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outbox_id",
+          "send"
+        ],
+        "additionalProperties": true
+      },
+      "LettersGrant": {
+        "type": "object",
+        "properties": {
+          "grantee_type": {
+            "type": "string"
+          },
+          "grantee_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "grantee_id",
+          "grantee_type",
+          "level"
+        ],
+        "additionalProperties": true
+      },
+      "LettersGrants": {
+        "type": "object",
+        "properties": {
+          "outbox_id": {
+            "type": "string"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "outbox_id": {
+                  "type": "string"
+                },
+                "grantee_type": {
+                  "type": "string"
+                },
+                "grantee_id": {
+                  "type": "string"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "granted_by_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "created_at",
+                "granted_by_id",
+                "grantee_id",
+                "grantee_type",
+                "id",
+                "level",
+                "outbox_id"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "grants",
+          "next",
+          "outbox_id"
+        ],
+        "additionalProperties": true
+      },
+      "LettersRevoked": {
+        "type": "object",
+        "properties": {
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "revoked"
+        ],
+        "additionalProperties": true
+      },
+      "LettersSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "return_address": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "monthly_cap_micros": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "availability": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "availability",
+          "checked_at",
+          "created_at",
+          "id",
+          "mode",
+          "monthly_cap_micros",
+          "return_address",
+          "updated_at"
+        ],
+        "additionalProperties": true
       },
       "Librarian": {
         "type": "object",
@@ -60926,22 +62406,6 @@
         "title": "MaintenanceUpdate",
         "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
       },
-      "MakePage": {
-        "properties": {
-          "text": {
-            "type": "string",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Text"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "text"
-        ],
-        "title": "MakePage"
-      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -61132,6 +62596,47 @@
         ],
         "additionalProperties": true
       },
+      "MeetingTaskLinkBatch": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeetingTaskLink"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "enum": [
+                    200,
+                    404
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "next_cursor",
+          "results",
+          "tasks"
+        ],
+        "additionalProperties": true
+      },
       "MeetingTaskLinks": {
         "type": "object",
         "properties": {
@@ -61151,6 +62656,49 @@
         "required": [
           "next_cursor",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskProposalAccepted": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "proposed_task_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "result_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "proposed_task_id",
+              "result_ref",
+              "status"
+            ],
+            "additionalProperties": true
+          },
+          "pushed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item",
+          "pushed"
         ],
         "additionalProperties": true
       },
@@ -62431,6 +63979,21 @@
       "Page": {
         "type": "object",
         "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only returned to managers on a single page read or write; null inherits where it is filed"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Only returned to managers, including on lists and cards"
+          },
           "file_id": {
             "type": "string"
           },
@@ -62577,6 +64140,16 @@
               }
             ],
             "title": "Archived"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -64547,6 +66120,88 @@
         ],
         "additionalProperties": true
       },
+      "Quote": {
+        "properties": {
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "mail_class": {
+            "type": "string",
+            "enum": [
+              "first_class",
+              "certified",
+              "certified_return_receipt"
+            ],
+            "title": "Mail Class",
+            "default": "first_class"
+          },
+          "color": {
+            "type": "boolean",
+            "title": "Color",
+            "default": false
+          },
+          "duplex": {
+            "type": "boolean",
+            "title": "Duplex",
+            "default": false
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "recipient"
+        ],
+        "title": "Quote"
+      },
       "RanOn": {
         "type": "object",
         "properties": {
@@ -64917,7 +66572,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/Grant"
+                  "$ref": "#/components/schemas/backend__repositories__Grant"
                 },
                 "type": "array"
               },
@@ -70405,72 +72060,6 @@
         ],
         "additionalProperties": true
       },
-      "TaskContext": {
-        "type": "object",
-        "properties": {
-          "pages": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TaskContextPage"
-            }
-          },
-          "meetings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TaskContextMeeting"
-            }
-          }
-        },
-        "required": [
-          "meetings",
-          "pages"
-        ],
-        "additionalProperties": true
-      },
-      "TaskContextMeeting": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "date": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "date",
-          "id",
-          "title"
-        ],
-        "additionalProperties": true
-      },
-      "TaskContextPage": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "version": {
-            "type": "integer"
-          },
-          "updated_at": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "title",
-          "updated_at",
-          "version"
-        ],
-        "additionalProperties": true
-      },
       "TaskCreate": {
         "properties": {
           "live_meeting_id": {
@@ -71479,46 +73068,6 @@
           "cursor",
           "next_offset",
           "tasks"
-        ],
-        "additionalProperties": true
-      },
-      "TaskMakePage": {
-        "type": "object",
-        "properties": {
-          "make_page": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "message_id": {
-                    "type": "string"
-                  },
-                  "conversation_id": {
-                    "type": "string"
-                  },
-                  "state": {
-                    "enum": [
-                      "making",
-                      "made",
-                      "failed"
-                    ]
-                  }
-                },
-                "required": [
-                  "conversation_id",
-                  "message_id",
-                  "state"
-                ],
-                "additionalProperties": true
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "make_page"
         ],
         "additionalProperties": true
       },
@@ -76237,6 +77786,65 @@
         ],
         "title": "Edit"
       },
+      "backend__letters__Grant": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "const": "send",
+            "title": "Level",
+            "default": "send"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Grant"
+      },
+      "backend__letters__Settings": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ask_first",
+                  "on_their_own",
+                  "never"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "return_address": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "monthly_cap_micros": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000000000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap Micros"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Settings"
+      },
       "backend__presence__Heartbeat": {
         "properties": {
           "place": {
@@ -76264,6 +77872,51 @@
           "session_id"
         ],
         "title": "Heartbeat"
+      },
+      "backend__repositories__Grant": {
+        "properties": {
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ],
+            "title": "Access",
+            "default": "write"
+          },
+          "run_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Workflows"
+          },
+          "edit_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "full_name"
+        ],
+        "title": "Grant"
       }
     },
     "securitySchemes": {

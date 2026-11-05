@@ -498,7 +498,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
         # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
         "history_events": ("CASE subject_type WHEN 'task' THEN subject_id IN (SELECT id FROM tasks) AND "
-                           + content_gate(("old", "new", "note"))
+                           + content_gate(("old", "new", "note", "data"))
                            + " WHEN 'goal' THEN subject_id IN (SELECT id FROM goals)"
                            + " WHEN 'strategy' THEN " + ("1" if owner else "0")
                            + " WHEN 'company' THEN 1 ELSE subject_type IN "
@@ -533,12 +533,14 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
+        "bot_files": (f"CASE WHEN id IN (SELECT file_id FROM {inner('pages')} WHERE audience IS NOT NULL) "
+                      "THEN " + function("file") + "(id) ELSE 1 END AND " + file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot_id')} END)"),
         "bot_file_versions": "file_id IN (SELECT id FROM bot_files)",
-        "bot_file_activity": "file_id IN (SELECT id FROM bot_files)",
+        "bot_file_activity": "file_id IN (SELECT id FROM bot_files) AND "
+                             "(action<>'page.access_changed' OR " + function("page_manager") + "(file_id))",
         # The company owner is not thereby the owner of everyone's private attachments (media.py).
         "blobs": blob_gate + " AND (" + ("" if bot else f"owner={me} OR ") +
                  "id IN (SELECT blob_id FROM message_assets) OR id IN (SELECT blob_id FROM task_assets) "
@@ -568,6 +570,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
         cols = columns.get(table, ()) if columns is not None else [r[1] for r in c.execute(f'PRAGMA table_info("{table}")')]
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
+    rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
+    rules["messages"] += " AND " + function("page_message") + "(refs)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
     rules["bot_file_activity"] += " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
@@ -758,9 +762,13 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
-        source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
-                                       "live_meeting_turns", "pins", "pages", "meeting_task_links", "bot_settings",
-                                       "sqlite_master", "row_clock", "roster_clock", "provenance_clock", "task_trash_assets"}
+        # Trusted callbacks traverse page, task and letter provenance in this snapshot.
+        source_tables = set(tables) | {
+            "blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots", "live_meeting_turns",
+            "pins", "pages", "page_identities", "meeting_task_links", "bot_settings", "sqlite_master",
+            "row_clock", "roster_clock", "provenance_clock", "task_trash_assets", "mail_items",
+            "postal_mail_grants", "rule_reads", "pin_places", "teammate_accesses", "home_merges", "home_merge_messages",
+            "letters", "letter_proofs", "letter_outbox_grants", "agents"}
         class Source:
             def __init__(self):
                 self.statements = {}
@@ -804,7 +812,18 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         source = Source()
         index = ReadIndex(source, who, rooms=True)
         from . import turn_scope
-        from .files import file_visible
+        from .files import (file_visible, page_audience_visible, page_event_readable, page_blob_visible,
+                            restricted_pages, readable_page_refs)
+        from .pages import may_manage as page_manager
+        audience_cache = {}
+
+        def visible_file(fid):
+            row = restricted_pages(source).get(fid)
+            return not row or page_audience_visible(source, auth, who, row, audience_cache)
+
+        def manages_page(fid):
+            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            return bool(row) and page_manager(source, auth, who, row)
         from .context_search import readable as meeting_readable
 
         def scoped_file(fid):
@@ -838,12 +857,18 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 value = {**value, "files": [ref for ref in value["files"] if turn_scope.file_ref_allowed(source, auth, who, ref)]}
             return encode(turn_scope.project(source, turn_scope.scope(source, who), value, auth=auth))
 
-        functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+        functions = {"page_message": (1, lambda refs: privacy.page_message_readable(
+                         source, privacy.actor(who), H._json(refs, {}) or {})),
+                     "page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
+                     "file": (1, visible_file), "page_manager": (1, manages_page),
+                     "message": (4, index.message), "attempt": (1, index.attempt),
                      "scope_refs": (1, scoped_refs),
                      "scope_file": (1, scoped_file), "scope_meeting": (1, scoped_meeting),
                      "scope_blob": (1, lambda bid: turn_scope.blob_allowed(source, auth, who, bid)),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
-                     "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
+                     "event": (4, lambda target, actor, ts, detail:
+                                    page_event_readable(source, auth, who, target, detail) and
+                                    index.event(target, actor, ts, detail)), "tag": (2, index.tag), "blob": (1, lambda bid: index.blob(bid) and page_blob_visible(source, auth, who, bid)),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
         for name, (arity, fn) in functions.items():
@@ -859,13 +884,15 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 raise Problem("schema", f"Table {table} is missing from this database", 500)
             names = ",".join(f'"{column}"' for column in exposed[table])
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
+        conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
         if deadline is not None:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
-        if turn_scope.scope(c, who) is not None:
-            masks["messages"] = {**masks.get("messages", {}), "refs": prefix + "privacy_scope_refs(source.refs)"}
+        page_refs = function("page_refs") + "(source.refs)"
+        masks["messages"] = {**masks.get("messages", {}), "refs": (
+            function("scope_refs") + "(" + page_refs + ")" if turn_scope.scope(c, who) is not None else page_refs)}
         from . import threads
         names = qlist(threads.Viewer(auth, who).member_names(conn))
         bots = TA.hidden(conn, who, "see", ("bot",), auth)
@@ -904,7 +931,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources}
+    inner_names = {prefix + table for table in set(tables) | sources | {"pages"}}
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -941,7 +968,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                          "market_figures", "market_sources", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if (table in tables or table in sources) and context == prefix + table:
+            if (table in tables or table in sources or table == "pages") and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner: mail_fts is owner-only.

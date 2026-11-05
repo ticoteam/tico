@@ -156,6 +156,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            (docs/pages.md)
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    hub page access <id> [--audience everyone|ben,group:legal,bot:analyst]
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
     hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
                                            or person:me (My dashboard)
@@ -1058,6 +1059,18 @@ def parser():
     item = connections.add_parser('list'); item.set_defaults(fn='connections list')
     item.add_argument('--cursor'); item.add_argument('--limit', type=int)
 
+    letters = sub.add_parser('letter', help='quote and send physical letters through the Gateway').add_subparsers(dest='sub')
+    item = letters.add_parser('quote', help='quote a PDF or text; never prints until send and approval')
+    item.set_defaults(fn='letter quote')
+    item.add_argument('--file-id'); item.add_argument('--text')
+    item.add_argument('--recipient', required=True, type=json.loads, help='US address as JSON: name, line1, city, state, postal_code')
+    item.add_argument('--mail-class', choices=['first_class', 'certified', 'certified_return_receipt'])
+    item.add_argument('--color', action='store_true'); item.add_argument('--duplex', action='store_true')
+    item.add_argument('--task-id'); item.add_argument('--thread-id')
+    item = letters.add_parser('list'); item.set_defaults(fn='letter list')
+    item.add_argument('--before'); item.add_argument('--limit', type=int)
+    for action in ('send', 'show', 'cancel'):
+        item = letters.add_parser(action); item.set_defaults(fn='letter ' + action); item.add_argument('letter_id')
     mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
     item = mail.add_parser('list'); item.set_defaults(fn='mail list')
     item.add_argument('--status', choices=('new','filed','archived','failed'))
@@ -1342,7 +1355,7 @@ def parser():
     s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
-    s = question.add_parser("ask")
+    s = question.add_parser("ask", description="Ask a teammate. A system recipient routes to your manager or the company owner.")
     s.add_argument("words", nargs="*")
     s.add_argument("--wait", type=float, default=60)
     s.set_defaults(fn="question ask")
@@ -1472,6 +1485,7 @@ def parser():
     s.add_argument("--page", help="add a version to a page filed on this turn's task")
     s.add_argument("--base-version", type=int, help="the current page version you read")
     s.add_argument("--scope", choices=["task", "bot"])
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
@@ -1483,6 +1497,10 @@ def parser():
     s = page.add_parser("show", help="one page's status")
     s.add_argument("id")
     s.set_defaults(fn="page show")
+    s = page.add_parser("access", help="show or change who can see a page")
+    s.add_argument("id")
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.set_defaults(fn="page access")
     s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
     s.add_argument("id")
     s.add_argument("--restore", action="store_true", default=None)
@@ -1655,7 +1673,7 @@ def parser():
                         "with no value (put the flag after the parent id), the company's check model, from a provider other "
                         "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
-                   help="with --check-model: what the other model is asked for (default check)")
+                   help="review files a review child; with --check-model, what that model is asked for (default check)")
     s.set_defaults(fn="task child create")
     s = task.add_parser("tree", help="show nested subtasks")
     s.add_argument("id")
@@ -1750,7 +1768,7 @@ def parser():
     s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
-    s = task.add_parser("ask")
+    s = task.add_parser("ask", description="Ask the requester. A system requester routes to your manager or the company owner.")
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")

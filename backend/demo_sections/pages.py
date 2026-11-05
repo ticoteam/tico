@@ -1,4 +1,4 @@
-"""A linked holiday plan and a page Ana asked her Assistant to make on the ad-budget task."""
+"""A restricted holiday plan and an Assistant-made page on the ad-budget task."""
 from ..store import H, digest
 
 
@@ -6,6 +6,7 @@ def seed(b):
     b.at(hours=2)
     task = b.tasks["paid-budget"]
     pages = b.call("GET", "pages?bot=marketing-lead")["pages"]
+    b.call("PATCH", "pages/" + pages[0]["file_id"], {"audience": {"people": ["ana"]}})
     b.call("POST", "pins", {"place": "task:" + task, "item": "page:" + pages[0]["file_id"]})
     sent = b.call("POST", f"tasks/{task}/make-page", {"text": "Make a page for the holiday ad-budget review."})["message"]
 

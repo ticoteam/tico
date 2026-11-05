@@ -738,8 +738,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
-    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). A hold is only made
-    for the audience the check named, so a different one comes back as {"moved": True} as well. A refused verdict
+    `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
+    belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
+    so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
@@ -750,9 +751,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"] and not holds(verdict):
         return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
+    if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
+        return {"moved": True}
     if verdict["outcome"] in ("broken", "too_large"):
-        if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
-            return {"moved": True}
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
         now = {(r["id"], r["version"])
@@ -814,11 +815,22 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    body = (replay or {}).get("body") or {}
+    if operation == "task_answer":
+        asked = H.answer_question(c, body.get("target") or {})
+        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
+    elif operation in ("answer", "reply"):
+        text, text_refs = H.answer_text(H.message(c, replay["message"]),
+                                        replay.get("text") or body.get("text") or "", text=text)
+    else:
+        text_refs = {}
+    from .files import page_references
+    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))], text_refs)
     # The run the output came from: Send anyway writes as the bot with it, so the run's private tasks and meetings are
     # checked against the destination again, as the original write was.
     # The check's own input (`input`) too: a rule changed since is checked on what this check was shown, and Send anyway
     # refuses once the object moved. `path` is the write's route, whose privacy guard Send anyway runs again.
-    stored = {"text": text, "replay": replay,
+    stored = {"text": text, **text_refs, "replay": replay,
               "provenance": {"attempt_id": verdict.get("attempt_id") or "", "path": PATH.get(),
                              "authenticated": verdict.get("sender") or author, "via": verdict.get("via") or "",
                              "place": verdict.get("place"), "origin": verdict.get("origin")},
@@ -998,6 +1010,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload"] or "{}")
+    if not summary:
+        from .files import readable_page_refs
+        stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
     destinations = json.loads(hold["destinations"] or "[]")

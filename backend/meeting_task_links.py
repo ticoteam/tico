@@ -80,7 +80,7 @@ def after_cursor(cursor, scope):
         raise Problem('cursor', 'Invalid link cursor', 422) from None
 
 
-def page(rows, project, scope, limit):
+def page(rows, project, scope, limit, extra=None):
     """Look ahead only through readable rows: hidden links never produce a cursor or a count."""
     items, last = [], None
     for row in rows:
@@ -90,7 +90,7 @@ def page(rows, project, scope, limit):
         candidate = [*items, value]
         key = (row['sort_at'], row['id'])
         # Reserve the actual continuation envelope, including UTF-8 and JSON escaping.
-        result = {scope[0]: candidate, 'next_cursor': cursor_for(scope, key)}
+        result = {scope[0]: candidate, 'next_cursor': cursor_for(scope, key), **(extra or {})}
         size = len(json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode())
         if len(items) == limit or size > PAGE_BYTES:
             if not items:
@@ -100,7 +100,7 @@ def page(rows, project, scope, limit):
     return {scope[0]: items, 'next_cursor': None}
 
 
-def meeting_tasks(c, auth, who, rid, limit=20, cursor=None):
+def meeting_tasks(c, auth, who, rid, limit=20, cursor=None, extra=None):
     record = media.authorized(c, who, rid)
     media.require_live(record)
     scope = ('tasks', rid)
@@ -115,7 +115,7 @@ def meeting_tasks(c, auth, who, rid, limit=20, cursor=None):
             return None
         return {'task_id': task['id'], 'number': task['number'], 'title': task['title'][:200],
                 'status': task['status'], 'kind': row['kind'], 'created_by': row['created_by']}
-    return page(rows, project, scope, limit)
+    return {**page(rows, project, scope, limit, extra), **(extra or {})}
 
 
 def task_meetings(c, auth, who, tid, limit=20, cursor=None):
@@ -155,9 +155,16 @@ def install(app, store, auth, mutate):
         human_only(who)
         def check(c):
             media.require_live(media.authorized(c, who, rid))
+        def available(c, tid):
+            try:
+                return auth.task(c, who, auth.resolve_task(c, who, tid))
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+                return None
         def work(c):
             check(c)
-            tasks = [auth.task(c, who, auth.resolve_task(c, who, tid)) for tid in body.task_ids]
+            tasks = [task for tid in body.task_ids if (task := available(c, tid))]
             if body.kind == 'sent' and any(t['requester_id'] != who.actor for t in tasks):
                 raise Problem('forbidden', 'Only the requester may link a sent task', 403)
             for task in tasks:
@@ -167,7 +174,14 @@ def install(app, store, auth, mutate):
             return {'ok': True}
         mutate(request, body, work, check=check)
         with store.read_transaction() as c:
-            return meeting_tasks(c, auth, who, rid)
+            # Position matches the submitted batch; unavailable tasks expose no reference or reason.
+            results = []
+            for tid in body.task_ids:
+                task = available(c, tid)
+                linked = task and c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=? AND task_id=?',
+                                             (rid, task['id'])).fetchone()
+                results.append({'status': 200 if linked else 404})
+            return meeting_tasks(c, auth, who, rid, extra={'results': results})
 
     @app.delete('/api/v2/meetings/{rid}/tasks/{tid}')
     def unlink(request: Request, rid: str, tid: str):

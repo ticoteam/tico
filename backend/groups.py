@@ -273,6 +273,9 @@ def _audit(c, actor, before, via=None):
         return
     from . import audit_log
     after = _snapshot(c)
+    if before != after:
+        from . import pages
+        pages.group_access_changed(c)
     for gid in sorted(set(before) | set(after)):
         if before.get(gid) != after.get(gid):
             audit_log.write(c, actor, f"group:{gid}", before.get(gid), after.get(gid), via)
