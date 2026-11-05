@@ -289,6 +289,25 @@ def test_updater_reports_old_index_config_and_ref_locks_without_retry_or_removal
 
 
 
+@pytest.mark.slow
+def test_old_locks_reach_the_update_status_with_the_manual_command(repos):
+    from runner_support import git_locks
+    _, checkout, state = repos
+    head = sh(checkout, "git", "rev-parse", "HEAD")
+    for name in ("refs/tags/v0.2.0.lock", "index.lock"):
+        lock = checkout / ".git" / name
+        lock.write_text("still owned")
+        old = time.time() - git_locks.OLD_S * 2
+        os.utime(lock, (old, old))
+        result, calls = run_apply(checkout, state)
+        assert result["state"] == "failed" and calls.restarts == 0
+        error = ru.read_status(state)["error"]
+        assert "minutes old" in error and "run: rm --" in error and str(lock) in error
+        assert lock.read_text() == "still owned"
+        assert sh(checkout, "git", "rev-parse", "HEAD") == head
+        lock.unlink()
+
+
 def test_a_blocked_update_names_the_first_three_changed_files(repos):
     public, checkout, state = repos
     names = [f"notes/{letter}.txt" for letter in "abcde"]

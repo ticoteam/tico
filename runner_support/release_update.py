@@ -508,7 +508,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
                               f"commit or stash them and the runner updates itself: {named}{more}")
     fetched = g("fetch", "--quiet", "origin", f"refs/tags/{tag}:refs/tags/{tag}", timeout=120)
     if fetched.returncode:
-        return say("failed", fetched.stderr if disk_space_error(fetched.stderr) else
+        return say("failed", fetched.stderr if fetched.stderr.startswith("repository copy needs attention:") or disk_space_error(fetched.stderr) else
                    f"release {tag} was not found on the public repository, or a local tag of that name differs")
     target = g("rev-parse", "--verify", "--quiet", tag + "^{commit}").stdout.strip()
     if not target:
@@ -566,7 +566,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
 
     switched = g("checkout", "--quiet", "--detach", target)
     if switched.returncode:
-        return say("failed", switched.stderr if disk_space_error(switched.stderr) else f"could not switch to {tag}: local files are in the way")
+        return say("failed", switched.stderr if switched.stderr.startswith("repository copy needs attention:") or disk_space_error(switched.stderr) else f"could not switch to {tag}: local files are in the way")
     error = install(root, old, target) or prepare(root)
     if error:
         return back_out(error)
