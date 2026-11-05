@@ -7,10 +7,89 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from runner_support import release_update as ru
+
+
+@pytest.fixture
+def old_follower(tmp_path):
+    # Exercise the released follower itself: copying its due rules would let the compatibility test drift.
+    source = subprocess.check_output(["git", "show", "v0.3.45:runner/release_update.py"], cwd=ru.ROOT, text=True)
+    scope = {"__file__": ru.__file__, "__name__": "released_update"}
+    exec(compile(source, "<v0.3.45 follower>", "exec"), scope)
+    now = [1_800_000_000.0]
+    follower = scope["Follower"]({}, tmp_path, None, env={"TICO_RUNNER_KIND": "linux"},
+                                 run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""),
+                                 clock=lambda: now[0], wall=lambda: now[0])
+    follower.release, follower.desired = "0.3.44", "0.3.45"
+    return follower, now
+
+
+@pytest.mark.slow
+def test_deferral_statuses_against_the_released_followers_due_and_claim_rules(old_follower):
+    follower, now = old_follower
+    cases = json.loads((Path(__file__).parent / "fixtures/update-status-cases.json").read_text())
+    for case in cases:
+        ru.write_status(follower.directory, state=case["state"], target="0.3.45", error="test cause",
+                        at=now[0] - case["age"])
+        follower.pending_since = now[0] - 21 * 60
+        follower.decide()
+        assert (follower.pending is not None) == case["due"], case
+        assert follower.blocks_claims(True) == (case["due"] or case["state"] == "updating"), case
+        if not case["due"] and case["state"] != "updating":
+            assert not follower.blocks_claims(False), case
+            assert follower.pending_since is None, case
+
+
+@pytest.mark.slow
+def test_all_deferrals_share_a_bounded_count_and_release_old_runners_between_retries(old_follower):
+    follower, now = old_follower
+    reasons = ("the update lock cannot be checked", "another update holds the checkout lock",
+               "this computer still has work running", "the runner binary is not published yet")
+    for attempt, reason in enumerate(reasons, 1):
+        if attempt > 1:
+            follower.decide()
+            assert follower.pending == "0.3.45"             # the six-hour cooldown ended
+            # A lock wait publishes updating, but it cannot reset the count or erase the final reason.
+            ru.write_status(follower.directory, state="updating", target="0.3.45", error="", at=now[0])
+        result = ru.defer_update(follower.directory, "v0.3.45", reason, clock=lambda: now[0])
+        assert result["state"] == ("blocked" if attempt >= ru.MAX_DEFERRALS else "failed")
+        assert reason in result["error"]
+        assert ru.read_status(follower.directory)["deferrals"] == min(attempt, ru.MAX_DEFERRALS)
+        for elapsed in (0, 6 * 3600 - 1):
+            follower.pending_since = now[0] - 21 * 60
+            now[0] += elapsed
+            follower.decide()
+            assert follower.pending is None and not follower.running
+            assert not follower.blocks_claims(True) and not follower.blocks_claims(False)
+            now[0] -= elapsed
+        now[0] += 6 * 3600
+
+    # A new release or an actual outcome starts a fresh series of deferrals.
+    result = ru.defer_update(follower.directory, "0.3.46", reasons[0], clock=lambda: now[0])
+    assert result["state"] == "failed" and ru.read_status(follower.directory)["deferrals"] == 1
+    ru.write_status(follower.directory, state="healthy", target="0.3.46", at=now[0])
+    ru.defer_update(follower.directory, "0.3.46", reasons[0], clock=lambda: now[0])
+    assert ru.read_status(follower.directory)["deferrals"] == 1
+
+
+def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_path, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(ru.time, "time", lambda: now[0])
+    monkeypatch.setattr(ru.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(ru, "in_flight", lambda directory: True)
+    monkeypatch.setattr(ru, "apply", lambda *a, **kw: pytest.fail("drain timeout must not start Git work"))
+    args = SimpleNamespace(state_dir=str(tmp_path), version="0.3.45")
+    for attempt in range(1, ru.MAX_DEFERRALS + 1):
+        assert ru.run_update(args) == 1
+        status = ru.read_status(tmp_path)
+        assert status["deferrals"] == attempt
+        assert status["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "failed")
+        assert "work running" in status["error"]
+    assert now[0] == 600 * ru.MAX_DEFERRALS
 
 
 def test_recovery_file_reads_refuse_fifos_symlinks_devices_and_oversized_files(tmp_path):
@@ -423,25 +502,26 @@ def test_a_release_whose_new_runner_binary_is_not_published_yet_waits_without_mo
     before, asked = head(checkout), []
     result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None,
                               listed=lambda version: asked.append(version) or False)
-    assert result["state"] == "waiting" and "does not have this computer's runner binary yet" in result["error"]
+    assert result["state"] == "failed" and "does not have this computer's runner binary yet" in result["error"]
     assert asked == ["0.3.0"] and head(checkout) == before and calls.restarts == 0 and calls.prepared == []
-    assert ru.read_status(state)["state"] == "waiting"
+    assert ru.read_status(state)["state"] == "failed"
     # Once release.yml adds the binary, the next try moves.
     result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None, listed=lambda version: True)
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.3.0"
 
 
-def test_a_runner_binary_that_never_comes_is_a_failed_update_after_an_hour(repos):
+def test_a_runner_binary_that_never_comes_is_blocked_after_bounded_retries(repos):
     public, checkout, state = repos
     runner_release(public, checkout)
     now = [1000.0]
     wait = dict(version="0.3.0", which=lambda name: None, listed=lambda version: False, clock=lambda: now[0])
-    assert run_apply(checkout, state, **wait)[0]["state"] == "waiting"
-    now[0] += ru.BINARY_WAIT_S - 1
-    assert run_apply(checkout, state, **wait)[0]["state"] == "waiting"     # the wait counts from the first try
-    now[0] += 1
-    result, calls = run_apply(checkout, state, **wait)
-    assert result["state"] == "failed" and "after 60 minutes" in result["error"] and calls.restarts == 0
+    for attempt in range(1, ru.MAX_DEFERRALS + 1):
+        result, calls = run_apply(checkout, state, **wait)
+        assert result["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "failed")
+        assert ru.read_status(state)["deferrals"] == attempt
+        assert calls.restarts == 0
+        now[0] += 6 * 3600
+    assert "runner binary" in result["error"] and "3 tries" in result["error"]
 
 
 def test_only_a_changed_runner_without_cargo_asks_whether_its_binary_is_published(repos):
@@ -540,6 +620,44 @@ def hold(checkout):
 
 
 @pytest.mark.slow
+def test_alternating_deferrals_keep_their_count_and_release_claims_without_changing_the_checkout(repos, old_follower, monkeypatch):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    before, index = head(checkout), (checkout / ".git/index").read_bytes()
+    follower, now = old_follower
+    follower.directory, follower.release, follower.desired = state, "0.1.0", "0.3.0"
+    for attempt, cause in enumerate(("lookup", "checkout_lock", "active_work", "binary"), 1):
+        with monkeypatch.context() as patch:
+            held = None
+            if cause == "lookup":
+                patch.setattr(ru, "lock_path", lambda *a: None)
+            elif cause == "checkout_lock":
+                held = hold(checkout)
+                patch.setattr(ru.time, "time", lambda: now[0])
+                patch.setattr(ru.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+            try:
+                result, calls = run_apply(checkout, state, version="0.3.0", clock=lambda: now[0], lock_wait=1,
+                                          busy=lambda: cause == "active_work", which=lambda name: None,
+                                          listed=lambda version: False)
+            finally:
+                if held:
+                    held.close()
+        status = ru.read_status(state)
+        assert status["state"] == result["state"] == ("blocked" if attempt >= ru.MAX_DEFERRALS else "failed")
+        assert status["deferrals"] == min(attempt, ru.MAX_DEFERRALS)
+        assert status["error"] == result["error"] and status["error"]
+        follower.decide()
+        assert not follower.blocks_claims(True) and not follower.blocks_claims(False)
+        assert follower.pending_since is None
+        assert head(checkout) == before and (checkout / ".git/index").read_bytes() == index
+        assert calls.installs == calls.prepared == calls.checks == [] and calls.restarts == 0
+        now[0] += 6 * 3600
+
+    result, _ = run_apply(checkout, state, version="0.3.0", listed=lambda version: True)
+    assert result["state"] == "healthy" and "deferrals" not in ru.read_status(state)
+
+
+@pytest.mark.slow
 def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(repos, monkeypatch):
     _, checkout, state = repos
     before = head(checkout)
@@ -566,8 +684,8 @@ def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(rep
 
         monkeypatch.setattr(ru, "git", release_after_lookup)
         result, calls = run_apply(checkout, state, run=run, lock_wait=0)
-        assert result["state"] == "waiting" and len(waited) == 1 and waited[0] >= 10
-        assert ru.read_status(state)["state"] == "waiting"
+        assert result["state"] == "failed" and len(waited) == 1 and waited[0] >= 10
+        assert ru.read_status(state)["state"] == "failed"
         assert commands == []                                      # B never fetched or checked out without A's lock
         assert calls.installs == [] and calls.prepared == [] and calls.checks == [] and calls.restarts == 0
         assert head(checkout) == before and (checkout / ".git/index").read_bytes() == index
@@ -588,7 +706,7 @@ def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeyp
     assert ru.main(["--root", str(tmp_path), "--version", "v0.2.0", "--state-dir", str(tmp_path),
                     "--pid", "42"]) == 1
     status = ru.read_status(tmp_path)
-    assert status["state"] == "waiting" and status["target"] == "0.2.0" and status["at"] > 1
+    assert status["state"] == "failed" and status["target"] == "0.2.0" and status["at"] > 1
     assert "update lock cannot be checked" in status["error"]
 
 
@@ -597,7 +715,7 @@ def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
     before = head(checkout)
     held = hold(checkout)                                         # another environment's update holds the checkout
     result, calls = run_apply(checkout, state, lock_wait=0)
-    assert result["state"] == "waiting" and ru.read_status(state)["state"] == "waiting"
+    assert result["state"] == "failed" and ru.read_status(state)["state"] == "failed"
     assert head(checkout) == before and calls.restarts == 0 and calls.installs == []
     seen = []
 

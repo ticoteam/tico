@@ -171,7 +171,14 @@ runner, still on the old release, finds the checkout already there, runs the ins
 restarts onto it (with its own jobs). The same happens after a `git checkout` of a release by hand. Their updates take
 turns on a lock in the checkout's git directory, so one never moves the checkout while another is mid-update.
 If the Git gate stays busy for ten seconds, or Git cannot find that shared update lock, the updater exits with
-`waiting` status and retries later. It never installs, restarts or rolls back without the shared update lock.
+a reason and lets the runner take new work. The same rule covers a ten-minute wait for another updater's checkout
+lock, work still running after the drain wait, work that starts before the final check, and a release whose runner
+binary is not published yet. All these delays use the same six-hour retry pause. The first two tries report
+`failed`; the third and later tries report `blocked`, with the cause in Settings > Computers and Health. The count
+survives lock waits and changes of cause. A new target release or a completed update clears it. A blocked update
+still retries every six hours, so fixing the cause lets it finish. This also lets older Python runners, including
+v0.3.45, take work between tries: they already honor `failed` and `blocked`, while `waiting` and `busy` are due at
+once. It never installs, restarts or rolls back without the shared update lock.
 
 ### Linux from a checkout: run `scripts/tico install` once
 

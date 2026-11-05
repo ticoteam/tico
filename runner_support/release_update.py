@@ -30,7 +30,7 @@ HEALTH_S = 180
 LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under follow.rs STALE_UPDATING_S
 LOCK_FILE = "tico-update.lock"
 PROCESS_LOCK = "update-process.lock"  # follow.rs probes this before starting an updater or declaring one stale
-BINARY_WAIT_S = 3600         # for a release's runner binary published after it (binary_pending), then a failed update
+MAX_DEFERRALS = 3           # consecutive deferrals of one release before Health asks for help
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
 
@@ -219,10 +219,33 @@ def read_status(directory):
 
 
 def write_status(directory, **fields):
+    if fields.get("state") == "updating":
+        # Waiting on a shared lock must not erase the retry count before this attempt can defer again.
+        before = read_status(directory)
+        if before.get("target") == fields.get("target") and "deferrals" in before:
+            fields["deferrals"] = before["deferrals"]
     path = Path(directory) / STATUS_FILE
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(fields))
     os.replace(tmp, path)
+
+
+def defer_update(directory, version, reason, *, clock=time.time):
+    """End this attempt and release claims for the six-hour cooldown both current and old followers honor.
+
+    waiting/busy are immediately due even in v0.3.45: a new status or a new timer field cannot release its drain.
+    Count all deferrals together so alternating causes cannot keep hiding a blocked update.
+    """
+    target = version.lstrip("v")
+    before = read_status(directory)
+    count = before.get("deferrals", 0) if before.get("target") == target else 0
+    count = count if type(count) is int and count >= 0 else 0
+    count = min(count + 1, MAX_DEFERRALS)
+    state = "blocked" if count == MAX_DEFERRALS else "failed"
+    error = (f"update blocked after {count} tries: " if state == "blocked" else "update paused: ") + reason
+    error = error[:250] + "; retrying in six hours"
+    write_status(directory, state=state, target=target, error=error, at=clock(), deferrals=count)
+    return {"state": state, "target": target, "error": error}
 
 
 # -- the update itself (a checkout) ---------------------------------------------------------------
@@ -433,13 +456,11 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
     """`update` (below) under the checkout's update lock. Runners of several company environments may share one checkout,
     and their updates must not interleave: one's rollback would move the checkout under another that already restarted.
     The second waits, saying "updating" so its runner does not start another, then sees where the first left the checkout.
-    If the lock cannot be found, or after `lock_wait` seconds, it gives up with "waiting" and its runner tries again later."""
+    If the lock cannot be found, or after `lock_wait` seconds, it defers and releases claims until the next retry."""
     path = lock_path(root, run)
     target = version.lstrip("v")
     if path is None:
-        error = "the checkout is busy or its update lock cannot be checked; retrying later"
-        write_status(directory, state="waiting", target=target, error=error, at=clock())
-        return {"state": "waiting", "target": target, "error": error}
+        return defer_update(directory, target, "the checkout is busy or its update lock cannot be checked", clock=clock)
     with open_regular_lock(path) as handle:
         deadline, said = time.time() + lock_wait, False
         while True:
@@ -448,8 +469,7 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
                 break
             except BlockingIOError:
                 if time.time() >= deadline:
-                    write_status(directory, state="waiting", target=target, error="", at=clock())
-                    return {"state": "waiting", "target": target, "error": ""}
+                    return defer_update(directory, target, "another update still holds the checkout lock", clock=clock)
                 if not said:
                     write_status(directory, state="updating", target=target, error="", at=clock())
                     said = True
@@ -458,8 +478,6 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
             result = update(root, version, directory, run=run, clock=clock, **kw)
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
-    if said and result["state"] == "waiting":     # not left saying "updating" while nothing is under way
-        write_status(directory, state="waiting", target=target, error="", at=clock())
     return result
 
 
@@ -472,7 +490,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     `started` is the commit the runner process started on. A checkout that is already on the release while the
     runner still runs other code (another runner sharing the checkout moved it, or a person did) only needs
     the restart.
-    Returns the status written: healthy, waiting, blocked, failed or rolled_back."""
+    Returns the status written: healthy, blocked, failed or rolled_back."""
     tag = "v" + version.lstrip("v")
     version = tag[1:]
 
@@ -517,21 +535,13 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     if not target:
         return say("failed", f"release {tag} does not name a commit")
     if busy and busy():
-        return {"state": "waiting", "target": version, "error": ""}
+        return defer_update(directory, version, "this computer still has work running", clock=clock)
     if target == old and started in ("", target):
         return say("healthy")
     if target != old:
         pending = binary_pending(root, old, target, version, run=run, listed=listed, which=which)
         if pending:
-            # A waiting runner takes no new work (follow.rs drains for a pending update), so the wait has an end:
-            # a Mac build that failed is a failed update, tried again later, while the runner works on.
-            before = read_status(directory)
-            since = before.get("binary_wait_since") if before.get("state") == "waiting" and before.get("target") == version else None
-            since = since if isinstance(since, (int, float)) else clock()
-            if clock() - since >= BINARY_WAIT_S:
-                return say("failed", f"release {tag} still has no runner binary for this computer after "
-                                     f"{BINARY_WAIT_S // 60} minutes")
-            return say("waiting", pending, binary_wait_since=since)
+            return defer_update(directory, version, pending, clock=clock)
     say("updating")
 
     def restarted_helpers():
@@ -621,6 +631,10 @@ def run_update(args):
     deadline = time.time() + 600
     while in_flight(args.state_dir) and time.time() < deadline:   # the runner waits for quiet first; this is the second look
         time.sleep(10)
+    if in_flight(args.state_dir):
+        result = defer_update(args.state_dir, args.version, "this computer still has work running")
+        print(json.dumps(result))
+        return 1
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
     result = apply(args.root, args.version, args.state_dir, busy=lambda: in_flight(args.state_dir),
                    restart=lambda: restart_runner(args.pid),

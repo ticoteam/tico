@@ -1,0 +1,13 @@
+[
+  {"state": "waiting", "age": 0, "due": true},
+  {"state": "busy", "age": 0, "due": true},
+  {"state": "updating", "age": 0, "due": false},
+  {"state": "failed", "age": 0, "due": false},
+  {"state": "blocked", "age": 0, "due": false},
+  {"state": "rolled_back", "age": 0, "due": false},
+  {"state": "failed", "age": 21599, "due": false},
+  {"state": "blocked", "age": 21599, "due": false},
+  {"state": "failed", "age": 21601, "due": true},
+  {"state": "blocked", "age": 21601, "due": true},
+  {"state": "rolled_back", "age": 21601, "due": true}
+]

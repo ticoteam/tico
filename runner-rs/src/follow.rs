@@ -1110,6 +1110,38 @@ scope['main'](sys.argv[1:])
         std::fs::remove_dir_all(f.directory).unwrap();
     }
 
+    #[tokio::test]
+    async fn deferral_statuses_obey_the_due_and_claim_rules() {
+        // The released Python follower runs this same table; waiting/busy would keep either runner drained.
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../runner_support/tests/fixtures/update-status-cases.json")).unwrap();
+        let f = checkout_follower();
+        std::env::set_var("TICO_SUPERVISED", "1");
+        for case in cases {
+            let state = case["state"].as_str().unwrap();
+            let due = case["due"].as_bool().unwrap();
+            write_status(&f.directory, json!({"state": state, "target": "0.3.45", "error": "test cause", "at": epoch_s() - case["age"].as_f64().unwrap()}));
+            {
+                let mut s = f.inner.lock().unwrap();
+                s.desired = Some("0.3.45".into());
+                s.pending_since = Instant::now().checked_sub(Duration::from_secs(21 * 60));
+                s.features = json!({"runner_drain": true});
+            }
+            f.decide().await;
+            assert_eq!(f.inner.lock().unwrap().pending.is_some(), due, "{case}");
+            assert_eq!(f.draining(), due || state == "updating", "{case}");
+            assert_eq!(f.blocks_claims(true).await, due || state == "updating", "{case}");
+            if !due && state != "updating" {
+                assert!(!f.blocks_claims(false).await, "{case}");
+                assert!(f.inner.lock().unwrap().pending_since.is_none(), "{case}");
+                let mut body = json!({});
+                f.fields(&mut body);
+                assert_eq!(body["update"]["state"], state);
+                assert_eq!(body["update"]["error"], "test cause");
+            }
+        }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
     #[test]
     fn versions_sort_as_release_update_does() {
         assert!(behind("0.3.44", "0.3.45"));
