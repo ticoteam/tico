@@ -70,7 +70,7 @@ def project(c, scoped, payload, *, auth=None):
     from .files import file_visible, prime_visible
 
     tokens = re.compile(r"[A-Za-z0-9_-]+")
-    parsed, names, explicit = {}, set(), set()
+    parsed, names, explicit, digest_refs = {}, set(), set(), set()
 
     def source_ref(value):
         if not isinstance(value, str):
@@ -99,6 +99,8 @@ def project(c, scoped, payload, *, auth=None):
                 source_ref(value)
             if parent in {"file_id", "blob_id", "page_id", "meeting_id", "digest", "source_digest"}:
                 explicit.add(value)
+            if parent in {"digest", "source_digest"} and value:
+                digest_refs.add(value)
         elif isinstance(value, dict):
             if parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str):
                 explicit.add(value["id"])
@@ -109,9 +111,10 @@ def project(c, scoped, payload, *, auth=None):
             for item in value:
                 strings(item, parent)
     strings(payload)
+    names.update(explicit)
     denied, files, blob_rows, meeting_ids, live = set(), {}, {}, set(), {}
     # Blob digests have their own index. Version source digests may differ from stored bytes.
-    digests = {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
+    digests = digest_refs | {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
     for chunk in H.chunks(sorted(names)):
         marks = ",".join("?" * len(chunk))
         files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
@@ -169,7 +172,10 @@ def project(c, scoped, payload, *, auth=None):
     gone = object()
 
     def rejected(value):
-        return isinstance(value, str) and value not in parsed and bool(denied.intersection(tokens.findall(unquote(value))))
+        if not isinstance(value, str) or value in parsed:
+            return False
+        decoded = unquote(value)
+        return decoded in denied or bool(denied.intersection(tokens.findall(decoded)))
 
     def walk(value, parent=""):
         if isinstance(value, str):
