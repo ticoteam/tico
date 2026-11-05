@@ -899,6 +899,9 @@ SCHEMAS = {
     "Me": obj({"actor": "s", "role": "s", "email": "s", "slug": {"type": "string", "description": "A bot caller: its slug (a label; the actor holds its id)."}}, required=["actor", "role", "email"]),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
+                   "administration_url": {"type": "string", "description": "Signed-in humans: the Tico account portal "
+                                          "URL, or empty for an install without a Tico account or portal company. "
+                                          "Open externally; carries no sign-in credentials."},
                    "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
                                      "when absent or invalid; grants no native IPC permission."},
                    "visuals": {"type": "string", "enum": ["full", "hosted", "media"],

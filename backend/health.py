@@ -1998,7 +1998,7 @@ def view(c, who, settings, auth, github, config):
             + ([f"{_plural(asleep, 'cloud machine')} stopped until work comes."] if asleep else []))))
 
     from .performance import load_statuses, recent_overloads
-    from .start_places import NOT_REPORTING, computer_hold, hold_rows
+    from .start_places import MEMORY_HOLD, NOT_REPORTING, computer_hold, hold_rows
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     rows = hold_rows(c, [computer["id"] for computer in computers])          # and their runner rows, once
     for computer in computers:
@@ -2006,6 +2006,12 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
         hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
+        if not hold:
+            # Runner-local memory admission still reports a wait when diagnostics are off.
+            local_memory = next((w['reason'] for w in computer['turn_counts']['waits']
+                                 if w['reason'].startswith(MEMORY_HOLD)), None)
+            if local_memory:
+                hold = local_memory, local_memory
         if hold and not (computer["resting"] and hold[0] == NOT_REPORTING):    # a stopped cloud machine reports nothing
             words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
                      else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING

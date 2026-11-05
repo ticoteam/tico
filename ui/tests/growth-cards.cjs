@@ -77,6 +77,12 @@ function server(me) {
   };
   return {reads, writes, handle(method, p, body, query) {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|growth)\b/.test(p)) writes.push([method, p, body]);
+    if (p === '/api/v2/places/dashboard' && method === 'GET') return [200, {
+      place: 'dashboard', kind: 'dashboard', saved: true, can_edit: me.company_role !== 'member',
+      pins: [{id: 'overview-pin', item: 'card:overview-card', position: 0, size: 'small', made_by: 'human:ana',
+        card: {id: 'overview-card', template: 'kpi', title: 'Company activation', heading: 'Company activation', name: 'KPI',
+          settings: {kpi: 'k2'}, team_name: '', hidden: false, data: {name: 'Activated', unit: '', value: 210, spark: []}}}],
+    }];
     if (p === '/api/v2/places/growth') {
       const month = query.get('month') || MONTHS.at(-1);
       reads.push(month);
@@ -233,7 +239,11 @@ async function shot(page, name) {
       assert.equal(await page.locator('#dash-grid .grc-ret-t tbody tr').count(), 2);
       // Opened at that address, the page reads that month.
       await page.evaluate(() => { location.hash = '#/overview'; });
-      await page.locator('.dash-tabs a[href="#/overview"][aria-current="page"]').waitFor();
+      // Both pages use #dash-grid: wait for Overview before accepting any pins from it.
+      await page.getByRole('heading', {name: 'Overview', exact: true}).waitFor();
+      await page.locator('#dash-grid .dash-pin').first().waitFor();
+      assert.deepEqual(await headings(page), ['Company activation'], 'Overview draws its own cards');
+      assert.equal(await page.locator('#dash-grid .dash-big strong').innerText(), '210');
       await page.evaluate(() => { location.hash = '#/growth?m=2026-09'; });
       await page.waitForFunction(() => document.querySelector('[data-gr-month]')?.value === '2026-09');
       assert.equal(fake.reads.at(-1), '2026-09');
