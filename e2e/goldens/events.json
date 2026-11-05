@@ -1615,6 +1615,7 @@
             "what": "spend"
           }
         ],
+        "plate_count": 1,
         "seq": 130,
         "went_away": {
           "assistant": 0,
@@ -1779,6 +1780,7 @@
             "what": "spend"
           }
         ],
+        "plate_count": 1,
         "seq": 143,
         "went_away": {
           "assistant": 0,

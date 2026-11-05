@@ -17,6 +17,10 @@ const KEY = 'stale:stale:human:ana';
 // refuses one whose task moved on, and the list it hands back is what the card must draw.
 async function answered(browser, viewport) {
   const {page, errors} = await open(browser, {hash: '#/tasks', viewport});
+  await page.evaluate(() => {
+    const answer = staleDecide;
+    staleDecide = (...args) => (window.__staleAnswer = answer(...args));
+  });
   const server = {rows: [row('s-1', 't-1', 'Old chore one', 'done', 4), row('s-2', 't-2', 'Old chore two', null, 2),
     row('s-3', 't-3', 'Old chore three', 'done', 9)]};
   const sent = [];
@@ -54,6 +58,9 @@ async function answered(browser, viewport) {
       all: all.length, focus: document.activeElement?.closest?.('[data-stale-row]')?.dataset.staleRow || ''};
   }, KEY);
   const settle = async (want, what) => {
+    // The row can leave on the first redraw while the answer's second refresh is still reading. Let both finish
+    // before changing the server again, so the next tap still sees the versions this scenario gives it.
+    await page.evaluate(() => window.__staleAnswer);
     let now;
     for (let i = 0; i < 250; i++) { now = await look(); if (want(now)) return now; await page.waitForTimeout(20); }
     assert.fail(`${what} (${viewport.width}px): ${JSON.stringify(now)}`);
