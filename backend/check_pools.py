@@ -365,8 +365,9 @@ def _earlier_reviewers(c, ticket, step):
     for child_id in TR.child_ids(c, ticket["id"]) if before else ():
         child = H.task(c, child_id)
         if step.get("pr"):
-            from .verdict_moves import for_pr
-            if not for_pr(child or {}, step["pr"]):
+            from .verdict_moves import _head, _judged_head, for_pr
+            judged = str((child or {}).get("verdict_head") or _judged_head(c, child or {}) or "").lower()
+            if not for_pr(child or {}, step["pr"]) or not judged or not _head(step["pr"]).startswith(judged):
                 continue
         found = step_flow.child_check(c, child, ticket) if child else None
         if found and found["id"] in before and H.is_bot(child["owner_id"]):

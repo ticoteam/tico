@@ -133,6 +133,23 @@ def test_green_after_approval_wakes_owner_and_qa_and_second_review_are_required(
     assert len(handoffs(api, task, "merge")) == 1
 
 
+def test_review_two_excludes_the_current_heads_first_reviewer(api):
+    setup(api, reviews=2)
+    task = task_pr(api)
+    dispatch(api)
+    [first] = children(api, task)
+    finish(api, first)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET last_turn_at=? WHERE id='rev-a'", (H.now(),))
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.head_sha',?) WHERE task_id=?", (OLD, task["id"]))
+        V.new_head(c, H.task(c, task["id"]))
+    [next_first] = children(api, task)
+    assert next_first["owner_id"] == "bot:rev-b" and next_first["title"].startswith("Review 1:")
+    finish(api, next_first, head=OLD)
+    [second] = children(api, task)
+    assert second["title"].startswith("Review 2:") and second["owner_id"] == "bot:rev-a"
+
+
 def test_private_task_is_not_shared_with_pool(api):
     setup(api)
     task = task_pr(api, private=True)
