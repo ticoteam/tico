@@ -125,7 +125,7 @@ Per install, in this order:
 1. **Stop the writers.** Stop the server; nothing else writes to the database. Runners and the Mac app reach an install
    only through its API (each keeps its own state file, not the hub database), so the server stop is the stop.
    Work in progress is picked up afterwards: a job whose lease runs out is recovered, and a webhook send caught
-   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico -e acme server stop`.
+   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico-computer -e acme server stop`.
 2. **Take the consistent backup while stopped.** The checkpoint copies every page of the database into a new private
    file and checks that the copy is complete, without an integrity scan, so it is quick enough to run with the server down:
 
@@ -144,7 +144,7 @@ Per install, in this order:
    tico-release.json`), so a rollback knows what each bot was on.
 4. **Start the new release.** Docker: set `TICO_TAG=vX.Y.Z` in `.env`, then `docker compose pull && docker compose up -d`.
    Mac: check out `vX.Y.Z` in the install's checkout (`git -C <checkout> checkout vX.Y.Z`) and restart it with
-   `scripts/tico -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
+   `scripts/tico-computer -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
    order, each in its own transaction with its `schema_migrations` row. A database that has both an old and a new name
    of one column is refused, not guessed at (`RenameConflict`). A failed migration leaves the file at the schema it had,
    and the server does not start on it.

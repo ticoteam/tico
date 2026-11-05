@@ -719,7 +719,7 @@ the job (and show a sign-in problem in Settings until the key is there).
 | `TICO_INTERNAL_DOMAINS` | the domains the policy file lists | optional, comma separated: the team's own mail domains when there is no policy file. Without it they come from the bot's mailbox and the team roster |
 
 Nothing in the `connectors` job is Mac-only: the key is a file on both (no Keychain), and there is no browser automation
-in it. What stays Mac-only is launchd (`scripts/tico install`; Linux uses the runner's own supervisor) and
+in it. What stays Mac-only is launchd (`scripts/tico-computer install`; Linux uses the runner's own supervisor) and
 `connectors/browser.py`, the signed-in browser tool bots use, which needs a desktop browser.
 
 ### Manual or self-hosted
