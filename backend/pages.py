@@ -285,6 +285,8 @@ class Pages:
         """A bot publishes a page: cleaned HTML stored as a version of its file, and the page row beside it, in one
         transaction. The same path (or name) again is a new version of the same page."""
         audience_set, audience = "audience" in fields, fields.get("audience")
+        if who.via == "assistant":
+            audience_set = False    # a Make page turn keeps the page's default audience; only managers set it
         fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items() if k != "audience"}
         name = str(fields.get("name") or str(fields.get("path") or "").rsplit("/", 1)[-1] or "")
         if not name.lower().endswith((".html", ".htm")):

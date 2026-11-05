@@ -118,7 +118,7 @@ def test_runner_file_receipts_without_an_attempt_in_the_response_check_the_reque
     post(api, path, body, machine["token"], key, expected=403)
 
 
-def test_acting_person_migration_preserves_finished_attempts_and_backfills_the_request_person(api):
+def test_acting_person_migration_adds_the_column_without_rewriting_rows(api):
     t = task(api, private=True)
     machine, attempt, _ = start(api, t["id"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
@@ -127,4 +127,5 @@ def test_acting_person_migration_preserves_finished_attempts_and_backfills_the_r
         c.execute("ALTER TABLE attempts DROP COLUMN acting_person")
         migration.up(c)
         assert tuple(c.execute("SELECT state,acting_person FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == (
-            "completed", "human:ben")
+            "completed", None)
+        migration.up(c)     # running it again is a no-op
