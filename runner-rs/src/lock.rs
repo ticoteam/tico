@@ -7,20 +7,33 @@ use std::path::Path;
 
 pub const HELD: &str = "A runner process already holds this registration";
 
-pub struct RunnerLock {
-    _file: File,
+pub struct FileLock {
+    file: File,
+    owner: libc::pid_t,
 }
 
-impl Drop for RunnerLock {
+impl FileLock {
+    /// The caller has acquired flock on this file's open file description.
+    pub fn from_locked(file: File) -> Self {
+        // SAFETY: getpid has no preconditions.
+        Self { file, owner: unsafe { libc::getpid() } }
+    }
+}
+
+impl Drop for FileLock {
     fn drop(&mut self) {
-        // A concurrent spawn can inherit the open description until exec closes it. Ownership ends here,
-        // even while that child's inherited descriptor remains open.
-        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN); }
+        // Closing only our fd leaves the lock held by a concurrent fork until that child execs or exits.
+        // SAFETY: unlock our own open file description; an inherited guard must not unlock its parent's work.
+        unsafe {
+            if libc::getpid() == self.owner {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
     }
 }
 
 /// Ok(lock) while held; Err(HELD) when another process (either engine) has it.
-pub fn acquire(path: &Path) -> Result<RunnerLock, String> {
+pub fn acquire(path: &Path) -> Result<FileLock, String> {
     let file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -35,7 +48,39 @@ pub fn acquire(path: &Path) -> Result<RunnerLock, String> {
         }
         return Err(format!("cannot lock {}: {err}", path.display()));
     }
-    Ok(RunnerLock { _file: file })
+    Ok(FileLock::from_locked(file))
+}
+
+/// Hold inherited descriptors across the parent's lock release, without relying on fork/exec timing.
+#[cfg(test)]
+pub(crate) fn inherited_files() -> impl Drop {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    struct Child { release: UnixStream, pid: libc::pid_t }
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.release.write_all(b"x");
+            // SAFETY: wait only for the child this helper starts, retrying an interrupted wait.
+            while unsafe { libc::waitpid(self.pid, std::ptr::null_mut(), 0) } < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {}
+        }
+    }
+    let (release, wait) = UnixStream::pair().unwrap();
+    let (release_fd, wait_fd) = (release.as_raw_fd(), wait.as_raw_fd());
+    // SAFETY: the child calls only async-signal-safe functions, then exits without running Rust destructors.
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "{}", std::io::Error::last_os_error());
+    if pid == 0 {
+        unsafe {
+            libc::close(release_fd);
+            let mut byte = 0u8;
+            libc::read(wait_fd, (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    drop(wait);
+    Child { release, pid }
 }
 
 #[cfg(test)]
@@ -48,27 +93,16 @@ mod tests {
     const PY_HOLD: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\nfcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nprint('holding',flush=True)\nsys.stdin.read()\n";
 
     #[test]
-    fn dropping_the_owner_releases_a_lock_even_while_a_child_inherits_its_descriptor() {
-        let dir = std::env::temp_dir().join(format!("tico-lock-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn released_registration_lock_does_not_wait_for_a_forked_child() {
+        let dir = std::env::temp_dir().join(format!("tico-lock-fork-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
         let path = dir.join("runner.lock");
         let held = acquire(&path).unwrap();
-        // Stderr inherits this open description explicitly; exec closes unrelated test threads' descriptors.
-        let mut child = Command::new("python3")
-            .args(["-c", "import os,sys; os.fstat(2); print('inherited',flush=True); sys.stdin.read()"])
-            .stdin(Stdio::piped()).stdout(Stdio::piped())
-            .stderr(Stdio::from(held._file.try_clone().unwrap())).spawn().unwrap();
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
-        assert_eq!(line.trim(), "inherited");
-        assert!(acquire(&path).is_err());
+        let child = inherited_files();
+        assert_eq!(acquire(&path).err().as_deref(), Some(HELD));
         drop(held);
-        assert!(child.try_wait().unwrap().is_none());
-        let next = acquire(&path);
-        drop(child.stdin.take());
-        assert!(child.wait().unwrap().success());
-        assert!(next.is_ok(), "the child must not extend the owner's lock lifetime");
-        drop(next);
+        assert!(acquire(&path).is_ok(), "a forked child retained the released registration lock");
+        drop(child);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1161,46 +1161,20 @@ async function meetComments(state, rec, quiet) {
 }
 
 
-// One queue per item. Only changed keys are sent; newer edits survive either an old reply or a failed write.
+// Pending items keep text at the root and their editable details under detail.
 function meetPendingDraft(state, id) {
   state.pendingDrafts ||= new Map();
-  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, {patch: {}, dirty: {}, flight: null, error: '', timer: 0, version: null, current: null});
+  if (!state.pendingDrafts.has(id)) state.pendingDrafts.set(id, sharedDraft());
   return state.pendingDrafts.get(id);
 }
-function meetPendingPatch(draft, key, value) {
-  if (!(key in draft.dirty)) draft.dirty[key] = meetPendingValue(draft.base, key);
-  if (key === 'text') draft.patch.text = value;
-  else (draft.patch.detail ||= {})[key] = value;
-}
-function meetPendingMerge(a, b) {
-  return {...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})};
-}
-function meetPendingValue(item, key) {
-  return (key === 'text' ? item?.text : item?.detail?.[key]) || '';
-}
-function meetPendingAccepted(draft, patch, item) {
-  for (const key of [...('text' in patch ? ['text'] : []), ...Object.keys(patch.detail || {})]) {
-    if (key === 'text' ? 'text' in draft.patch : key in (draft.patch.detail || {})) draft.dirty[key] = meetPendingValue(item, key);
-    else delete draft.dirty[key];
-  }
-  draft.version = item.version; draft.base = item; draft.current = null;
-}
+const meetPendingPatch = (draft, key, value) => sharedDraftPatch(draft, key, value, key === 'text' ? '' : 'detail');
+const meetPendingMerge = sharedDraftMerge;
 async function meetPendingSave(state, rid, iid) {
-  const draft = meetPendingDraft(state, iid);
-  clearTimeout(draft.timer);
-  if (draft.closed || draft.closedAcknowledged || draft.flight || draft.sending || !Object.keys(draft.patch).length) return draft.flight?.catch(() => {});
-  const patch = draft.patch;
-  draft.patch = {}; draft.error = '';
-  draft.inflightPatch = patch;
-  draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version: draft.version});
-  try { const reply = await draft.flight; meetPendingAccepted(draft, patch, reply.item); }
-  catch (e) {
-    draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message;
-    if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; draft.base = draft.current; }
-  }
-  finally { draft.flight = null; draft.inflightPatch = null; }
-  if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return meetPendingSave(state, rid, iid);
-  await meetItemsLoad(state, rid);
+  return sharedDraftSave(meetPendingDraft(state, iid), {
+    write: (patch, version) => post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version}).then(r => r.item),
+    current: error => error.body?.error?.item,
+    settled: () => meetItemsLoad(state, rid)
+  });
 }
 function meetPendingRender(state, rec, data) {
   const panel = $('#meet-sections [data-pending-panel]');
@@ -1324,7 +1298,7 @@ function meetPendingRender(state, rec, data) {
         if (selection) field.setSelectionRange(...selection);
       }
     }
-    node.querySelector('[data-edited]').textContent = item.updated_by ? `${meetAuthor(item.updated_by)} edited · just now` : '';
+    node.querySelector('[data-edited]').textContent = item.updated_by ? sharedEdited(item.updated_by, meetAuthor) : '';
     node.querySelector('[data-save-error]').hidden = !draft.error;
     let conflict = node.querySelector('[data-current]');
     if (!conflict) { conflict = document.createElement('div'); conflict.dataset.current = ''; node.append(conflict); }
@@ -1336,49 +1310,12 @@ function meetPendingRender(state, rec, data) {
     node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && item.section === 'task' && !owner);
   }
 }
-function meetSharedStop(state) {
-  const shared = state.shared;
-  if (!shared) return;
-  state.shared = null;
-  shared.source?.close(); clearInterval(shared.timer);
-  document.removeEventListener('visibilitychange', shared.visibility);
-  window.removeEventListener('pagehide', shared.leave);
-  shared.leave();
-}
+function meetSharedStop(state) { sharedPlaceStop(state); }
 function meetSharedStart(state, id) {
-  if (state.shared?.id === id) return;
-  meetSharedStop(state);
-  const place = 'meeting:' + id;
-  const shared = state.shared = {id, session: crypto.randomUUID()};
-  const present = async () => {
-    try {
-      getForget();
-      const reply = await get('/v2/presence?place=' + encodeURIComponent(place));
-      if (state.shared !== shared) return;
-      const el = $('#meet-sections [data-meet-presence]');
-      const others = (reply.actors || []).filter(a => a.actor !== 'human:' + S.me?.id);
-      if (el) el.textContent = others.length ? `${others.map(a => a.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here` : '';
-    } catch {}
-  };
-  const heartbeat = async gone => {
-    try { await post('/v2/presence', {place, session_id: shared.session, gone}, undefined, {keepalive: gone}); if (!gone) await present(); } catch {}
-  };
-  shared.leave = () => { heartbeat(true); };
-  shared.visibility = () => { heartbeat(document.hidden); if (!document.hidden) meetItemsLoad(state, id); };
-  document.addEventListener('visibilitychange', shared.visibility);
-  window.addEventListener('pagehide', shared.leave);
-  shared.timer = setInterval(() => { if (!document.hidden) heartbeat(false); }, 15000);
-  if (!document.hidden) heartbeat(false);
-  if (typeof EventSource !== 'undefined') {
-    const source = shared.source = new EventSource(API + '/v2/events?topics=meeting_items,presence&meeting=' + encodeURIComponent(id) + '&place=' + encodeURIComponent(place));
-    source.addEventListener('meeting_items', event => {
-      const data = JSON.parse(event.data);
-      if (data.gone) { meetSharedStop(state); delete state.items[id]; meetShow(state, false); return; }
-      meetItemsLoad(state, id);
-    });
-    source.addEventListener('presence', present);
-    source.addEventListener('ready', () => { meetItemsLoad(state, id); present(); });
-    source.addEventListener('reset', () => { meetItemsLoad(state, id); present(); });
-    source.addEventListener('expired', () => { meetSharedStop(state); meetShow(state, false); });
-  }
+  sharedPlaceStart(state, {
+    id, place: 'meeting:' + id, topic: 'meeting_items', filter: 'meeting',
+    changed: () => meetItemsLoad(state, id),
+    gone: () => { meetSharedStop(state); delete state.items[id]; meetShow(state, false); },
+    present: words => { const el = $('#meet-sections [data-meet-presence]'); if (el) el.textContent = words; }
+  });
 }

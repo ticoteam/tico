@@ -70,7 +70,8 @@ const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({
 function liveTasksApply(events) {
   events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
   if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
-    TASK_CHAT.dialog.querySelector('[data-modal-close]')?.click();
+    if (TASK_CHAT.dialog.taskLive) taskLiveGone(TASK_CHAT.dialog, TASK_CHAT.dialog.taskLive);
+    else TASK_CHAT.dialog.querySelector('[data-modal-close]')?.click();
     taskChatStop();
   }
   const state = TASKS_ST;

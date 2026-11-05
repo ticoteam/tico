@@ -8,11 +8,12 @@ and address is fictional (.example domains, 555 numbers); the secrets are derive
 
 import hashlib
 import json
+import uuid
 
 from .. import demo_content as D
 from .. import gateway_connection, hubdb, slack_app
 from ..auth import Identity
-from ..demo_seed import RUNNER_VERSION, SEED_SHA
+from ..demo_seed import NAMESPACE, RUNNER_VERSION, SEED_SHA, fixed
 from ..inbound import save_inbox
 from ..postal_mail import arrived
 from ..store import H
@@ -149,7 +150,9 @@ def _email_sending(b):
         raw = compose.build(["customer@shop.example"], "Your replacement order", "Your replacement is ready to ship.", from_addr=owner.email)
         email_sending.enqueue(c, b.app.state.auth, owner.actor, email_sending.Enqueue(mailbox=owner.email, raw=raw),
                               {"legal_or_money": False, "status": "classified"})
-    b.write(work)
+    # A separate namespace keeps this last approval stable when other demo sections add rows.
+    with fixed(b.clock, namespace=uuid.uuid5(NAMESPACE, "email-sending")):
+        b.write(work)
 
 
 def _inboxes(b):
