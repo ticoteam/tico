@@ -9,7 +9,9 @@ Attio, 410 from Todoist, 200 from Apollo) or has no cheap GET (Linear's GraphQL)
 cannot tell a bad key from a good one would show Working for both. Their calls still go through the proxy.
 
 `apply_auth` is the one place a key is put on a request, shared by the check here and the proxy (track B), so the two
-can never disagree about where a service expects its key.
+can never disagree about where a service expects its key. `is_tool_key` and `insert_tool` are the one rule for which
+stored key is a tool's and how its tool is made, shared by the data migration (on a raw connection) and
+`api_tools.ensure_tool` (every key stored since), so a key stored either way lands on Tools alike.
 """
 
 import base64
@@ -104,6 +106,41 @@ def match(env="", name="", service=""):
             if words[:len(prefix)] == prefix:
                 return key
     return None
+
+
+def is_tool_key(kind, env, name, source, stored, on_computers):
+    """Whether a stored credential is a tool's key: an `api_key` or `token` with a value. Not a tool's: a model key (its
+    variable, or a name with none set, is a providers.MODEL_KEY_NAMES name; it belongs to the model setup), a computer's
+    key or shared model login (`on_computers`: a computer_keys row or a grant to the computers; or a `computers:`
+    source), Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, passwords and files."""
+    from backend.providers import MODEL_KEY_NAMES
+    env, source = env or "", source or ""
+    return (kind in ("api_key", "token") and bool(stored) and not on_computers
+            and (env or str(name or "").strip()) not in MODEL_KEY_NAMES and not env.startswith("HUB_")
+            and not source.startswith("computers:") and source != "finance")
+
+
+def slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:48].strip("-") or "tool"
+
+
+def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None):
+    """A new tools row for a key's service (or its own name), its fields from SERVICES; the id is free in `tools`. The
+    first tool of a known service takes the service's name, a second keeps its key's name so the two can be told
+    apart. Plain positional SQL, so it runs on a migration's raw connection too."""
+    fields = defaults(service)
+    base = slug(service or name)
+    tid, n = base, 1
+    while conn.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+        n += 1
+        tid = f"{base}-{n}"
+    conn.execute(
+        "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (tid, fields["name"] if service and tid == base else str(name or "").strip() or tid, service or "",
+         fields.get("base_url", ""), fields.get("auth_scheme", "bearer"), fields.get("check_path", ""), delivery,
+         created_by or "", created_at, updated_at or created_at))
+    return tid
 
 
 def defaults(service):

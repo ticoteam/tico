@@ -477,6 +477,8 @@ class Vault:
                   (cid,name,body.username,body.kind,model_env(name,body.kind,body.env),preview,ciphertext,nonce,body.source,now,now,who.actor,who.actor,
                    int(member)))
         H.event(c,who.actor,'credential.updated' if old else 'credential.created',cid,{'secret_changed':secret is not None})
+        from . import api_tools
+        api_tools.ensure_tool(c, who, cid)        # a tool's key shows on Tools however it was stored
         return self.brief(self.row(c,cid))
 
     def manages_bot(self, c, who, subject):
@@ -692,6 +694,8 @@ def install_credentials(app,store,delegate=None,propose=None):
                 c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
                           (gid,cid,subject,who.actor,now))
                 H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
+                from . import api_tools
+                api_tools.ensure_tool(c,who,cid)
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(pending),FILE_MIGRATION))

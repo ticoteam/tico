@@ -191,3 +191,25 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
     assert api.delete(f"/api/v2/api-tools/{tid}", headers=headers()).json()["deleted"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0] == 0
+
+
+def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_service(api):
+    """Settings' vault (and a chat card, and a computer's migration) store through the vault: each tool key lands on a
+    tool in the same write. A known service's key fills that service's tool while it has no Read and write key."""
+    setup(api)
+    tid = tool(api)["id"]                                     # Close CRM, no key yet
+    close = post(api, "credentials", {"name": "Close API key", "env": "CLOSE_API_KEY", "secret": SECRET_RW})["id"]
+    own = post(api, "credentials", {"name": "Acme internal", "env": "ACME_TOKEN", "secret": SECRET_R})["id"]
+    post(api, "credentials", {"name": "Bank", "kind": "password", "secret": "synthetic-password"})
+    post(api, "credentials", {"name": "OpenAI", "env": "OPENAI_API_KEY", "secret": SECRET_R + "-model"})
+    second = post(api, "credentials", {"name": "Close backup", "env": "CLOSE_API_KEY", "secret": SECRET_RW + "-2"})["id"]
+    with api.app.state.store.read() as c:
+        keys = {r["id"]: r["tool_id"] for r in c.execute("SELECT id, tool_id FROM credentials")}
+        tools = {r["id"]: dict(r) for r in c.execute("SELECT id, delivery, service FROM tools")}
+    assert keys[close] == tid and tools[tid]["delivery"] == "proxy"
+    assert keys[second] not in (None, tid) and tools[keys[second]]["delivery"] == "proxy"   # Close already had its key
+    assert tools[keys[own]]["delivery"] == "computer" and tools[keys[own]]["service"] == ""
+    assert len(tools) == 3                                    # the password and the model key are no tool's
+    rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
+    assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
+    assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"
