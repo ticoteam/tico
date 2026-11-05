@@ -62,6 +62,7 @@ delivered when its job is queued, and an external inbox (no computer, no job) wh
 held is not counted as sent. The list is written to the bot's own notice room with Tico, where no person is a member, so the
 roundup never notifies a person.
 
+Maintenance chooses bots least recently sent first, then oldest line. Only the lines a list would show set its age.
 The scheduler selects the bots in one read transaction (discover), then sends each one in its own short transaction (send),
 which rebuilds that bot's list from the live database before it writes anything."""
 
@@ -134,7 +135,7 @@ def _candidates(c, at, shared):
 
 def discover(c, at=None):
     """The bots to visit for the run at `at`: active bots with a line to list that were not sent a list in this run. Read
-    only. send builds each list again from the live database."""
+    only. The oldest line is among the first MAX_LINES in list order. send builds each list again from the live database."""
     from .hubdb import _has_table
     if not _has_table(c, "jobs"):       # a hub without jobs has no wakes to send: nothing is listed
         return []
@@ -148,7 +149,7 @@ def discover(c, at=None):
         items = _items(c, slug, at, shared)
         if items:
             plans.append({"slug": slug, "at": at, "lines": len(items),
-                          "oldest": min(item["sort"] for item in items)})
+                          "oldest": min(item["sort"] for item in items[:MAX_LINES])})
     return plans
 
 
