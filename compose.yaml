@@ -38,6 +38,11 @@ services:
       TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Link previews in Slack (docs/slack-gateway.md): the server builds the manifest, and its unfurl_domains
+      # list these hosts.
+      TICO_SLACK_UNFURL_HOSTS:
+      TICO_SLACK_OPEN_LABEL:
+      TICO_SLACK_OPEN_URL:
       # Visuals in replies (backend/visuals.py): a separate site of their own; unset = pictures, video and audio only.
       TICO_VISUAL_ORIGIN:
       TICO_VISUAL_SECRET:
@@ -124,7 +129,6 @@ services:
       TICO_DECISIONS_IDEA_TRIAGE:
       TICO_STALE_REVIEW:
       TICO_TOPIC_FRESH:
-      TICO_STALL_TRIAGE:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -242,6 +246,9 @@ services:
       TICO_SLACK_MAX_RECIPIENTS:
       TICO_SLACK_DIGEST_MINUTES:
       TICO_SLACK_DIGEST_CAP:
+      TICO_SLACK_UNFURL_HOSTS:
+      TICO_SLACK_OPEN_LABEL:
+      TICO_SLACK_OPEN_URL:
       TICO_SLACK_SECRET_ARN:
       TICO_TELEMETRY:
       DO_NOT_TRACK:
@@ -415,8 +422,6 @@ services:
       TICO_UPDATER_BUNDLE: ${TICO_UPDATER_BUNDLE:-always}   # never: releases that exist only as local tags (docker/smoke.sh)
       # Unset: the pre-update snapshot's time scales with the database size. Set in .env to fix it in seconds.
       TICO_UPDATER_SNAPSHOT_SECONDS: ${TICO_UPDATER_SNAPSHOT_SECONDS:-}
-      # Set to 1 in .env to also run PRAGMA quick_check on the pre-update copy (slow on a large hub).
-      TICO_UPDATER_FULL_CHECK: ${TICO_UPDATER_FULL_CHECK:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - tico-control:/control:ro

@@ -35,7 +35,7 @@ def key():
             shared.update(read_env(path))
     env = {k: os.environ.get(k) or shared.get(k, '') for k in ('GEMINI_API_KEY', 'OP_SERVICE_ACCOUNT_TOKEN')}
     if env['GEMINI_API_KEY'].startswith('op://'):
-        from runner.op import resolve_op_refs
+        from runner_support.op import resolve_op_refs
         resolve_op_refs(env)
     if not env['GEMINI_API_KEY']:
         raise NoKey('Docs answers need a configured Gemini API key.')

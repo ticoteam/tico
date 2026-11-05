@@ -14,8 +14,11 @@ async function refresh(force) {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
     // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
-    const [st, emps, people, seats] = await Promise.allSettled([get('/status'), get('/employees'), get('/humans'),
-      seatsDue ? get('/v2/seats') : null]);
+    // A forced refresh follows a change: an in-flight read (including startup's notification preference read of
+    // /humans) may already hold the old roster. Ask again instead of joining that read.
+    const options = {fresh: !!force};
+    const [st, emps, people, seats] = await Promise.allSettled([get('/status', options), get('/employees', options), get('/humans', options),
+      seatsDue ? get('/v2/seats', options) : null]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
     cloudAccessFromStatus();
@@ -143,7 +146,7 @@ function liveWire() {
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
   for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's

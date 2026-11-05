@@ -266,7 +266,9 @@ async function finCardAdd() {
 
 // ----------------------------------------------------------------- transactions
 const FIN_TX = {q: '', source: 'all', status: '', account: '', org: null};
-const FIN_TX_STATUS = [['', 'Any status'], ['new', 'New'], ['matched', 'Matched'], ['posted', 'Posted'], ['pending', 'Pending'], ['ignored', 'Ignored']];
+const FIN_TX_STATUS = [['', 'Any status'], ['new', 'New'], ['matched', 'Matched'], ['posted', 'Posted'], ['pending', 'Pending'], ['ignored', 'Ignored'], ['failed', 'Failed']];
+// A bank row the bank ended (stored as ignored): shown by Mercury's reason, not as a person's ignore.
+const FIN_TX_GONE = {failed: 'failed', blocked: 'failed', cancelled: 'canceled', reversed: 'returned'};
 function finTxPage() {
   const t = FIN_TX;
   if (FIN.q.has('q') || FIN.q.has('account_id')) {
@@ -361,7 +363,7 @@ function finTxDraw() {
   box.innerHTML = `<table class="fin-t fin-tx-t"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Line</th><th class="fin-n">Amount</th><th>Teammate</th><th>Vendor</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
     const {tags, vendor} = finTxTags(r), key = finTxKey(r);
     const account = r.kind === 'feed' ? `${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}` : '';
-    const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status) : r.reversed ? 'reversed' : 'posted';
+    const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status === 'ignored' && FIN_TX_GONE[r.provider_status] || r.status) : r.reversed ? 'reversed' : 'posted';
     return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.date))}</td>
       <td><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut">${account ? esc(account) : '<span class="muted">—</span>'}</td><td>${finTxLineCell(r)}</td>
       <td class="fin-n">${finCents(r.amount)}</td><td>${tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td class="fin-cut">${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>

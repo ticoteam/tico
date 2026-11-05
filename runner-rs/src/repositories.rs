@@ -1,7 +1,7 @@
-//! Base clones for this computer (runner/repositories.py): a supervisor-owned bare mirror of each repository
+//! Base clones for this computer: a supervisor-owned bare mirror of each repository
 //! the server lists (`<state>/mirrors/<owner>__<repo>.git`), a base clone made from it in `<projects>/repos/`
-//! marked `.git/tico-managed`, their state in `<state>/repositories.json` (the Python file, read and written
-//! the same way), and the heartbeat's `repositories` rows. Task worktrees are made from the base clones.
+//! marked `.git/tico-managed`, their state in `<state>/repositories.json` (the file the Python runner kept,
+//! read and written the same way), and the heartbeat's `repositories` rows. Task worktrees are made from the base clones.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -387,7 +387,7 @@ impl Repositories {
         self.rows.lock().unwrap().values().map(Self::report_row).collect()
     }
 
-    /// What `doctor` prints (repositories.py inspect): the server's current list with each one's saved status,
+    /// What `doctor` prints: the server's current list with each one's saved status,
     /// without cloning or cleanup; empty when the server cannot say.
     pub async fn inspect(&self) -> Vec<Value> {
         let Ok(reply) = self.client.get("runners/me/repositories").await else { return vec![] };
@@ -1235,12 +1235,20 @@ async fn clone_into(name: &str, path: &Path, command: &[String], url: &str, env:
     }
 }
 
-/// Whether the folder is plainly what Tico's own clone left when stopped halfway (repositories.tico_half_clone).
+/// Whether the folder is plainly what Tico's own clone left when stopped halfway: empty, or a Git folder
+/// this runner or its bot user made whose only remote is `tico-mirror` (or none yet). Anything else is never deleted.
+/// Base clones run as the bot user (`run_as_bot`), so where bots are another user the half clone is theirs.
 pub async fn tico_half_clone(path: &Path) -> bool {
+    // SAFETY: geteuid has no preconditions.
+    let mut owners = vec![unsafe { libc::geteuid() }];
+    owners.extend(crate::isolation::identity().map(|(uid, _)| uid));
+    half_clone_of(path, &owners).await
+}
+
+async fn half_clone_of(path: &Path, owners: &[u32]) -> bool {
     use std::os::unix::fs::MetadataExt;
-    let me = unsafe { libc::geteuid() };
     let Ok(meta) = path.symlink_metadata() else { return false };
-    if meta.file_type().is_symlink() || meta.uid() != me {
+    if meta.file_type().is_symlink() || !owners.contains(&meta.uid()) {
         return false;
     }
     if std::fs::read_dir(path).map(|mut d| d.next().is_none()).unwrap_or(false) {
@@ -1248,7 +1256,7 @@ pub async fn tico_half_clone(path: &Path) -> bool {
     }
     let git_dir = path.join(".git");
     match git_dir.symlink_metadata() {
-        Ok(m) if m.is_dir() && m.uid() == me => {}
+        Ok(m) if m.is_dir() && owners.contains(&m.uid()) => {}
         _ => return false,
     }
     let config = git_dir.join("config");
@@ -1370,5 +1378,26 @@ mod tests {
         assert_eq!(wait_words(6.0 * 3600.0), "6 hours");
         assert_eq!(py_g(5.0), "5");
         assert_eq!(py_g(5.5), "5.5");
+    }
+
+    #[tokio::test]
+    async fn a_half_clone_the_bot_user_made_is_still_tico_s_and_one_by_anyone_else_is_not() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = std::env::temp_dir().join(format!("tico-half-clone-{}", std::process::id()));
+        let path = tmp.join("half");
+        std::fs::create_dir_all(&path).unwrap();
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).status().unwrap().success());
+        let p = path.to_str().unwrap();
+        git(&["init", "-q", p]);
+        git(&["-C", p, "remote", "add", "tico-mirror", "file:///mirror"]);
+        let bot = path.metadata().unwrap().uid();
+        // The runner is another user; the folder was made by the bot user the clone ran as.
+        assert!(half_clone_of(&path, &[bot + 1, bot]).await);
+        // Made by neither the runner nor its bot user: someone else's, never Tico's.
+        assert!(!half_clone_of(&path, &[bot + 1, bot + 2]).await);
+        // A person's clone with its own origin is never a half clone, whoever made it.
+        git(&["-C", p, "remote", "add", "origin", "https://github.com/acme/web.git"]);
+        assert!(!half_clone_of(&path, &[bot]).await);
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 }

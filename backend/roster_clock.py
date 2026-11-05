@@ -1,15 +1,17 @@
 """Share the roster's whole-table reads, every bot, every bot's settings and the task step definitions, between requests
 until one of them changes.
 
-Most requests read all of `bots` and `bot_config` once in their snapshot (backend/read_cache.py), and those rows change
+Most requests read all of `bots` and `bot_config` (with `bot_settings`) once in their snapshot (backend/read_cache.py), and those rows change
 a few times an hour at most: on a busy server the two reads were a tenth of all SQL time. SQLite triggers count every
 change from every connection, as provenance_clock does, so the rows read at one count are the rows at that count.
 These are neutral stored rows, never a permission result.
 """
 import sqlite3
 
-TABLES = ("bots", "bot_config", "task_steps")
-STATEMENTS = frozenset({"SELECT * FROM bot_config", "SELECT * FROM bots ORDER BY slug",
+from . import bot_settings as BS
+
+TABLES = ("bots", "bot_config", "bot_settings", "task_steps")
+STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug",
                         "SELECT * FROM task_steps ORDER BY position,id"})
 
 

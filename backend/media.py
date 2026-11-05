@@ -18,7 +18,7 @@ from pydantic import Field, ValidationError
 
 from . import meetings as MS
 from . import models as M
-from . import note_outcomes
+from . import note_outcomes, task_references
 from .blobs import Blobs, brief, register
 from .files import is_file_id
 from clients import bot_files as BF
@@ -138,7 +138,7 @@ def replay_upload(store, request, payload):
     key = upload_key(request)
     with store.read() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+        row = c.execute("SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                         (principal, request.url.path, key)).fetchone()
     if row is None:
         return None
@@ -231,8 +231,15 @@ def may_write(who, record):
     """Only the company owner and the person the source belongs to may change or send it."""
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
-    return who.role == "owner" or (who.role == "human" and bool(who.email)
-                                   and record["owner"].lower() == who.email.lower())
+    # A meeting saved for its participants only is the recorder's, not the company owner's too.
+    owner = who.role == "owner" and not participants_only(record)
+    return owner or (who.role in ("human", "owner") and bool(who.email)
+                     and record["owner"].lower() == who.email.lower())
+
+
+def participants_only(record):
+    """Saved "Participants only" from the Recorder: readable by the people it names, owners excluded."""
+    return (record.get("metadata") or {}).get("audience") == "participants"
 
 
 def shared_meeting(record, who):
@@ -247,9 +254,11 @@ def shared_meeting(record, who):
         return False
     if meta.get("kind") != "meeting":
         return False
+    email = (who.email or "").lower()
+    if participants_only(record):
+        return bool(email) and email in {str(a).strip().lower() for a in meta.get("audience_emails") or []}
     if not meta.get("private"):
         return True
-    email = (who.email or "").lower()
     attendees = [*((meta.get("calendar") or {}).get("attendees") or []),
                  *(p.get("email", "") for p in meta.get("participants") or [] if isinstance(p, dict))]
     return bool(email) and any(str(a).strip().lower() == email for a in attendees)
@@ -271,7 +280,7 @@ def authorized(c, who, rid, *, include_deleted=False, write=False):
     raise Problem("forbidden", "This source belongs to another person", 403)
 
 
-def view(c, who, rid, *, include_transcripts=False):
+def view(c, who, rid, *, auth, include_transcripts=False):
     record = authorized(c, who, rid)
     meta = record["metadata"]
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
@@ -283,7 +292,7 @@ def view(c, who, rid, *, include_transcripts=False):
               "version": state["version"] if state else 1, "turns": meta.get("turns", []),
               "can_edit": may_write(who, record)}
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
-    result["outbox"] = outbox(c, rid)
+    result["outbox"] = outbox(c, rid, who, auth)
     if include_transcripts:
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
@@ -299,7 +308,7 @@ def view(c, who, rid, *, include_transcripts=False):
     return result
 
 
-def outbox(c, rid):
+def outbox(c, rid, who, auth):
     """Doc updates, tasks and feature requests still on this meeting — the structured outcomes."""
     groups = {"doc": [], "task": [], "feature": []}
     try:
@@ -310,7 +319,7 @@ def outbox(c, rid):
         return groups
     for row in rows:
         groups[row["section"]].append({"id": row["id"], "text": row["text"], "status": row["status"],
-                                       "result_ref": row["result_ref"]})
+                                       "result_ref": task_references.redact(c, auth, who, dict(row))["result_ref"]})
     return groups
 
 
@@ -608,12 +617,31 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         versions = [[e["file"], e["version"], e["digest"]] for e in review or []]
         return hashlib.sha256(json.dumps([text, versions]).encode()).hexdigest()
 
+    def question_shown_options(who, body):
+        """The options the person sees on the question as written: a review's own (file_reviews.options, from the
+        files as the write resolves them), else the bot's, else Yes / No. A review the write would refuse keeps the
+        bot's options: the write refuses it as it resolves."""
+        from . import file_reviews
+        if body.review:
+            with store.read() as c:
+                try:
+                    person, _ = question_checked(c, who, body)
+                    review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+                    return file_reviews.options(review, attachments, body.pick, body.options)
+                except Problem:
+                    pass
+        return body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+
     def question_ingest(who, body):
-        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
+        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write: the question as the
+        person sees it, with the options it shows and the body the task is filed with."""
         from . import ask_ingest
         question = body.question.strip()
-        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question,
-                                    "\n\n".join(filter(None, (question, body.why, body.body))), kind="task_question")
+        options = question_shown_options(who, body)
+        asked = [{"question": question, "why": body.why,
+                  "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options]}]
+        return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question, body.body or "",
+                                    kind="task_question", asked=asked)
 
     def question_replay(body, option_files, stored, review_seal=None):
         """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are
@@ -714,6 +742,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             ask["questions"][0]["question"] = said_text
         if topic:
             ask["topic"] = topic
+        # Set here, after the request's ask is checked: a client cannot send it (the ask model forbids extra fields),
+        # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
+        ask["task_question"] = True
         if review:
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
@@ -1042,7 +1073,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             rows = []
             for r in c.execute("SELECT id FROM meetings ORDER BY created_at DESC"):
                 try:
-                    item = view(c, who, r[0])
+                    item = view(c, who, r[0], auth=auth)
                 except Problem:
                     continue
                 if item["review_state"] != review:
@@ -1055,7 +1086,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     @app.get("/api/meetings/{rid}")
     def read(request: Request, rid: str):
         with store.read() as c:
-            return view(c, request.state.identity, rid, include_transcripts=True)
+            return view(c, request.state.identity, rid, include_transcripts=True, auth=auth)
 
     @app.get("/api/meetings/{rid}/versions")
     def versions(request: Request, rid: str):
@@ -1073,7 +1104,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
                 return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
-            return view(c, request.state.identity, meta["id"])
+            return view(c, request.state.identity, meta["id"], auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     def writable(who, rid):
@@ -1092,7 +1123,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             meta["attachments"] = meta.get("attachments", []) + attachments(
                 c, request.state.identity, rid, uploads)
             save(c, meta)
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/meetings/{rid}/edit")
@@ -1113,7 +1144,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 meta["private"] = bool(body.private)
             save(c, meta)
             c.execute("UPDATE media_control SET version=version+1 WHERE meeting_id=?", (rid,))
-            return view(c, request.state.identity, rid)
+            return view(c, request.state.identity, rid, auth=auth)
         return mutate(request, body, work)
 
     @app.post("/api/meetings/{rid}/send")

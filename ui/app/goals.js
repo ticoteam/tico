@@ -95,7 +95,7 @@ function bindGoalEditor(el, g, done) {
       g.title = text || g.title;
       await goalsRefresh();
       done?.(!text);
-    } catch (e) { toast(e.message || 'Could not save the goal', true); input.value = g.title; }
+    } catch (e) { toast(e.message || 'Could not save the goal', true, null, {host: input.closest('dialog[open]')}); input.value = g.title; }
     saving = false;
   };
   const toggle = () => { pick.hidden = !pick.hidden; if (!pick.hidden) { pick.focus(); pick.showPicker?.(); } };
@@ -111,29 +111,6 @@ function bindGoalEditor(el, g, done) {
     } catch (e) { toast(e.message || 'Could not link the goal', true); }
   };
 }
-// "Add goal" becomes an empty line; Enter or leaving it with words saves it. No parent: it is simply not linked.
-function goalAddInline(host, owner, done) {
-  host.innerHTML = `<input class="goal-ed-text goal-add-text" type="text" maxlength="300" aria-label="New goal" placeholder="Plain English: what they are going for">`;
-  const input = host.querySelector('input');
-  input.focus();
-  let saving = false;
-  input.onkeydown = ev => {
-    if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-    if (ev.key === 'Escape') { input.value = ''; input.blur(); }
-  };
-  input.onblur = async () => {
-    const title = input.value.trim();
-    if (saving) return;
-    if (!title) { done?.(null); return; }
-    saving = true;
-    try {
-      const out = await post('/v2/goals', {title, owner});
-      await goalsRefresh();
-      done?.(out.goal);
-    } catch (e) { toast(e.message || 'Could not add the goal', true); saving = false; input.focus(); }
-  };
-}
-
 // The Goals page's editor: one form for a new goal and an existing one. Goal, Owner (new goals),
 // Supports (optional, Nothing by default) and one Save.
 const goalEveryone = () => [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
@@ -160,11 +137,14 @@ function goalMayMove(g, goals = []) {
   if (!me || g.owner_id === GOAL_COMPANY) return false;
   return goals.find(x => x.id === g.parent_id)?.owner_id === 'human:' + me.id || goalOrgPlace(g.owner_id).above.has('p:' + me.id);
 }
-// A group's goals are its lead's: the "+" on a group's line adds one for the lead, when this person may.
+// A group's goals are its lead's, else those of whoever it answers to (orgGroupHead): the "+" on a group's line adds one
+// for them, when this person may.
 function goalGroupOwner(gid) {
   const g = (GOALS_ST?.groups || []).find(x => x.id === gid) || (S.orgGroups || []).find(x => x.id === gid);
-  const lead = String(g?.lead || ''), owner = lead.startsWith('person:') ? 'human:' + lead.slice(7) : lead;
-  return owner && goalMayEdit({owner}, GOALS_ST?.goals || []) ? owner : '';
+  const lead = String(g?.lead || ''), head = lead ? '' : orgGroupHead(gid);
+  const owner = lead.startsWith('person:') ? 'human:' + lead.slice(7) : lead
+    || (head.startsWith('p:') ? 'human:' + head.slice(2) : head.startsWith('b:') ? 'bot:' + head.slice(2) : '');
+  return owner && goalMayEdit({owner_id: owner}, GOALS_ST?.goals || []) ? owner : '';
 }
 // A long press on a phone line adds a goal, as "+" does under a pointer; the tap that ends it opens nothing.
 function goalLongPress(el, fire) {
@@ -423,13 +403,13 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
   if (auto) auto.onclick = async () => {
     auto.disabled = true;
     try { await post('/v2/goals/' + encodeURIComponent(g.id) + '/status/auto', {}); await goalsRefresh(); done(true); }
-    catch (e) { toast(e.message || 'Could not hand the colour back', true); auto.disabled = false; }
+    catch (e) { toast(e.message || 'Could not hand the colour back', true, null, {host: form.closest('dialog[open]')}); auto.disabled = false; }
   };
   const remove = form.querySelector('[data-goal-remove]');
   if (remove) remove.onclick = async () => {
     remove.disabled = true;
     try { await post('/v2/goals/' + encodeURIComponent(g.id) + '/status', {status: 'dropped', note: ''}); goalRemovedToast(g); await goalsRefresh(); done(true); }
-    catch (e) { toast(e.message || 'Could not remove the goal', true); remove.disabled = false; }
+    catch (e) { toast(e.message || 'Could not remove the goal', true, null, {host: form.closest('dialog[open]')}); remove.disabled = false; }
   };
   form.onsubmit = async ev => {
     ev.preventDefault();
@@ -462,7 +442,7 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
       if (measure.post && gid) await measure.post(gid);
       await goalsRefresh();
       done(true);
-    } catch (e) { toast(e.message || 'Could not save the goal', true); save.disabled = false; }
+    } catch (e) { toast(e.message || 'Could not save the goal', true, null, {host: form.closest('dialog[open]')}); save.disabled = false; }
   };
   title.focus();
 }

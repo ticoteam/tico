@@ -20,6 +20,7 @@ import uuid
 from . import hubdb as H
 from . import statuses
 from .store import Problem
+from . import bot_settings as BS
 
 RECRUITING, ONBOARDING, ACTIVE = "recruiting", "onboarding", "active"
 SEAT_PREFIX = "seat:"
@@ -128,7 +129,7 @@ def refuse_send(c, who, to, conversation=None, what="a message"):
 
 
 def _manager_actor(c, slug):
-    row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
     if not row:
         return ""
     reports = str(row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or "")
@@ -156,10 +157,10 @@ def ready(c, who, slug, summary):
     if not is_onboarding(c, slug):
         raise Problem("onboarding", "This bot is not onboarding", 409)
     summary = str(summary or "").strip()[:SUMMARY_MAX]
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
     declared = json.loads(row["config"] or "{}") if row else {}
     declared["onboarding_ready"] = {"at": H.now(), "summary": summary}
-    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(declared), slug))
+    BS.write(c, slug, declared)
     H.event(c, who.actor, "bot.onboarding_ready", slug, {"summary": summary})
     return {"bot": slug, "stage": ONBOARDING, "ready": declared["onboarding_ready"]}
 

@@ -3,8 +3,8 @@ watched against the numbers and the market.
 
 - The page is one row at a time in `strategy_versions`: a summary (400 characters, what every bot reads on every run),
   the vision (400 characters, kept but not shown on the Strategy page; the Goals page reads it from here and falls
-  back to the summary), five fixed sections (`serve`, `sell`, `know`, `how` (How we sell), `not`)
-  plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
+  back to the summary), seven fixed sections (`serve`, `sell`, `proof` (How we know they want it), `now` (Why now),
+  `know`, `how` (How we sell), `not`) plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
   the `draft` (`n` NULL); publishing stamps it `n` (1, 2, 3...), snapshots every bet that is not retired, and opens a
   fresh draft copied from it. The draft carries a `revision`: a write against an older one answers 409, so two
   editors never overwrite each other silently.
@@ -15,7 +15,7 @@ watched against the numbers and the market.
   bet keeps its goals.
 - The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
   exercises run against a strategy are lenses (backend/lenses.py).
-- Every change is a `strategy_events` row with the old and new values, like `market_events`.
+- Every change is a `history_events` row (subject_type `strategy`, its values in `data`), like the market's changes.
 - Publishing emits `strategy.published`, puts `/strategy/summary` in every run's context from the next run
   (backend/learned.py `for_turn`, runner-rs/src/prompt.rs), and files one Decide card for the owner when a bet with
   goals was retired or rewritten (`strategy_realign`, decided through the goal proposals).
@@ -64,10 +64,13 @@ DEFAULT_GUIDE = "default"
 BET_STATUSES = ("proposed", "active", "retired")
 WRONG_KINDS = ("kpi", "thesis", "text")
 DIRECTIONS = ("above", "below")
-FIXED = (("serve", "Who we serve"), ("sell", "What we sell, and for how much"),
-         ("know", "What we know that others don't"), ("how", "How we sell"), ("not", "What we won't do"))
+FIXED = (("serve", "Who we serve"), ("sell", "What we sell, and for how much"), ("proof", "How we know they want it"),
+         ("now", "Why now"), ("know", "What we know that others don't"), ("how", "How we sell"),
+         ("not", "What we won't do"))
 FIXED_KEYS = tuple(k for k, _ in FIXED)
 TITLES = dict(FIXED)
+SECTIONS_SHAPE = "sections is an object: {" + ", ".join(FIXED_KEYS) + ", extra: {key: {title, body}}}"
+PROOF_STALE_DAYS = 30      # the Monday note says so when "How we know they want it" is older (playbooks/keep-proof-current.md)
 EXTRA_KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 FIELDS = ("guide", "summary", "vision", "sections")
 SNAPSHOT = ("id", "statement", "why", "rules_out", "wrong_if", "cites", "status", "rank")
@@ -92,10 +95,6 @@ SCHEMA = (
     "why TEXT NOT NULL DEFAULT '', rules_out TEXT NOT NULL DEFAULT '', wrong_if TEXT, cites TEXT NOT NULL DEFAULT '[]', "
     "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
     "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS strategy_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')",
-    "CREATE INDEX IF NOT EXISTS strategy_events_at ON strategy_events(created_at)",
-    "CREATE INDEX IF NOT EXISTS strategy_events_kind ON strategy_events(kind, created_at)",
 )
 
 
@@ -143,8 +142,7 @@ def loads(value, default):
 
 
 def _event(c, actor, kind, payload):
-    c.execute("INSERT INTO strategy_events (id, kind, actor, created_at, payload) VALUES (?,?,?,?,?)",
-              (H.new_id(), kind, actor, H.now(), dumps(payload or {})))
+    H.history_event(c, "strategy", "strategy", actor, kind, data=payload or {})
 
 
 def _clean(c, actor, value, limit, what, one_line=False):
@@ -155,12 +153,20 @@ def _clean(c, actor, value, limit, what, one_line=False):
 
 
 def _sections(raw):
-    """The stored shape, whatever was stored: every fixed key (a string) and `extra` ({key: {title, body}})."""
+    """The stored shape, whatever was stored: every fixed key (a string) and `extra` ({key: {title, body}}). An extra
+    section stored under a key that later became a fixed one (`proof`, `now`) reads as `<key>-2` (or the next unused
+    number), its title and body kept, so the owner can still edit or remove it."""
     raw = raw if isinstance(raw, dict) else {}
     out = {k: str(raw.get(k) or "") for k in FIXED_KEYS}
     extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
-    out["extra"] = {k: {"title": str((v or {}).get("title") or k), "body": str((v or {}).get("body") or "")}
-                    for k, v in extra.items() if isinstance(v, dict)}
+    out["extra"] = {}
+    for k, v in extra.items():
+        if not isinstance(v, dict):
+            continue
+        key, n = k, 2
+        while key in FIXED_KEYS or key in out["extra"] or (key != k and key in extra):
+            key, n = f"{k}-{n}", n + 1
+        out["extra"][key] = {"title": str(v.get("title") or k), "body": str(v.get("body") or "")}
     return out
 
 
@@ -220,6 +226,26 @@ def versions(c, limit=VERSIONS_PAGE):
     """The published versions, newest first: what the history list shows, without the sections and the bets."""
     return H._rows(c.execute("SELECT n, note, published_at, published_by, guide, summary FROM strategy_versions "
                              "WHERE status='published' ORDER BY n DESC LIMIT ?", (max(1, min(limit, VERSIONS_PAGE)),)))
+
+
+def proof_since(c):
+    """When the published "How we know they want it" last changed: the publish time of the oldest version in the newest
+    run of versions with the same text. None before the first publish, or while the published one is empty."""
+    since, text, below = None, None, None
+    while True:                                  # newest first, a page at a time, until the text differs
+        rows = c.execute("SELECT n, sections, published_at FROM strategy_versions WHERE status='published' "
+                         "AND (? IS NULL OR n < ?) ORDER BY n DESC LIMIT ?", (below, below, VERSIONS_PAGE)).fetchall()
+        for n, sections, at in rows:
+            proof = _sections(loads(sections, {}))["proof"].strip()
+            if text is None:
+                if not proof:
+                    return None
+                text = proof
+            elif proof != text:
+                return since
+            since, below = at, n
+        if len(rows) < VERSIONS_PAGE:
+            return since
 
 
 def _bet(row):
@@ -308,7 +334,7 @@ def view(c, auth, who):
     # The draft is the owner's: a bot never reads an unpublished "What we won't do".
     return {**({"draft": mine} if editor else {}), "current": published, "bets": listed,
             "label": guide(gid)["bets_label"], "label_one": guide(gid)["bet_label"], "may_edit": editor,
-            "website": website(c),
+            "website": website(c), "proof_since": proof_since(c),
             "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner_id", "status")} for g in rows[:GOALS_SHOWN]]
                              for bid, rows in linked.items()},
             # goals_by_bet is a sample; a retire's "N goals serve it" needs every live goal the caller may read.
@@ -401,7 +427,7 @@ def _merge_sections(c, actor, stored, sent):
     """`sent` merged onto `stored`: a fixed key sent is set and "" clears it; an extra section sent as {title, body}
     is set, sent as "" (or with an empty body) is removed; anything not sent is kept, whatever the guide."""
     if not isinstance(sent, dict):
-        H.refuse(c, actor, "kind", "sections is an object: {serve, sell, know, how, not, extra: {key: {title, body}}}")
+        H.refuse(c, actor, "kind", SECTIONS_SHAPE)
     out = _sections(stored)
     for key, value in sent.items():
         if key == "extra":
@@ -464,8 +490,7 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
 
 def _vision_event(c, actor, old, new):
     """The vision everyone sees changed: its history on the Goals page (GET /company/history)."""
-    c.execute("INSERT INTO company_events (id, created_at, actor, field, old, new) VALUES (?,?,?,?,?,?)",
-              (H.new_id(), H.now(), actor, "vision", old, new))
+    H.history_event(c, "company", "company", actor, "vision", old or "", new or "")
 
 
 def sync_vision(c):
@@ -655,7 +680,7 @@ def proposal_error(c, payload):
     sections = payload.get("sections")
     if sections is not None:
         if not isinstance(sections, dict):
-            return "sections is an object: {serve, sell, know, how, not, extra: {key: {title, body}}}"
+            return SECTIONS_SHAPE
         for key, value in sections.items():
             if key == "extra":
                 if not isinstance(value, dict):
@@ -809,7 +834,7 @@ def settle_card(c, actor, proposal_id, note):
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.LIVE_STATUSES:
-        H.task_close(c, actor, task["id"], note=note, quiet=True)
+        H.task_close(c, actor, task["id"], note=note, quiet=True, strict=False)
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
 
 
@@ -900,8 +925,9 @@ def _evidence(c, item, published, today):
         ids = list(dict.fromkeys([wrong["market_id"], *(item.get("cites") or [])]))
         marks = ",".join("?" * len(ids))
         rows = H._rows(c.execute(
-            f"SELECT subject_kind, subject_id, field, old, new, created_at, actor FROM market_events WHERE subject_id IN "
-            f"({marks}) AND created_at > ? AND actor <> 'seed' ORDER BY created_at DESC LIMIT 3", (*ids, published or "")))
+            "SELECT substr(subject_type, 8) AS subject_kind, subject_id, kind AS field, old, new, created_at, "
+            f"actor_id AS actor FROM history_events WHERE subject_type IN {H.MARKET_SUBJECTS_SQL} AND subject_id IN "
+            f"({marks}) AND created_at > ? AND actor_id <> 'seed' ORDER BY created_at DESC LIMIT 3", (*ids, published or "")))
         if not rows:
             return None
         return "The market changed since it was published: " + "; ".join(
@@ -910,6 +936,12 @@ def _evidence(c, item, published, today):
     if wrong.get("kind") == "text" and wrong.get("check_by") and wrong["check_by"] < today:
         return f"Its check date {wrong['check_by']} has passed: look again at \"{wrong.get('text')}\"."
     return None
+
+
+def local_day():
+    """Today on this server's calendar, read from the hub clock. A check falls due on the day the owner reads on this
+    machine, so a server west of UTC does not trip a bet the evening before its date."""
+    return H.parse_ts(H.now()).astimezone().date().isoformat()
 
 
 def watch(c, kpi_id=None, market_id=None, today=None):
@@ -930,9 +962,9 @@ def watch(c, kpi_id=None, market_id=None, today=None):
     active = [b for b in loads(row["bets"], []) if b.get("status") == "active" and b.get("wrong_if")]
     if not active or not strategy_bot.checks(c) or not GA.manager_ready(c):
         return []
-    done = {r[0] for r in c.execute("SELECT json_extract(payload,'$.bet_id') FROM strategy_events WHERE kind=? AND "
-                                    "json_extract(payload,'$.n')=?", (TRIPPED, row["n"]))}
-    today = today or date.today().isoformat()
+    done = {r[0] for r in c.execute("SELECT json_extract(data,'$.bet_id') FROM history_events WHERE subject_type='strategy' "
+                                    "AND kind=? AND json_extract(data,'$.n')=?", (TRIPPED, row["n"]))}
+    today = today or local_day()                         # the hub clock on this server's calendar; a demo build uses its own
     tripped = []
     for number, item in enumerate(active, 1):
         wrong = item["wrong_if"]

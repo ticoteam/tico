@@ -1,7 +1,7 @@
 """Continuous claim observations, evaluated without holding the scheduler's write lock."""
 from typing import Any, cast
 
-from . import execution as E, hubdb as H
+from . import execution as E, hubdb as H, usage_limits
 
 EVENT = 'job.refusal-observed'
 KEY = 'queue-refusal:'
@@ -37,16 +37,17 @@ CURRENT_SQL = ("SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN 
                "WHERE a.bot=? AND b.state='active'")
 
 
-def current(c, settings, bot, suspect=None):
-    """`suspect`: the suspect tasks of this bot's queue, read with the others' (`_prime`)."""
+def current(c, settings, bot, suspect=None, default=None, loads=None):
+    """`suspect`: the suspect tasks of this bot's queue, read with the others' (`_prime`). `default`: the company's limit
+    default, shared by a pass over many bots so its budget and spend reads are made once (usage_limits.Default)."""
     from .read_cache import one
     row = one(c, CURRENT_SQL, (bot,))
     if not row:
         return {}
     # with_job=True always returns four values; cast, so the unpacking below still fails loudly if that changes.
     why, created, _, job = cast(tuple[Any, Any, Any, Any],
-                                E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True,
-                                                suspect=suspect))
+                                E.bot_claimable(c, settings, row['runner_id'], bot, default, oldest=True, with_job=True,
+                                                suspect=suspect, loads=loads))
     if not job or not why or why == 'lane_held':
         return {}
     return {'bot': bot, 'runner_id': row['runner_id'], 'name': row['display_name'] or bot,
@@ -121,7 +122,7 @@ def _prime(c, bots):
     return E._queue_suspects(c, [job for bot in bots if bot in found for job in rows(c, E.queued_jobs_sql(), (bot,))])
 
 
-def aged(c, settings):
+def aged(c, settings, loads=None):
     at = H.now()
     bots = targets(c)
     previous_of = states(c, bots)           # one read for every bot, not one per queued bot
@@ -129,8 +130,9 @@ def aged(c, settings):
            and previous['since'] <= H.shift(at, hours=-12)
            and previous.get('observed_at', '') >= H.shift(at, seconds=-MAX_GAP_SECONDS)]
     suspect = _prime(c, due)                # Health asks every refused queue on each poll
+    default = usage_limits.company(c)       # one pass: every bot's limit check shares its budget and spend reads
     for bot in due:
         previous = previous_of[bot]
-        value = current(c, settings, bot, suspect)
+        value = current(c, settings, bot, suspect, default, loads)
         if value and value['job'] == previous['job'] and value['reason'] == previous['reason']:
             yield {**value, 'refused_since': previous['since']}

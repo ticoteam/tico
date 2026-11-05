@@ -67,8 +67,11 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
             v = threads.viewer(auth, identity)
             python = {i for i in ids if threads.readable(c, v, i)}
             marks = ",".join("?" * len(ids))
+            # `tasks` is the viewer's readable tasks, as a caller passes it: a private task's thread is not SQL's call.
+            tasks = [t for (t,) in c.execute("SELECT id FROM tasks") if threads._task_readable(c, v, t)]
+            readable_tasks = "SELECT id FROM tasks WHERE id IN (" + (",".join(f"'{t}'" for t in tasks) or "NULL") + ")"
             sql = {r[0] for r in c.execute(f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
-                                           + threads.readable_sql(c, v, "conversations"), ids)}
+                                           + threads.readable_sql(c, v, "conversations", tasks=readable_tasks), ids)}
             sse = threads.readable_ids(c, threads.viewer(auth, identity), ids)
             assert sql <= python, (actor, "SQL shows what Python hides", sorted(sql - python)[:5])
             assert sse == python, (actor, sorted(sse ^ python)[:5])
@@ -118,17 +121,17 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
     import json
     bot = "bot:content"
     with store.transaction() as c:
-        # The demo's Content bot is in Leadership; here Leadership sits under Operations.
+        # The demo's Content bot is in Marketing; here Marketing sits under Operations.
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster["org_groups"] = {"operations": {"name": "Operations"}, "marketing": {"name": "Marketing"},
-                                "leadership": {"name": "Leadership", "parent": "operations"}}
+        roster["org_groups"] = {"operations": {"name": "Operations"}, "leadership": {"name": "Leadership"},
+                                "marketing": {"name": "Marketing", "parent": "operations"}}
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
         other = next(a for a in people(who) if a != owner.actor)
         chain = threads.Viewer(auth, Identity(bot, "bot", attempt_id="att-none")).chain(c)
-        assert chain[:2] == ["leadership", "operations"], chain
-        own, above, outside = "leadership", "operations", "marketing"
+        assert chain[:2] == ["marketing", "operations"], chain
+        own, above, outside = "marketing", "operations", "leadership"
 
         def make(title, **kw):
             return threads.create(c, owner, title=title, **kw)["id"]
@@ -319,10 +322,10 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
         tid = threads.create(c, owner, title="Mirror", audience="personal")["id"]
-        message = threads.post(c, owner, tid, "v0", via="peer",
-                               origin={"origin_id": "0190-acme@peer-1", "revision": 0, "install": "peer-1"})
-        again = threads.post(c, owner, tid, "v0", via="peer",
-                             origin={"origin_id": "0190-acme@peer-1", "revision": 0, "install": "peer-1"})
+        message = threads.post(c, owner, tid, "v0", via="slack",
+                               origin={"origin_id": "0190-acme@slack:acme", "revision": 0, "install": "slack:acme"})
+        again = threads.post(c, owner, tid, "v0", via="slack",
+                             origin={"origin_id": "0190-acme@slack:acme", "revision": 0, "install": "slack:acme"})
         assert again.get("duplicate") and again["id"] == message["id"]
         origin = {"origin_id": message["origin_id"]}
         assert threads.apply_revision(c, {**origin, "revision": 2}, body="v2")
@@ -352,14 +355,14 @@ def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
         member, outsider = [a for a in people(who) if a != owner.actor][:2]
         tid = threads.create(c, owner, title="Inner", audience="members", members=[member])["id"]
         other = threads.create(c, owner, title="Other", audience="personal")["id"]
-        origin = {"origin_id": "0191-acme@peer-1", "revision": 0, "install": "peer-1"}
-        sent = threads.post(c, owner, tid, "Mirrored", via="peer", origin=origin)
+        origin = {"origin_id": "0191-acme@slack:acme", "revision": 0, "install": "slack:acme"}
+        sent = threads.post(c, owner, tid, "Mirrored", via="slack", origin=origin)
         stranger = threads.viewer(auth, who[outsider])
         with pytest.raises(Problem) as hidden:
-            threads.post(c, stranger, tid, "Mirrored", via="peer", origin=origin)
+            threads.post(c, stranger, tid, "Mirrored", via="slack", origin=origin)
         assert hidden.value.status == 404
         with pytest.raises(Problem) as moved:
-            threads.post(c, owner, other, "Mirrored", via="peer", origin=origin)
+            threads.post(c, owner, other, "Mirrored", via="slack", origin=origin)
         assert moved.value.status == 409
         threads.sub_thread(c, owner, sent["id"])
         with pytest.raises(Problem) as hidden:
@@ -613,7 +616,7 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
         assert threads.restricted_for(None, {"origin": {"task": secret["id"]}}, None, c=c) == 1
         assert threads.restricted_for(None, {"via": secret["id"]}, None, c=c) == 1
         assert threads.restricted_for(None, {"reason": "see #/task/abc"}, None) == 1
-        assert threads.restricted_for(None, {"via": "assistant", "origin": {"install": "peer-1"}}, None, c=c) == 0
+        assert threads.restricted_for(None, {"via": "assistant", "origin": {"install": "slack:acme"}}, None, c=c) == 0
     with store.read_transaction() as c:
         home = threads.home(c, "bot:cpo", create=False)
         assert home["audience"] == "home" and home["owner_id"] == "bot:cpo"
@@ -726,38 +729,6 @@ def test_a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read
         assert [m["depth"] for m in threads.timeline(c, owner, tid)["messages"]] == [0, 1]
         assert {m["depth"] for m in threads.timeline(c, owner, sub["id"])["messages"]} == {1}
     assert threads.sub_thread_title("word " * 30).endswith("…") and len(threads.sub_thread_title("word " * 30)) <= 61
-
-
-# ----------------------------------------------------------------------------- federation: remote authors are guests
-def test_a_remote_author_writes_only_through_the_keeper_in_its_installs_namespace_and_only_where_linked(world):
-    store, auth, who = world
-    origin = {"origin_id": "0190aaaa-0000-7000-8000-000000000001", "revision": 0, "install": "peer.acme.example"}
-    with store.transaction() as c:
-        owner = threads.viewer(auth, owner_of(c, auth))
-        linked = threads.create(c, owner, title="Partner", audience="members", members=[])["id"]
-        other = threads.create(c, owner, title="Inside", audience="members", members=[])["id"]
-        threads.add_member(c, H.KEEPER, linked, "peer:peer.acme.example")    # sharing's door: a person cannot (test_federation)
-        with pytest.raises(Problem) as owner_role:
-            threads.add_member(c, H.KEEPER, linked, "human:ana@peer.acme.example", role="owner")
-        assert owner_role.value.status == 422, "a remote member is never an owner"
-        for principal, actor, via in ((owner, "human:ana@peer.acme.example", "peer"),
-                                      (H.KEEPER, "human:ana@peer.acme.example", None)):
-            with pytest.raises(Problem) as refused:
-                threads.post(c, principal, linked, "hi", as_actor=actor, via=via, origin=origin)
-            assert refused.value.status == 403
-        with pytest.raises(Problem) as spoofed:
-            threads.post(c, H.KEEPER, linked, "hi", as_actor="human:ana@other.acme.example", via="peer", origin=origin)
-        assert spoofed.value.status == 422, "a peer writes only in its own namespace"
-        with pytest.raises(Problem) as unlinked:
-            threads.post(c, H.KEEPER, other, "hi", as_actor="human:ana@peer.acme.example", via="peer", origin=origin)
-        assert unlinked.value.status == 404, "C1 for a remote author is membership"
-        sent = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
-                            via="peer", origin=origin)
-        assert sent["sender_id"] == "human:ana@peer.acme.example"
-        again = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
-                             via="peer", origin=origin)
-        assert again["id"] == sent["id"], "a repeat (origin_id, revision) writes nothing"
-        assert not c.execute("SELECT 1 FROM thread_followers WHERE actor=?", ("human:ana@peer.acme.example",)).fetchone()
 
 
 def test_a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(world):

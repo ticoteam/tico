@@ -73,6 +73,105 @@ fn connect_links_carry_only_a_safe_tico_address() {
 }
 
 #[test]
+fn an_open_link_chooses_its_tico_and_starts_nothing() {
+    assert_eq!(
+        link_address(
+            "tico-recorder://open?server=https://tico.example.com/",
+            "open"
+        )
+        .as_deref(),
+        Some("https://tico.example.com")
+    );
+    assert_eq!(
+        link_address(
+            "tico-recorder://open?server=https://tico.example.com",
+            "connect"
+        ),
+        None
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
+    app.config.destinations = vec![
+        connection("first", "first.example.com"),
+        connection("second", "tico.example.com"),
+    ];
+    app.destination = "first".into();
+    app.link("tico-recorder://open?server=https://tico.example.com/");
+    assert_eq!(
+        app.destination, "second",
+        "the runner sign-in is that Tico's"
+    );
+    assert!(app.connect.is_none() && app.error.is_empty());
+    assert_eq!(full_view(&mut app)["status"]["recording"], Value::Null);
+    // A Tico the Recorder is not signed in to asks first, as a connect link does.
+    app.link("tico-recorder://open?server=https://new.example.com");
+    assert_eq!(app.connect.as_deref(), Some("https://new.example.com"));
+    assert_eq!(app.destination, "second");
+    app.dismiss_connect();
+    app.link("tico-recorder://open?server=http://evil.example");
+    assert!(app.connect.is_none());
+    assert_eq!(app.error, "That link is not a Tico Recorder connect link");
+}
+
+#[test]
+fn the_view_lists_the_desktop_apps_orgs_and_which_are_signed_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
+    assert_eq!(
+        full_view(&mut app)["desktop_orgs"],
+        json!([]),
+        "the demo library reads no orgs.json"
+    );
+    let file = directory.path().join("orgs.json");
+    std::fs::write(
+        &file,
+        r#"{"version":1,"active":"o_bbbbbbbb","orgs":[
+            {"id":"o_aaaaaaaa","url":"https://tico.example.com/","name":"Acme","email":"ana@acme.example"},
+            {"id":"o_bbbbbbbb","url":"https://tidy.example.com/","name":"TIDY","email":"ana@tidy.example"}]}"#,
+    )
+    .unwrap();
+    app.desktop = tico_recorder_native::desktop::Watch::new(Some(file));
+    app.config.destinations = vec![connection("acme", "tico.example.com")];
+    assert_eq!(
+        full_view(&mut app)["desktop_orgs"],
+        json!([
+            {"name":"Acme","url":"https://tico.example.com","email":"ana@acme.example","active":false,"connected":true},
+            {"name":"TIDY","url":"https://tidy.example.com","email":"ana@tidy.example","active":true,"connected":false}
+        ])
+    );
+    // Allow on a row signs in to that org only: one already signed in, or not in the desktop app, starts nothing.
+    app.sign_in_desktop(Some("https://tico.example.com"));
+    app.sign_in_desktop(Some("https://other.example.com"));
+    assert_eq!(full_view(&mut app)["status"]["signing_in"], json!(false));
+    let orgs = tico_recorder_native::desktop::parse(
+        r#"{"version":1,"active":"o_bbbbbbbb","orgs":[{"id":"o_aaaaaaaa","url":"https://a.example.com/"},
+            {"id":"o_bbbbbbbb","url":"https://b.example.com/"}]}"#,
+    );
+    assert_eq!(
+        suggested_address(Some(&orgs), || unreachable!()),
+        "b.example.com"
+    );
+    assert_eq!(
+        suggested_address(Some(&[]), || unreachable!()),
+        "",
+        "orgs.json wins over server.txt"
+    );
+    assert_eq!(
+        suggested_address(None, || "https://old.example.com/\n".into()),
+        "old.example.com"
+    );
+    assert_eq!(signed_in_message(&["A".into()]), "Signed in to A");
+    assert_eq!(
+        signed_in_message(&["A".into(), "B".into()]),
+        "Signed in to A and B"
+    );
+    assert_eq!(
+        signed_in_message(&["A".into(), "B".into(), "C".into()]),
+        "Signed in to A, B and C"
+    );
+}
+
+#[test]
 fn library_rows_send_and_delete_only_what_is_stopped() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
@@ -575,6 +674,149 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
 }
 
 #[test]
+fn delete_while_recording_here_stops_capture_then_deletes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Not wanted").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
+    .unwrap();
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    // Finish → Delete on a recording that was never shared.
+    app.delete(&recording.id);
+    settle(&mut app, |app| !app.busy);
+    assert!(!app.busy, "delete did not finish");
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.get(&recording.id).is_err());
+    assert!(full_view(&mut app)["status"]["recording"].is_null());
+}
+
+fn delete_during_capture_stop(fail_stop: bool, shutdown: bool) {
+    use std::sync::mpsc;
+    use tico_recorder_native::capture::{AudioSink, CaptureStream, Source};
+
+    struct GatedStop {
+        entered: mpsc::Sender<()>,
+        release: Option<mpsc::Receiver<()>>,
+        fail: bool,
+    }
+    impl CaptureStream for GatedStop {
+        fn stop(&mut self) -> anyhow::Result<()> {
+            if let Some(release) = self.release.take() {
+                self.entered.send(())?;
+                release.recv_timeout(Duration::from_secs(2))?;
+            }
+            anyhow::ensure!(!self.fail, "Synthetic capture stop failure");
+            Ok(())
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Delete buffered audio").unwrap();
+    let (entered, stopping) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        move || {
+            let (mut sink, consumer) = AudioSink::channel();
+            let health = sink.health.clone();
+            sink.push_interleaved(&vec![0.2; 16000], 1);
+            Ok((
+                vec![Source {
+                    channel: tico_recorder_native::audio::Channel::Microphone,
+                    name: "synthetic".into(),
+                    sample_rate: 16000,
+                    started: Instant::now(),
+                    health,
+                    consumer,
+                    stream: Box::new(GatedStop {
+                        entered,
+                        release: Some(gate),
+                        fail: fail_stop,
+                    }),
+                }],
+                String::new(),
+            ))
+        },
+    )
+    .unwrap();
+    let mut app = app(store, directory.path());
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    settle(&mut app, |app| {
+        app.status_view()["recording"]["sources"]
+            .as_array()
+            .is_some_and(|sources| sources.len() == 1)
+    });
+    app.delete(&recording.id);
+    stopping.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(app.busy);
+    assert!(app.update_hold().is_some());
+    assert!(app.store.get(&recording.id).is_ok());
+    release.send(()).unwrap();
+    if shutdown {
+        app.shutdown();
+        assert!(app.store.get(&recording.id).is_err());
+    }
+    settle(&mut app, |app| !app.busy);
+    assert!(!app.busy, "delete did not finish");
+    assert!(app.update_hold().is_none());
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.get(&recording.id).is_err());
+    assert!(!directory.path().join("audio").join(&recording.id).exists());
+    assert!(
+        full_view(&mut app)["library"]["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != recording.id)
+    );
+}
+
+#[test]
+fn delete_waits_for_the_last_audio_write_and_removes_its_files() {
+    delete_during_capture_stop(false, false);
+}
+
+#[test]
+fn delete_still_removes_audio_after_capture_stop_fails() {
+    delete_during_capture_stop(true, false);
+}
+
+#[test]
+fn shutdown_waits_for_delete_to_remove_the_last_audio() {
+    delete_during_capture_stop(false, true);
+}
+
+#[test]
+fn delete_does_not_take_capture_when_another_job_holds_the_controls() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Busy recording").unwrap();
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
+    .unwrap();
+    let mut app = app(store, directory.path());
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    app.busy = true;
+    app.delete(&recording.id);
+    assert_eq!(app.status_view()["recording"]["id"], recording.id);
+    assert_eq!(app.meeting.as_deref(), Some(recording.id.as_str()));
+    assert!(app.store.get(&recording.id).is_ok());
+}
+
+#[test]
 fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
@@ -1065,7 +1307,7 @@ fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording()
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["id"] == id && r["status"]["label"] == "Discard pending · saved locally")
+            .any(|r| r["id"] == id && r["status"]["label"] == "Ending in Tico")
     );
 }
 
@@ -1301,4 +1543,35 @@ fn a_title_without_a_quote_requires_fresh_review_after_each_edit() {
         full_view(&mut app)["meeting"]["data"]["actions"]["items"][0]["paused_warning"],
         true
     );
+}
+
+#[test]
+fn screen_controls_honor_local_pause_and_pending_discard() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Synthetic screen controls").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    app.open(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+        true
+    );
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "synthetic-live".into();
+                context.live_state = "live".into();
+                context.locally_paused = !discarded;
+                context.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.context = store.context(&record.id).unwrap();
+        app.bump();
+        assert_eq!(
+            full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+            false
+        );
+        assert!(super::screen::require_live(&app.context).is_err());
+    }
 }

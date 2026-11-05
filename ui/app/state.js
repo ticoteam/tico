@@ -152,8 +152,11 @@ async function applyAuthenticatedConfig(config, expected = nativeVisualVersion()
 }
 // A page reload is not evidence that the previous browser session is still valid.
 void clearNativeVisualOrigin();
+// Whether a config was read yet: until then S.config holds only the defaults, which say nothing about this server.
+let CONFIG_READ = false;
 function applyConfig(config) {
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};
+  CONFIG_READ = true;
   document.title = (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);
@@ -161,8 +164,10 @@ function applyConfig(config) {
   document.documentElement.classList.toggle('strip', strip || document.documentElement.classList.contains('cloud-frozen'));
   $('#demo-banner').hidden = !strip;
   if (S.config.rehearsal && !S.config.demo) $('#demo-banner').innerHTML = '<strong>Rehearsal: nothing runs or leaves this server</strong>';
+  if (S.config.demo && S.config.demo_public) $('#demo-banner').innerHTML = '<strong>Read only demo</strong>';
   renderOnboardingNav();
   renderNewVersion();
+  if (typeof nativeOrgSync === 'function') nativeOrgSync();
   window.renderChangelogNotice?.();
   noticeUpdatedServer();
   void renderAppUpdate();
@@ -171,7 +176,6 @@ function applyConfig(config) {
   renderVersionMessage();
   renderFeedbackAsk();
   document.documentElement.classList.toggle('no-support', S.config.support_on === false);
-  window.redesignApply?.();
   return S.config;
 }
 // Beta: the server's one list (backend/beta.py), so the app, Help, the manual and support diagnostics agree. The pill

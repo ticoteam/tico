@@ -6,6 +6,7 @@ from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
 from backend.tests.test_computer_signin import computer_asks, grant, new_computer, store, vault
 from backend.tests.test_getting_started import add_bot
 from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
+from backend import bot_settings as BS
 
 CAPABLE = ["model_sign_out_v1"]
 
@@ -110,8 +111,8 @@ def test_a_canceled_switch_keeps_the_mark_and_the_old_login(api):
 def put_config(api, bot, runtime):
     import json
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot, config, owner_id) VALUES(?, ?, 'ana') ON CONFLICT(bot) DO UPDATE "
-                  "SET config=excluded.config", (bot, json.dumps({"runtime": runtime})))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana') ON CONFLICT(bot) DO NOTHING", (bot,))
+        BS.write(c, bot, {'runtime': runtime})
 
 
 def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_so(environment):
@@ -197,7 +198,7 @@ def test_only_a_heartbeat_moves_readiness_at_so_the_page_can_tell_a_report_from_
     first = machine()["readiness_at"]
     assert first
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+        c.execute("UPDATE runner_states SET readiness_at='2000-01-01T00:00:00+00:00' WHERE runner_id=?", (rid,))
     pending(api, r)  # other contact moves last_seen, never readiness_at
     assert machine()["readiness_at"] == "2000-01-01T00:00:00+00:00"
     beat(api, r["token"])
@@ -362,10 +363,10 @@ def test_a_write_kept_from_the_lock_answers_busy_with_retry_after_and_a_beat_rew
     r = online(api)
     store = api.app.state.store
     with store.read() as c:
-        before = c.execute("SELECT readiness,last_seen_at FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+        before = c.execute("SELECT readiness,last_seen_at FROM runners_with_state WHERE id=?", (r["runner_id"],)).fetchone()
     beat(api, r["token"])
     with store.read() as c:
-        after = c.execute("SELECT readiness,last_seen_at FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+        after = c.execute("SELECT readiness,last_seen_at FROM runners_with_state WHERE id=?", (r["runner_id"],)).fetchone()
     assert after[0] == before[0] and after[1] >= before[1]
     store.writer.acquire()
     timeout, store.writer.timeout = store.writer.timeout, 0.05

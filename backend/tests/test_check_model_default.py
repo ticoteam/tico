@@ -5,6 +5,7 @@ from backend.store import encode
 from backend.tests.test_api import assign, claim, get, post  # noqa: F401
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.test_check_models import GROK, finish, heartbeat, parent_turn
+from backend.tests.usage_rows import segment
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "api"}
 
@@ -26,10 +27,9 @@ def computer(api, machine, grok="ready"):
 def earlier_run(api, task_id, model, provider, runtime):
     """A finished run on the task by another model: the parent's work as a fallback wrote it."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
                   "'2026-01-01T00:05:00Z',?)", (task_id,))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-                  "harness) VALUES('earlier',0,10,10,?,?,?,?)", (model, provider, runtime, runtime))
+        segment(c, 'earlier', input_tokens=10, output_tokens=10, model=model, provider=provider, runtime=runtime, harness=runtime)
 
 
 def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
@@ -59,7 +59,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
                                 "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:
-        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (alone["id"],)).fetchone()
+        why = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (alone["id"],)).fetchone()
     assert why and "other than Anthropic" in why[0] and "author's own" in why[0], why
 
 
@@ -84,14 +84,14 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
                                "relations": [{"task": own["id"], "kind": "parent"}]})
     assert check_row(api, mine["id"]) is None
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_model'", (mine["id"],)).fetchone()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (mine["id"],)).fetchone()
     # A person's task with no runs has no known author: its own model, and the history says why.
     person = post(api, "tasks", {"owner": "human:ana", "title": "Draft the launch post", "body": "Mine."})
     unknown = post(api, "tasks", {"owner": "cpo", "title": "Review my draft", "body": "Please.",
                                   "relations": [{"task": person["id"], "kind": "parent"}]})
     assert check_row(api, unknown["id"]) is None
     with api.app.state.store.read() as c:
-        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (unknown["id"],)).fetchone()
+        why = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (unknown["id"],)).fetchone()
     assert why and "author is unknown" in why[0]
 
     assign(api, machine, "cpo")
@@ -128,5 +128,5 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:
-        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (alone["id"],)).fetchone()
+        why = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'", (alone["id"],)).fetchone()
     assert why and "other than Anthropic" in why[0] and "author's own" in why[0], why

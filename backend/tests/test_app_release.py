@@ -88,3 +88,17 @@ def test_recorder_manifest_is_mac_only_and_named_for_the_recorder(tmp_path):
     from scripts.app_release import main
     with pytest.raises(SystemExit, match="Recorder releases need"):
         main(["--github", "--kind", "recorder", "--version", "0.2.0", "--output", str(tmp_path / "x.json"), str(windows)])
+
+
+def test_a_new_version_drops_updates_signed_for_the_previous_one():
+    mac = {"platforms": {"darwin-aarch64": {"file": "Tico.app.tar.gz", "bytes": 6, "signature": "mac-1.1.0"}},
+           "installers": {}}
+    previous = {"version": "1.0.0", "installers": {"windows": {"file": "Tico-setup.exe", "bytes": 6}},
+                "platforms": {"windows-x86_64": {"signature": "win-1.0.0", "url": "https://hub/1.0.0/Tico-setup.exe"},
+                              "linux-x86_64": {"signature": "linux-1.0.0", "url": "https://hub/1.0.0/Tico.AppImage"}}}
+    value = manifest("1.1.0", "https://hub", [mac], previous)
+    assert set(value["platforms"]) == {"darwin-aarch64"}
+    assert value["installers"]["windows"]["file"] == "Tico-setup.exe"
+    # A second publish of the same version (another platform's build) keeps what the first one brought.
+    again = manifest("1.1.0", "https://hub", [], value)
+    assert again["platforms"] == value["platforms"]

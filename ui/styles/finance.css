@@ -155,6 +155,7 @@
 .fin-form label[hidden]{display:none}
 .fin-form input,.fin-form select{height:var(--ctl);color:var(--ink)}
 .fin-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.fin-foot [aria-busy=true]{opacity:.6;cursor:progress}
 .fin-rail-form{margin-top:12px}
 .fin-dlg .tmodal-head{display:flex;align-items:center;gap:8px}
 .fin-dlg .spacer{flex:1}

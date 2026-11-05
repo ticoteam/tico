@@ -74,7 +74,7 @@ ALIASES = {
     "seo": "seo-visibility", "social": "listening",
     "social media": "listening", "blog": "content", "writer": "content", "copywriter": "content", "sdr": "sdr-research",
     "recruiter": "recruiting", "qa": "issue-triage", "tester": "issue-triage", "reviewer": "pr-reviewer",
-    "code reviewer": "pr-reviewer", "engineer": "pr-reviewer", "support": "support", "customer support": "support",
+    "code reviewer": "pr-reviewer", "engineer": "builder", "support": "support", "customer support": "support",
     "invoices": "billing", "invoicing": "billing", "payroll": "payroll", "legal": "general-counsel",
     "lawyer": "general-counsel", "contracts": "legal-review", "hr": "people-hr", "chief of staff": "chief-of-staff",
     "pr": "pr", "press": "pr", "ads": "paid-media", "release manager": "release-notes", "docs": "docs-writer",

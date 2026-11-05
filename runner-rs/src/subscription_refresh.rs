@@ -78,9 +78,11 @@ pub(crate) fn remember_windows(profile: &str, reply: &Value) {
         return;
     }
     for w in [&bucket["primary"], &bucket["secondary"]].into_iter().filter(|w| w.is_object()) {
+        // The computer's own login's read, never a turn's: it counts for a plan only where the plan's account is known.
         let event = json!({"used_percent": w.get("usedPercent").cloned().unwrap_or(Value::Null),
                            "window_minutes": w.get("windowDurationMins").cloned().unwrap_or(Value::Null),
-                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null)});
+                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null),
+                           "origin": "login"});
         crate::profiles::remember_weekly(profile, "codex", &event);
     }
 }
@@ -96,12 +98,15 @@ pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBoo
     if canceled.load(Ordering::SeqCst) {
         return json!({"state": "failed"});
     }
+    // A sign-out or sign-in after this point (accounts::forget) makes this read's answers stale: they are not kept.
+    let since = crate::accounts::read_started(&profile.name, "codex");
     // The bot user's, like the profile's sign-in and turns: app-server writes in CODEX_HOME.
     let mut cmd = crate::isolation::command(exe);
     cmd.arg("app-server").env_clear().envs(&env).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     let Ok(mut child) = cmd.spawn() else { return json!({"state": "failed"}) };
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else { return json!({"state": "failed"}) };
     let mut lines = BufReader::new(stdout).lines();
+    let mut account = None;
     let result = async {
         rpc(&mut stdin, &mut lines, 1, "initialize", json!({"clientInfo": {"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"}})).await?;
         let note = json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}).to_string() + "\n";
@@ -112,23 +117,29 @@ pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBoo
         let limits = rpc(&mut stdin, &mut lines, 2, "account/rateLimits/read", json!({})).await?;
         // The same session names the account and plan, read without a token refresh (crate::accounts).
         if let Ok(reply) = rpc(&mut stdin, &mut lines, 3, "account/read", json!({"refreshToken": false})).await {
-            if let Some(account) = crate::accounts::from_app_server(&reply) {
-                crate::accounts::remember(&profile.name, "codex", account);
-            }
+            account = crate::accounts::from_app_server(&reply);
         }
         Ok(limits)
     }
     .await;
-    if let Ok(reply) = &result {
-        remember_windows(&profile.name, reply);
-    }
+    // A read begun before a sign-in or sign-out is someone else's usage: not kept here, and not reported either.
+    let current = crate::accounts::keep_if_current(&profile.name, "codex", since, || {
+        if let Some(account) = account {
+            crate::accounts::remember(&profile.name, "codex", account);
+        }
+        if let Ok(reply) = &result {
+            remember_windows(&profile.name, reply);
+        }
+    });
     drop(stdin);
     if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
+    // Again after the child's shutdown wait: a sign-in during it makes this read someone else's as well.
+    let current = current && crate::accounts::read_started(&profile.name, "codex") == since;
     match result {
-        Ok(reply) => weekly(&reply, crate::util::epoch_s()),
-        Err(()) => json!({"state": "failed"}),
+        Ok(reply) if current => weekly(&reply, crate::util::epoch_s()),
+        _ => json!({"state": "failed"}),
     }
 }
 

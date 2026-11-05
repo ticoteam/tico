@@ -11,6 +11,7 @@ import re
 
 from . import runs, task_privacy as privacy
 from .store import H, Problem
+from . import bot_settings as BS
 
 KEEP_DAYS = 7
 # The runner's 5 MB cap plus its truncation marker and the JSON around it.
@@ -81,7 +82,7 @@ def scrub_value(c, value, label, attempt_id="", conversation_id=""):
 def keep(c, row, body):
     """A runner hands in its attempt's stream (`row` is the attempt, already checked as that runner's)."""
     sweep(c)
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
+    found = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
     if not wanted(json.loads(found[0] or "{}") if found else {}):
         # Turned off since the turn began, or never on: nothing is kept.
         raise Problem("capture_off", "This bot does not capture its provider stream", 409)
@@ -163,7 +164,7 @@ def export(c, who, auth, aid, full=True):
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
     message = ({"kind": msg["kind"], "from": msg["sender_id"], "body": mask(msg["body"] or "")} if msg
                else {"deleted": True})
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot_id"],)).fetchone()
+    config = c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()
     declared = json.loads(config[0] or "{}") if config else {}
     events = [{"seq": e["seq"], "kind": e["kind"], "payload": json.loads(e["payload"])}
               for e in c.execute("SELECT seq,kind,payload FROM attempt_events WHERE attempt_id=? ORDER BY seq "

@@ -13,6 +13,7 @@ from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_goal_asks import asks, sync
 from backend.tests.test_strategy import draft, publish, ready, write
+from backend import bot_settings as BS
 
 ANSWERS = {"rivals": ["Globex", "Doing it by hand"], "factors": ["Price", "Setup time"],
            "scores": {"columns": ["Us", "Globex", "Doing it by hand"],
@@ -64,9 +65,10 @@ def run_row(api, run_id):
 
 def librarian(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+        BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
     return bot(api, "librarian")
 
 
@@ -76,7 +78,7 @@ def test_every_shipped_lens_loads_and_the_list_puts_strategy_first_and_hides_the
     for token in ("cara-test", bot(api, "ops")):          # a member and a bot read the list
         listed = get(api, "lenses", token=token)["lenses"]
         assert [x["id"] for x in listed] == ["playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy",
-                                             "pre-mortem", "positioning", "where-to-play", "five-forces"]
+                                             "startup-idea", "pre-mortem", "positioning", "where-to-play", "five-forces"]
     assert [x["id"] for x in get(api, "lenses?applies_to=market")["lenses"]] == ["where-to-play", "five-forces"]
     assert get(api, "lenses?applies_to=nope", expected=422)["error"]["code"] == "validation"
 
@@ -331,7 +333,7 @@ def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):
     assert S.guide("rumelt")["id"] == "default" and [g["id"] for g in get(api, "strategy/guides")] == ["default"]
 
 
-def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens_does_not(api, model):
+def test_a_market_lens_and_the_startup_idea_check_read_the_market_sizes_and_other_strategy_lenses_do_not(api, model):
     from backend.tests.test_market_spend import B, defined, size
     first, second, _ = defined(api)
     size(api, first, 4 * B, accept=True)
@@ -344,3 +346,20 @@ def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens
     two_bets(api)
     start(api)
     assert model["sent"][-1]["market_spend"] is None
+    # "How big could it get" is weighed against the sizes the Librarian keeps, not a number the model makes up.
+    idea = start(api, "startup-idea", {"want": "Yes", "tarpit": "Many tried listing sites; none ran the units."})
+    assert idea["status"] == "done" and model["sent"][-1]["market_spend"]["segments"][0]["id"] in sized
+    steps = {x["key"]: x for x in model["sent"][-1]["lens"]["steps"]}
+    assert steps["tarpit"]["answer"].startswith("Many tried") and steps["now"]["answer"].startswith("not answered")
+    start(api, "startup-idea", {"want": "Maybe"}, expected=422)                 # a choice is one of its options
+
+
+def test_a_lens_choice_of_a_bare_yes_or_no_is_refused_at_load(tmp_path):
+    """YAML reads a bare Yes or No as true or false, which would make the step's only valid answers "True" and "False"."""
+    path = tmp_path / "idea.yaml"
+    path.write_text("id: idea\nname: Idea\napplies_to: strategy\nminutes: 5\nsteps:\n"
+                    "  - {key: want, ask: 'Do you want it', input: choice, options: [Yes, No]}\n")
+    with pytest.raises(ValueError, match="quote a Yes or a No"):
+        L._load(path)
+    path.write_text(path.read_text().replace("[Yes, No]", "['Yes', 'No']"))
+    assert L._load(path)["steps"][0]["options"] == ["Yes", "No"]

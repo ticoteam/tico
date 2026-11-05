@@ -397,7 +397,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
-      assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
+      await page.locator('#side a[data-nav="finance"]').waitFor({state: 'visible'});   // Finance in the sidebar once its access read lands
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
@@ -602,6 +602,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/transactions', READY.transactions);
       await page.waitForTimeout(100);
       assert.ok(!txRead().includes('teams=') && !(await page.locator('[data-fin-org-clear]').count()), tag + ': the bare tab is unfiltered');
+      // A tab Finance does not have goes to the P&L, not a page that never draws.
+      await page.evaluate(() => { location.hash = '#/finance/balance-sheet'; });
+      await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
+      await page.locator(READY.pnl).first().waitFor();
       // Balance sheet, cards (freeze), transactions, sources, access.
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
@@ -896,7 +900,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
     // (one the rules send for approval names the approver first); the Balance sheet's "+ Add" posts a journal entry.
     {
       const tag = 'payables';
-      const {page, errors, writes, reads} = await open(browser, {hash: '#/finance/payables'});
+      const {page, errors, writes, reads, hub} = await open(browser, {hash: '#/finance/payables'});
       const today = await page.evaluate(() => finToday());
       const heads = async () => (await page.locator('.fin-doc-t').first().locator('thead th').allInnerTexts()).map(t => t.toUpperCase());
       await page.locator(READY.payables).waitFor();
@@ -1049,6 +1053,23 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Bank account', 'Card account', 'Payments', 'Invoice', 'Bill', 'Loan or credit line', 'Asset', 'Journal entry', 'Import history'],
         tag + ': what the owner may add');
       await shot(page, 'balance-add-desktop');
+      // Import history: while the dry run runs the button says Preview… (disabled, aria-busy); after it, Import stays.
+      await page.locator('[data-fin-add-item="import"]').click();
+      await page.locator('dialog.fin-dlg input[name="file"]').setInputFiles({name: 'acme.csv', mimeType: 'text/csv',
+        buffer: Buffer.from('month,line,amount\n2026-01,Software,1200\n')});
+      await page.locator('dialog.fin-dlg select[data-fin-sheet-line]').first().selectOption('a-6100');
+      let unhold = () => {};
+      hub.hold = new Promise(r => { unhold = r; });
+      const go2 = page.locator('dialog.fin-dlg [type=submit]');
+      await go2.click();
+      await page.waitForFunction(() => document.querySelector('dialog.fin-dlg [type=submit]')?.getAttribute('aria-busy') === 'true');
+      assert.deepEqual([await go2.innerText(), await go2.isDisabled()], ['Preview…', true], tag + ': the button shows the save running');
+      unhold(); hub.hold = null;
+      await page.waitForFunction(() => document.querySelector('dialog.fin-dlg [type=submit]')?.getAttribute('aria-busy') === 'false');
+      assert.deepEqual([await go2.innerText(), await go2.isDisabled()], ['Import', false], tag + ': the preview relabels the button and keeps it');
+      await page.locator('dialog.fin-dlg [data-close]').first().click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      await page.locator('[data-fin-add]').click();
       await page.locator('[data-fin-add-item="journal"]').click();
       const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
       await jl.nth(0).locator('select').selectOption('a-6100');

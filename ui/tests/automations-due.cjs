@@ -37,10 +37,10 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations', time: HUB_NOW});
   await page.locator('tr.au-row').first().waitFor({timeout: t(10000)});
 
-  // + New offers the triggers; Before a due date makes the routine and opens it.
+  // + New offers New inbox and the triggers; Before a due date makes the routine and opens it.
   await page.locator('.au-new').click();
   assert.deepEqual(await page.locator('.au-newm [data-new]').evaluateAll(els => els.map(x => x.lastChild.textContent)),
-    ['On a schedule', 'When something happens', 'Before a due date']);
+    ['New inbox', 'On a schedule', 'When something happens', 'Before a due date']);
   await page.locator('.au-newm [data-new="due"]').click();
   await page.locator('.au-hd .au-name:text("New automation")').waitFor({timeout: t(10000)});
   const made = await automationNamed(page, 'New automation');

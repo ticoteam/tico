@@ -5,11 +5,14 @@ import json
 
 import pytest
 
+from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
 from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
+from backend import team_rules
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend import usage_limits
 
 DUE = "2026-11-02T09:00:00.000000Z"
 LONG = "Sort Acme mail by sender and urgency. " * 300                   # about 11,000 characters
@@ -46,8 +49,7 @@ def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=
 
 def hourly(api, bot, usd):
     with db(api).transaction() as c:
-        c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "
-                  "hourly_usd=excluded.hourly_usd", (bot, usd))
+        usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
 
 
 def first_start(api):
@@ -115,8 +117,8 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
             assert made["next_due_at"] == DUE                                     # its next occurrence, once
     assert not rows(api, "SELECT id FROM rules WHERE id IN ('rule_wake','rule_note','rule_team')")
     assert decisions(api, events, targets) == before_decisions                # the same wakes, from What wakes
-    assert rows(api, "SELECT hourly_usd, per_30m_usd FROM usage_limits WHERE bot='coo'") == [
-        {"hourly_usd": None, "per_30m_usd": 0.2}]
+    with db(api).read() as c:
+        assert (usage_limits.own(c, "coo")["hourly_usd"], usage_limits.own(c, "coo")["per_30m_usd"]) == (None, 0.2)
 
     # Once: a second start (or a catch-up) changes nothing and tells nobody again.
     automations = rows(api, "SELECT id FROM automations ORDER BY id")
@@ -242,7 +244,8 @@ def test_the_librarians_briefing_routine_becomes_the_market_briefing_builtin_nev
 
 def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api):
     """What the real-data rehearsal found: wake rules scoped to a department; a routine on a paused bot; an Inbox
-    Manager whose instructions run past 8,000 characters (they move whole)."""
+    Manager whose instructions run past 8,000 characters (they do not move: the inbox runs on the short routing prompt,
+    and its report says where the instructions stay)."""
     rule(api, "rule_dept", scope=("department", "operations"))
     routine(api, "sch_ops", bot="ops", cron="0 8 * * 1", zone="UTC", title="Weekly ops check")
     with db(api).transaction() as c:
@@ -263,9 +266,11 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
         dept = json.loads(c.execute("SELECT flow FROM automations WHERE id=?",
                                     (found[("wake_rule", "rule_dept")]["automation"],)).fetchone()[0])
     step = json.loads(made["flow"])["steps"][0]
-    assert step["type"] == "llm" and step["prompt"].startswith(LONG.rstrip())
+    assert step["type"] == "llm" and step["prompt"].endswith(M.MESSAGE_PART) and len(step["prompt"]) < 600
+    assert LONG.strip() not in step["prompt"]                                # the instructions stay on the bot
+    assert found[("inbox", "inbox:cara@acme.example")]["why"]                 # told: the report flags it
     assert dept["owner"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
-    paused = [a for a in get(api, "automations")["automations"] if a["name"] == "Weekly ops check"]
+    paused = [a for a in get(api, "automations?limit=500")["automations"] if a["name"] == "Weekly ops check"]
     assert paused and paused[0]["enabled"] is True                          # its own switch; the tick waits for the bot
     assert "paused" in found[("routine", "sch_ops")]["why"]                   # moved, with the bot's state told
 
@@ -352,6 +357,7 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
                      "accepted_at TEXT NOT NULL)")
         conn.execute("INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')")
         # As a file from before 0007 has it: that migration and every later one not run yet.
+        restore_config(conn)
         conn.execute("DELETE FROM schema_migrations WHERE version>='0007' AND version NOT LIKE 'legacy_%'")
     store.initialize(seed_market=False)
     with store.read() as conn:
@@ -360,3 +366,215 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
         assert "redesign_migrated" in tables
         assert M.holds(conn, "routine", "sch_1") is True
         assert M.holds(conn, "routine", "sch_2") is False
+
+
+OLD_FLOW = {"name": "Stale ticket review", "owner": "human:ana", "enabled": True,
+            "trigger": {"type": "schedule", "cron": "0 * * * *", "tz": "Europe/London"},
+            "steps": [{"id": "tasks", "type": "find", "source": "tasks",
+                       "query": "open tasks that look finished or forgotten", "limit": 20},
+                      {"id": "verdict", "type": "decide", "set": "stale-review@1", "out": "d1", "level": "low"},
+                      {"id": "route", "type": "paths", "paths": []}],
+            "source": {"kind": "system_job", "id": "job:stale_review"}}
+
+
+def old_stale_automation(api, enabled=True, rule_on=False):
+    """The cutover as it was before this fix: Stale ticket review became a find-based automation, the team rule off."""
+    aid = "auto_mig_old_stale"
+    flow = {**OLD_FLOW, "enabled": enabled}
+    with db(api).transaction() as c:
+        M.ensure(c)
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (M.REPAIR,))   # an install that has not been repaired
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES(?,?,?,?,?,0,?,1,?,?,?)",
+                  (aid, "Stale ticket review", "human:ana", "schedule", int(enabled), json.dumps(flow), DUE,
+                   "human:ana", DUE))
+        c.execute("INSERT INTO redesign_migrated(kind,id,migration,automation,outcome,why,title,migrated_at) "
+                  "VALUES('system_job','job:stale_review','mig_old',?,'converted','','Stale ticket review',?)",
+                  (aid, DUE))
+        team_rules.save(c, "human:ana", {"stale_review": rule_on})
+    return aid
+
+
+def stale_automations(api):
+    return rows(api, "SELECT id, enabled, deleted_at, json_array_length(json_extract(flow,'$.steps')) AS steps, "
+                "json_extract(flow,'$.readonly') AS readonly FROM automations WHERE json_extract(flow,'$.source.id')=? "
+                "ORDER BY created_at, id", ("job:stale_review",))
+
+
+def stale_mirror(api):
+    """The live read-only mirror of the job: no steps, nothing it runs itself."""
+    (mirror,) = [r for r in stale_automations(api) if not r["deleted_at"]]
+    assert mirror["steps"] == 0 and mirror["readonly"] == 1
+    return mirror
+
+
+def repair(api):
+    with db(api).transaction() as c:
+        return M.repair_stale_review(c)
+
+
+def stale_rule(api):
+    with db(api).read() as c:
+        return team_rules.load(c)["stale_review"]
+
+
+def test_stale_review_stays_the_built_in_job_on_a_fresh_install(api):
+    with db(api).transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": True})
+    first_start(api)
+    mirror = stale_mirror(api)                                # a read-only mirror, like every built-in job; the job runs
+    assert stale_rule(api) is True                            # the cutover does not switch the rule off
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] == mirror["id"]
+    with db(api).read() as c:
+        assert [i["now"] for i in M.inventory(c) if i["id"] == "job:stale_review"] == ["runs as before"]
+    assert repair(api) == [] and stale_rule(api) is True      # a mirror is not the no-op: nothing to repair
+
+
+def test_the_repair_turns_the_rule_on_for_an_enabled_no_op_automation_once(api):
+    aid = old_stale_automation(api, enabled=True, rule_on=False)
+    assert stale_rule(api) is False
+    assert repair(api) == [aid]
+    assert stale_rule(api) is True
+    gone = next(r for r in stale_automations(api) if r["id"] == aid)
+    assert gone["deleted_at"] and gone["enabled"] == 0        # removed through automations.remove, on record
+    with db(api).read() as c:
+        assert c.execute("SELECT 1 FROM audit_log WHERE object=? AND via=?", ("automation:" + aid, "migration repair")).fetchone()
+    mirror = stale_mirror(api)                                # in its place the read-only mirror
+    assert marks(api)[("system_job", "job:stale_review")]["outcome"] == "converted"
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] == mirror["id"]
+    # Once: a second start changes nothing, and the cutover run again (its done bookkeeping) makes no automation.
+    before = stale_automations(api)
+    assert repair(api) == [] and stale_rule(api) is True
+    first_start(api)
+    assert stale_automations(api) == before and stale_rule(api) is True
+
+
+def test_the_repair_with_the_old_automation_off_removes_it_and_leaves_the_rule_off(api):
+    aid = old_stale_automation(api, enabled=False, rule_on=False)
+    assert repair(api) == [aid]
+    assert stale_rule(api) is False
+    gone = next(r for r in stale_automations(api) if r["id"] == aid)
+    assert gone["deleted_at"] and gone["enabled"] == 0
+    stale_mirror(api)
+    assert repair(api) == [] and stale_rule(api) is False
+
+
+def test_the_repair_leaves_an_install_without_the_automation_alone(api):
+    with db(api).transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": False})
+    assert repair(api) == [] and stale_rule(api) is False
+    assert stale_automations(api) == []
+
+
+# ---------------------------------------------------------------------------------------------- inbox prompts
+OLD_INBOX = "Sort Acme mail by sender and urgency. Refunds go to Ben."   # short instructions the cutover copied whole
+
+
+def inbox_of(api, content=OLD_INBOX):
+    """Ana's inbox, moved by the cutover on this release's code, with her Inbox Manager's instructions as given."""
+    post(api, "access/people/ana", {"inbox_bot": "inbox", "mailbox": "ana@acme.example"})
+    with db(api).transaction() as c:
+        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
+                  ("inbox", content, "", "2026-10-28T00:00:00Z"))
+    first_start(api)
+    return marks(api)[("inbox", "inbox:ana@acme.example")]["automation"]
+
+
+def as_before_this_fix(api, aid, content=OLD_INBOX):
+    """The inbox as the release before this one left it: the Inbox Manager's instructions, whole, before the message."""
+    old = (content.rstrip() + M.MESSAGE_PART)[:F.MAX_PROMPT]
+    with db(api).transaction() as c:
+        flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()[0])
+        flow["steps"][0]["prompt"] = old
+        c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(flow, sort_keys=True), aid))
+        first = json.loads(c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=1",
+                                     (aid,)).fetchone()[0])
+        first["steps"][0]["prompt"] = old
+        c.execute("UPDATE automation_versions SET flow=? WHERE automation_id=? AND n=1",
+                  (json.dumps(first, sort_keys=True), aid))
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (M.PROMPT_REPAIR,))   # an install not yet repaired
+    return aid
+
+
+def prompt_of(api, aid):
+    return json.loads(rows(api, "SELECT flow FROM automations WHERE id=?", (aid,))[0]["flow"])["steps"][0]["prompt"]
+
+
+def prompt_repair(api):
+    with db(api).transaction() as c:
+        return M.repair_inbox_prompts(c)
+
+
+def test_a_new_inbox_runs_on_the_short_routing_prompt_and_its_instructions_stay_on_the_bot(api):
+    aid = inbox_of(api)
+    prompt = prompt_of(api, aid)
+    assert prompt.endswith(M.MESSAGE_PART) and len(prompt) < 600 and "Sort Acme mail" not in prompt
+    mark = marks(api)[("inbox", "inbox:ana@acme.example")]
+    assert mark["outcome"] == "converted" and mark["automation"] == aid     # moved, not kept back
+    assert mark["why"]                                                       # the report flags the instructions
+
+
+def test_an_inbox_without_instructions_of_its_own_moves_with_no_flag(api):
+    aid = inbox_of(api, content="")
+    assert prompt_of(api, aid).endswith(M.MESSAGE_PART)
+    assert marks(api)[("inbox", "inbox:ana@acme.example")]["why"] == ""
+
+
+def test_the_repair_moves_an_unchanged_inbox_onto_the_short_prompt_once(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    assert prompt_of(api, aid).startswith(OLD_INBOX)
+    assert prompt_repair(api) == [aid]
+    assert prompt_of(api, aid).endswith(M.MESSAGE_PART) and len(prompt_of(api, aid)) < 600
+    assert len(rows(api, "SELECT n FROM automation_versions WHERE automation_id=?", (aid,))) == 2
+    with db(api).read() as c:
+        assert c.execute("SELECT 1 FROM audit_log WHERE object=? AND via=?",
+                         ("automation:" + aid, "migration repair")).fetchone()
+    assert marks(api)[("inbox", "inbox:ana@acme.example")]["why"]
+    before = rows(api, "SELECT id, flow, version FROM automations ORDER BY id")
+    assert prompt_repair(api) == [] and rows(api, "SELECT id, flow, version FROM automations ORDER BY id") == before
+
+
+def test_the_repair_leaves_an_edited_inbox_alone(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    with db(api).transaction() as c:   # an edit since the cutover: a second version, the automation at version 2
+        c.execute("INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status,summary) "
+                  "SELECT automation_id, 2, 'human:ana', ?, flow, 'active', 'edited' FROM automation_versions "
+                  "WHERE automation_id=? AND n=1", (H.now(), aid))
+        c.execute("UPDATE automations SET version=2 WHERE id=?", (aid,))
+    assert prompt_repair(api) == [] and prompt_of(api, aid).startswith(OLD_INBOX)
+
+
+def test_the_repair_leaves_an_inbox_whose_bot_instructions_changed_since_alone(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    with db(api).transaction() as c:
+        c.execute("UPDATE mail_agent_instructions SET content=? WHERE bot='inbox'", ("Sort by sender only.",))
+    assert prompt_repair(api) == [] and prompt_of(api, aid).startswith(OLD_INBOX)
+
+
+def test_an_inbox_whose_mailbox_no_longer_validates_stays_as_it_is_and_startup_goes_on(api):
+    aid = as_before_this_fix(api, inbox_of(api))
+    with db(api).transaction() as c:   # its mailbox was changed since the cutover: the automation no longer reads it
+        flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()[0])
+        flow["trigger"]["inbox"] = "gone@acme.example"
+        c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(flow, sort_keys=True), aid))
+    assert prompt_repair(api) == []                       # no refusal escapes: startup goes on
+    assert prompt_of(api, aid).startswith(OLD_INBOX)      # the flow is unchanged
+    with db(api).read() as c:
+        assert M._meta(c, M.PROMPT_REPAIR)                # every inbox was done or skipped: not tried again
+    assert "Not moved" in marks(api)[("inbox", "inbox:ana@acme.example")]["why"]
+
+
+def test_an_inbox_that_fails_for_another_reason_is_tried_again_at_the_next_start(api, monkeypatch):
+    aid = as_before_this_fix(api, inbox_of(api))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("backend.automations._save", broken)
+    assert prompt_repair(api) == []
+    with db(api).read() as c:
+        assert not M._meta(c, M.PROMPT_REPAIR)            # not marked: the next start tries it again
+    assert prompt_of(api, aid).startswith(OLD_INBOX)
+    monkeypatch.undo()
+    assert prompt_repair(api) == [aid]
+

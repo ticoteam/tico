@@ -48,7 +48,7 @@ async function open(browser) {
     if (p === '/api/v2/assistant/messages') {
       const n = ++state.sent, user = msg('u' + n, 'human:ben', JSON.parse(route.request().postData()).text), bot = msg('b' + n, 'bot:coo', 'On it.');
       state.messages.push(user, bot);
-      return json({message: user, reply: bot, fast: true});
+      return json({message: user});
     }
     if (p === '/api/v2/support/tickets' || p === '/api/v2/support/tickets/refresh') return json({enabled: true, tickets: [], unread: 0});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

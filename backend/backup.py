@@ -439,12 +439,12 @@ def restore_snapshot(source, destination):
         c.execute("UPDATE attempts SET state='expired',finished_at=?,lease_until=? WHERE state IN ('leased','running')", (now, now))
         from .run_triggers import SETTLE_SQL
         # Its runner will never report these runs' tokens: 0 with the reason, as hubdb.turn_finish records it.
-        c.execute(f"UPDATE turns SET finished_at=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
-                  "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE finished_at IS NULL", (now,))
+        c.execute(f"UPDATE attempts SET settled_at=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
+                  "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE settled_at IS NULL "
+                  "AND (job_id IS NULL OR trigger IS NOT NULL)", (now,))
         c.execute("UPDATE assignments SET generation=generation+1,updated_at=?,updated_by='keeper'", (now,))
         c.execute("UPDATE runners SET revoked_at=coalesce(revoked_at,?)", (now,))
         c.execute("UPDATE enrollments SET expires_at=?", (now,))
-        c.execute("UPDATE bots SET token_hash=NULL")
         # An old backup must not resurrect a credential grant revoked after it was taken.
         c.execute("UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by='recovery'", (now,))
         c.execute("UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated_at=? WHERE state='running'", (now,))

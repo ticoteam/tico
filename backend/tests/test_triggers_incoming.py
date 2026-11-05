@@ -123,8 +123,10 @@ def test_a_sender_id_stays_a_duplicate_after_the_log_and_the_body_are_gone(api, 
     assert hook(api, made["url"], headers={"Webhook-Id": "w1"}).status_code == 202       # now a log row is replaced, not an error
 
 
-def test_a_bare_retry_in_the_same_minute_is_a_duplicate(api):
+def test_a_bare_retry_in_the_same_minute_is_a_duplicate(api, monkeypatch):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
+    at = triggers.H.now()
+    monkeypatch.setattr(triggers.H, "now", lambda: at)   # both calls in one minute, even across a minute boundary
     assert hook(api, made["url"], b'{"a": 1}').status_code == 202
     assert hook(api, made["url"], b'{"a": 1}').status_code == 200
     assert hook(api, made["url"], b'{"a": 2}').status_code == 202

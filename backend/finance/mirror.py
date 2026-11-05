@@ -12,6 +12,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+from .. import outbox as O
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
@@ -40,6 +41,7 @@ from .store import tico
 
 OUTBOX_MOST = 50                            # writes out claimed in one pass
 RETRY = (60, 300, 1800, 3600)               # seconds to wait after each failed try of a write (the last repeats)
+WRITE_SCHEDULE = O.Waits(RETRY, repeat_last=True)
 CLAIM_MINUTES = 10                          # a write claimed this long ago with no answer was cut off mid-call
 MATCH_MOST = 500                            # bank rows looked at in one pass to find their provider entry
 PENDING_MOST = 500                          # provider records the books could not take in, kept to be read again
@@ -904,16 +906,30 @@ def _void(c: sqlite3.Connection, ctx: Ctx, cid: str, table: str, local: str, key
     settled it stay as they are, since the provider keeps them too. A void that lands in a closed month is flagged as a
     restatement, as a deletion of an entry is."""
     doc = SAP.get(c, table, local)
-    if doc is None:
+    if doc is None or str(doc["status"]) == "void":
+        # Already void: its entry was reversed and its order lines given their room back the first time. A provider echo
+        # of a Tico void that the change feed reads while the void is still in flight reaches here a second time, and a
+        # second give-back would restore each billed order line again.
         return
     entry = str(doc["entry_id"] or "")
+    # Posted as bill_void tests it: an entry already reversed had its spend taken out of the books, so its order lines
+    # get no room back. Read before the reversal below, which makes the entry reversed.
+    posted = _entry_posted(c, entry)
     if entry:
         _retire_entry_only(c, ctx, cid, entry, key, at)
     orders = SP.bill_orders(c, local) if table == "fin_bills" else []
     SAP.update(c, table, local, {"status": "void", "updated_at": at})
     if orders:
-        PU.give_back(ctx, SYSTEM, local, posted=bool(entry))
+        PU.give_back(ctx, SYSTEM, local, posted=posted)
         PU.sync_orders(ctx, SYSTEM, orders)
+
+
+def _entry_posted(c: sqlite3.Connection, entry_id: str) -> bool:
+    """Whether a document's entry is posted (not reversed, not a draft): the test bill_void makes too."""
+    if not entry_id:
+        return False
+    entry = SL.entry_row(c, entry_id)
+    return entry is not None and str(entry["status"]) == "posted"
 
 
 def _retire_entry_only(c: sqlite3.Connection, ctx: Ctx, cid: str, entry_id: str, key: str, at: str) -> None:
@@ -1063,7 +1079,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
                                               tags=line_tags, control_id=control, keys=keys), at)
     SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
     if kind == "bill":
-        SP.set_bill_retained(c, local, retained)
+        PU.set_retained(ctx, SYSTEM, local, retained)
         PU.sync_orders(ctx, SYSTEM, sorted({*old_orders, *SP.bill_orders(c, local)}))
     for s in settled:
         documents.settle(ctx, kind, local, amount=int(s["amount"]), day=str(s["settled_on"]),
@@ -2166,9 +2182,9 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
             tico.needs_you(c, SX.connection_owner(c, cid), f"QuickBooks refused the {RECORD_KINDS[kind][2]} write",
                            sent.error[:300])
     else:
-        delay = RETRY[min(attempts, len(RETRY)) - 1]
+        delay = WRITE_SCHEDULE.wait_for(attempts)
         SK.update(c, "fin_outbox", oid, {"attempts": attempts, "claimed_at": None, "last_error": sent.error[:300],
-                                         "next_try_at": M.stamp(now, delay * 1_000_000), "updated_at": now})
+                                         "next_try_at": M.stamp(now, int(delay * 1_000_000)), "updated_at": now})
 
 
 # The creates a provider may already hold when a retry comes: a cut-off call can have landed, and a provider's

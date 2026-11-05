@@ -1163,16 +1163,23 @@ RUNWAY_MONTHS = 3           # runway divides cash by the average burn of this ma
 
 def _worst_gap(s: _Seen, money_ids: Sequence[str]) -> int | None:
     """Days since the oldest reconciliation among these money accounts; None when none has a feed yet."""
+    return _worst(s, money_ids)[0]
+
+
+def _worst(s: _Seen, money_ids: Sequence[str]) -> tuple[int | None, bool]:
+    """`_worst_gap`, and whether that worst account was never reconciled (its days count from its first row)."""
     today = dates.day(s.ctx.today)
     worst: int | None = None
+    never = False
     for m in money_ids:
         through = SK.locked_through(s.ctx.c, m)
         first = SK.first_feed_day(s.ctx.c, m)
         if not first:
             continue
         gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
-        worst = gap if worst is None else max(worst, gap)
-    return worst
+        if worst is None or gap > worst:
+            worst, never = gap, not through
+    return worst, never
 
 
 def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
@@ -1789,8 +1796,9 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
         if not R.has(ctx.org, s.view.viewer, R.BOOK, held):
             return None
         money_ids, _ = tab.feed_scope(ctx, view)
-        days = _worst_gap(s, money_ids)
-        late: list[Row] = ([{"id": "books", "days": days, "label": f"{days} days since the books were reconciled"}]
+        days, never = _worst(s, money_ids)
+        label = "Books not reconciled yet" if never else f"{days} days since the books were reconciled"
+        late: list[Row] = ([{"id": "books", "days": days, "label": label}]
                            if days is not None and days > STATEMENT_DAYS else [])
         return late[skip:skip + n], len(late) > skip + n
     if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, and a view of bills

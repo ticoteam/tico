@@ -3,7 +3,7 @@
 Such a task was itself the person's card: its title, its body and the bot's notes. Each one whose waiting note is a
 plain ask (hubdb.lint_person_ask) and that has no open question to the person is updated as its bot would update it
 now, so the ask becomes one small subtask the person owns and the task stays the bot's, blocked on it. One with no
-plain ask is left to backend/restate_asks.py, and the bot's restated ask takes this shape when it is set. Run by the
+plain ask is left to its bot, which the task roundup asks to restate it (backend/task_roundup.py); a restated ask takes this shape on the next run. Run by the
 scheduler, never on a read; a task already moved is no longer waiting on the person, so it is never moved twice.
 """
 
@@ -15,7 +15,7 @@ def waiting_on_people(conn):
     """Bot tasks waiting on a person with a plain ask and no open question to them."""
     out = []
     for row in H._rows(conn.execute(
-            "SELECT * FROM tasks WHERE status='waiting' AND waiting_on LIKE 'human:%' AND owner_id LIKE 'bot:%' "
+            f"SELECT * FROM {H.TASKS} tasks WHERE status='waiting' AND waiting_on LIKE 'human:%' AND owner_id LIKE 'bot:%' "
             "ORDER BY created_at")):
         if H.lint_person_ask(row.get("note")):
             continue

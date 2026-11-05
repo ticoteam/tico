@@ -4,6 +4,7 @@ import json
 import httpx
 import jwt
 
+from backend import bot_settings as BS
 from backend import github_app as G
 from backend.tests.test_github_app import (api, gh, auth, runner_token, turn_token, PEM, KEY)  # noqa: F401
 from backend.tests.test_bot_product_repos import ready
@@ -203,14 +204,16 @@ def test_review_missing_from_reviewer_installation_refuses_before_claim_or_post(
     assert reply.json()["error"]["code"] == "github_repo_not_accessible"
     assert seen["reviews"] == []
     with api.app_state.store.read_transaction() as c:
-        assert c.execute("SELECT count(*) FROM github_review_operations").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM idempotency WHERE binding='github_review'").fetchone()[0] == 0
 
 
 def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager(api, gh, tmp_path, monkeypatch):
     from backend import hubdb as H
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id, slug, display_name, runtime, state) VALUES('devops-engineer','devops-engineer','DevOps','fake','active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('devops-engineer','ana')")
+        BS.write(c, "devops-engineer", {"runtime": "fake"})
     seen["refusal"] = 403
     for key in ("first", "again"):
         assert submit(api, key=key).status_code == 409
@@ -224,7 +227,9 @@ def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monk
     from backend import hubdb as H
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id, slug, display_name, runtime, state) VALUES('devops-engineer','devops-engineer','DevOps','fake','active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('devops-engineer','ana')")
+        BS.write(c, "devops-engineer", {"runtime": "fake"})
     seen["refusal"] = 403
     seen["refusal_message"] = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
     assert submit(api, key="throttled").status_code == 409

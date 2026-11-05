@@ -15,6 +15,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, runner, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.test_automation_cli import Client
 from clients import hubcli, hubtools, remotecli
+from backend import bot_settings as BS
 
 
 def create_bot(api, slug, token="ana-test", **fields):
@@ -25,9 +26,9 @@ def create_bot(api, slug, token="ana-test", **fields):
     with api.app.state.store.transaction() as c:
         bot_id = H.resolve_bot(c, slug)["id"]
         # It runs on the test runtime the fixture's bots run on, so the test computer can claim its work.
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot_id,)).fetchone()[0])
+        config = BS.read(c, bot_id)
         config.update({"runtime": "fake", "harness": None, "model": "", "model_managed_by": None})
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot_id))
+        BS.write(c, bot_id, config)
     return bot_id
 
 
@@ -271,12 +272,12 @@ def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch)
     monkeypatch.setattr(remotecli, "Client", lambda *a, **k: Client(api, "ana-test"))
     remotecli.run(hubcli.parser().parse_args(["bot", "update", "revenue-helper", "--new-slug", "pipeline-helper"]))
     assert get(api, "bots/" + sales)["slug"] == "pipeline-helper"
-    config = json.loads(column(api, "SELECT config FROM bot_config WHERE bot=?", sales)[0])
+    config = json.loads(column(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", sales)[0])
     assert config["folder"] == "bot-sales-helper"                  # its folder keeps the name it was made with
 
 
 def config_of(api, bot_id):
-    return json.loads(column(api, "SELECT config FROM bot_config WHERE bot=?", bot_id)[0])
+    return json.loads(column(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", bot_id)[0])
 
 
 def test_a_new_bot_given_a_renamed_bots_old_slug_gets_a_folder_and_repository_of_its_own(api, sales):
@@ -312,7 +313,7 @@ def test_two_bots_with_one_folder_are_never_placed_on_one_computer(api, sales):
     rename(api, sales, "revenue-helper")
     newcomer = create_bot(api, "sales-helper", status="planned")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.folder','bot-sales-helper') WHERE bot=?", (newcomer,))
+        BS.update(c, newcomer, {'folder': 'bot-sales-helper'})
     r = api.post(f"/api/v2/bots/{newcomer}/assignment", json={"runner_id": machine["runner_id"], "expected_generation": 0},
                  headers=headers())
     assert r.status_code == 409 and r.json()["error"]["code"] == "folder_taken", r.text

@@ -1,5 +1,5 @@
 /* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
-   then Where we play beside the bets, the competitors beside related news, then five fixed sections and any the owner
+   then Where we play beside the bets, the competitors beside related news, then seven fixed sections and any the owner
    adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
    published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
    Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
@@ -12,12 +12,15 @@ let STRAT_MKT = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
-// The five sections every strategy has, in this order. The placeholder is the question; nothing else is shown.
+// The seven sections every strategy has, in this order (backend/strategy.py FIXED). The placeholder is the question;
+// nothing else is shown.
 const STRAT_SECTIONS = [
-  {key: 'serve', title: 'Who we serve', prompt: 'The customer, what they use today, and the one you turned down'},
+  {key: 'serve', title: 'Who we serve', prompt: 'The customer, how badly they need it, and what they use today'},
   {key: 'sell', title: 'What we sell, and for how much', prompt: 'The product, the price, and the price that would break if doubled or halved'},
-  {key: 'know', title: "What we know that others don't", prompt: 'What the team understands that the obvious competitors miss'},
-  {key: 'how', title: 'How we sell', prompt: 'How customers find us, who does the selling, and what closes a sale'},
+  {key: 'proof', title: 'How we know they want it', prompt: 'Who uses it, how often, who comes back, and what they say'},
+  {key: 'now', title: 'Why now', prompt: 'What changed recently that makes this possible or needed now'},
+  {key: 'know', title: "What we know that others don't", prompt: 'What the team understands that the obvious competitors miss, and why this team'},
+  {key: 'how', title: 'How we sell', prompt: 'Where the next 100 customers come from, who sells, and what closes a sale'},
   {key: 'not', title: "What we won't do", prompt: 'The trade-offs: what the team refuses'},
 ];
 const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
@@ -412,7 +415,7 @@ function strategyPaintMarket(key) {
 }
 
 // ---------------------------------------------------------------- the sections
-// The five fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
+// The seven fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
 // an extra one can be renamed or removed, and nothing else ever drops it.
 function strategySectionList(version) {
   const s = version?.sections || {};
@@ -422,17 +425,18 @@ function strategySectionList(version) {
 function strategySectionsHtml(view) {
   const owner = view.owner;
   const rows = strategySectionList(view.version).map(sec => {
-    const editing = owner && STRAT?.editSection === sec.key;
+    // Which editor is open: a fixed section and an extra one may share a key, so the two are told apart.
+    const ed = (sec.extra ? 'x:' : 'f:') + sec.key, editing = owner && STRAT?.editSection === ed;
     if (!owner && !stratText(sec.text)) return '';
     const id = 'x-' + sec.key;
     const body = editing
-      ? `<form class="strat-sec-form" data-section-form="${esc(sec.key)}"${sec.extra ? ' data-extra' : ''} novalidate>
+      ? `<form class="strat-sec-form" data-section-form="${esc(sec.key)}" data-section-ed="${esc(ed)}"${sec.extra ? ' data-extra' : ''} novalidate>
           ${sec.extra ? `<input type="text" name="title" maxlength="80" autocomplete="off" value="${esc(sec.title)}" aria-label="Title" placeholder="Title">` : ''}
           <textarea name="text" rows="8" aria-label="${esc(sec.title)}" placeholder="${esc(sec.prompt)}">${esc(sec.text)}</textarea>
           <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-section-cancel>Cancel</button>
             ${sec.extra ? '<span class="spacer"></span><button class="ghost danger" type="button" data-section-remove>Remove</button>' : ''}</div></form>`
       : stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '<p class="muted strat-empty">Not written</p>';
-    return `<section class="card strat-card strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}"${sec.extra ? ' data-extra' : ''}>
+    return `<section class="card strat-card strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}" data-section-ed="${esc(ed)}"${sec.extra ? ' data-extra' : ''}>
         <div class="strat-sec-head"><h2 class="strat-k">${esc(sec.title)}</h2>${owner && !editing ? `<button class="ghost strat-mini" type="button" data-section-edit>${stratText(sec.text) ? 'Edit' : 'Write'}</button>` : ''}</div>
         ${body}</section>`;
   }).join('');
@@ -470,9 +474,10 @@ function strategyRender() {
   const key = f => f.dataset.stratField || f.closest('[data-bet]')?.dataset.bet || 'new';
   const typed = [...body.querySelectorAll('[data-strat-field], [data-bet-st]')].filter(f => f.value !== f.defaultValue).map(f => [key(f), f.value]);
   patchHTML($('#strat-pub'), `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}`);
-  patchHTML($('#strat-top'), view.owner
+  // The summary at reading size, named like every other part of the page.
+  patchHTML($('#strat-top'), '<h3 class="strat-k">Summary</h3>' + (view.owner
     ? `<textarea class="strat-ed strat-big" data-strat-field="summary" rows="1" maxlength="400" placeholder="Your strategy in one sentence" aria-label="Summary">${esc(v.summary || '')}</textarea>`
-    : `<p class="strat-text strat-big">${esc(v.summary || '')}</p>`);
+    : `<p class="strat-text strat-big">${esc(v.summary || '')}</p>`));
   $('#strat-top').hidden = !view.owner && !stratText(v.summary);
   const bets = $('#strat-sec-bets'), live = view.bets.filter(c => c.status !== 'retired');
   bets.hidden = !view.owner && !live.length;
@@ -582,7 +587,7 @@ function strategyBind() {
   // The sections, one at a time: Save, or Cmd/Ctrl+Enter; Escape leaves it as it was.
   for (const sec of body.querySelectorAll('[data-section]')) {
     const b = sec.querySelector('[data-section-edit]');
-    if (b) b.onclick = () => { state.editSection = sec.dataset.section; state.addSection = false; strategyRender(); const t = $(`[data-section-form="${CSS.escape(sec.dataset.section)}"] textarea`); if (t) { stratAutosize(t); t.focus(); } };
+    if (b) b.onclick = () => { state.editSection = sec.dataset.sectionEd; state.addSection = false; strategyRender(); const t = $(`form[data-section-ed="${CSS.escape(sec.dataset.sectionEd)}"] textarea`); if (t) { stratAutosize(t); t.focus(); } };
   }
   const addSec = body.querySelector('[data-section-add]');
   if (addSec) addSec.onclick = () => { state.addSection = true; state.editSection = ''; strategyRender(); $('[data-section-new] input')?.focus(); };

@@ -18,8 +18,11 @@ Retired spellings are rewritten by `upgrade` (one spelling per meaning). Each re
 precheck and mapped to its replacement, never kept as a second spelling.
 """
 
+import logging
 import re
 from contextlib import contextmanager
+
+log = logging.getLogger(__name__)
 
 COLOURS = ("red", "yellow", "green")
 BOT_STATES = ("active", "paused", "planned", "quarantined", "archived")
@@ -69,9 +72,13 @@ class Column:
 # Hot and growing tables use triggers; small tables use a CHECK rebuilt into the table.
 COLUMNS = (
     Column("tasks", "status", TASK_STATUSES, nullable=True),
-    Column("tasks", "blocked_from_status", TASK_STATUSES, nullable=True),
-    Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"),)),
-    Column("attempts", "state", ATTEMPT_STATES),
+    # The status a blocked hold returns its task to (backend/migrations/0075_task_holds.py).
+    Column("task_holds", "from_status", TASK_STATUSES, nullable=True),
+    # "done" is the spelling older hubs stored for a finished job (seen on Tico Team, Nov 2).
+    Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"), ("done", "completed"))),
+    # NULL for a run recorded with no lease (backend/migrations/0072_turns_into_attempts.py); attempts' CHECK keeps a
+    # leased run's state set.
+    Column("attempts", "state", ATTEMPT_STATES, nullable=True),
     Column("automation_runs", "status", RUN_STATUSES),
     Column("webhook_sends", "state", WEBHOOK_SEND_STATES, retired=(("cancelled", "canceled"),)),
     Column("bots", "state", BOT_STATES, nullable=True, enforce="check"),
@@ -91,6 +98,7 @@ COLUMNS = (
     Column("model_subscriptions", "status", ("new", "working", "needs_reconnect"), enforce="check"),
     Column("strategy_actions", "state", ("proposed", "done", "undone"), enforce="check"),
     Column("google_connects", "status", GOOGLE_CONNECT_STATUSES, enforce="check"),
+    Column("google_workspaces", "status", ("pending", "connected", "failing"), enforce="check"),
     Column("fin_cards", "status", ("active", "frozen", "canceled"), enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
@@ -106,10 +114,10 @@ def present(conn):
     return [spec for spec in COLUMNS if spec.column in _columns(conn, spec.table)]
 
 
-def unknown_values(conn):
+def unknown_values(conn, specs=None):
     """(table, column, value, rows) for every stored value outside the accepted list, NULL included where refused."""
     found = []
-    for spec in present(conn):
+    for spec in present(conn) if specs is None else specs:
         accepted = spec.in_list(spec.accepted)
         rows = conn.execute(
             f"SELECT {spec.column}, COUNT(*) FROM {spec.table} WHERE {spec.column} NOT IN ({accepted}) "
@@ -123,21 +131,26 @@ def unknown_values(conn):
 
 
 def upgrade(conn):
-    """Migration 0002. Refuse stored values outside the lists (naming them), then rewrite retired spellings and
-    install the constraints. Runs inside the migration's transaction, with foreign keys already off."""
+    """Migration 0002. Rewrite retired spellings and install the constraints. A stored value outside a list is kept as
+    it is and logged, never a reason to stop the server: a trigger column still gets its triggers (they check new
+    writes only), and a CHECK column is left without its CHECK until its rows are fixed (enforce adds it then).
+    Runs inside the migration's transaction, with foreign keys already off."""
     problems = unknown_values(conn)
     if problems:
-        lines = [f"  {t}.{c} = {v!r} ({n} rows)" if v is not None else f"  {t}.{c} IS NULL ({n} rows)"
-                 for t, c, v, n in problems]
-        raise StatusValuesError("status values outside their lists; map or fix these rows, then start again:\n"
-                                + "\n".join(lines))
+        log.warning("status values outside their lists, kept as they are; map or fix these rows:\n%s",
+                    "\n".join(_describe(problems)))
     for spec in present(conn):
         # CHECK columns are mapped while their table is copied (_rebuild_with_check), not by an UPDATE the old CHECK
         # would refuse.
         if spec.enforce == "trigger":
             for old, new in spec.retired:
                 conn.execute(f"UPDATE {spec.table} SET {spec.column}=? WHERE {spec.column}=?", (new, old))
-    _enforce(conn)
+    _enforce(conn, problems)
+
+
+def _describe(problems):
+    return [f"  {t}.{c} = {v!r} ({n} rows)" if v is not None else f"  {t}.{c} IS NULL ({n} rows)"
+            for t, c, v, n in problems]
 
 
 def enforce(conn):
@@ -147,11 +160,16 @@ def enforce(conn):
     _enforce(conn)
 
 
-def _enforce(conn):
+def _enforce(conn, problems=None):
+    checks = [spec for spec in present(conn) if spec.enforce != "trigger"]
+    if problems is None:
+        # Only CHECK columns are scanned here (small tables): a rebuild would refuse rows outside the list.
+        problems = unknown_values(conn, checks)
+    blocked = {(t, c) for t, c, _v, _n in problems}
     for spec in present(conn):
         if spec.enforce == "trigger":
             _ensure_triggers(conn, spec)
-        else:
+        elif (spec.table, spec.column) not in blocked:
             _ensure_check(conn, spec)
 
 

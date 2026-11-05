@@ -89,7 +89,7 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
@@ -187,6 +187,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     return json(unrouted(p));
   });
   if (clock) await page.clock.install({time: clock});     // the page's timers too, so a test moves time on
+  await beforeGoto?.(page);
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
@@ -934,6 +935,15 @@ async function wakeNotes(browser) {
       bold: await page.locator('#task-peek .tmodal-head b').count()};
   };
   const day = await page.evaluate(at => snoozeDay({holds: [{kind: 'snoozed', until: at}]}), inDays(3));
+  // The year shows only off this year, so a snooze two years out can't read as a date already past.
+  const years = await page.evaluate(() => {
+    const y = new Date().getFullYear(), day = (yr, mo, d) => snoozeDay({holds: [{kind: 'snoozed', until: new Date(yr, mo, d, 12).toISOString()}]});
+    const due = (yr, mo, d) => taskDueInfo({status: 'open', owner_id: 'human:ana', due_at: new Date(yr, mo, d, 12).toISOString()}).words;
+    return {y, next: day(y + 1, 9, 20), now: day(y, 5, 15), dueNext: due(y + 1, 9, 20), duePast: due(y - 1, 9, 20)};
+  });
+  assert.ok(years.dueNext.includes(String(years.y + 1)) && years.duePast.includes(String(years.y - 1)), `due dates off this year show the year: ${years.dueNext} / ${years.duePast}`);
+  assert.ok(years.next.includes(String(years.y + 1)), `next year's snooze shows its year: ${years.next}`);
+  assert.ok(!/\d{4}/.test(years.now), `this year's snooze hides the year: ${years.now}`);
   const noted = await chips('tt-noted', 'Noted snooze');
   assert.equal(noted.snooze, `Snoozed to ${day} · ${long}`);
   assert.match(noted.snoozeTitle, new RegExp(` · ${long.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Click to bring it back now$`));
@@ -1451,12 +1461,32 @@ async function renamedBot(browser) {
   console.log('a bot whose id is not its slug: ok');
 }
 
+async function taskCheckBack(browser) {
+  const extra = {...fixtures().find(x => x.id === 't-checkout'), id: 't-followup', title: 'Inspect the review result',
+    check_back_at: new Date(Date.now() + 3600000).toISOString(), check_back_note: 'Verify the reviewer was assigned.'};
+  const {page, errors, posts} = await open(browser, {extraTasks: [extra]});
+  await page.locator('[data-task-key="tt-followup"] .tl-title').click();
+  const peek = page.locator('#task-peek');
+  await peek.locator('[data-prop="check_back"]').click();
+  await peek.locator('.prop-pop [data-prop-pick="2h"]').click();
+  await page.waitForFunction(() => !document.querySelector('#task-peek').saving);
+  assert.equal(taskWrites(posts).at(-1).body.check_back_at, '2h');
+  await peek.locator('[data-prop="check_back_note"]').click();
+  await peek.locator('.prop-pop input').fill('Inspect the returned review.');
+  await peek.locator('.prop-pop input').press('Enter');
+  await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="check_back_note"]')?.textContent.includes('returned review'));
+  assert.equal(taskWrites(posts).at(-1).body.check_back_note, 'Inspect the returned review.');
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('task follow-up date and expected result: ok');
+}
+
 module.exports = {open, fixtures};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot, taskCheckBack}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

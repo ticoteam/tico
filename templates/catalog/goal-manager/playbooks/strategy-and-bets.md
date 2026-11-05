@@ -5,8 +5,8 @@ Read this before you draft a strategy, judge a bet, file a goal proposal, or rea
 ## The strategy
 - The strategy has one draft and numbered published versions. The draft is the owner's and only they see it. `hub strategy show`
   is the published version, with its bets, `goals_by_bet` and `health_by_bet`.
-- The sections are `serve`, `sell`, `know` (what we know that others don't) and `not` (what we won't do), plus any extra the owner
-  adds. The owner writes and publishes it, never you; your drafts are proposals.
+- The sections are `serve`, `sell`, `proof` (how we know they want it), `now` (why now), `know` (what we know that others don't),
+  `how` (how we sell) and `not` (what we won't do), plus any extra the owner adds. `proof_since` says when proof last changed. The owner writes and publishes it, never you; your drafts are proposals.
 - A bet is `proposed`, `active` or `retired`. Three to five bets (at most seven active). Every active bet has a `rules_out` and a
   `wrong_if`: a KPI with a threshold, a market entity, or a sentence with a check-by date.
 - Goals carry the bet they serve (`--bet` on `hub goal create|update`). Drafting is `playbooks/draft-the-strategy.md`; a bet whose
@@ -34,7 +34,8 @@ Read this before you draft a strategy, judge a bet, file a goal proposal, or rea
 ## Talking to Tico: the commands
 Read with `hub strategy show`, `hub strategy versions`, `hub strategy diff --from <n> --to <n>`, `hub lens list`, `hub lens show`,
 `hub goal list`, `hub goal show`, `hub kpi list`, `hub kpi show`, `hub goal checkin-list`, the market with `hub doc search --market`,
-`hub market show <id>` and `hub market delta`, and the bots' state with `hub health check`.
+`hub market show <id>` and `hub market delta`, customers with `hub growth numbers` and `hub meeting search`, and the bots' state
+with `hub health check`.
 Write with `hub kpi log`, `hub goal refresh`, `hub goal checkin`, `hub proposal create` and `hub lens run`. Nothing else changes a
 goal, a KPI or the strategy. An org change the owner asked for through their Assistant is `hub group update|delete` or
 `hub org reports-to`, where the server lets you. At level 3 only, `hub goal strategy-bot-decide` changes bot tasks. `hub strategy draft`,

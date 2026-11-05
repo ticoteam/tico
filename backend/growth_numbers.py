@@ -42,10 +42,11 @@ def _month(row, month):
     return {"month": month, **{key: row.get(key) for key in SERIES_KEYS}}
 
 
-def _window(c, months):
-    """The newest `months` months with cohort rows, oldest first."""
-    return sorted(r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts ORDER BY month DESC LIMIT ?",
-                                          (months,)))
+def _window(c, months, until=None):
+    """The newest `months` months with cohort rows, oldest first; `until` (YYYY-MM) leaves out the months after it."""
+    where, args = ("WHERE month<=? ", [until]) if until else ("", [])
+    return sorted(r[0] for r in c.execute(f"SELECT DISTINCT month FROM growth_cohorts {where}ORDER BY month DESC LIMIT ?",
+                                          [*args, months]))
 
 
 def _since(window):
@@ -107,8 +108,9 @@ def _kpis(c, hidden):
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
     rows = H._rows(c.execute(
-        "SELECT e.task_id, e.created_at, e.new, t.title, t.goal_id FROM task_events e JOIN tasks t ON t.id=e.task_id "
-        f"WHERE e.field='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
+        "SELECT e.subject_id AS task_id, e.created_at, e.new, t.title, t.goal_id FROM history_events e "
+        "JOIN tasks t ON t.id=e.subject_id "
+        f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
         f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
         [*MOVES, MT.TYPE_ID, since, MT.TYPE_ID, MARKERS_MAX]))
     tags = {}
@@ -126,8 +128,9 @@ def _markers(c, auth, who, since):
     return out
 
 
-def numbers(c, auth, who, months, hidden):
-    window = _window(c, months)
+def numbers(c, auth, who, months, hidden, until=None):
+    """The numbers for the newest `months` months with rows up to `until` (default: all of them)."""
+    window = _window(c, months, until)
     conf = G.settings(c)
     totals, by_month = {}, {}
     for m in window:

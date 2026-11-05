@@ -1,24 +1,18 @@
-"""One recovery wake for a lost assignment; overdue starts remain visible until attempted.
+"""A lost assignment is listed once on its bot's task roundup ("assigned, not started", backend/task_roundup.py); overdue
+starts remain visible until attempted.
 
-The audit ledger is keyed by the assignment event, not by mutable task.updated. It survives
-restarts and does not turn a Lead's profile into an idle task-pulling profile.
+The audit ledger is keyed by the assignment event, not by mutable task.updated. The roundup writes its row when the line is
+sent, so it survives restarts and the health check reads it. It does not turn a Lead's profile into an idle task-pulling profile.
 """
 import logging
-import os
-import sqlite3
 
 from . import auto_tasks, hubdb as H, task_privacy as privacy
+from . import bot_settings as BS
 
 EVENT = 'task.assignment-rewake'
 WAKE_HOURS = 1
 ESCALATE_HOURS = 2
 SCAN_LIMIT = 200
-CURSOR_KEY = "assignment-recovery-cursor"
-# (database file, task id, assignment key) -> True once the assignment's bot has run the task since it was assigned.
-# Attempts are never deleted and a new assignment has a new key, so the answer never turns false. Keyed by the
-# database file, as health's token cache is, so separate stores (and a restored file) never share entries.
-ATTEMPTED = {}
-ATTEMPTED_LIMIT = 20000
 
 
 def page_ledger(c, rows):
@@ -28,8 +22,8 @@ def page_ledger(c, rows):
     for part in H.chunks(row['id'] for row in rows):
         marks = ','.join('?' * len(part))
         for task_id, event_id, ts in c.execute(
-                f"SELECT task_id,id,created_at FROM task_events WHERE field='owner' AND task_id IN ({marks}) "
-                "ORDER BY task_id,created_at DESC,rowid DESC", part):
+                f"SELECT subject_id,id,created_at FROM history_events WHERE subject_type='task' AND kind='owner' "
+                f"AND subject_id IN ({marks}) ORDER BY subject_id,created_at DESC,rowid DESC", part):
             owners.setdefault(task_id, (event_id, ts))
         for target, detail in c.execute(
                 f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,created_at DESC",
@@ -38,18 +32,8 @@ def page_ledger(c, rows):
     return owners, ledger
 
 
-def _memo_scope(c):
-    """The database file this connection reads, or None (no memo) for an unnamed or missing file."""
-    path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
-    try:
-        stat = os.stat(path) if path else None
-    except OSError:
-        return None
-    return (path, stat.st_dev, stat.st_ino) if stat else None
-
-
 def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=None, visible="1", manager_actor=None,
-               attempts=None, on_error=None, page=None):
+               on_error=None, page=None, owner=None):
     if task_ids is not None and not task_ids:
         return
     at = at or H.now()
@@ -58,7 +42,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     scope = f" AND t.id IN ({','.join('?' for _ in task_ids)})" if task_ids else ''
     params.extend(task_ids or ())
     # Select the current assignment's ledger entry before reading task bodies or provenance.
-    assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at)"
+    assignment_key = "coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at)"
     ledger = ("SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
               f"AND json_extract(e.detail,'$.assignment')={assignment_key}")
     if recorded is not None:
@@ -70,64 +54,64 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     if after:
         scope += " AND t.id>?"
         params.append(after)
+    if owner:
+        scope += " AND t.owner_id=?"
+        params.append(owner)
     if manager_actor:
         scope += " AND b.id IN (SELECT bot FROM bot_config WHERE reports_to IN (?,?))"
         params.extend((manager_actor, H.actor_id(manager_actor)))
     # One page bounds Python wait/provenance work, including pages with no eligible wake.
     # The scheduler persists the last inspected id, so held/started rows cannot starve later work.
-    attempts = {} if attempts is None else attempts
     # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
     visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
-    rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id "
-                                 "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
-                                 + scope + visibility + " ORDER BY t.id LIMIT ?",
-                                 (*params, SCAN_LIMIT)))
+    rows = H._rows(c.execute(f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id "
+                             "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
+                             + scope + visibility + " ORDER BY t.id LIMIT ?",
+                             (*params, SCAN_LIMIT)))
     if page is not None:
         page[:] = [len(rows)]
     owners, ledger = page_ledger(c, rows)
-    # Only a committed view may be remembered: a write transaction can still roll back what it reads.
-    writing = getattr(c, 'write_transaction', False) or c.total_changes != getattr(c, 'provenance_changes', c.total_changes)
-    memo_scope = _memo_scope(c) if rows else None
+    # Each row's assignment and ledger entry, read before any row is checked. A row whose read failed keeps the error,
+    # raised for that row alone below.
+    picked = []
+    for row in rows:
+        try:
+            picked.append(_picked(row, owners, ledger, cutoff, at, recorded))
+        except Exception as exc:
+            logging.getLogger(__name__).exception('Assignment recovery could not read one task')
+            picked.append(exc)
+    # Waits come before the attempts read: a row they hold back sets no floor, so its bot's runs are not read for it.
     # Tasks the page's wait checks can't rule out; the rest of the page skips waiting() (auto_tasks.maybe_waiting).
     suspect = auto_tasks.maybe_waiting(c, rows)
-    for row in rows:
+    for i, row in enumerate(rows):
+        if isinstance(picked[i], tuple) and row['id'] in suspect:
+            try:
+                if auto_tasks.waiting(c, row, starting=True):
+                    picked[i] = None
+            except Exception as exc:
+                logging.getLogger(__name__).exception('Assignment recovery could not check one task for a wait')
+                picked[i] = exc
+    latest, failed, bot_failed = _attempted(c, rows, picked)
+    for i, row in enumerate(rows):
         if scanned is not None:
             scanned[:] = [row['id']]
         try:
-            owned = owners.get(row['id'])
-            key, since = (owned[0], owned[1]) if owned else (row['owner_id'] + ':' + row['created_at'], row['created_at'])
-            if since > cutoff:
+            entry = picked[i]
+            if isinstance(entry, Exception):
+                raise entry
+            if entry is None:
                 continue
-            saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
-            # Most reads need only one side of the ledger. Skip the other before wait/provenance checks.
-            if recorded is False and saved:
-                continue
-            if recorded is True and (not saved or saved['rewoken_at'] > H.shift(at, hours=-ESCALATE_HOURS)):
-                continue
-            if row['id'] in suspect and auto_tasks.waiting(c, row, starting=True):
-                continue
-            # Include folded inputs and next-run carried work, not just the job's original task.
-            memo = (memo_scope, row['id'], key) if memo_scope else None
-            if memo in ATTEMPTED:
-                continue
+            key, since, saved = entry
             bot = H.actor_id(row['owner_id'])
-            floor, touched = attempts.get(bot, ("9999", {}))
-            # Only runs since this assignment can count, so the bot's attempts are read from `since`, not the page's oldest row.
-            if since < floor:
-                found = c.execute("SELECT id,created_at FROM attempts WHERE bot_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC",
-                                  (bot, since, floor)).fetchall()
-                # Every run's task set in a fixed number of statements; attempt_tasks then reads each from that snapshot.
-                privacy.prime_attempts(c, [attempt['id'] for attempt in found])
-                for attempt in found:
-                    for tid in privacy.attempt_tasks(c, attempt['id']):
-                        touched.setdefault(tid, attempt['created_at'])
-                attempts[bot] = since, touched
-            if touched.get(row['id'], '') >= since:
-                if memo is not None and not writing:
-                    if len(ATTEMPTED) >= ATTEMPTED_LIMIT:
-                        ATTEMPTED.clear()
-                    ATTEMPTED[memo] = True
+            # A bot whose runs could not be read raises for each of its rows; the page's other bots are unaffected.
+            if bot in bot_failed:
+                raise bot_failed[bot]
+            # A run of this bot that failed to read its tasks raises for every row it could have counted for.
+            broken = [item for item in failed.get(bot, ()) if item[0] >= since]
+            if broken:
+                raise max(broken, key=lambda item: item[0])[1]
+            if latest[i] >= since:
                 continue
             yield row, key, since, saved
         except Exception as exc:
@@ -136,75 +120,116 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             on_error(row, exc)
 
 
-def due(c, at, limit=50, cursor=None, failures=None):
-    """Read outside the scheduler write lock; each selected row is rechecked in its own transaction."""
-    out = []
-    after = cursor[0] if cursor else ""
-    if cursor is not None:
-        cursor[:] = [""]
-
-    def failed(row, exc):
-        logging.getLogger(__name__).exception('Assignment recovery selection failed for one task')
-        if failures is not None:
-            failures.append({'assigned_start': row['id'], 'error': type(exc).__name__})
-
-    for row, _, _, saved in candidates(c, at, recorded=False, after=after, scanned=cursor, on_error=failed):
-        if not saved and H.bot(c, H.actor_id(row['owner_id']))['state'] == 'active':
-            out.append(row['id'])
-            if len(out) >= limit:
-                break
-    return out
+def _picked(row, owners, ledger, cutoff, at, recorded):
+    """(assignment key, since, saved ledger entry) for a row the ledger filters keep, or None for one they skip."""
+    owned = owners.get(row['id'])
+    key, since = (owned[0], owned[1]) if owned else (row['owner_id'] + ':' + row['created_at'], row['created_at'])
+    if since > cutoff:
+        return None
+    saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
+    # Most reads need only one side of the ledger. Skip the other before wait/provenance checks.
+    if recorded is False and saved:
+        return None
+    if recorded is True and (not saved or saved['rewoken_at'] > H.shift(at, hours=-ESCALATE_HOURS)):
+        return None
+    return key, since, saved
 
 
-def sweep(c, at=None, task_ids=None):
-    at = at or H.now()
-    woke = []
-    for row, key, since, saved in candidates(c, at, task_ids):
-        if saved:
-            continue
-        if H.bot(c, H.actor_id(row['owner_id']))['state'] != 'active':
-            continue
-        # A delivery refusal is also one try, recorded durably; never repeat it every tick.
-        c.execute('SAVEPOINT assignment_rewake')
-        refusal = None
+# (bot, floor) pairs per statement: two parameters each, well under SQLite's variable limit.
+RUN_PAIRS = 250
+
+
+def _runs_sql(pairs):
+    """The runs of each (bot, floor) pair at or after that bot's own floor: one join on the attempts' bot_id index."""
+    return ("WITH f(bot,since) AS (VALUES " + ",".join("(?,?)" for _ in range(pairs)) + ") "
+            "SELECT a.id,a.bot_id,a.created_at FROM f JOIN attempts a ON a.bot_id=f.bot AND a.created_at>=f.since "
+            "ORDER BY a.created_at DESC")
+
+
+def _runs(c, floors):
+    """(id, bot_id, created_at) of each bot's runs at or after its floor, one statement a chunk of bots."""
+    found = []
+    for part in H.chunks(sorted(floors.items()), RUN_PAIRS):
+        found.extend(c.execute(_runs_sql(len(part)), [value for pair in part for value in pair]))
+    return found
+
+
+def _attempted(c, rows, picked):
+    """When each row's task was last carried by a run of its bot: the page's runs read in one statement, primed once.
+
+    Only rows still candidates set a floor: `picked` holds None or an error for a row a wait or a read held back. Returns
+    (latest, failed, bot_failed). latest[i] is the newest created_at of a run of row i's bot that carried row i's task, or
+    ''. A run counts only at or after its bot's own floor, the oldest eligible assignment of that bot. failed maps a bot to
+    [(created_at, error)] for each run whose tasks could not be read. bot_failed maps a bot to the error from reading or
+    priming its runs: the page's batch read failed, then each bot is read alone, and only the bot that still fails is kept."""
+    floors = {}
+    for row, entry in zip(rows, picked, strict=True):
+        if isinstance(entry, tuple):
+            bot = H.actor_id(row['owner_id'])
+            floors[bot] = min(floors.get(bot, entry[1]), entry[1])
+    latest, failed, bot_failed = [''] * len(rows), {}, {}
+    if not floors:
+        return latest, failed, bot_failed
+    try:
+        runs = _runs(c, floors)
+        if runs:
+            privacy.prime_attempts(c, [run['id'] for run in runs])
+    except Exception:
+        logging.getLogger(__name__).exception('Assignment recovery could not read its runs together; reading each bot alone')
+        runs = []
+        for bot, since in floors.items():
+            try:
+                own = _runs(c, {bot: since})
+                if own:
+                    privacy.prime_attempts(c, [run['id'] for run in own])
+            except Exception as exc:
+                logging.getLogger(__name__).exception('Assignment recovery could not read the runs of one bot')
+                bot_failed[bot] = exc
+                continue
+            runs.extend(own)
+    where = {row['id']: (i, H.actor_id(row['owner_id'])) for i, row in enumerate(rows)}
+    for run in runs:
         try:
-            if not c.execute('SELECT 1 FROM conversations WHERE id=?', (row['conversation_id'],)).fetchone():
-                raise H.Refused('missing_conversation', 'The assignment has no task conversation.')
-            message = H._wake(c, row, row['owner_id'], 'Assigned, not started: ' + row['title'],
-                              {'assignment_rewake': True, 'needs_action': True}, trigger='other')
-        except H.Refused as exc:
-            c.execute('ROLLBACK TO assignment_rewake')
-            message, refusal = None, exc.rule
+            carried = privacy.attempt_tasks(c, run['id'])
         except Exception as exc:
-            # Storage failures must reach the scheduler's fatal-error isolation. A bad task's
-            # delivery gets one recorded try so it cannot starve the next bounded batch.
-            code = getattr(exc, 'sqlite_errorcode', 0) & 0xff
-            if not c.in_transaction or code in (sqlite3.SQLITE_FULL, sqlite3.SQLITE_IOERR,
-                                                sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB,
-                                                sqlite3.SQLITE_READONLY):
-                raise
-            c.execute('ROLLBACK TO assignment_rewake')
-            logging.getLogger(__name__).exception('Assignment recovery delivery failed')
-            message, refusal = None, 'recovery_error'
-        finally:
-            if c.in_transaction:
-                c.execute('RELEASE assignment_rewake')
-        H.event(c, H.KEEPER, EVENT, row['id'], {'assignment': key, 'assigned_at': since,
-                                            'rewoken_at': at, 'refusal': refusal or (None if message else 'no_queued_wake')})
-        if message:
-            woke.append(row['id'])
-    return woke
+            logging.getLogger(__name__).exception('Assignment recovery could not read a run of the bot')
+            failed.setdefault(run['bot_id'], []).append((run['created_at'], exc))
+            continue
+        for tid in carried:
+            i, bot = where.get(tid, (None, None))
+            if i is not None and bot == run['bot_id'] and run['created_at'] > latest[i]:
+                latest[i] = run['created_at']
+    return latest, failed, bot_failed
+
+
+def unstarted(c, at=None, owner=None):
+    """Every open assignment of an active bot that no run has started and no list has recorded (`recorded=False`), as
+    (row, key, since, saved), read a page at a time. `owner` (`bot:<slug>`) limits it to one bot's tasks."""
+    at = at or H.now()
+    out, after = [], ""
+    while True:
+        scanned, page = [""], []
+        out.extend(candidates(c, at, recorded=False, after=after, scanned=scanned, page=page, owner=owner,
+                              on_error=_skip_row))
+        # A short page is the last: the page after it, from its last id, would be empty and is not read.
+        if not scanned[0] or page[0] < SCAN_LIMIT:
+            return out
+        after = scanned[0]
+
+
+def _skip_row(row, exc):
+    logging.getLogger(__name__).exception('Assignment recovery selection failed for one task')
 
 
 def overdue(c, at=None, *, visible="1", manager_actor=None, limit=200):
     """Page past ineligible ledger rows; cap alert output, not the pre-filter candidate window."""
     at = at or H.now()
-    after, count, attempts = "", 0, {}
+    after, count = "", 0
     while count < limit:
         scanned, page = [""], []
         for row, _, since, saved in candidates(c, at, recorded=True, visible=visible,
                                                manager_actor=manager_actor, after=after,
-                                               scanned=scanned, attempts=attempts, page=page):
+                                               scanned=scanned, page=page):
             yield {**row, 'assigned_at': since, 'rewoken_at': saved['rewoken_at'], 'rewake_refusal': saved.get('refusal')}
             count += 1
             if count >= limit:
@@ -230,9 +255,9 @@ def _bot_state(c, bot, settings):
     owner = H.bot(c, bot)
     if owner and owner['state'] != 'active':
         return owner['state'], None
-    config = c.execute(f"SELECT bc.config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
-                       "FROM bot_config bc WHERE bc.bot=?", (bot,)).fetchone()
-    runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id '
+    config = c.execute(f"SELECT {BS.CONFIG} AS config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+                       f"FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (bot,)).fetchone()
+    runner = c.execute('SELECT r.* FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id '
                        'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not runner:
         return 'no_computer', None

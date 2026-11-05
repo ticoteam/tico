@@ -20,7 +20,7 @@ def _fresh_store(tmp_path):
 
 
 # Columns whose CHECK wants a real value, not a placeholder.
-OVERRIDES = {("fin_payments", "method"): "ach", ("bot_config", "config"): "{}", ("fin_cards", "kind"): "standing"}
+OVERRIDES = {("fin_payments", "method"): "ach", ("fin_cards", "kind"): "standing"}
 
 
 def _required(conn, table, skip):
@@ -118,15 +118,41 @@ def _upgrade_as_migrate_runs_it(conn):
         conn.execute("PRAGMA foreign_keys=ON")
 
 
-def test_the_upgrade_names_values_it_cannot_map_and_changes_nothing(tmp_path):
+def test_the_upgrade_keeps_values_it_cannot_map_logs_them_and_still_guards_new_writes(tmp_path, caplog):
     conn = _old_file(tmp_path / "old.db")
     conn.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
                      [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "stalled", "t"),
                       ("j3", "m", "b", "cancelled", "t")])
-    with pytest.raises(SV.StatusValuesError) as failed:
+    with caplog.at_level("WARNING", logger="backend.status_values"):
         _upgrade_as_migrate_runs_it(conn)
-    assert "jobs.state = 'stalled' (1 rows)" in str(failed.value)
-    assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("stalled",), ("cancelled",)]
+    assert "jobs.state = 'stalled' (1 rows)" in caplog.text
+    assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("stalled",), ("canceled",)]
+    with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
+        conn.execute("UPDATE jobs SET state='stalled' WHERE id='j1'")
+
+
+def test_an_old_done_job_maps_to_completed(tmp_path):
+    # Tico Team's v0.5.54 upgrade stopped on one Oct 2 job stored as 'done'.
+    conn = _old_file(tmp_path / "old.db")
+    conn.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES('j1','m','b','done','t')")
+    _upgrade_as_migrate_runs_it(conn)
+    assert conn.execute("SELECT state FROM jobs").fetchall() == [("completed",)]
+
+
+def test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check(tmp_path):
+    conn = _old_file(tmp_path / "old.db")
+    conn.executescript("""
+        CREATE TABLE bots(slug TEXT PRIMARY KEY, state TEXT);
+        INSERT INTO bots VALUES('a','active'),('b','hibernating');
+    """)
+    _upgrade_as_migrate_runs_it(conn)
+    assert conn.execute("SELECT slug,state FROM bots ORDER BY slug").fetchall() == [("a", "active"), ("b", "hibernating")]
+    assert "status_values_state" not in conn.execute("SELECT sql FROM sqlite_master WHERE name='bots'").fetchone()[0]
+    # Once the row is fixed, the next enforce (every start) adds the CHECK.
+    conn.execute("UPDATE bots SET state='paused' WHERE slug='b'")
+    conn.execute("PRAGMA foreign_keys=OFF")
+    SV.enforce(conn)
+    assert "status_values_state" in conn.execute("SELECT sql FROM sqlite_master WHERE name='bots'").fetchone()[0]
 
 
 def test_the_upgrade_rewrites_cancelled_and_refuses_it_afterwards(tmp_path):

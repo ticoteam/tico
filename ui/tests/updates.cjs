@@ -42,13 +42,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
      created_at: iso(-170 * hour), updated_at: iso(-170 * hour), read: true, replies: 0}];
   const threads = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
                              {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
-  // Older updates past the feed's page: only the one-update route has them (a From: link on an older card).
-  const older = {'u-seo-old': {id: 'u-seo-old', bot: 'seo', kind: 'daily', day: day(-86400e3), headline: 'Outlined the checklist page',
-                               body: '- Outlined the checklist page', created_at: iso(-27 * hour), updated_at: iso(-27 * hour), read: true, replies: 0},
-                 'u-game-old': {id: 'u-game-old', bot: 'game', kind: 'daily', day: day(-86400e3), headline: 'Sketched a level',
-                                body: '- Sketched the first level', created_at: iso(-28 * hour), updated_at: iso(-28 * hour), read: true, replies: 0}};
-  const oneAsked = [];
-  let pageTwo = null, holdOne = null;               // a second daily page for Load older; a held one-update reply
   const archivedIds = new Set(), archiveRequests = [];
   let archiveFails = false, nextListGate = null, holdList = null, holdReply = null, keepUnread = null;
   const isArchived = u => archivedIds.has(u.id) || !!u.superseded;
@@ -56,7 +49,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const source = kind === 'weekly' ? weekly : updates;
     const list = includeArchive ? source : source.filter(u => isArchived(u) === archive);
     return {updates: list, missed: kind === 'weekly' || archive ? [] : [{bot: 'game', kind: 'daily', day: day(0), reason: 'its run stopped part-way'}],
-            unread: source.filter(u => !isArchived(u) && !u.read).length, next_before: pageTwo && kind !== 'weekly' && !archive ? 'p2' : null, today: {posted: 2, missed: 1, queued: 1}};
+            unread: source.filter(u => !isArchived(u) && !u.read).length, today: {posted: 2, missed: 1, queued: 1}};
   };
   const open = async (viewport) => {
     const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(viewport.width < 600 ? {isMobile: true, hasTouch: true} : {})});
@@ -93,9 +86,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         for (const id of body.ids) { if (body.archived) archivedIds.add(id); else archivedIds.delete(id); }
         return json({updated_at: body.ids.length, archived: body.archived, unread: updates.filter(u => !isArchived(u) && !u.read).length});
       }
-      if (p === '/api/v2/updates' && req.method() === 'GET' && url.searchParams.get('before') === 'p2') {
-        return json({updates: pageTwo, missed: [], unread: 0, next_before: null});
-      }
       if (p === '/api/v2/updates' && req.method() === 'GET') {
         const payload = feed(url.searchParams.get('kind'), url.searchParams.get('archive') === 'true',
           url.searchParams.get('include_archive') === 'true');
@@ -118,9 +108,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       }
       const one = p.match(/^\/api\/v2\/updates\/([^/]+)$/);
       if (one) {
-        oneAsked.push(one[1]);
-        if (holdOne) await holdOne;
-        const u = updates.find(x => x.id === one[1]) || older[one[1]];
+        const u = updates.find(x => x.id === one[1]);
         return u ? json({update: u, thread: threads[one[1]] || []}) : json({error: {code: 'not_found', detail: 'Update not found'}}, 404);
       }
       return json(unrouted(p));
@@ -173,12 +161,22 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // No Unread filter. Unread first, then newest; marking one unread (or read)
     // never moves anything while the page is open.
     assert.equal(await page.locator('#upd-unread').count(), 0);
-    // The action row is icons, each named for a screen reader and a tooltip; no words on the card.
-    const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act');
-    assert.deepEqual(await acts.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('.nav-icon')?.textContent])),
-      [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']]);
-    assert.deepEqual(await acts.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim())),
-      ['', '', ''], 'no visible words');
+    // The actions are icons, each named for a screen reader and a tooltip; no words on the card. Reply, Mark unread and
+    // Archive sit at the top right, on the line with the name and the time; no row is left under the update.
+    const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act'), corner = page.locator('[data-upd="u-cmo"] .upd-corner .upd-act');
+    const named = locator => locator.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('.nav-icon')?.textContent]));
+    const words = locator => locator.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
+    assert.equal(await acts.count(), 0, 'no bottom row');
+    assert.equal(await page.locator('[data-upd="u-cmo"] .upd-actions').evaluate(r => getComputedStyle(r).display), 'none');
+    assert.deepEqual(await named(corner), [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']],
+      'reply, read and archive at the top right');
+    assert.deepEqual(await page.locator('[data-upd="u-cmo"] .upd-corner').evaluate(c => {
+      const m = c.closest('.upd-meta').getBoundingClientRect(), r = c.getBoundingClientRect(), body = c.closest('.upd-main').querySelector('.upd-body').getBoundingClientRect();
+      // The icons' centre is on the name line; the button's box may reach a little past it (its negative margins).
+      const mid = (r.top + r.bottom) / 2;
+      return {onNameLine: mid >= m.top && mid <= m.bottom, atRight: Math.abs(m.right - r.right) <= 10, aboveBody: mid < body.top};
+    }), {onNameLine: true, atRight: true, aboveBody: true}, 'the corner is on the name line, at its right end, above the body');
+    assert.deepEqual(await words(corner), ['', '', ''], 'no visible words');
     assert.equal(await page.locator('#upd-feed [data-upd-kids]').count(), 0, 'the List has no reports toggle');
     await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').click();
     assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').getAttribute('aria-label'), 'Mark read', 'Mark unread marked it unread');
@@ -290,86 +288,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.deepEqual(errors, []);
     await page.close();
 
-    // An older manager card's From: link opens the update it was written from, even when that one is past the feed's
-    // page and its author has posted since (their page shows their latest): it loads under the card and is selected.
-    // My bots doesn't hide it; a link that can't load goes to its author as before.
-    const cmoCard = updates.find(u => u.id === 'u-cmo');
-    cmoCard.inputs = [{id: 'u-seo-old', author: 'seo'}, {id: 'u-game-old', author: 'game'}, {id: 'u-fin-gone', author: 'finance'}];
-    const linked = await open({width: 1280, height: 900});
-    const lp = linked.page;
-    await lp.goto('http://tico-ui.test/#/updates');
-    const cmoFrom = lp.locator('[data-upd="u-cmo"] .upd-from');
-    await cmoFrom.waitFor();
-    await cmoFrom.locator('[data-upd-input="u-seo-old"]').click();
-    await lp.locator('#upd-feed [data-upd="u-seo-old"].sel').waitFor();
-    assert.match(await lp.locator('[data-upd="u-seo-old"] .upd-body').innerText(), /Outlined the checklist page/, 'the linked update, not the newer one');
-    assert.match(lp.url(), /#\/updates$/, 'the link stays on the page');
-    let order = await lp.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd));
-    assert.equal(order[order.indexOf('u-cmo') + 1], 'u-seo-old', 'under the card that links it: ' + order);
-    assert.equal(await lp.locator('#upd-mine').getAttribute('aria-pressed'), 'true');
-    await cmoFrom.locator('[data-upd-input="u-game-old"]').click();
-    await lp.locator('#upd-feed [data-upd="u-game-old"].sel').waitFor();
-    order = await lp.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd));
-    assert.equal(order.filter(id => id === 'u-seo-old').length, 1, 'shown once: ' + order);
-    await cmoFrom.locator('[data-upd-input="u-seo-old"]').click();      // already under it: selected, not loaded again
-    await lp.locator('#upd-feed [data-upd="u-seo-old"].sel').waitFor();
-    assert.deepEqual(oneAsked.filter(id => id.endsWith('-old')), ['u-seo-old', 'u-game-old']);
-    for (let n = 0; n < 2; n++) await lp.locator('[data-upd="u-cmo"] [data-upd-toggle]').click();   // each writes the cache
-    const cards = () => lp.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd));
-    const loaded = () => lp.waitForFunction(() => UPD && !UPD.loading && !UPD.fromCache);
-    // On a repeat visit the cached cards paint first; a first page that lands after the link opened its update keeps
-    // that update under its card and selected. Load older then brings it again with an older one: each shows once.
-    pageTwo = [older['u-seo-old'], {id: 'u-fin-old', bot: 'finance', kind: 'daily', day: day(-2 * 86400e3), headline: 'Paid the rent',
-      body: '- Paid the October rent', created_at: iso(-50 * hour), updated_at: iso(-50 * hour), read: true, replies: 0}];
-    await lp.evaluate(() => { location.hash = '#/updates?view=archive'; });
-    await lp.waitForFunction(() => UPD?.view === 'archive' && !UPD.loading);
-    let releaseFirst; holdList = new Promise(r => { releaseFirst = r; });
-    const fresh = {id: 'u-seo-new', bot: 'seo', kind: 'daily', day: day(0), headline: 'New', body: '- Posted while you read',
-                   created_at: iso(0), updated_at: iso(0), read: false, replies: 0};
-    updates.push(fresh);                                      // the held first page brings a newer card that sorts first
-    await lp.evaluate(() => { location.hash = '#/updates'; });
-    await cmoFrom.waitFor();                                  // painted from the cache while the first page is held
-    assert.equal(await lp.evaluate(() => UPD.fromCache), true);
-    assert.equal(await lp.locator('#upd-feed [data-upd="u-seo-old"]').count(), 0, 'a link\'s update is not cached');
-    await cmoFrom.locator('[data-upd-input="u-seo-old"]').click();
-    await lp.locator('#upd-feed [data-upd="u-seo-old"].sel').waitFor();
-    holdList = null; releaseFirst();
-    await loaded();
-    updates.splice(updates.indexOf(fresh), 1);
-    order = await cards();
-    assert.equal(order[order.indexOf('u-cmo') + 1], 'u-seo-old', 'still under its card after the first page: ' + order);
-    assert.equal(await lp.locator('#upd-feed [data-upd="u-seo-old"].sel').count(), 1, 'and still selected');
-    await lp.locator('[data-upd-more]').click();
-    await lp.locator('#upd-feed [data-upd="u-fin-old"]').waitFor();
-    order = await cards();
-    assert.deepEqual([order.filter(id => id === 'u-seo-old').length, order.filter(id => id === 'u-fin-old').length], [1, 1], 'once each: ' + order);
-    pageTwo = null;
-    // Leaving Updates while the linked update loads: its late reply neither moves the page nor adds a card.
-    let releaseOne; holdOne = new Promise(r => { releaseOne = r; });
-    await lp.evaluate(() => { location.hash = '#/updates?view=archive'; });
-    await lp.waitForFunction(() => UPD?.view === 'archive' && !UPD.loading);
-    await lp.evaluate(() => { location.hash = '#/updates'; });
-    await loaded();
-    const asked = oneAsked.length;
-    await cmoFrom.locator('[data-upd-input="u-game-old"]').click();
-    for (const end = Date.now() + t(10000); oneAsked.length === asked && Date.now() < end;) await new Promise(r => setTimeout(r, 20));
-    assert.equal(oneAsked.at(-1), 'u-game-old');
-    await lp.evaluate(() => { location.hash = '#/updates?view=archive'; });
-    await lp.waitForFunction(() => UPD?.view === 'archive' && !UPD.loading);
-    const late = lp.waitForResponse(r => r.url().endsWith('/api/v2/updates/u-game-old'));
-    holdOne = null; releaseOne();
-    await late;
-    await lp.evaluate(() => new Promise(r => setTimeout(r, 200)));
-    assert.equal(await lp.evaluate(() => location.hash), '#/updates?view=archive', 'the late reply does not navigate');
-    assert.equal(await lp.locator('#upd-feed [data-upd="u-game-old"]').count(), 0, 'nor adds a card to the new page');
-    await lp.evaluate(() => { location.hash = '#/updates'; });
-    await cmoFrom.waitFor();
-    await cmoFrom.locator('[data-upd-input="u-fin-gone"]').click();
-    await lp.waitForFunction(() => location.hash === '#/bot/finance');
-    assert.deepEqual(linked.errors.filter(e => !/404/.test(e)), []);
-    await lp.close();
-    delete cmoCard.inputs;
-
     // Phone: Tasks and Updates are in the bottom bar; Tasks stays in More too (the tour points at it there).
     const phone = await open({width: 390, height: 844});
     const p = phone.page;
@@ -459,7 +377,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.close();
 
     // Nothing yet: one short line, with no sentence under it and no Chat with us (Support is the ? in the sidebar).
-    updates = []; pageTwo = null;
+    updates = [];
     const none = await open({width: 1280, height: 900});
     await none.page.goto('http://tico-ui.test/#/updates');
     const empty = none.page.locator('#upd-feed .upd-empty');

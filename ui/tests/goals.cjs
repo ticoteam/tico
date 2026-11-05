@@ -17,7 +17,7 @@ const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
   bot('old', 'Old bot', 'p:ana', {status: 'archived'}),
-  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox'}),
+  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox', helper: true}),
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
@@ -127,13 +127,18 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const chips = row('bot:cmo').locator('.gt-chip');
     assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.querySelector('.gdot').className.replace('gdot ', '') + ' ' + el.innerText.trim())), ['yellow 52%', 'gray –']);
     assert.equal(await row('company').locator('.gt-goal .gdot').getAttribute('class'), 'gdot red');
-    // Needs you: a count and its lines; a proposal is confirmed there.
-    assert.match(await page.locator('#goal-needs').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
+    // Needs you: one quiet line with a count; Review opens its cards in a sheet, where a proposal is confirmed.
+    assert.match(await page.locator('#goal-needs-line').innerText(), /^2 waiting on you\s*·\s*Review$/);
+    assert.equal(await page.locator('#goal-needs').count(), 0, 'no cards on the page itself');
+    await page.locator('#goal-needs-line [data-needs-review]').click();
+    assert.match(await page.locator('#goal-needs-sheet[open]').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
     // Each line is the Strategy Bot's task, linked; the link opens the task, not the KPI.
     assert.equal(await page.locator('#goal-needs .need-row [data-need-task]').getAttribute('href'), '#/task/t-red');
     await page.locator('#goal-needs [data-decide=confirm]').click();
     await until(() => page.locator('#goal-needs .kpi-prop').count().then(n => n === 0), 'proposal gone');
     assert.deepEqual(last(), {path: '/api/v2/proposals/p1/decide', body: {decision: 'confirm'}});
+    assert.match(await page.locator('#goal-needs-line').innerText(), /^Activation is off track\s*·\s*Review$/, 'one left: the line says it');
+    await page.locator('#goal-needs-sheet [data-gn-close]').click();
 
     // A bot with no goal: tapping it opens its panel on a new goal, the owner fixed.
     const panel = page.locator('#goal-panel[open]');

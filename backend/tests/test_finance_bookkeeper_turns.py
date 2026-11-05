@@ -12,9 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import bookkeeper as BK
 from backend.finance import actions as FA
-from backend.store import H, encode
+from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.test_mcp import call, rpc
@@ -33,7 +34,8 @@ def hire(api):
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeper','bookkeeper','Bookkeeper','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('bookkeeper',?,'ana')", (encode(CONFIG),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('bookkeeper','ana')")
+        BS.write(c, "bookkeeper", CONFIG)
         assert BK.grant_defaults(c)
         granted = act(c, OWNER, "view_grant", {"subject": BK.ACTOR, "what": "everything"})
         assert granted.status == "committed", granted
@@ -422,6 +424,7 @@ def test_gap_books_check_kinds_can_be_paged(api):
                       "'needs_entry','',?)", (f"bin_{n}", received, "a" * 64, received))
     err, late = call(api, "hub_finance_inbox", {"kind": "unreconciled"}, token=token)
     assert not err and [(i["kind"], i["id"]) for i in late["items"]] == [("unreconciled", "books")], late
+    assert late["items"][0]["label"] == "Books not reconciled yet", late          # never reconciled: no day count
     err, first = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1}, token=token)
     assert not err and [i["id"] for i in first["items"]] == ["bin_1"] and first["next_cursor"], first
     err, second = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]},
