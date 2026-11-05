@@ -282,6 +282,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # Who can use a mailbox (Settings > Mailboxes, backend/mailboxes.py): connecting one, sharing it, each access and
     # stopping it are the person's own tap, never a chat's.
     (None, r"/api/v2/mailboxes(/.*)?"),
+    (None, r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
+    ("PUT", r"/api/v2/postal/settings"),
     # A computer's part of a Connect Google sign-in and its Workspace tokens: computers only, never a chat's.
     (None, r"/api/v2/connectors/mail/google/.*"), (None, r"/api/v2/connectors/mail/workspace/token"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
@@ -691,6 +693,9 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
     ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
     ("POST", r"/api/v2/postal/orders"),
+    ("PUT", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
+    ("DELETE", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
+    ("PUT", r"/api/v2/postal/settings"),
     ("POST", r"/api/v2/github/product-repos"), ("POST", r"/api/v2/tasks/[^/]+/requesters"), ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+"),
     ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"), ("POST", r"/api/v2/tasks/[^/]+/links"),
     ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),

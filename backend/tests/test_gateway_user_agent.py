@@ -152,6 +152,7 @@ HQ_CLIENTS = {
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',
     "backend/support_access.py": '"User-Agent": "tico-support-access"',
+    "backend/suggestions.py": '"User-Agent": G.user_agent()',
     "clients/gateway.py": "branded_opener(*handlers).open(",
     "clients/judge.py": "G.branded_opener(*handlers).open(",
     "setup/support.py": '"User-Agent": "tico-setup"',

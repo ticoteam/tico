@@ -897,6 +897,7 @@ def install(app, store, auth, mutate):
         validate_identity(c, who)
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
+        H._writer(c, who.actor, task_id=task_id)
         human = who.role == 'owner' or who.role == 'human' and H.can_move(c, who.actor)
         if not H.is_bot(row['owner_id']) or not (human or H.task_represents(c, who.actor, row['owner_id'])):
             raise Problem('forbidden', "Only the task's owner bot, its managers or a human mover manages its worktrees", 403)

@@ -28,7 +28,7 @@ from .migrations import renames
 
 
 # The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
-READABLE = "(SELECT *, owner AS owner_id, requester AS requester_id FROM task_trash)"
+READABLE = "(SELECT *, task_id AS id, owner AS owner_id, requester AS requester_id FROM task_trash) tasks"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
@@ -42,7 +42,7 @@ TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "t
              "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
              "task_check_models", "task_run_models", "task_holds", "meeting_task_links",
-             "maintenance_listings", "maintenance_handoffs")
+             "maintenance_listings", "maintenance_handoffs", "quarantine_holds")
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
 TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
