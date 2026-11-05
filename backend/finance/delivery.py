@@ -1,11 +1,10 @@
 """Invoice emails: the send approval a reminder or an invoice goes out under, and how each send went.
 
-A reminder or an invoice reaches its customer only under a Tico `send` approval (docs/mail.md). Finance issues it when the
-action commits, for these recipients, this exact text and this invoice document, approved at once by the person whose
-yes the action waited on (or the person who made it). The Bookkeeper sends the text with that approval
-(`mail send --approval-issue`) and reports the outcome through `invoice_delivery`. Finance sends no mail itself, and a
-bot cannot issue or decide one. A failed send raises one Needs-you for the finance admin; a send with no report for a
-day raises one more. A retry sends the same text under the same approval, and a stage is never made again.
+A reminder or invoice enters the shared frozen send queue when the finance action commits. Its exact MIME,
+recipients and invoice document hash are bound to a send approval which still needs an authorized preview and yes.
+The finance decision alone never approves unseen MIME. The shared connector dispatches after approval and undo;
+the Bookkeeper reports the delivery outcome. A failed send raises one Needs-you for the finance admin, and an
+unreported send raises another after a day. Operation retries preserve the original frozen send.
 
 The ask carries the email's intent (`intent`: addresses, subject, text, document and mailbox), resolved when the action is
 planned. If any of it changes before the ask is decided, the ask is void and asked again; no send approval is issued for
@@ -32,7 +31,7 @@ MAIL = "mail"                 # the resolved key an invoice email's intent is ke
 
 def digest(text: str) -> str:
     """The sha256 an approval's body_sha256 holds for this exact text (the mail connector hashes the body it sends)."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256((text.rstrip("\r\n") + "\n").encode("utf-8")).hexdigest()
 
 
 def document_digest(document: Mapping[str, Any]) -> str:
@@ -83,14 +82,11 @@ def mailbox(c: Any) -> str:
 
 def issue(c: Any, decider: str, requester: str, *, to: Any, subject: str, text: str, box: str,
           document: Mapping[str, Any], ref: str) -> str:
-    """The send approval for one invoice email, approved by `decider` at once. Only Finance's commit path calls this,
-    for the person whose decision the action waits on; a bot is refused. Returns the approval id."""
+    """Freeze an invoice email for its own preview and approval; the finance decision never approves unseen MIME."""
     if not tico.is_person(decider):
         raise FinanceError(DENIED, "an invoice email is approved by a person, not by a bot")
-    payload = {**intent(to, subject, text, box, document), "ref": ref}
-    approval_id = tico.approval_request(c, requester, SEND, payload, decider)
-    tico.approval_decide(c, decider, approval_id, "approved")
-    return approval_id
+    return tico.queue_email(c, requester, recipients(to), subject, text, ref,
+                            {"mailbox": box, "document_sha256": document_digest(document), "ref": ref})
 
 
 def pending(c: Any, invoice_id: str | None = None) -> list[dict[str, Any]]:

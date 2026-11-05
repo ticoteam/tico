@@ -1078,7 +1078,14 @@ def parser():
     item.add_argument('--after'); item.add_argument('--limit', type=int)
     item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
 
-    email = sub.add_parser('email', help='read email; Whole Workspace mailboxes read live from Gmail').add_subparsers(dest='sub')
+    email = sub.add_parser('email', help='read email, set sending policy, and manage pending sends').add_subparsers(dest='sub')
+    item = email.add_parser('policy'); item.set_defaults(fn='email policy')
+    item.add_argument('--mailbox'); item.add_argument('--bot')
+    item.add_argument('--settings', type=json.loads, help='JSON policy fields; omit to read')
+    item = email.add_parser('sends'); item.set_defaults(fn='email sends')
+    item.add_argument('--mailbox', required=True); item.add_argument('--pending', action='store_true')
+    item.add_argument('--cursor'); item.add_argument('--limit', type=int)
+    item = email.add_parser('cancel'); item.set_defaults(fn='email cancel'); item.add_argument('id')
     for action in ('mailboxes', 'inbox', 'search', 'thread', 'message'):
         item = email.add_parser(action)
         item.set_defaults(fn='email ' + action)

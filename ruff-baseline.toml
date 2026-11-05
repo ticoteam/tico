@@ -20,7 +20,7 @@
 #   F402         1   owner: engineering
 #   F541         4   owner: engineering
 #   F811         2   owner: engineering
-#   F841        17   owner: engineering
+#   F841        16   owner: engineering
 #   PLW1510     29   owner: engineering
 #   S110        33   owner: engineering
 
@@ -196,7 +196,6 @@
 "connectors/mail/review.py" = ["B904", "BLE001"]
 "connectors/mail/rules.py" = ["B904"]
 "connectors/mail/scheduling.py" = ["B904", "BLE001", "F401"]
-"connectors/mail/tests/test_write.py" = ["F841"]
 "connectors/mail/unsubscribe.py" = ["BLE001"]
 "connectors/slack.py" = ["B904", "BLE001", "S110"]
 "docker/updater.py" = ["B904", "BLE001", "PLW1510"]

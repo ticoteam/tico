@@ -92,8 +92,8 @@ class CompanyGates(Base):
         # A draft is the first step of every send, so Send mail on allows the reply's, and Tico's own markers on it.
         rc, out, err = self.reply()
         self.assertEqual(rc, 0, out + err)
-        self.assertEqual(len(self.service.sent), 1)
-        self.assertIn("hub/handled/inbox", self.service.labels_by_id.values())
+        self.assertEqual(len(self.queue_requests), 1)
+        self.assertEqual(self.service.sent, [])
         self.company()
         self.assertEqual(self.archive()[0], 0)
         self.assertFalse(self.in_inbox())

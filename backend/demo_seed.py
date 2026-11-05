@@ -48,12 +48,12 @@ class Clock:
 
 
 @contextlib.contextmanager
-def fixed(clock):
+def fixed(clock, namespace=NAMESPACE):
     """Time, ids and secrets that repeat, restored afterwards."""
     counter = itertools.count()
 
     def digest():
-        return hashlib.sha256(f"{NAMESPACE}:{next(counter)}".encode()).hexdigest()
+        return hashlib.sha256(f"{namespace}:{next(counter)}".encode()).hexdigest()
 
     from . import inbound, threads, usage_limits
     saved = (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4,
@@ -65,7 +65,7 @@ def fixed(clock):
     # Spend windows (an hour, a day) are read on the demo's clock too, so two builds of one `now` save the same limits
     # whichever side of an hour the machine's clock is on.
     usage_limits.clock = lambda: clock.at
-    hubdb.new_id = lambda: str(uuid.uuid5(NAMESPACE, str(next(counter))))
+    hubdb.new_id = lambda: str(uuid.uuid5(namespace, str(next(counter))))
     # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.
     hubdb.uuid7 = threads.uuid7 = lambda: str(uuid.UUID(hex=digest()[:32]))
     uuid.uuid4 = lambda: uuid.UUID(hex=digest()[:32])

@@ -469,7 +469,8 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
     action = post(api, "assistant/actions", {"summary": "Close your 25 old tasks", "path": assistant.BATCH_PATH,
                                              "body": {"actions": steps}}, token=token)["action"]
     assert action["description"] == "26 task actions, on one Confirm" and len(action["diff"]) == 27
-    assert action["diff"][0] == {"field": "Close 26 tasks, under a week old", "new": "each listed below", "group": True}
+    assert {k: v for k, v in action["diff"][0].items() if k != "body_sources"} == {
+        "field": "Close 26 tasks, under a week old", "new": "each listed below", "group": True}
     assert "Old task 0" in action["diff"][1]["field"] and "close: True" in action["diff"][1]["new"]
     pending = get(api, "assistant", "ben-test")["pending"]
     assert [p["id"] for p in pending] == [action["id"]]                                  # one card, not 26
@@ -539,7 +540,8 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     card = post(api, "assistant/actions", {"summary": "3 old publish batches from before the reset: decline; answer Ops",
                                            "path": assistant.BATCH_PATH, "body": {"actions": steps}}, token=token)["action"]
     assert card["description"] == "4 actions, on one Confirm: 3 approval decisions, 1 answer"
-    assert card["diff"][0] == {"field": "Decline 3 publish approvals, over a month old", "new": "reason: Before the reset",
+    assert {k: v for k, v in card["diff"][0].items() if k != "body_sources"} == {
+        "field": "Decline 3 publish approvals, over a month old", "new": "reason: Before the reset",
                                "group": True}
     assert card["diff"][1]["field"] == "Answer 1 bot question, under a week old"
     assert "post-0" in card["diff"][2]["field"] and "40 days old" in card["diff"][2]["field"]

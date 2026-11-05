@@ -4012,6 +4012,34 @@ def group_access(api, args):
     return _teammate_access(api, f"groups/{quote(str(args['group']), safe='')}", args)
 
 
+@tool("hub_email_policy", "Read or change the effective email sending policy: company, inbox, or bot. Ask first is "
+      "the default; Never blocks approved sends too. Settings changes require a person acting as themselves.",
+      {"mailbox": _s("Inbox address; omit for company"), "bot": _s("Bot id or slug; omit for inbox/company"),
+       "settings": {"type": "object", "description": "Policy fields to set; omit to read, inherit:true clears the override"}},
+      writes=True)
+def email_policy(api, args):
+    mailbox, bot = args.get("mailbox"), args.get("bot")
+    path = (f"bots/{quote(str(bot), safe='')}/email-sending-policy" if bot else
+            f"email/inboxes/{quote(str(mailbox), safe='')}/sending-policy" if mailbox else "email/sending-policy")
+    if args.get("settings") is not None:
+        return api.call("PUT", path, args["settings"], key=_key(args))
+    return api.get(path, **({"mailbox": mailbox} if bot and mailbox else {}))
+
+
+@tool("hub_email_sends", "Read pending email sends or the send audit for an inbox you may read. Includes the "
+      "policy decision, exact content hash, recipients, attachments, approval and provider receipt.",
+      {"mailbox": _s("Inbox address"), "pending": {"type": "boolean", "description": "Only waiting sends"},
+       "cursor": _s("Next cursor"), "limit": {"type": "integer", "description": "1–100, default 50"}}, required=("mailbox",))
+def email_sends(api, args):
+    return api.get("email/sends", **{key: args[key] for key in ("mailbox", "pending", "cursor", "limit") if key in args})
+
+
+@tool("hub_email_cancel", "Cancel pending email before dispatch: the sender, its manager, or an inbox admin. "
+      "Already delivered mail cannot be recalled.", {"id": _s("Queued send id")}, required=("id",), writes=True)
+def email_cancel(api, args):
+    return api.post(f"email/sends/{quote(str(args['id']), safe='')}/cancel", {}, key=_key(args))
+
+
 @tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
       "Only a person who manages the bot sets it, as themselves; a bot, BotOps included, is refused. `outbound_send` and "
       "`forward_to` in bot.yaml are only a request: this setting decides (docs/mail.md, \"Turning sending on\").",
@@ -5495,7 +5523,7 @@ def audit(api, args):
       "(that message's id). A decided send approval id works as --approve too.",
       {"kind": {"type": "string", "enum": list(APPROVAL_KINDS)},
        "payload": {"type": "object", "description": "The exact action, as the approvals policy describes. "
-                   "kind=send is to/cc/subject/body_sha256/mailbox. Skip this tool when the owner "
+                   "Email approvals come from mail send or POST /email/sends with frozen MIME; kind=send here is refused. When the owner "
                    "already said send; use mail send --approve <their-message-id>. A "
                    "proposal the hub applies on approval: task_cap {sender, receiver, per_day}, spend_limit "
                    "{bot | pool: company|group:<id>, per_30m_usd, daily_usd, weekly_usd, monthly_usd}."},
@@ -7839,7 +7867,7 @@ REQUESTER = PEOPLE + BOTOPS
 REQUESTER_READ = REQUESTER + ("assistant",)
 HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are refused
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
-ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
+ASSISTANT_WRITES = {"hub_email_cancel", "hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",

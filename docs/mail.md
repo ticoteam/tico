@@ -141,8 +141,7 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments use the same send permissions as the
-message without files; there is no separate attachment setting. Legacy `allow_attachments` keys
+from the file sizes before anything is read). Attachments use the shared sending policy, whose attachment prompt is on by default. Legacy `allow_attachments` keys
 in `registry/mail-policy.yaml` are accepted but do nothing. A file must be inside your own folder
 (`bot-<slug>`, or an older bot's `emp-<slug>`), after following symlinks; a relative path starts
 there, and `..` is refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
@@ -150,17 +149,13 @@ there, and `..` is refused. Files that look like keys or passwords are refused w
 `credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
 `.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
 reviewer read the text, and the reviewer is told each file's name, type and size, not its
-contents. Attaching lifts nothing: the same send chain applies with or without files. If the
-plain message could send without a per-message approval, the attached message can too. An owner's
-Tico message telling the bot to send covers the files attached to that send, as does an otherwise
-valid GitHub Issue or Tico send approval that names no files.
+contents. Attaching lifts no permission. The server freezes and hashes every attachment, including unnamed inline parts. An approval binds that exact snapshot; changed files need a new send and approval.
 
 If a Tico send approval names files, that binding still applies: its payload carries `draft` and
 `attachments: [{name, size, sha256}]`. At send time the connector hashes the files as they stand
 in the Gmail draft and requires the exact approved set and draft id; changed, added, removed or
 swapped files need a new approval. `mail draft --attach --json` returns an optional
-`approval_request` payload with those fields for sends that need per-message approval under the
-usual rules. Attaching files does not make that request necessary. When the draft
+`approval_request` summary and a `mail send` command that freezes the draft through the shared queue. The generic approvals endpoint does not accept a new email approval. When the draft
 belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
 each file to it and adds its `file_id` to the request, so the approver can open the file from the
 approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
@@ -181,7 +176,7 @@ the `draft` verb and is audited.
 ### Send
 
 ```bash
-$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131] [--dry-run]
+$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue <tico-approval-id>] [--dry-run]
 ```
 
 **Once a person has turned sending on for the bot in Tico (see "Turning sending on"), the bot follows its rules without
@@ -193,19 +188,17 @@ asking for each message, to three kinds of recipient:**
 3. **The forward addresses a person approved in Tico**, usually the owner's other email. An address that is only in
    `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
 
-Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
-table is one), or `--approval-issue N` where N is a **closed** GitHub Issue with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. The id of a Tico message telling this bot to send also counts
-when its human sender may manage this bot's mail sending: Tico checks that authority, rather than the computer's
-local owner settings. The company owner, admins, bot owners and people above the bot on the org chart qualify;
-built-in bots such as Counsel require the company owner. Ordinary chat access and bot senders never qualify.
-The message is passed to the reviewer as the person's instruction. See docs/mail-service.md, "Per-message approval".
-A Tico `send` approval (`hub approval request --kind send`) is
-for one exact text: put the `body_sha256` that `mail draft --json` returns in its payload. At send time the connector
-hashes the draft's text as it stands in Gmail (line ends and the space around the whole text don't count) and refuses a
-draft whose text differs, with "the draft changed after it was approved; ask for a new yes". A changed draft needs a
-new approval. With sending off in Tico a send needs a full per-message approval. The
-daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
+Grandfathered recipient scopes keep their existing registry allowances. New sends use the shared company/inbox/bot
+policy below. A Tico approval or an authorized person's in-chat “send it” can approve a specific message; the effective
+**Who can OK** rule decides whose instruction counts. A numbered GitHub issue does not prove a Tico approver identity
+and no longer authorizes a send. Use a Tico send approval instead. The person's verified message still reaches the
+reviewer as their instruction. See docs/mail-service.md, “Per-message approval”.
+New email approvals are created by the frozen send queue. Use `mail send --draft <id>` or
+`POST /api/v2/email/sends`; a generic `POST /api/v2/approvals` with `kind=send` is refused.
+The card binds the complete MIME and exact To, Cc and Bcc, and approval requires loading its authorized preview.
+Only old-format approvals created before the queue migration retain their original text-bound recipient scope.
+Finance also queues its exact invoice email for this preview; approving the finance action does not approve unseen MIME.
+The daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
 to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
 Tico holds, what bot.yaml asks, and which policy it is reading.
 
@@ -735,37 +728,53 @@ The server's operator can set Tico's OAuth client in its environment, `TICO_GOOG
 
 ## Turning sending on
 
-A message bot starts with sending off: everything it writes is a draft for the human. Whether it sends without a
-per-message approval, and to which forward addresses, is a switch held on the Tico server that only a person sets: the
-owner, or a human who manages the bot (its owner, a co-owner, an admin, or someone it reports up to). A bot cannot set
-it, and neither can BotOps, in its own runs or acting for a person, nor the Assistant. Set it in **Settings > Bots >
-the bot > Edit > Mail sending**, or with your own token:
+Every email Tico sends goes through one server policy and a persisted queue: bot sends, automation replies and
+forwards, approved sends, calendar invitations and scheduling offers, and the Assistant acting for a person. Configure it in **Settings >
+Inboxes > Settings > Email > Sending**. An inbox's own page shows its policy, bot overrides, **Waiting to send** with
+Cancel, and the send audit.
+
+New senders start at **Ask first**, **Replies only**. **On their own** is an explicit opt-in at company, inbox or bot
+level; the effective rule names the level that set it. Replies only keeps new messages behind a per-message approval.
+**Never** at company, inbox or bot level blocks every send, including already-approved sends. A bot override cannot
+relax company recipient restrictions, message type, approver requirements, always-ask rules, caps, pacing or the undo window. Recipient and approver rules at different levels intersect; the explicit Ask first → On their own opt-in is the exception. Only a person acting as themselves changes sending
+policy: company admins, an inbox's person/admin, or a bot's manager for that bot. BotOps and the Assistant cannot
+change these settings for them.
+
+The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money
+matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person, even when the legal/money prompt is off. Named primary bodies and alternative representations are classified. Non-primary inline text files also stay hashed, downloadable attachments and trigger attachment review; their text is classified too. Unsupported body alternatives or primary bodies, including named text/enriched, always need review without a new parser, even when attachment prompts are off. CSS-dependent, conditional or unsupported HTML needs review; its full frozen source is shown as inert text. This is triage, not a
+security boundary. Read/write grants, Never, sender identity, content-bound approval and caps remain deterministic.
+The approval rule is configurable: bot managers (the default), inbox admins, or named people. Hash-bound approvals
+must match the content, subject, recipients and files. The approval card loads an authorized frozen body preview and links to the exact attachment bytes before enabling Approve. An in-chat “send it” must be an unambiguous affirmative instruction from an authorized person after they viewed the frozen send, and must name that send or reply to its approval message. Otherwise use the content-bound card. Changing content requires another send and approval.
+
+Allowed emails wait in SQLite for the company's undo window (two minutes by default). The connector rechecks access,
+policy, approval authority, aggregate daily caps and pacing before dispatch. Retained daily limits count the union of verified Sent history and queue attempts, de-duplicating their provider message ids. Cancel works until dispatch; delivered
+mail cannot be recalled. Pending sends recover across server/runner restarts. An uncertain provider result is
+**Unknown**, counted against caps and never automatically retried. An expired claim with no issued permit returns to Pending with a new fenced lease. Active, Sent and Unknown content and recipients deduplicate, including across MIME boundary and Message-ID changes. Retrying the same `operation_id` or HTTP idempotency key returns the same operation; a new intent may resend after a definite cancellation, block, failure or decline. Reply identity comes from MIME headers matched to synced history, so omitting caller metadata cannot bypass automatic-reply, bounce or repeated-reply guards. Delivery-status reports suppress previously attempted recipients; an inbox admin can
+inspect and remove a suppression through the API.
 
 ```bash
-hub bot mail <slug>                                  # show it, and what the bot's bot.yaml asks
-hub bot mail <slug> --send --forward-to me@personal.example
-hub bot mail <slug> --no-send                        # off again
-hub bot mail <slug> --from-bot-yaml                  # take exactly what bot.yaml asks, after reading it
+hub email policy                                    # company policy
+hub email policy --settings '{"mode":"on_their_own"}'
+hub email policy --mailbox support@acme.example       # inbox effective rule
+hub email policy --bot support --settings '{"mode":"ask_first"}'
+hub email sends --mailbox support@acme.example --pending
+hub email cancel <send-id>
 ```
 
-The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send": true, "forward_to": [...]}`).
+The v2 API exposes `/email/sending-policy`, `/email/inboxes/{mailbox}/sending-policy`,
+`/bots/{bot}/email-sending-policy`, `/email/sends` (queue and paged audit), `/email/sends/{id}`,
+`/email/sends/{id}/approve` and `/email/sends/{id}/cancel`. The OpenAPI document describes the public endpoints.
+The audit retains content/body hashes, recipients, attachment names/hashes, actor, policy decision, approval id,
+provider message id and delivery status. `/email/sends/{id}` supplies the authorized preview and `/email/sends/{id}/attachments/{part}` downloads frozen attachment bytes. MIME content is discarded after delivery or cancellation. Gmail sends the frozen raw MIME in a single request, with retries disabled; a source draft may remain in Gmail so a concurrent user edit is never deleted.
 
-`outbound_send` and `forward_to` in the bot's `bot.yaml` are only a request. Anything that can push to the bot's
-repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an
-approval for each message and the refusal names the setting. The bot's computer reports what bot.yaml asks, and
-Settings > Health shows "<bot> asks to send mail without approval; a person must turn this on" (or names the new
-forward addresses) until a person turns it on or the request goes away. The owner and admins see it for every bot;
-a person who manages a bot sees it for that bot only. The Support Agent's `software/hq-tickets reply` reads the same
-switch before it posts a reply to an HQ ticket.
+Calendar creation is silent and checks inbox-level Never first. Invitations are frozen calendar attachments in the same queued email as their confirmation, so approval, undo and dispatch checks apply before any invitation is sent. Before freezing, the connector waits up to 15 polls for a generated conference link; if it is still unavailable it returns a retryable error and queues no invitation. The frozen invitation and visible body include the join URL, location and description. Canceling a queued invitation leaves the silent calendar hold in place. A verified canceled, blocked, declined or failed send releases the scheduling fence for a new intent; pending, sent and uncertain sends remain fenced. A rebooking checks every calendar conflict and reuses an unchanged hold from a verified definite non-send. Every unchanged hold with a trusted insert snapshot is excluded from the availability check, the newest is reused, and extra holds are left untouched. Polls are checked against the original insert snapshot: only conference status, entry points and the join link may change. Any other edit or a legacy hold without a trusted snapshot requires reviewing the calendar hold and stays busy. Moved or edited holds and unrelated events remain busy. Repeated conference-preparation failures reuse the same silent hold. A failed conference request is restarted on that event with a version check and a fresh request id, without sending invitations.
 
-To have the rules written down, ask BotOps in a DM in plain words: "let my Inbox Manager reply to support senders that
-support has it, and forward job, partnership, investor and press mail to me at <address> with the subject `🔔 Tico
-inbound: <subject>`, plus a Needs you task". BotOps writes the rules into the bot's `playbooks/inbox-preferences.md`
-under `## Sending` and tells you which addresses to type in the switch; it never edits `outbound_send` or `forward_to`.
-
-**After upgrading.** Bots that sent with `outbound_send: true` in bot.yaml send drafts until a person confirms mail
-sending per bot: Health lists each one, and `hub bot mail <slug> --from-bot-yaml` (or the Mail sending row) turns on
-exactly what its bot.yaml asks.
+**After upgrading.** Existing explicitly enabled bot recipient scopes and existing automation versions retain their
+previous authorization, marked **kept from before**. Existing legal inbox approvals stay approvals. New automation
+ids and edited automation versions start under the shared default. Saving a company or inbox sending policy applies
+its safeguards to grandfathered paths too. A bot's old registry recipient restrictions remain enforced until a person
+sets its new policy. The older `hub bot mail` / `/bots/{bot}/mail-settings` controls remain compatible; setting their
+switch now sets the bot's new mode. `outbound_send` and `forward_to` in bot.yaml remain requests, never authorization.
 
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox
