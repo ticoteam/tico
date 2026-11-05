@@ -1,7 +1,8 @@
 /* ui/app/inboxes-letters.js — Letters in, in Settings > Inboxes: the company's mailing addresses and mail by email
    (backend/postal_mail.py, docs/physical-mail.md). Addresses and orders come from Tico Gateway (GET /v2/postal/addresses),
    letters from this server (GET /v2/postal/items). Kind 'postal': a row an address, an open order and the mail-by-email
-   inbox; one address's page shows its Form 1583 progress and its letters (sender, summary, scan, task). Scan and
+   inbox (kept, as Not in use, while it is off and has letters); one address's page shows its Form 1583 progress and
+   its letters (sender, summary, scan, task). Scan and
    forward requests are not offered: Tico Gateway does not take them. Ordering, the intake inbox and a retry are an
    owner's or admin's; everyone else reads. In Inboxes > Settings > Letters in: Addresses (Get an address) and Bring
    your own. Registry: ui/app/inboxes.js.
@@ -80,9 +81,11 @@ inboxesKind('postal', {group: 'letters-in', label: 'Letters in', order: 40,
       rows.push({id: 'order-' + (o.order_id || ''), name: `${pmStateName(o.state)} · ${PM_KINDS[o.kind] || o.kind}`, sub: 'Ordered',
         status: 'pending', statusText: 'Ordered', latest: null, usedBy: {people: 0, bots: 0, names: []}});
     }
-    if (intake.inbox_id || intake.hidden) {
-      rows.push({id: 'intake', name: 'Mail by email', sub: intake.hidden ? 'An inbox you can’t read' : intake.address || intake.inbox_id,
-        status: 'ok', latest: latest.intake || null, usedBy: readers, search: (intake.senders || []).join(' ')});
+    // Turned off, mail by email stays listed while it has letters, so a failed one can still be retried.
+    const on = !!(intake.inbox_id || intake.hidden);
+    if (on || items.some(m => m.provider === 'email')) {
+      rows.push({id: 'intake', name: 'Mail by email', sub: !on ? 'Letters emailed earlier' : intake.hidden ? 'An inbox you can’t read' : intake.address || intake.inbox_id,
+        status: on ? 'ok' : 'off', latest: latest.intake || null, usedBy: readers, search: (intake.senders || []).join(' ')});
     }
     return rows;
   },
@@ -96,7 +99,16 @@ async function pmDetail(host, id, ctx) {
   const readers = '<p>Each letter goes to whoever may read the task it is filed on.</p>';
   const recent = '<section class="card" id="inbox-letters"><header><h2>Recent</h2></header><div data-pm-letters>' + skelRows(2, {dot: false}) + '</div></section>';
   if (id === 'intake') {
-    if (!intake.inbox_id && !intake.hidden) throw new Error('Mail by email is off');
+    if (!intake.inbox_id && !intake.hidden) {
+      // Off: the letters it brought in, with Retry, and where to turn it on again.
+      const items = await pmItems(ctx).catch(() => []);
+      if (!ctx.live()) return null;
+      if (!items.some(m => m.provider === 'email')) throw new Error('Mail by email is off');
+      host.innerHTML = `${inboxesHead(host, {name: 'Mail by email', status: 'off', sub: 'Letters emailed earlier. New ones are not brought in.',
+          actions: ctx.admin ? '<a class="ghost" href="#/settings/inboxes/settings/letters-in" data-pm-intake-on>Turn on</a>' : ''})}${recent}`;
+      await pmLetters(host, ctx, 'intake');
+      return {kind: 'postal', id, name: 'Mail by email', address: ''};
+    }
     const address = intake.address || '';
     host.innerHTML = `${inboxesHead(host, {name: 'Mail by email', status: 'ok', sub: esc(intake.hidden ? 'An inbox you can’t read' : address),
         actions: ctx.admin ? '<button type="button" class="ghost danger" data-pm-intake-stop>Stop using in Tico</button>' : ''})}

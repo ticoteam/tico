@@ -1,10 +1,11 @@
 /* ui/app/inboxes.js — Settings > Inboxes: every inbox Tico uses, in one list, with a page each and one Settings page.
    Its addresses: #/settings/inboxes (the list, or first run until company email is connected),
-   #/settings/inboxes/settings[/<section>] (Inboxes > Settings, one section a channel) and
-   #/settings/inboxes/<kind>/<id> (one inbox). The old Mailboxes, Email & Phone and Mail tabs redirect here (router.js).
+   #/settings/inboxes/settings[/<section>] (Inboxes > Settings, one section a channel), #/settings/inboxes/<view> (a
+   page a file adds, such as Messages) and #/settings/inboxes/<kind>/<id> (one inbox). The old Mailboxes, Email & Phone
+   and Mail tabs redirect here (router.js).
 
    This file is the shell, the list, first run and the router. Each kind of inbox is its own file, loaded after this
-   one, and joins through three calls made when that file loads:
+   one, and joins through the calls below, made when that file loads:
 
    inboxesKind(key, spec) — one kind of inbox. `key` is the address segment (#/settings/inboxes/<key>/<id>).
      group   'email' | 'texts' | 'letters-in' | 'letters-out': the Kind filter it is listed under
@@ -29,6 +30,11 @@
      render(host, inbox, ctx) → Promise: draws into host; `inbox` is what that kind's detail() resolved with
      (every kind resolves {kind, id, name, address}, plus its own fields: a mailbox adds the GET /v2/mailboxes/<id> body)
 
+   inboxesView(key, spec) — a page of its own at #/settings/inboxes/<key>, linked from the list's header.
+     label   the link's and the page's name;  order: its place among the links
+     render(host, ctx) → Promise: draws the page into host, which is kept for the whole visit so a later draw can
+     update what an earlier one drew
+
    ctx: {admin, me, once(name, load) (one load a draw, shared by every kind), live() (false once another draw began),
    refresh() (draw again), go(view)}. Helpers for kind files: inboxesHead, inboxesCard, inboxesSoon, inboxesPill,
    inboxesLink, inboxesAutomations, inboxesAutomationsLink, inboxesUsedLine. Styles: ui/styles/inboxes.css, one
@@ -36,9 +42,9 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// '' the list (or first run), 'settings' or 'settings/<section>', or '<kind>/<id>' (one inbox).
+// '' the list (or first run), 'settings' or 'settings/<section>', '<view>' (inboxesView), or '<kind>/<id>' (one inbox).
 let INBOXES_VIEW = '';
-const INBOX_KINDS = {}, INBOX_SETTINGS = [], INBOX_STEPS = [], INBOX_PANELS = [];
+const INBOX_KINDS = {}, INBOX_VIEWS = {}, INBOX_SETTINGS = [], INBOX_STEPS = [], INBOX_PANELS = [];
 const INBOX_GROUPS = [['email', 'Email'], ['texts', 'Texts in'], ['letters-in', 'Letters in'], ['letters-out', 'Letters out']];
 const INBOX_SECTIONS = [['email', 'Email'], ['texts', 'Texts'], ['letters-in', 'Letters in'], ['letters-out', 'Letters out']];
 const INBOX_STATUS = {ok: ['ok', 'Connected'], attention: ['fail', 'Needs attention'], pending: ['waiting', 'Pending'], off: ['', 'Not in use']};
@@ -47,6 +53,7 @@ const INBOX_SKIP_KEY = 'tico.inboxes.skip', INBOX_DISMISS_KEY = 'tico.inboxes.di
 const IB = {run: 0, rows: [], errors: [], shown: INBOX_PAGE, q: '', kind: '', status: '', used: ''};
 
 function inboxesKind(key, spec) { INBOX_KINDS[key] = {key, ...spec}; }
+function inboxesView(key, spec) { INBOX_VIEWS[key] = {key, ...spec}; }
 function inboxesSetting(key, spec) { INBOX_SETTINGS.push({key, ...spec}); INBOX_SETTINGS.sort((a, b) => a.order - b.order); }
 function inboxesStep(key, spec) { INBOX_STEPS.push({key, ...spec}); INBOX_STEPS.sort((a, b) => a.order - b.order); }
 function inboxesPanel(key, spec) { INBOX_PANELS.push({key, ...spec}); INBOX_PANELS.sort((a, b) => a.order - b.order); }
@@ -113,6 +120,7 @@ async function renderSettingsInboxes() {
   el.dataset.ibView = head || 'list';
   if (!(head && INBOX_KINDS[head])) delete el.dataset.ibOpen;
   if (head === 'settings') return inboxesSettingsPage(el, rest[0] || '', ctx);
+  if (head && INBOX_VIEWS[head] && !rest.length) return inboxesPage(el, head, ctx);
   if (head && INBOX_KINDS[head]) return inboxesDetail(el, head, rest.join('/'), ctx);
   if (head) { INBOXES_VIEW = el.dataset.ibShown = ''; settingsAddress(); }
   return inboxesHome(el, ctx);
@@ -203,7 +211,9 @@ function inboxesDraw(el, full = false) {
   if (full || !home.querySelector('[data-ib-list]')) {
     home.innerHTML = `<div data-ib-list>
       <header class="ib-head"><h2>Inboxes <span class="muted tnum" data-ib-count></span></h2>
-        <div class="ib-head-act"><a class="ghost" href="#/settings/inboxes/settings" data-ib-settings>Settings</a>${inboxesAddMenu(ctx)}</div></header>
+        <div class="ib-head-act">${Object.values(INBOX_VIEWS).sort((a, b) => a.order - b.order).map(v =>
+          `<a class="ghost" href="${inboxesLink(v.key)}" data-ib-view-link="${esc(v.key)}">${esc(v.label)}</a>`).join('')}<a
+          class="ghost" href="#/settings/inboxes/settings" data-ib-settings>Settings</a>${inboxesAddMenu(ctx)}</div></header>
       <div class="ib-filters" role="search">
         <input type="search" data-ib-q placeholder="Search address, person or bot" aria-label="Search inboxes" value="${esc(IB.q)}" autocomplete="off" spellcheck="false">
         <select data-ib-filter="kind" aria-label="Kind">${inboxesOption('', 'All kinds', IB.kind)}${INBOX_GROUPS.map(([k, l]) => inboxesOption(k, l, IB.kind)).join('')}</select>
@@ -289,6 +299,20 @@ const inboxesCard = (id, title, body, action = '') =>
   `<section class="card ib-card"${id ? ` id="${esc(id)}"` : ''}><header><h2>${esc(title)}</h2>${action}</header>${body}</section>`;
 // A placeholder: the card's title and its Coming soon pill, nothing under them.
 const inboxesSoon = (id, title) => inboxesCard(id, title, '', '<span class="pill" data-ib-soon>Coming soon</span>');
+
+// ---------------------------------------------------------------------------------------------------------- A view
+// A page another file adds (inboxesView): its frame is built once a visit and every draw renders into the same host.
+async function inboxesPage(el, key, ctx) {
+  const view = INBOX_VIEWS[key];
+  if (!el.querySelector(`[data-ib-page="${CSS.escape(key)}"] [data-ib-page-body]`)) {
+    el.innerHTML = `<div class="ib-page" data-ib-page="${esc(key)}">
+      <nav class="ib-crumb" aria-label="Breadcrumb"><a href="#/settings/inboxes">Inboxes</a> / <span>${esc(view.label)}</span></nav>
+      <div data-ib-page-body></div></div>`;
+  }
+  const host = el.querySelector('[data-ib-page-body]');
+  try { await view.render(host, ctx); }
+  catch (e) { if (ctx.live() && host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
 
 // ---------------------------------------------------------------------------------------------------------- One inbox
 async function inboxesDetail(el, kind, id, ctx) {
