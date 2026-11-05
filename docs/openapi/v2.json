@@ -59703,7 +59703,9 @@
               },
               "names": {
                 "type": "array",
-                "items": "s"
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [

@@ -312,9 +312,14 @@ const scenarios = {
     assert.equal(await page.locator('.ib-crumb a').getAttribute('href'), '#/settings/inboxes');
     // A section's address opens Settings at it.
     await page.evaluate(() => { location.hash = '#/settings/inboxes/settings/letters-in'; });
+    // At the top, or as far down as the page goes with the section in view (it is near the end).
     await page.waitForFunction(() => {
-      const top = document.querySelector('#inboxes-letters-in')?.getBoundingClientRect().top;
-      return top !== undefined && top >= -2 && top < 120;
+      const el = document.querySelector('#inboxes-letters-in');
+      if (!el) return false;
+      let box = el.parentElement;
+      while (box && !(box.scrollHeight > box.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+      const s = box || document.scrollingElement, top = el.getBoundingClientRect().top;
+      return top >= -2 && (top < 120 || (s.scrollTop > 0 && s.scrollTop + s.clientHeight >= s.scrollHeight - 2 && top < innerHeight - 200));
     });
     assert.ok(await fits(page));
     if (SHOTS) {
