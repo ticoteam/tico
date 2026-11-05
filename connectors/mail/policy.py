@@ -489,12 +489,13 @@ def _default_hub_post(path, body, key=None):
 HUB_POST = _default_hub_post
 
 
-def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id=""):
+def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id="", calendar_action_id=""):
     """Fail closed: every provider send must have a durable server queue record first."""
     body = {"mailbox": mailbox, "raw": raw, "thread_id": thread_id, "reply_to_id": reply_to_id,
-            "approval_id": str(approval_id or ""), "automation_action_id": automation_action_id, "draft_id": draft_id}
+            "approval_id": str(approval_id or ""), "automation_action_id": automation_action_id, "draft_id": draft_id,
+            "calendar_action_id": calendar_action_id}
     try:
-        if automation_action_id:
+        if automation_action_id or calendar_action_id:
             from . import oauth
             answer = oauth.broker(retries=0).post("email/sends", body)
         else:
@@ -505,6 +506,22 @@ def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", autom
     if not isinstance(answer, dict) or not isinstance(answer.get("send"), dict):
         raise Failure("Tico did not confirm a durable queued send; the draft has not been sent.")
     return answer["send"]
+
+
+def sending_preflight(mailbox, calendar_action_id=""):
+    """A silent calendar event still checks the inbox's Never ceiling before creating any provider side effect."""
+    if calendar_action_id:
+        from . import oauth
+        answer = oauth.broker(retries=0).post("connectors/email/sends/preflight", {
+            "mailbox": mailbox, "calendar_action_id": calendar_action_id})
+    else:
+        from urllib.parse import quote
+        answer = HUB_GET("email/inboxes/" + quote(mailbox, safe="") + "/sending-policy")
+    if not isinstance(answer, dict) or not isinstance(answer.get("effective"), dict):
+        raise Failure("Tico did not confirm this inbox's sending policy; nothing was scheduled.")
+    if answer["effective"].get("mode") == "never":
+        raise Refused("Never blocks this inbox's invitations and confirmation emails.")
+    return answer["effective"]
 
 
 def rule_check(slug, to, cc, subject, body, key=None):

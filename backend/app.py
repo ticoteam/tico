@@ -5855,6 +5855,10 @@ def create_app(settings=None):
         boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
+            if body.decision == "approved" and row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
+                from .email_sending import require_preview
+                queued = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
+                require_preview(c, who.actor, queued)
             if row["kind"] == "support" and body.decision == "approved":
                 # Sending off the install is a person's own tap, or their confirmed yes: not their token, nor an Assistant
                 # that is not confirmed. A decline sends nothing, so anyone who may decide it may decline it.

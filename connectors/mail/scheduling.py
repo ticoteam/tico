@@ -174,6 +174,7 @@ def signer(ctx):
 
 
 def permission(ctx, category, attendee, thread_id, confirmation):
+    pl.sending_preflight(ctx.mailbox)
     manifest = access.load(ctx.slug)
     if not pl.scheduling_enabled(ctx.policy, ctx.slug, ctx.mailbox) or manifest.get('scheduling_send') is not True:
         raise Refused('Standing scheduling permission is not enabled for this employee/mailbox.')
@@ -213,9 +214,9 @@ def run(ctx, args):
     if ctx.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduling_actions'").fetchone():
         old = ctx.conn.execute('SELECT status, result FROM scheduling_actions WHERE key=?', (key,)).fetchone()
         if old:
-            return dict(json.loads(old[1] or '{}'), ok=old[0]=='sent', status=old[0], already_attempted=True,
+            return dict(json.loads(old[1] or '{}'), ok=old[0] in ('sent','queued'), status=old[0], already_attempted=True,
                         dry_run=ctx.dry)
-        booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
+        booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','queued','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
         if booked:
             raise Refused('This thread already has a booking or an uncertain attempt; review it before rescheduling.')
     if args.mode == 'book':
@@ -253,8 +254,8 @@ def run(ctx, args):
         ctx.conn.commit()
         old = ctx.conn.execute('SELECT status, result FROM scheduling_actions WHERE key=?', (key,)).fetchone()
         if old:
-            return dict(json.loads(old[1] or '{}'), ok=old[0]=='sent', status=old[0], already_attempted=True)
-        booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
+            return dict(json.loads(old[1] or '{}'), ok=old[0] in ('sent','queued'), status=old[0], already_attempted=True)
+        booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','queued','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
         if booked:
             raise Refused('This thread already has a booking or an uncertain booking attempt; review before rescheduling.')
         day = datetime.now(TZ).date().isoformat()
@@ -274,14 +275,20 @@ def run(ctx, args):
                 event = ctx.calendar.create_scheduling_event(starts[0], starts[0]+DURATION,
                                                              attendee, key, body,
                                                              settings.get('meeting_title') or 'Meeting')
-                result = dict(payload, ok=True, sent=True, event=event['id'], event_url=event.get('htmlLink',''))
+                raw = compose.build([attendee], subject, body, from_addr=ctx.mailbox,
+                                    in_reply_to=reply_id, references=refs)
+                raw = compose.with_invitation(raw, event, ctx.mailbox, [attendee], starts[0], starts[0]+DURATION,
+                                             settings.get('meeting_title') or 'Meeting')
+                queued = pl.queue_send(ctx.mailbox, raw, args.thread, latest['id'])
+                result = dict(payload, ok=True, sent=False, queued=True, send_id=queued['id'], state=queued['state'],
+                              event=event['id'], event_url=event.get('htmlLink',''))
             else:
                 raw = compose.build([attendee], subject, body, from_addr=ctx.mailbox,
                                     in_reply_to=reply_id, references=refs)
                 draft = ctx.gmail.create_draft(raw,args.thread)
                 queued = pl.queue_send(ctx.mailbox, raw, args.thread, latest['id'], draft_id=draft['id'])
                 result = dict(payload, ok=True, sent=False, queued=True, send_id=queued['id'], state=queued['state'])
-            status = 'sent' if args.mode == 'book' else 'queued'
+            status = 'queued'
         except Exception:
             # A network failure may occur after delivery. Never automatically retry or claim rollback.
             status = 'unknown'

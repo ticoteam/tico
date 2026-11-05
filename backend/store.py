@@ -281,6 +281,7 @@ CREATE TABLE IF NOT EXISTS mail_messages(
  has_unsubscribe INTEGER NOT NULL DEFAULT 0, rule_hits TEXT NOT NULL DEFAULT '[]', send_facts TEXT NOT NULL DEFAULT '{}',
  updated_at TEXT NOT NULL, deleted_at TEXT, PRIMARY KEY(mailbox,msg_id));
 CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages(mailbox,thread_id,epoch);
+CREATE INDEX IF NOT EXISTS mail_messages_rfc_id ON mail_messages(mailbox,json_extract(send_facts,'$.message-id'));
 CREATE INDEX IF NOT EXISTS mail_messages_epoch ON mail_messages(mailbox,epoch DESC);
 CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5(
  subject, body, from_addr, to_text, mailbox UNINDEXED, msg_id UNINDEXED, tokenize='porter unicode61');

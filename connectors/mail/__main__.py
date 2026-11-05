@@ -2335,6 +2335,8 @@ def cmd_calendar_hold(args):
     if len(attendees) > 50:
         raise Refused("a calendar hold accepts at most 50 attendees.")
     attendees.sort()
+    if attendees:
+        pl.sending_preflight(ctx.mailbox)
 
     description = ""
     if getattr(args, "description_file", None):
@@ -2366,6 +2368,11 @@ def cmd_calendar_hold(args):
             payload = {"ok": True, "mailbox": ctx.mailbox, "event": ev_id, "event_url": url,
                        "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
                        "attendees": attendees, "duplicate": True, "dry_run": ctx.dry}
+            if attendees and not ctx.dry:
+                raw = compose.build(attendees, summary, description or summary, from_addr=ctx.mailbox)
+                raw = compose.with_invitation(raw, {**ev, "id": ev_id}, ctx.mailbox, attendees, start, end, summary)
+                invitation = pl.queue_send(ctx.mailbox, raw)
+                payload.update(invitation_send_id=invitation["id"], invitation_state=invitation["state"])
             ctx.audit("calendar-hold-duplicate", ev_id, {"summary": summary, "start": start.isoformat(), "end": end.isoformat()})
             return out(args, payload, f"existing event {summary} ({ev_id}) already on {ctx.mailbox}\n")
 
@@ -2384,6 +2391,11 @@ def cmd_calendar_hold(args):
     url = event.get("htmlLink") or f"https://calendar.google.com/calendar/event?eid={real_id}"
     payload["event"] = real_id
     payload["event_url"] = url
+    if attendees:
+        raw = compose.build(attendees, summary, description or summary, from_addr=ctx.mailbox)
+        raw = compose.with_invitation(raw, event, ctx.mailbox, attendees, start, end, summary)
+        invitation = pl.queue_send(ctx.mailbox, raw)
+        payload.update(invitation_send_id=invitation["id"], invitation_state=invitation["state"])
 
     ctx.audit("event-create", real_id, {
         "summary": summary, "start": start.isoformat(), "end": end.isoformat(),
@@ -2396,6 +2408,7 @@ cmd_calendar_add = cmd_calendar_hold
 
 def cmd_schedule(args):
     ctx = Ctx(args, "draft")
+    pl.sending_preflight(ctx.mailbox)
     policy = ctx.policy
     body = body_of(args.body_file)
     start = parse_since(args.slot)
@@ -2424,11 +2437,14 @@ def cmd_schedule(args):
     event = ctx.calendar.create_event(start, end, would["summary"], attendees=[attendee],
                                       description=f"Booked by the hub mail service for "
                                                   f"{ctx.slug}, Issue {ctx.issue or '-'}.",
-                                      send_updates="all")
+                                      send_updates="none")
     ctx.audit("event-create", event.get("id", ""), dict(would, thread=args.thread))
     try:
         payload, state = make_draft(ctx, [attendee], None, body, reply_to=args.thread,
                                     slot=args.slot, minutes=args.minutes)
+        raw = compose.with_invitation(ctx.gmail.get_draft_raw(state["draft_id"]), event, ctx.mailbox,
+                                      [attendee], start, end, would["summary"])
+        ctx.gmail.update_draft(state["draft_id"], raw, state["thread_id"])
         sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
                             state["thread_id"], state["msgs"], state["verdict"],
                             approval=args.approval_issue, body=state["body"])
@@ -2483,15 +2499,23 @@ def cmd_connector_event(args):
         raise Refused("Tico couldn't check the company's mail settings; try again",
                       "Nothing was sent to Google. Schedule it again once Tico answers.")
     event_id = hashlib.sha256(str(request["id"]).encode()).hexdigest()[:32]
+    if attendees:
+        pl.sending_preflight(mailbox, str(request["id"]))
     event = ctx.calendar.create_hub_event(
         start, end, str(request["title"]).strip(), attendees, event_id,
         str(request.get("description") or ""), bool(request.get("add_meet", True)))
     meeting_url = cal._meeting_url(event)  # normalized URL only; descriptions never leave here
     provider_id = str(event.get("id") or event_id)
+    invitation = None
+    if attendees:
+        raw = compose.build(attendees, str(request["title"]), str(request.get("description") or request["title"]), from_addr=mailbox)
+        raw = compose.with_invitation(raw, event, mailbox, attendees, start, end, str(request["title"]))
+        invitation = pl.queue_send(mailbox, raw, calendar_action_id=str(request["id"]))
     ctx.audit("event-create", provider_id,
               {"action": request["id"], "attendees": len(attendees),
                "start": start.isoformat(), "end": end.isoformat()})
-    return out(args, {"ok": True, "event_id": provider_id, "meeting_url": meeting_url},
+    return out(args, {"ok": True, "event_id": provider_id, "meeting_url": meeting_url,
+                      "invitation_send_id": invitation["id"] if invitation else None},
                provider_id + "\n")
 
 

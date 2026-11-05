@@ -5,19 +5,17 @@ sends, are leased from this queue. A lost provider response is unknown, never an
 Classification is triage, not a security boundary: deterministic permissions, approvals and limits still apply.
 """
 
-import base64
-import hashlib
 import json
 import re
-from email import policy as email_policy
-from email.parser import BytesParser
 from email.utils import getaddresses
 
-from fastapi import Request
+from fastapi import Request, Response
+from urllib.parse import quote
 from pydantic import Field
 
 from . import mailbox_access as access
 from .models import Contract, Empty
+from .email_content import MAX_RAW, attachment, digest, snapshot
 from .store import H, Problem
 
 DEFAULTS = {"mode": "ask_first", "what": "replies_only", "to": "anyone", "daily_cap": 50,
@@ -28,16 +26,11 @@ MODES = {"on_their_own": 0, "ask_first": 1, "never": 2}
 ASKS = ("ask_new_address", "ask_attachments", "ask_many_recipients", "ask_legal_money")
 CAPS = ("daily_cap", "mailbox_daily_cap", "company_daily_cap")
 ACTIVE = ("waiting_approval", "pending", "dispatching")
-MAX_RAW = 24 * 1024 * 1024
 LIST_BYTES = 128 * 1024
 
 
 def dump(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def digest(value):
-    return hashlib.sha256(value if isinstance(value, bytes) else str(value).encode()).hexdigest()
 
 
 def record_bounces(c, mailbox, sender, body):
@@ -78,6 +71,8 @@ class Enqueue(Contract):
     reply_to_id: str = Field(default="", max_length=200)
     approval_id: str = Field(default="", max_length=200)
     automation_action_id: str = Field(default="", max_length=100)
+    calendar_action_id: str = Field(default="", max_length=100)
+    operation_id: str = Field(default="", max_length=200)
 
 
 class SendApproval(Contract):
@@ -86,9 +81,16 @@ class SendApproval(Contract):
 
 class Claim(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
+    lease_id: str = Field(default="", max_length=100)
+
+
+class CalendarPreflight(Contract):
+    mailbox: str = Field(min_length=3, max_length=320)
+    calendar_action_id: str = Field(min_length=1, max_length=100)
 
 
 class Receipt(Contract):
+    lease_id: str = Field(default="", max_length=100)
     status: str
     message: str = Field(default="", max_length=200)
     detail: str = Field(default="", max_length=1000)
@@ -107,38 +109,39 @@ def effective(c, mailbox="", bot=""):
     if bot:
         layers.append(("bot", saved(c, "bot:" + bot)))
     out, sources, never = dict(DEFAULTS), {key: "company" for key in DEFAULTS}, None
-    company = {**DEFAULTS, **layers[0][1]}
+    recipient_rules, approval_rules = [], []
     for label, settings in layers:
         if settings.get("mode") == "never":
             never = never or label
         for key in DEFAULTS:
-            if key in settings:
-                value, source = settings[key], label
-                if label != "company":
-                    if key in ASKS:
-                        if out[key]:
-                            value, source = True, sources[key]
-                    elif key in CAPS:
-                        if out[key] <= value:
-                            value, source = out[key], sources[key]
-                    elif key in ("pacing_seconds", "undo_seconds"):
-                        if out[key] >= value:
-                            value, source = out[key], sources[key]
-                out[key], sources[key] = value, source
+            if key not in settings:
+                continue
+            value, source = settings[key], label
+            if label != "company":
+                if key in ASKS and out[key]:
+                    value, source = True, sources[key]
+                elif key in CAPS and out[key] <= value:
+                    value, source = out[key], sources[key]
+                elif key in ("pacing_seconds", "undo_seconds") and out[key] >= value:
+                    value, source = out[key], sources[key]
+                elif key == "what" and out[key] == "replies_only":
+                    value, source = out[key], sources[key]
+                elif key in ("to", "who_can_ok", "approvers"):
+                    continue  # These permissions intersect below; a child never replaces its parent's restriction.
+            out[key], sources[key] = value, source
+        recipient = settings.get("to", DEFAULTS["to"] if label == "company" else "anyone")
+        if recipient != "anyone":
+            recipient_rules.append({"value": recipient, "source": label})
+        if "who_can_ok" in settings or label == "company":
+            approval_rules.append({"value": settings.get("who_can_ok", DEFAULTS["who_can_ok"]),
+                                   "approvers": settings.get("approvers", []), "source": label})
     if never:
         out["mode"], sources["mode"] = "never", never
-    # Replies only and recipient restrictions on an inbox cannot be undone by its bot.
-    inbox = layers[1][1] if mailbox else {}
-    if inbox.get("what") == "replies_only":
-        out["what"], sources["what"] = "replies_only", "inbox"
-    if inbox.get("to") in ("known_addresses", "internal"):
-        out["to"], sources["to"] = inbox["to"], "inbox"
-    if "who_can_ok" in inbox:
-        out["who_can_ok"], out["approvers"] = inbox["who_can_ok"], inbox.get("approvers", [])
-        sources["who_can_ok"] = "inbox"
-    if layers[0][1].get("who_can_ok") == "named_people":
-        out["who_can_ok"], out["approvers"] = company["who_can_ok"], company["approvers"]
-        sources["who_can_ok"] = "company"
+    if recipient_rules:
+        out["to"], sources["to"] = recipient_rules[0]["value"], recipient_rules[0]["source"]
+    # The visible rule names the company's ceiling; all additional rules must also be satisfied.
+    out["who_can_ok"], out["approvers"] = approval_rules[0]["value"], approval_rules[0]["approvers"]
+    out["recipient_rules"], out["approval_rules"] = recipient_rules, approval_rules
     out["sources"] = sources
     out["legacy"] = bool(layers[-1][1].get("legacy"))
     out["company_restrictions_set"] = bool(layers[0][1])
@@ -181,72 +184,31 @@ def update_policy(c, who, scope, body):
     H.event(c, who.actor, "email.policy", scope, {"fields": sorted(values), "inherit": inherit})
 
 
-def snapshot(raw, mailbox):
-    try:
-        data = base64.b64decode(raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True)
-        if len(data) > MAX_RAW:
-            raise ValueError()
-        msg = BytesParser(policy=email_policy.default).parsebytes(data)
-        to = sorted({a.lower() for _, a in getaddresses(msg.get_all("to", []) + msg.get_all("cc", [])
-                                                      + msg.get_all("bcc", [])) if a})
-        sender = [a.lower() for _, a in getaddresses(msg.get_all("from", []))]
-        if not to or len(to) > 100 or sender != [mailbox]:
-            raise ValueError()
-        from .mail_settings import ADDRESS
-        if any(not ADDRESS.fullmatch(a) for a in to):
-            raise ValueError()
-        files, texts = [], []
-        for part in msg.walk():
-            if part.is_multipart():
-                continue
-            payload = part.get_payload(decode=True) or b""
-            if part.get_filename() or part.get_content_disposition() == "attachment":
-                files.append({"name": str(part.get_filename() or "attachment")[:255], "sha256": digest(payload)})
-            elif part.get_content_type() == "text/plain":
-                texts.append(payload.decode(part.get_content_charset() or "utf-8", errors="replace"))
-        if len(files) > 50:
-            raise ValueError()
-    except (ValueError, TypeError, LookupError) as exc:
-        raise Problem("email", "Invalid email: From must be the inbox, with 1–100 valid recipients and at most 50 files", 422) from exc
-    body = "\n".join(texts)
-    # Stable across MIME boundaries, Date, Message-ID and recipient ordering; includes HTML and attachment bytes.
-    parts = [{"type": p.get_content_type(), "name": p.get_filename(), "content_id": p.get("Content-ID"),
-              "disposition": p.get_content_disposition(),
-              "sha256": digest(p.get_payload(decode=True) or b"")} for p in msg.walk() if not p.is_multipart()]
-    material_headers = {key: str(msg.get(key) or "") for key in ("from", "sender", "reply-to", "in-reply-to", "references")}
-    groups = {key: sorted(a.lower() for _, a in getaddresses(msg.get_all(key, []))) for key in ("to", "cc", "bcc")}
-    content_hash = digest(dump({"subject": str(msg.get("subject", "")), "headers": material_headers,
-                                "recipient_headers": groups, "parts": parts}))
-    return {"recipients": to, "attachments": files, "subject": str(msg.get("subject", ""))[:1000],
-            "body_sha256": digest(body), "body": body, "content_sha256": content_hash,
-            "in_reply_to": str(msg.get("in-reply-to", "")), "raw": raw}
-
-
 def can_ok(c, auth, actor, mailbox, bot, policy):
     try:
         who = auth.identity_for_actor(c, actor)
     except Problem:
         return False
-    if policy["who_can_ok"] == "named_people":
-        return H.actor_id(actor) in policy["approvers"]
-    if policy["who_can_ok"] == "bot_managers" and bot:
-        return auth.bot_manager(c, who, bot)
-    try:
-        row = access._row(c, mailbox)
-        if row:
-            access._manager(c, who, row, "approve sends")
-            return True
-        if who.email.lower() == mailbox and access.may(c, who, mailbox)["send"]:
-            return True
-    except Problem:
-        pass
-    return False
+    def permits(rule):
+        if rule["value"] == "named_people":
+            return H.actor_id(actor) in rule["approvers"]
+        if rule["value"] == "bot_managers" and bot:
+            return auth.bot_manager(c, who, bot)
+        try:
+            row = access._row(c, mailbox)
+            if row:
+                access._manager(c, who, row, "approve sends")
+                return True
+            return who.email.lower() == mailbox and access.may(c, who, mailbox)["send"]
+        except Problem:
+            return False
+    return all(permits(rule) for rule in policy["approval_rules"])
 
 
 def approver(c, auth, row, policy):
     """Route the approval card to a person who may actually decide it under the effective rule."""
     facts = access._Facts(c)
-    candidates = list(policy["approvers"]) if policy["who_can_ok"] == "named_people" else list(facts.people)
+    candidates = list(facts.people)
     return next(("human:" + pid for pid in candidates if can_ok(c, auth, "human:" + pid, row["mailbox"], row["bot"], policy)), None)
 
 
@@ -260,6 +222,10 @@ def approved(c, auth, row, policy):
         if (ap.get("kind") != "send" or ap.get("decision") != "approved" or ap.get("consumed_at")
                 or ap.get("requested_by_id") != row["actor"]
                 or not can_ok(c, auth, ap.get("decided_by_id"), row["mailbox"], row["bot"], policy)):
+            return False
+        if payload.get("email_send_id") and not c.execute(
+                "SELECT 1 FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
+                (row["id"], ap["decided_by_id"], row["content_sha256"])).fetchone():
             return False
         def addresses(value):
             return {a.lower() for _, a in getaddresses(value if isinstance(value, list) else [str(value or "")]) if a}
@@ -278,26 +244,42 @@ def approved(c, auth, row, policy):
             if not row["raw"] or payload.get("body_sha256") not in body_digests(snapshot(row["raw"], row["mailbox"])["body"]):
                 return False
         approved_files = [{"name": f.get("name"), "sha256": f.get("sha256")} for f in payload.get("attachments") or [] if isinstance(f, dict)]
-        if (payload.get("attachments") or payload.get("content_sha256")) and sorted(approved_files, key=dump) != sorted(json.loads(row["attachments"]), key=dump):
+        actual_files = [{"name": f["name"], "sha256": f["sha256"]} for f in json.loads(row["attachments"])]
+        if sorted(approved_files, key=dump) != sorted(actual_files, key=dump):
             return False
         if payload.get("attachments") and payload.get("draft") and payload["draft"] != row["draft_id"]:
             return False
+        if not payload.get("content_sha256") and row["raw"] and any(
+                body["type"] == "text/html" for body in snapshot(row["raw"], row["mailbox"])["visible_bodies"]):
+            return False  # A plain-text hash never authorizes a different HTML representation.
         # A queue approval binds the full MIME content too; existing text-bound approvals retain their original scope.
         if payload.get("content_sha256") and payload["content_sha256"] != row["content_sha256"]:
             return False
         return True
-    # In-chat "send it" is rechecked against the current approver rule. The connector's existing reviewer checks the
-    # instruction before enqueue; the binding below prevents reusing that instruction for a changed queued message.
+    # A server-recorded preview precedes the person's instruction and binds it to this exact immutable send.
     message = H.message(c, aid)
-    if not message or message.get("recipient_id") != "bot:" + row["bot"]:
-        return False
-    from connectors.mail.policy import SEND_INTENT
-    if not SEND_INTENT.search(message.get("body") or "") or not can_ok(
+    if not message or message.get("recipient_id") != "bot:" + row["bot"] or not can_ok(
             c, auth, message.get("sender_id"), row["mailbox"], row["bot"], policy):
         return False
-    used = c.execute("SELECT id,content_sha256,recipients FROM email_sends WHERE approval_id=? AND id<>? LIMIT 1",
-                     (aid, row["id"])).fetchone()
-    return not used or (used["content_sha256"] == row["content_sha256"] and used["recipients"] == row["recipients"])
+    preview = c.execute("SELECT * FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
+                        (row["id"], message["sender_id"], row["content_sha256"])).fetchone()
+    if not preview or message["created_at"] <= preview["shown_at"]:
+        return False
+    text = (message.get("body") or "").strip()
+    # Deliberately accept only unambiguous affirmative forms; arbitrary prose needs the approval card.
+    if re.search(r"\b(?:not|no|never|unless|except|hold|stop|cancel|wait|decline|reject)\b|n['’]t", text, re.I):
+        return False
+    card = c.execute("SELECT message_id FROM approvals WHERE json_extract(payload,'$.email_send_id')=? "
+                     "ORDER BY rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    named = re.search(r"(?<![\w-])" + re.escape(row["id"]) + r"(?![\w-])", text)
+    reply = card and message.get("in_reply_to") == card["message_id"]
+    refs = message.get("refs") or {}
+    if not (named or reply or refs.get("email_send_id") == row["id"]):
+        return False
+    words = re.sub(re.escape(row["id"]), "", text).strip(" #.,!?:;").lower()
+    if not re.fullmatch(r"(?:yes[,! ]+)?(?:please )?(?:send(?: it| this(?: email)?)?|approve(?: this(?: email)?)?|go ahead(?: and send it)?)(?: please)?", words):
+        return False
+    return not c.execute("SELECT 1 FROM email_sends WHERE approval_id=? AND id<>? LIMIT 1", (aid, row["id"])).fetchone()
 
 
 def _original(c, row):
@@ -306,6 +288,78 @@ def _original(c, row):
     found = c.execute("SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL",
                       (row["mailbox"], row["reply_to_id"])).fetchone()
     return dict(found) if found else None
+
+
+def resolve_reply(c, mailbox, snap, supplied_reply="", supplied_thread=""):
+    ids = re.findall(r"<[^<>\s]+>", snap["in_reply_to"] or snap["references"])
+    original = None
+    for reference in reversed(ids):
+        found = c.execute("SELECT msg_id,thread_id FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL "
+                          "AND json_extract(send_facts,'$.message-id')=? LIMIT 1", (mailbox, reference)).fetchone()
+        if found:
+            original = found
+            break
+    if (supplied_reply and (not original or supplied_reply != original["msg_id"])) or (
+            supplied_thread and (not original or supplied_thread != original["thread_id"])):
+        raise Problem("reply", "Reply identifiers must match the frozen MIME headers and synced message", 422)
+    if (snap["in_reply_to"] or snap["references"]) and not original:
+        raise Problem("reply", "Sync the original message's headers before sending this reply", 422)
+    return (original["msg_id"], original["thread_id"]) if original else ("", "")
+
+
+def require_preview(c, actor, row):
+    if not row or row["state"] not in ACTIVE:
+        raise Problem("state", "This email is no longer waiting to send", 409)
+    preview = c.execute("SELECT 1 FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
+                        (row["id"], actor, row["content_sha256"])).fetchone()
+    if not preview:
+        raise Problem("preview", "Read the frozen email and attachments before approving", 409)
+
+
+def registry_restrictions(c, auth, row, approved_send, *, dispatch=False):
+    """The server re-reads retained registry safeguards; calling the API never skips the connector's restrictions."""
+    from connectors.mail import Failure, policy as local
+    path = auth.settings.registry_dir / "mail-policy.yaml"
+    try:
+        pol = local.load(path) if path.is_file() else {
+            "send_enabled": True, "mailboxes": {}, "internal_domains": access.company_domains(c),
+            "defaults": dict(local.BUILTIN_DEFAULTS), "allowances": [],
+            "blocklist": {"addresses": [], "domains": []}, "owner_handles_personally": {"addresses": [], "domains": []}}
+        bot = H.bot(c, row["bot"]) or {} if row["bot"] else {}
+        caps = local.caps_for(pol, local.allowance_for(pol, bot.get("slug", row["bot"]), row["mailbox"]), row["mailbox"])
+    except (Failure, OSError, ValueError):
+        return ["registry_unavailable"]
+    reasons = []
+    if not pol["send_enabled"]:
+        reasons.append("registry_send_disabled")
+    if local.paused(pol, row["mailbox"]):
+        reasons.append("registry_mailbox_paused")
+    recipients = json.loads(row["recipients"])
+    for kind in ("blocklist", "owner_handles_personally"):
+        if any(local.listed(pol[kind], address) for address in recipients):
+            reasons.append("registry_" + kind)
+    if row["raw"]:
+        snap = snapshot(row["raw"], row["mailbox"])
+        if not approved_send and (len(local.externals(pol, recipients)) > caps["max_external_recipients"] or (
+                not caps["allow_cc_external"] and local.externals(pol, snap["recipient_headers"]["cc"] + snap["recipient_headers"]["bcc"]))):
+            reasons.append("registry_recipient_cap")
+    if dispatch or (not approved_send and caps["per_recipient_cooldown_days"]):
+        sent = c.execute("SELECT * FROM email_sends WHERE mailbox=? AND id<>? AND state IN ('sent','dispatching','unknown')",
+                         (row["mailbox"], row["id"])).fetchall()
+        day = H.now()[:10]
+        if dispatch and sum(item["actor"] == row["actor"] and (item["provider_attempted_at"] or item["claimed_at"] or item["created_at"])[:10] == day for item in sent) >= caps["max_sends_per_day"]:
+            reasons.append("registry_daily_cap")
+        if not approved_send and any((item["provider_attempted_at"] or item["claimed_at"] or item["created_at"]) > H.shift(H.now(), days=-caps["per_recipient_cooldown_days"])
+                and set(json.loads(item["recipients"])) & set(recipients) for item in sent):
+            reasons.append("registry_cooldown")
+        # Synced Sent history includes sends outside Tico; it cannot be evaded by changing the API operation id.
+        if not approved_send and caps["per_recipient_cooldown_days"] and c.execute(
+                "SELECT 1 FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL AND lower(from_addr)=? "
+                "AND EXISTS (SELECT 1 FROM json_each(labels) WHERE value='SENT') AND epoch>CAST(strftime('%s',?) AS REAL) "
+                "AND EXISTS (SELECT 1 FROM json_each(to_addresses) WHERE lower(value) IN (" + ",".join("?" for _ in recipients) + ")) LIMIT 1",
+                (row["mailbox"], row["mailbox"], H.shift(H.now(), days=-caps["per_recipient_cooldown_days"]), *recipients)).fetchone():
+            reasons.append("registry_cooldown")
+    return reasons
 
 
 def known(c, mailbox, address):
@@ -379,9 +433,9 @@ def decision(c, auth, row, *, dispatch=False):
             reasons.append("more_than_10_recipients")
         if policy["ask_legal_money"] and json.loads(row["classification"]).get("legal_or_money") is not False:
             reasons.append("legal_or_money_or_unclassified")
-    if policy["to"] == "known_addresses" and any(not known(c, row["mailbox"], a) for a in recipients):
+    if any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]) and any(not known(c, row["mailbox"], a) for a in recipients):
         blocked.append("known_addresses_only")
-    if policy["to"] == "internal" and any(not access.inside(a, access.company_domains(c)) for a in recipients):
+    if any(rule["value"] == "internal" for rule in policy["recipient_rules"]) and any(not access.inside(a, access.company_domains(c)) for a in recipients):
         blocked.append("internal_only")
     if row["automation_action_id"]:
         found = c.execute("SELECT a.*,m.owner_id,m.enabled,m.deleted_at,m.flow FROM automation_mail_actions a "
@@ -392,6 +446,10 @@ def decision(c, auth, row, *, dispatch=False):
                 or acts_as(c, {"flow": json.loads(found["flow"])}) != row["actor"]
                 or not send_on(c, row["mailbox"])):
             blocked.append("automation_revoked")
+    if row["calendar_action_id"]:
+        action = c.execute("SELECT * FROM calendar_actions WHERE id=?", (row["calendar_action_id"],)).fetchone()
+        if not action or action["requested_by"] != row["actor"] or action["status"] not in ("claimed", "done"):
+            blocked.append("calendar_revoked")
     if c.execute("SELECT 1 FROM email_suppressed_recipients WHERE mailbox=? AND address IN ("
                  + ",".join("?" for _ in recipients) + ") LIMIT 1", (row["mailbox"], *recipients)).fetchone():
         blocked.append("bounce_suppression")
@@ -410,6 +468,8 @@ def decision(c, auth, row, *, dispatch=False):
     if json.loads(row["classification"]).get("legacy_github_approval"):
         reasons.append("github_approval_needs_tico")
     approval_ok = approved(c, auth, row, policy)
+    for reason in registry_restrictions(c, auth, row, approval_ok, dispatch=dispatch):
+        (reasons if reason in ("registry_recipient_cap", "registry_cooldown") else blocked).append(reason)
     if reasons and not approval_ok:
         return {"outcome": "blocked" if blocked else "ask", "reasons": blocked or reasons,
                 "policy": policy, "approval_id": row["approval_id"], "approved": False, "legacy": grandfathered}
@@ -432,7 +492,7 @@ def decision(c, auth, row, *, dispatch=False):
 
 
 def public(row):
-    keys = ("id", "mailbox", "actor", "bot", "via", "automation_action_id", "content_sha256", "body_sha256", "subject", "approval_id", "state",
+    keys = ("id", "mailbox", "actor", "bot", "via", "automation_action_id", "calendar_action_id", "content_sha256", "body_sha256", "subject", "approval_id", "state",
             "created_at", "send_after", "claimed_at", "finished_at", "provider_message_id", "detail")
     return {**{key: row[key] for key in keys}, **{key: json.loads(row[key]) for key in
                                                ("recipients", "attachments", "decision", "classification")}}
@@ -451,12 +511,13 @@ def settle_automation(c, row, state, detail="", message=""):
 def request_approval(c, auth, row, policy):
     payload = {"to": json.loads(row["recipients"]), "cc": [], "mailbox": row["mailbox"], "subject": row["subject"],
                "body_sha256": row["body_sha256"], "content_sha256": row["content_sha256"],
-               "attachments": json.loads(row["attachments"]), "email_send_id": row["id"]}
+               "attachments": json.loads(row["attachments"]), "email_send_id": row["id"],
+               "preview_url": "/api/v2/email/sends/" + row["id"]}
     approval = H.approval_request(c, row["actor"], "send", payload, to=approver(c, auth, row, policy))
     c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (approval["id"], row["id"]))
 
 
-def enqueue(c, auth, actor, body, classification, via=""):
+def enqueue(c, auth, actor, body, classification, via="", operation_key=""):
     mailbox = body.mailbox.strip().lower()
     if body.approval_id.isdigit():
         classification = {**classification, "legacy_github_approval": body.approval_id}
@@ -464,24 +525,36 @@ def enqueue(c, auth, actor, body, classification, via=""):
     if not access.may(c, actor, mailbox)["send"]:
         raise Problem("forbidden", "The sender cannot send from this inbox", 403)
     snap = snapshot(body.raw, mailbox)
-    # Reply facts come from synced mail, never from the caller's description of the recipients.
+    reply_id, thread_id = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
+    operation_key = operation_key or body.operation_id
+    if operation_key:
+        prior = c.execute("SELECT s.* FROM email_send_operations o JOIN email_sends s ON s.id=o.send_id "
+                          "WHERE o.actor=? AND o.operation_key=?", (actor, operation_key)).fetchone()
+        if prior:
+            if prior["content_sha256"] != snap["content_sha256"] or prior["mailbox"] != mailbox:
+                raise Problem("operation", "This operation already froze different email content", 409)
+            return public(prior)
     key = digest(dump([mailbox, snap["content_sha256"], snap["recipients"]]))
     old = c.execute("SELECT * FROM email_sends WHERE idempotency_key=?", (key,)).fetchone()
-    if old:
+    if old and old["state"] in (*ACTIVE, "sent", "unknown"):
         if old["actor"] != actor:
             raise Problem("duplicate", "This email is already queued or sent", 409)
+        if operation_key:
+            c.execute("INSERT INTO email_send_operations VALUES(?,?,?)", (actor, operation_key, old["id"]))
         return public(old)
+    if old:
+        c.execute("UPDATE email_sends SET idempotency_key=? WHERE id=?", ("retired:" + old["id"], old["id"]))
     if c.execute("SELECT count(*) FROM email_sends WHERE state IN ('pending','waiting_approval','dispatching')").fetchone()[0] >= 1000:
         raise Problem("queue_full", "The email queue is full", 429)
     if c.execute("SELECT coalesce(sum(length(raw)),0) FROM email_sends").fetchone()[0] + len(body.raw) > 128 * 1024 * 1024:
         raise Problem("queue_full", "The email queue content limit is reached", 429)
     now, ident = H.now(), H.new_id()
     row = {"id": ident, "mailbox": mailbox, "actor": actor, "bot": bot,
-           "via": "automation:" + body.automation_action_id if body.automation_action_id else via,
-           "automation_action_id": body.automation_action_id or None, "content_sha256": snap["content_sha256"],
-           "idempotency_key": key, "recipients": dump(snap["recipients"]), "attachments": dump(snap["attachments"]),
+           "via": "automation:" + body.automation_action_id if body.automation_action_id else "calendar:" + body.calendar_action_id if body.calendar_action_id else via,
+           "automation_action_id": body.automation_action_id or None, "calendar_action_id": body.calendar_action_id or None, "content_sha256": snap["content_sha256"],
+           "idempotency_key": key, "operation_key": operation_key, "recipients": dump(snap["recipients"]), "attachments": dump(snap["attachments"]),
            "subject": snap["subject"], "body_sha256": snap["body_sha256"], "raw": body.raw,
-           "draft_id": body.draft_id, "thread_id": body.thread_id, "reply_to_id": body.reply_to_id, "approval_id": body.approval_id,
+           "draft_id": body.draft_id, "thread_id": thread_id, "reply_to_id": reply_id, "approval_id": body.approval_id,
            "classification": dump(classification), "decision": "{}", "state": "pending", "created_at": now,
            "send_after": H.shift(now, seconds=effective(c, mailbox, bot)["undo_seconds"])}
     found = decision(c, auth, row)
@@ -490,8 +563,10 @@ def enqueue(c, auth, actor, body, classification, via=""):
     if row["state"] == "blocked":
         row.update(raw="", finished_at=now, detail=", ".join(found["reasons"]))
     c.execute("INSERT INTO email_sends(" + ",".join(row) + ") VALUES(" + ",".join("?" for _ in row) + ")", tuple(row.values()))
-    if row["state"] == "waiting_approval" and (not row["approval_id"] or row["approval_id"].isdigit()):
-        # Existing approval cards expose only the proof metadata, never the MIME payload.
+    if operation_key:
+        c.execute("INSERT INTO email_send_operations VALUES(?,?,?)", (actor, operation_key, ident))
+    if row["state"] == "waiting_approval" and not found["approved"]:
+        # Only a content-bound card or an instruction after a verified preview can release this snapshot.
         request_approval(c, auth, row, found["policy"])
     if classification.get("status") == "classified":
         H.event(c, actor, "judge.call", "email.sending", {"label": "email.sending", "questions": 1,
@@ -506,10 +581,13 @@ def classify(app, store, snap):
     from clients.judge import JudgeError
     with store.read() as c:
         engine = server_engine(store, c, app.state.judge)
+    visible = snap["visible_bodies"]
+    if not snap["classification_complete"] or not visible or sum(len(part["text"]) for part in visible) > 16000:
+        return {"legal_or_money": None, "status": "incomplete_content"}
     if engine is None:
         return {"legal_or_money": None, "status": "unavailable"}
     try:
-        result = ask(engine, {"subject": snap["subject"], "body": snap["body"][:16000]},
+        result = ask(engine, {"subject": snap["subject"], "body": "\n\n".join(part["type"] + ":\n" + part["text"] for part in visible)},
                      {"legal_or_money": {"type": "choice", "instructions": "Does this email concern legal or money matters?",
                                          "criteria": {"yes": "Legal, contracts, payments, finance or money",
                                                       "no": "None of these matters"}}},
@@ -611,7 +689,8 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/email/inboxes/{mailbox}/sending-policy")
     def read_inbox(request: Request, mailbox: str):
         with store.read() as c:
-            return policy_view(c, inbox(c, mailbox, request.state.identity))
+            return policy_view(c, inbox(c, mailbox, request.state.identity),
+                               H.actor_id(request.state.identity.actor) if request.state.identity.actor.startswith("bot:") else "")
 
     @app.put("/api/v2/email/inboxes/{mailbox}/sending-policy")
     def write_inbox(request: Request, mailbox: str, body: PolicyUpdate):
@@ -637,11 +716,28 @@ def install(app, store, auth, mutate):
             return policy_view(c, bot=ref)
         return mutate(request, body, work, durable=True)
 
+    def calendar_actor(c, who, mailbox, action_id):
+        runner = reader(c, who, mailbox)
+        action = c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
+        if not action or action["runner_id"] != runner["id"] or action["status"] != "claimed" or action["calendar_email"] != mailbox:
+            raise Problem("forbidden", "No calendar action leased to this computer", 403)
+        return action["requested_by"]
+
+    @app.post("/api/v2/connectors/email/sends/preflight")
+    def calendar_preflight(request: Request, body: CalendarPreflight):
+        with store.read() as c:
+            mailbox = body.mailbox.strip().lower()
+            actor = calendar_actor(c, request.state.identity, mailbox, body.calendar_action_id)
+            policy = effective(c, mailbox, H.actor_id(actor) if actor.startswith("bot:") else "")
+            return {"effective": policy}
+
     @app.post("/api/v2/email/sends")
     def queue(request: Request, body: Enqueue):
         who = request.state.identity
         with store.read() as c:
-            if body.automation_action_id:
+            if body.calendar_action_id:
+                actor = calendar_actor(c, who, body.mailbox.strip().lower(), body.calendar_action_id)
+            elif body.automation_action_id:
                 runner = reader(c, who, body.mailbox.strip().lower())
                 action = c.execute("SELECT a.*,m.owner_id,m.flow FROM automation_mail_actions a JOIN automations m "
                                    "ON m.id=a.automation_id WHERE a.id=?", (body.automation_action_id,)).fetchone()
@@ -658,7 +754,7 @@ def install(app, store, auth, mutate):
         snap = snapshot(body.raw, body.mailbox.strip().lower())
         classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": None, "status": "off"}
         via = who.via or ("agent:" + who.agent if who.agent else "")
-        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=via)}, durable=True)
+        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=via, operation_key=body.operation_id or request.headers.get("Idempotency-Key", ""))}, durable=True)
 
     @app.get("/api/v2/email/sends")
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
@@ -684,17 +780,39 @@ def install(app, store, auth, mutate):
             more = len(out) < len(rows)
             return {"sends": out, "next_cursor": out[-1]["id"] if more and out else None}
 
+    def preview_row(c, request, sid):
+        row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+        if not row:
+            raise Problem("not_found", "Send not found", 404)
+        if not can_cancel(c, request.state.identity, row) and not can_ok(
+                c, auth, request.state.identity.actor, row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])):
+            inbox(c, row["mailbox"], request.state.identity)
+        return row
+
     @app.get("/api/v2/email/sends/{sid}")
     def send_detail(request: Request, sid: str):
-        with store.read() as c:
-            row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
-            if not row:
-                raise Problem("not_found", "Send not found", 404)
-            if not can_cancel(c, request.state.identity, row) and not can_ok(
-                    c, auth, request.state.identity.actor, row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])):
-                inbox(c, row["mailbox"], request.state.identity)
+        with store.transaction(durable=True) as c:
+            row = preview_row(c, request, sid)
             snap = snapshot(row["raw"], row["mailbox"]) if row["raw"] else None
-            return {"send": public(row), "body": (snap or {}).get("body", "")[:32768]}
+            if snap:
+                c.execute("INSERT INTO email_send_previews VALUES(?,?,?,?) ON CONFLICT(send_id,actor) DO UPDATE SET "
+                          "shown_at=CASE WHEN content_sha256=excluded.content_sha256 THEN shown_at ELSE excluded.shown_at END,"
+                          "content_sha256=excluded.content_sha256",
+                          (sid, request.state.identity.actor, row["content_sha256"], H.now()))
+            return {"send": public(row), "body": (snap or {}).get("body", ""),
+                    "bodies": (snap or {}).get("visible_bodies", []), "preview_complete": bool(snap)}
+
+    @app.get("/api/v2/email/sends/{sid}/attachments/{part}")
+    def send_attachment(request: Request, sid: str, part: int):
+        with store.read() as c:
+            row = preview_row(c, request, sid)
+            file = next((file for file in json.loads(row["attachments"]) if file["part"] == part), None)
+            if not row["raw"] or not file:
+                raise Problem("not_found", "The frozen file is no longer available", 404)
+            data = attachment(row["raw"], part)
+            return Response(data, media_type="application/octet-stream", headers={
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(file["name"], safe=""),
+                "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox", "Cache-Control": "no-store"})
 
     @app.get("/api/v2/email/inboxes/{mailbox}/suppressed-recipients")
     def suppressed(request: Request, mailbox: str, cursor: str = "", limit: int = 50):
@@ -748,15 +866,24 @@ def install(app, store, auth, mutate):
         def work(c):
             mailbox, now = body.mailbox.strip().lower(), H.now()
             runner = reader(c, request.state.identity, mailbox)
-            # A provider may have accepted an unreported send. Preserve its receipt as unknown; never resend it.
-            for stale in c.execute("SELECT * FROM email_sends WHERE state='dispatching' AND claimed_at<? LIMIT 100",
-                                   (H.shift(now, minutes=-5),)).fetchall():
-                c.execute("UPDATE email_sends SET state='unknown',detail='The connector did not confirm delivery',"
-                          "finished_at=?,raw='' WHERE id=?", (now, stale["id"]))
-                settle_automation(c, stale, "unknown")
-            rows = c.execute("SELECT * FROM email_sends WHERE mailbox=? AND state IN ('pending','waiting_approval') "
-                             "ORDER BY created_at,rowid LIMIT 100", (mailbox,)).fetchall()
+            # Only an issued permit can have reached a provider; an abandoned claim is safe to lease again.
+            for stale in c.execute("SELECT * FROM email_sends WHERE mailbox=? AND state='dispatching' AND claimed_at<? LIMIT 100",
+                                   (mailbox, H.shift(now, minutes=-5))).fetchall():
+                if stale["provider_attempted_at"]:
+                    c.execute("UPDATE email_sends SET state='unknown',detail='The connector did not confirm delivery',"
+                              "finished_at=?,raw='' WHERE id=?", (now, stale["id"]))
+                    settle_automation(c, stale, "unknown")
+                else:
+                    c.execute("UPDATE email_sends SET state='pending',runner_id=NULL,claimed_at=NULL,lease_id='' WHERE id=?",
+                              (stale["id"],))
+            # Rotate approval reconciliation independently of due sends; a waiting prefix cannot starve delivery.
+            waiting = c.execute("SELECT * FROM email_sends WHERE mailbox=? AND state='waiting_approval' "
+                                "ORDER BY checked_at,rowid LIMIT 100", (mailbox,)).fetchall()
+            due = c.execute("SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? "
+                            "ORDER BY created_at,rowid LIMIT 1000", (mailbox, now)).fetchall()
+            rows = [*waiting, *due]
             for row in rows:
+                c.execute("UPDATE email_sends SET checked_at=? WHERE id=?", (now, row["id"]))
                 found = decision(c, auth, row)
                 approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
                 if approval and approval.get("decision") in ("declined", "withdrawn"):
@@ -787,9 +914,10 @@ def install(app, store, auth, mutate):
                     c.execute("UPDATE email_sends SET decision=?,detail=? WHERE id=?",
                               (dump(found), ", ".join(found["reasons"]), row["id"]))
                     continue
-                c.execute("UPDATE email_sends SET state='dispatching',decision=?,runner_id=?,claimed_at=? WHERE id=?",
-                          (dump(found), runner["id"], now, row["id"]))
-                return {"send": {"id": row["id"], "mailbox": mailbox, "thread_id": row["thread_id"]}}
+                lease = H.new_id()
+                c.execute("UPDATE email_sends SET state='dispatching',decision=?,runner_id=?,claimed_at=?,lease_id=? WHERE id=?",
+                          (dump(found), runner["id"], now, lease, row["id"]))
+                return {"send": {"id": row["id"], "mailbox": mailbox, "thread_id": row["thread_id"], "lease_id": lease}}
             return {"send": None}
         return mutate(request, body, work, durable=True)
 
@@ -798,7 +926,8 @@ def install(app, store, auth, mutate):
         def work(c):
             runner = reader(c, request.state.identity, body.mailbox.strip().lower())
             row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
-            if not row or row["runner_id"] != runner["id"] or row["mailbox"] != body.mailbox.strip().lower():
+            if (not row or row["runner_id"] != runner["id"] or row["mailbox"] != body.mailbox.strip().lower()
+                    or not body.lease_id or row["lease_id"] != body.lease_id):
                 raise Problem("forbidden", "This send belongs to another connector", 403)
             if row["state"] != "dispatching" or row["provider_attempted_at"]:
                 return {"send": None}
@@ -828,10 +957,12 @@ def install(app, store, auth, mutate):
             from . import google_rights
             runner = google_rights.runner_of(app.state.execution, c, request.state.identity)
             row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
-            if not row or row["runner_id"] != runner["id"]:
-                raise Problem("forbidden", "Only the dispatching computer reports this receipt", 403)
+            if not row or row["runner_id"] != runner["id"] or not body.lease_id or row["lease_id"] != body.lease_id:
+                raise Problem("forbidden", "Only the current dispatch lease reports this receipt", 403)
             if row["state"] not in ("dispatching", "unknown"):
                 return {"send": public(row)}
+            if not row["provider_attempted_at"]:
+                raise Problem("state", "This lease has not received a dispatch permit", 409)
             c.execute("UPDATE email_sends SET state=?,provider_message_id=?,detail=?,finished_at=?,raw='' WHERE id=?",
                       (body.status, body.message, body.detail, H.now(), sid))
             H.event(c, row["actor"], "email." + body.status, sid, {"mailbox": row["mailbox"], "provider_message_id": body.message})

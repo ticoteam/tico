@@ -118,13 +118,23 @@ inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (hos
   const editable = !!inbox.can_manage;
   host.innerHTML = inboxesCard('inbox-sending', 'Sending', ibSendForm(document, false, !editable) + '<div data-send-bots></div>') +
     inboxesCard('inbox-waiting-to-send', 'Waiting to send', `<ul class="ib-send-pending">${(pending.sends || []).map(send =>
-      `<li><div><strong>${esc(send.subject || '(No subject)')}</strong><span>${esc(send.recipients.join(', '))}</span><span>${esc(send.state === 'waiting_approval' ? 'Waiting for OK' : 'After ' + new Date(send.send_after).toLocaleTimeString())}</span></div>${send.can_cancel ? `<button type="button" class="ghost danger" data-send-cancel="${esc(send.id)}">Cancel</button>` : ''}</li>`).join('') || '<li class="muted">None</li>'}</ul>`) +
+      `<li><div><strong>${esc(send.subject || '(No subject)')}</strong><span>${esc(send.recipients.join(', '))}</span><span>${esc(send.state === 'waiting_approval' ? 'Waiting for OK' : 'After ' + new Date(send.send_after).toLocaleTimeString())}</span><button type="button" class="ghost" data-send-preview="${esc(send.id)}">Preview</button><div data-send-preview-body></div></div>${send.can_cancel ? `<button type="button" class="ghost danger" data-send-cancel="${esc(send.id)}">Cancel</button>` : ''}</li>`).join('') || '<li class="muted">None</li>'}</ul>`) +
     inboxesCard('inbox-send-audit', 'Send audit', '<button type="button" class="ghost" data-send-audit>Show activity</button><div data-send-activity></div>');
   if (editable) ibSendBind(host, ibSendPath(address), ctx);
   const grants = (inbox.accesses || []).filter(a => a.grantee_type === 'bot').map(a => ({id: a.grantee_id, display_name: a.name}));
   const botRows = await ibSendBots(host.querySelector('[data-send-bots]'), grants, ctx, address, editable && ctx.admin);
   if (!ctx.live()) return;
   ibSendAccessColumn(host, inbox, botRows, document.effective);
+  host.querySelectorAll('[data-send-preview]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true;
+    const target = button.nextElementSibling;
+    target.textContent = 'Loading frozen email…';
+    try {
+      const data = await get(`/v2/email/sends/${encodeURIComponent(button.dataset.sendPreview)}`, {fresh: true});
+      if (ctx.live()) target.innerHTML = emailSendPreviewHTML(data);
+    } catch (e) { if (ctx.live()) target.textContent = e.message; }
+    finally { if (button.isConnected) button.disabled = false; }
+  }));
   host.querySelectorAll('[data-send-cancel]').forEach(button => button.addEventListener('click', async () => {
     button.disabled = true;
     try { await post(`/v2/email/sends/${encodeURIComponent(button.dataset.sendCancel)}/cancel`, {}); if (ctx.live()) { button.closest('li').remove(); ctx.refresh(); } }

@@ -40,7 +40,7 @@ def perform(ctx, action):
     mid, args = str(action.get("msg_id") or ""), action.get("args") or {}
     verb(kind)
     if kind == "dispatch_send":
-        return _dispatch(ctx, aid)
+        return _dispatch(ctx, aid, action.get("lease_id", ""))
     if not mid:
         raise Refused(f"the {kind} action names no message.")
     if kind == "archive":
@@ -194,7 +194,7 @@ def _draft(ctx, aid, raw, thread, to, subject):
     return made.get("id", "")
 
 
-def _dispatch(ctx, ident):
+def _dispatch(ctx, ident, lease):
     """Only the server's frozen payload can leave; uncertain results are never retried into duplicates."""
     from . import oauth
     key = compose.key("email-queue", ctx.mailbox, ident)
@@ -204,22 +204,17 @@ def _dispatch(ctx, ident):
                 "status": "sent" if prior["status"] == "sent" else "unknown",
                 "message": prior.get("message_id", ""), "detail": "This dispatch was already attempted"}
     # This final server round trip rechecks permissions, policy and caps immediately before the provider call.
-    permit = oauth.broker(retries=0).post(f"connectors/email/sends/{ident}/dispatch", {"mailbox": ctx.mailbox})
+    permit = oauth.broker(retries=0).post(f"connectors/email/sends/{ident}/dispatch", {"mailbox": ctx.mailbox, "lease_id": lease})
     action = permit.get("send")
     if not action:
         return {"ok": False, "retry": False, "status": "failed", "detail": "Sending permission was revoked"}
     raw, thread = action["raw"], action.get("thread_id", "")
     draft_id = action.get("draft_id") or ""
-    if draft_id:
-        ctx.gmail.update_draft(draft_id, raw, thread)
-    else:
-        made = ctx.gmail.create_draft(raw, thread)
-        draft_id = made.get("id", "")
     db.claim_send(ctx.conn, key, str(action["actor"]).partition(":")[2], ctx.mailbox, ident,
                   action["recipients"], action["subject"], thread, draft_id,
                   datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"), source="email-queue")
     try:
-        sent = ctx.gmail.send_draft(draft_id)
+        sent = ctx.gmail.send_raw(raw, thread)
     except Failure:
         return {"ok": False, "retry": False, "status": "unknown", "detail": "The provider result is unknown"}
     if not sent.get("id"):

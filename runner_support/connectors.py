@@ -376,14 +376,15 @@ class ConnectorPublisher:
             if not claimed:
                 continue
             try:
-                answer = self.run_action({"id": claimed["id"], "mailbox": address, "action": "dispatch_send"})
+                answer = self.run_action({"id": claimed["id"], "mailbox": address, "action": "dispatch_send", "lease_id": claimed["lease_id"]})
                 status = answer.get("status") or ("sent" if answer.get("ok") else "unknown")
                 result = {"status": status, "message": str(answer.get("message") or "")[:200],
                           "detail": str(answer.get("detail") or "")[:1000]}
             except Exception:
                 result = {"status": "unknown", "detail": "The local mail dispatch did not confirm delivery"}
+            result["lease_id"] = claimed["lease_id"]
             self.client.post(f"connectors/email/sends/{claimed['id']}/result", result,
-                             key=f"email-receipt-{claimed['id']}")
+                             key=f"email-receipt-{claimed['id']}-{claimed['lease_id']}")
             done += 1
         return done
 

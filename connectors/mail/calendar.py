@@ -171,7 +171,7 @@ class Calendar:
         try:
             return self._exec(
                 self.service.events().insert(calendarId=calendar_id, body=body,
-                                             sendUpdates=send_updates), "events.insert")
+                                             sendUpdates="none"), "events.insert")
         except Failure as exc:
             is_409 = exc.status == 409 or "409" in str(exc) or "already exists" in str(exc).lower()
             if not event_id or not is_409:
@@ -190,7 +190,7 @@ class Calendar:
                 "conferenceData": {"createRequest": {"requestId": event_id,
                     "conferenceSolutionKey": {"type": "hangoutsMeet"}}}}
         return self._exec(self.service.events().insert(calendarId="primary", body=body,
-                            sendUpdates="all", conferenceDataVersion=1), "events.insert")
+                            sendUpdates="none", conferenceDataVersion=1), "events.insert")
 
     def create_hub_event(self, start, end, summary, attendees, event_id, description="",
                          add_meet=True):
@@ -209,7 +209,7 @@ class Calendar:
             kwargs["conferenceDataVersion"] = 1
         return self._exec(self.service.events().insert(
             calendarId="primary", body=body,
-            sendUpdates="all" if attendees else "none", **kwargs), "events.insert")
+            sendUpdates="none", **kwargs), "events.insert")
 
     def get_event(self, event_id, calendar_id="primary"):
         """Get one normalized event by ID."""

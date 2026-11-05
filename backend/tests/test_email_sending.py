@@ -11,10 +11,19 @@ import pytest
 
 from backend import email_sending as S, mailbox_access as MA
 from backend.store import H
-from backend.tests.test_api import api, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, headers, post as api_post, runner, setup_attempt  # noqa: F401
 
 BOX = "ana@acme.example"
 CONTACT = "contact@vendor.example"
+
+
+def post(api, path, body, **kwargs):
+    if path.startswith("connectors/email/sends/") and not path.endswith("/claim") and isinstance(body, dict) and "lease_id" not in body:
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT lease_id FROM email_sends WHERE id=?", (path.split("/")[-2],)).fetchone()
+        if row:
+            body = {**body, "lease_id": row["lease_id"]}
+    return api_post(api, path, body, **kwargs)
 
 
 def mime(body="Thanks for the update.", to=None, files=False, subject="Update", **headers):
@@ -41,7 +50,7 @@ def incoming(c, *, facts=None, sender=CONTACT, mid="inbound"):
     c.execute("INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,to_addresses,cc,subject,"
               "snippet,labels,body,attachments,updated_at,send_facts) VALUES(?,?,?,0,?,?,?,?,?,?,?,?,?,?,?)",
               (BOX, mid, "thread", H.now(), sender, json.dumps([BOX]), "[]", "Update", "Hello", "[]", "Hello", "[]",
-               H.now(), json.dumps(facts or {})))
+               H.now(), json.dumps({"message-id": "<" + mid + "@vendor.example>", **(facts or {})})))
 
 
 def policy(api, **values):
@@ -58,7 +67,7 @@ def autonomous(api, **values):
 
 def queue(api, *, raw=None, actor="human:ana", **values):
     with api.app.state.store.transaction() as c:
-        return S.enqueue(c, api.app.state.auth, actor, S.Enqueue(mailbox=BOX, raw=raw or mime(), **values),
+        return S.enqueue(c, api.app.state.auth, actor, S.Enqueue(mailbox=BOX, raw=raw or mime(**({"In_Reply_To": "<" + values["reply_to_id"] + "@vendor.example>"} if values.get("reply_to_id") else {})), **values),
                          {"legal_or_money": False, "status": "classified"})
 
 
@@ -67,6 +76,7 @@ def claim(api, token):
 
 
 def approved(api, queued, token="ana-test"):
+    assert api.get("/api/v2/email/sends/" + queued["id"], headers=headers(token)).status_code == 200
     post(api, "approvals/" + queued["approval_id"], {"decision": "approved"}, token=token)
 
 
@@ -200,7 +210,7 @@ def test_due_send_is_dispatched_once_with_a_receipt_and_audit(inbox):
     assert post(inbox, path + "/dispatch", {"mailbox": BOX}, token=machine["token"], key="one-permit")["send"] is None
     receipt = post(inbox, path + "/result", {"status": "sent", "message": "provider-123"}, token=machine["token"])
     assert receipt["send"]["provider_message_id"] == "provider-123"
-    assert receipt["send"]["attachments"] == [{"name": "proof.pdf", "sha256": S.digest(b"proof")}]
+    assert [{k: f[k] for k in ("name", "sha256")} for f in receipt["send"]["attachments"]] == [{"name": "proof.pdf", "sha256": S.digest(b"proof")}]
     assert claim(inbox, machine["token"]) is None
 
 
@@ -237,6 +247,7 @@ def test_caps_reserve_concurrent_dispatches_including_unknown_results(inbox, cap
     machine = runner(inbox)
     assert claim(inbox, machine["token"])["id"] == first["id"]
     assert claim(inbox, machine["token"]) is None
+    post(inbox, "connectors/email/sends/" + first["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])
     post(inbox, "connectors/email/sends/" + first["id"] + "/result", {"status": "unknown"}, token=machine["token"])
     assert claim(inbox, machine["token"]) is None
 
@@ -251,7 +262,7 @@ def test_pacing_duplicate_hash_and_reply_loop_protection(inbox):
     assert claim(inbox, machine["token"]) is None
     with inbox.app.state.store.transaction() as c:
         incoming(c, facts={"auto-submitted": "auto-replied"}, mid="automatic")
-    blocked = queue(inbox, raw=mime(body="No loop"), reply_to_id="automatic", thread_id="thread")
+    blocked = queue(inbox, raw=mime(body="No loop", In_Reply_To="<automatic@vendor.example>"), reply_to_id="automatic", thread_id="thread")
     assert blocked["state"] == "blocked" and "reply_loop" in blocked["decision"]["reasons"]
 
 
@@ -289,7 +300,7 @@ def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(in
                   (json.dumps({"owner": "person:ana", "steps": []}), H.now(), H.now()))
         c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,claimed_by) "
                   "VALUES('action','auto',NULL,?,'inbound','send','{}','claimed',?,?)", (BOX, H.now(), machine["runner_id"]))
-    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(), "thread_id": "thread",
+    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(In_Reply_To="<inbound@vendor.example>"), "thread_id": "thread",
                                        "reply_to_id": "inbound", "automation_action_id": "action"}, token=machine["token"])
     queued = result["send"]
     assert queued["state"] == "waiting_approval" and queued["actor"] == "human:ana"

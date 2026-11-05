@@ -104,6 +104,9 @@
 .pm-grant-form select,.pm-pick select{width:100%;min-width:0}
 
 /* Sending (ui/app/inboxes-sending.js) */
+.email-send-preview{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.email-send-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:50vh;overflow:auto}
+.email-send-preview code{font-size:var(--t-sm);overflow-wrap:anywhere}
 .ib-send-form fieldset{border:0;padding:0;margin:0;min-width:0}
 .ib-send-form select,.ib-send-form input:not([type=checkbox]){width:100%;max-width:390px;min-width:0;box-sizing:border-box}
 .ib-send-checks{display:flex;flex-direction:column;gap:10px}

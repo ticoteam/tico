@@ -171,6 +171,7 @@ class Stage2(unittest.TestCase):
         # A person has already confirmed in Tico what each bot.yaml asks (backend/mail_settings.py); the tests of the
         # server-held switch itself replace this.
         pl.SERVER_GET = self.confirmed_setting
+        pl.HUB_GET = lambda path: {"effective": {"mode": "ask_first"}} if path.endswith("/sending-policy") else None
         pl.HUB_POST = lambda path, body, key=None: None    # no Tico to ask the org rule check of: sends go on
         # An owner run reads What Tico may do over the runner's registration: all on here; test_company.py turns it off.
         pl.RUNNER_GET = lambda path: {"company": dict.fromkeys(pl.COMPANY_FIELDS, True)}
@@ -188,7 +189,7 @@ class Stage2(unittest.TestCase):
         self.dbfile = self.root / "mail.db"
         self.service = fake.FakeGmailService(self.corpus())
         self.queue_requests = []
-        def queued(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id=""):
+        def queued(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id="", calendar_action_id=""):
             import hashlib
             self.queue_requests.append({"mailbox": mailbox, "raw": raw, "thread_id": thread_id,
                                         "reply_to_id": reply_to_id, "approval_id": approval_id})

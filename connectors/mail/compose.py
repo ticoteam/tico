@@ -20,6 +20,26 @@ with the text first, so lint and the reviewer read the same body Gmail shows.
 
 import base64, hashlib, re
 from email.message import EmailMessage
+from email.parser import BytesParser
+from email import policy
+from datetime import timezone
+
+
+def with_invitation(raw, event, mailbox, attendees, start, end, summary):
+    """The invitation is part of the same frozen MIME send and approval as its confirmation."""
+    def text(value):
+        return str(value).replace("\\", "\\\\").replace("\r", "").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
+    def stamp(value):
+        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Tico//Calendar//EN", "METHOD:REQUEST", "BEGIN:VEVENT",
+             "UID:" + text(event.get("iCalUID") or str(event["id"]) + "@google.com"), "SEQUENCE:0",
+             "DTSTAMP:" + stamp(start), "DTSTART:" + stamp(start), "DTEND:" + stamp(end),
+             "SUMMARY:" + text(summary), "ORGANIZER:mailto:" + mailbox]
+    lines += ["ATTENDEE;RSVP=TRUE:mailto:" + address for address in attendees]
+    lines += ["END:VEVENT", "END:VCALENDAR", ""]
+    msg = BytesParser(policy=policy.SMTP).parsebytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    msg.add_attachment("\r\n".join(lines), subtype="calendar", filename="invitation.ics", params={"method": "REQUEST"})
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
 RE_PREFIX = re.compile(r"(?i)^\s*(re\s*:\s*)+")
 

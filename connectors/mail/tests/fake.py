@@ -178,6 +178,17 @@ class _Messages:
     def __init__(self, s):
         self.s = s
 
+    def send(self, userId="me", body=None, **kwargs):
+        def go():
+            self.s._maybe_fail(None)
+            rec = _Drafts(self.s)._make({"message": body})
+            self.s.drafts_by_id.pop(rec["id"])
+            m = self.s.store[rec["message"]["id"]]
+            m["labelIds"] = ["SENT"]
+            self.s.sent.append({"id": m["id"], "threadId": m["threadId"], "raw": body["raw"]})
+            return {"id": m["id"], "threadId": m["threadId"]}
+        return _Req(go)
+
     def list(self, userId="me", q=None, labelIds=None, maxResults=100, pageToken=None):
         def go():
             self.s.calls.append(("list", q))

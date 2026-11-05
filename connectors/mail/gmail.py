@@ -236,6 +236,14 @@ class Gmail:
             self.service.users().drafts().send(userId="me", body={"id": draft_id}),
             "drafts.send", retry=False)
 
+    def send_raw(self, raw, thread_id=""):
+        """Send exactly the frozen MIME in this request, with no mutable draft lookup or automatic retry."""
+        oauth.require(self.granted, "drafts", self.mailbox, "send mail")
+        oauth.company_allows(self.company, "send", self.mailbox, "send mail")
+        draft_body, media = _draft_body(raw, thread_id)
+        return self._exec(self.service.users().messages().send(userId="me", body=draft_body.get("message", {}), **media),
+                          "messages.send", retry=False)
+
 
 def _draft_body(raw, thread_id=""):
     """(body, extra kwargs) for drafts.create/update. A message with large attachments goes as a
@@ -567,7 +575,7 @@ def normalize(msg, label_names=None, tz_name=DEFAULT_TZ):
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
-        "send_facts": {**{key: str(hdrs.get(key) or "")[:100] for key in ("auto-submitted", "precedence", "return-path")},
+        "send_facts": {**{key: str(hdrs.get(key) or "")[:1000] for key in ("auto-submitted", "precedence", "return-path", "message-id")},
                        "delivery-status": "\n".join(decode(p.get("body") or {}, charset_of(p)) for p in walk(payload)
                                                      if p.get("mimeType") == "message/delivery-status")[:4096]},
     }

@@ -159,6 +159,7 @@ def approve_and_dispatch(api, computer, send_id=None):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT id,approval_id FROM email_sends WHERE " + ("id=?" if send_id else "state='waiting_approval'") + " ORDER BY rowid DESC LIMIT 1", (send_id,) if send_id else ()).fetchone()
     assert row
+    assert api.get("/api/v2/email/sends/" + row["id"], headers=headers()).status_code == 200
     post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
     assert computer.worker.email_send_tick() == 0  # approval starts the undo window
     with later(3):
