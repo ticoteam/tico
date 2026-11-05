@@ -34,23 +34,27 @@ function lettersOutProof(row) {
 }
 function lettersOutActivity(row) {
   const labels = {quoted: 'Quoted', waiting_for_ok: 'Waiting for OK', ready: 'Queued', submitting: 'Checking submission',
+    needs_review: 'Needs review',
     submitted: 'Submitted', printing: 'Printing', mailed: 'Mailed', delivered: 'Delivered', returned: 'Returned',
     failed: 'Failed', cancelled: 'Cancelled', declined: 'Declined'};
-  const tone = row.error ? 'attention' : ['waiting_for_ok', 'submitting', 'ready'].includes(row.status) ? 'pending'
+  const tone = row.error || row.status === 'needs_review' ? 'attention' : ['waiting_for_ok', 'submitting', 'ready'].includes(row.status) ? 'pending'
     : ['failed', 'returned'].includes(row.status) ? 'attention' : ['cancelled', 'declined', 'quoted'].includes(row.status) ? 'off' : 'ok';
-  const canCancel = row.cancel_possible || ['quoted', 'waiting_for_ok', 'ready'].includes(row.status);
+  const canCancel = row.can_cancel ?? (row.cancel_possible || ['quoted', 'waiting_for_ok', 'ready'].includes(row.status));
+  const sender = row.requested_by || (row.acting_bot_id ? 'bot:' + row.acting_bot_id : '');
   return `<li class="lo-letter" data-lo-letter="${esc(row.id)}"><div class="lo-letter-top"><div>
-    <strong>${esc(row.recipient?.name || 'Recipient')}</strong><span class="muted">${esc([row.recipient?.city, row.recipient?.state].filter(Boolean).join(', '))}</span>
+    <strong>${row.redacted ? 'Private letter' : esc(row.recipient?.name || 'Recipient')}</strong>${row.redacted ? '' : `<span class="muted">${esc([row.recipient?.city, row.recipient?.state].filter(Boolean).join(', '))}</span>`}
     </div>${inboxesPill(tone, row.error === 'unconfigured' ? 'Coming soon' : labels[row.status] || row.status)}</div>
     <div class="lo-letter-meta"><time datetime="${esc(row.created_at)}">${esc(new Date(row.created_at).toLocaleDateString())}</time>
     <span>${esc(row.page_count ?? '—')} pages</span><span>${esc(String(row.mail_class).replaceAll('_', ' '))}</span>
-    <span>${esc(actorLabel(row.requested_by))}</span><strong>${lettersOutMoney(row.total_micros)}</strong></div>
-    <div class="lo-letter-actions">${lettersOutProof(row)}${row.status === 'waiting_for_ok' ? '<a href="#/foryou">Review</a>' : ''}
+    <span>${sender ? esc(actorLabel(sender)) : 'Person'}</span><strong>${lettersOutMoney(row.total_micros)}</strong>
+    ${['none', 'void', 'reversed'].includes(row.billing) ? '<span>Not charged</span>' : ''}</div>
+    ${row.status === 'needs_review' ? '<p class="muted">Submission needs an admin’s review. The total stays reserved until the outcome is confirmed.</p>' : ''}
+    <div class="lo-letter-actions">${row.redacted ? '' : lettersOutProof(row)}${!row.redacted && row.status === 'waiting_for_ok' ? '<a href="#/foryou">Review</a>' : ''}
       ${canCancel ? `<button class="ghost small" type="button" data-lo-cancel="${esc(row.id)}">Cancel</button>` : ''}
-      <details><summary>Details</summary><dl class="lo-facts"><dt>Recipient</dt><dd>${esc(lettersOutAddress(row.recipient))}</dd>
+      ${row.redacted ? '<p class="muted">Recipient and proof are private.</p>' : `<details><summary>Details</summary><dl class="lo-facts"><dt>Recipient</dt><dd>${esc(lettersOutAddress(row.recipient))}</dd>
       <dt>Return address</dt><dd>${esc(lettersOutAddress(row.return_address))}</dd><dt>Print</dt><dd>${row.color ? 'Color' : 'Black and white'} · ${row.duplex ? 'Duplex' : 'Single sided'}</dd>
       ${row.tracking?.length ? `<dt>Tracking</dt><dd>${row.tracking.map(t => `${esc(t.barcode)}${t.status ? ' · ' + esc(t.status) : ''}`).join('<br>')}</dd>` : ''}
-      ${row.error ? `<dt>Status</dt><dd>${esc(row.error.replaceAll('_', ' '))}</dd>` : ''}</dl></details></div></li>`;
+      ${row.error ? `<dt>Status</dt><dd>${esc(row.error.replaceAll('_', ' '))}</dd>` : ''}</dl></details>`}</div></li>`;
 }
 
 async function lettersOutAccess(host, ctx, config, grants) {
@@ -156,7 +160,7 @@ async function lettersOutSettingsRender(host, ctx) {
       `<label>${label}<input name="${name}" value="${esc(address[name] || '')}" maxlength="${name === 'state' ? 2 : name === 'postal_code' ? 10 : 100}"${name === 'state' ? ' pattern="[A-Z]{2}"' : name === 'postal_code' ? ' pattern="[0-9]{5}(-[0-9]{4})?"' : ''}></label>`).join('')}</div>
     <label class="lo-setting-row"><span>Sending</span><select name="mode">${lettersOutOptions(config.mode)}</select></label>
     <label class="lo-setting-row"><span>Monthly cap ($)</span><input name="cap" type="number" min="0" max="1000000" step="0.01" placeholder="No cap" value="${config.monthly_cap_micros == null ? '' : Number(config.monthly_cap_micros) / 1000000}"></label>
-    <div class="lo-setting-row"><span>Always ask</span><span>Certified mail<br>Courts and agencies<br>First letter to an address</span></div>
+    <div class="lo-setting-row"><span>Always ask</span><span>Certified mail<br>Courts and agencies<br>Letters we couldn’t fully read<br>First letter to an address</span></div>
     ${ctx.admin ? '<div class="lo-controls"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-lo-check>Check connection</button><a href="#/settings/inboxes/outbox/company">Who can use it</a></div>' : ''}</fieldset></form>`);
   if (!ctx.admin) return;
   const form = host.querySelector('form');
