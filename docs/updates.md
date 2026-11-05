@@ -191,7 +191,8 @@ the runner knows something will start it again and how the update restarts it th
 process itself runs as a transient `tico-update-<pid>-<random>` unit so the restart does not kill it. Each attempt gets
 a new name, so a retry cannot collide with a unit left from an earlier attempt. A lock in the runner's state folder
 keeps a second updater from running, even when the first is waiting for the checkout lock or its status is old.
-The runner fills in missing user-bus settings from `/run/user/<uid>` and passes them to the updater. If `systemd-run`
+The runner fills in missing user-bus settings from `/run/user/<uid>` and passes them to the updater. If only
+`DBUS_SESSION_BUS_ADDRESS` is set, it leaves `XDG_RUNTIME_DIR` unset so systemd uses that bus address. If `systemd-run`
 fails, its error is saved as one short line in Health, the computer's update status and `update.log`. A detached
 process is used only for a missing command or a bus connection failure, including systemd 257's user scope bus
 errors, and only if systemd confirms the runner's `KillMode` is `process` or `none`. The installed units use systemd's

@@ -280,6 +280,12 @@ fn update_log(path: &Path, message: &str) {
 
 /// A lingering user manager need not inherit a login shell's bus variables. Keep explicit settings intact.
 fn user_bus_env(env: &crate::env::Env, uid: u32) -> crate::env::Env {
+    if !env.contains_key("XDG_RUNTIME_DIR") {
+        if let Some(address) = env.get("DBUS_SESSION_BUS_ADDRESS").filter(|s| !s.is_empty()) {
+            // systemd uses an explicit session bus only when XDG_RUNTIME_DIR is unset.
+            return [("DBUS_SESSION_BUS_ADDRESS".into(), address.clone())].into();
+        }
+    }
     let mut bus = crate::env::Env::new();
     let runtime = env.get("XDG_RUNTIME_DIR").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("/run/user/{uid}"));
     let address = env.get("DBUS_SESSION_BUS_ADDRESS").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("unix:path={runtime}/bus"));
@@ -946,6 +952,24 @@ mod tests {
         let env = [("XDG_RUNTIME_DIR".into(), "/custom/runtime".into()), ("DBUS_SESSION_BUS_ADDRESS".into(), "unix:path=/custom/bus".into())].into();
         assert_eq!(user_bus_env(&env, 123), env);
         assert_eq!(user_bus_env(&crate::env::Env::new(), 123)["XDG_RUNTIME_DIR"], "/run/user/123");
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn a_custom_session_bus_does_not_add_a_runtime_directory() {
+        let f = checkout_follower();
+        let mut env = systemd_env();
+        let address = "unix:path=/custom/bus";
+        env.insert("DBUS_SESSION_BUS_ADDRESS".into(), address.into());
+        f.spawn_with("0.3.45", &env, |cmd| {
+            assert_eq!(cmd.get_program(), "systemd-run");
+            assert!(cmd.get_envs().any(|(name, value)| name == "DBUS_SESSION_BUS_ADDRESS" && value == Some(std::ffi::OsStr::new(address))));
+            assert!(!cmd.get_envs().any(|(name, _)| name == "XDG_RUNTIME_DIR"));
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert!(args.contains(&format!("--setenv=DBUS_SESSION_BUS_ADDRESS={address}")));
+            assert!(!args.iter().any(|a| a.starts_with("--setenv=XDG_RUNTIME_DIR=")));
+            command_output(0, "", "")
+        }, |_| panic!("systemd started the updater")).unwrap();
         std::fs::remove_dir_all(f.directory).unwrap();
     }
 
