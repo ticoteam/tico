@@ -346,10 +346,25 @@ pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>)
     let mut out = record.clone();
     let them = reference_words(record, streamed);
     if let Some(live) = streamed.get("them") {
+        let mut live: Vec<_> = live.iter().filter(|w| !w.speaker.is_empty()).collect();
+        live.sort_by_key(|w| w.start_ms);
+        let mut ends = Vec::with_capacity(live.len());
+        let mut end = 0;
+        for word in &live {
+            end = end.max(word.end_ms);
+            ends.push(end);
+        }
+        let overlapping = |word: &Word| {
+            let from = ends.partition_point(|end| *end <= word.start_ms);
+            let until = word.end_ms;
+            live[from..]
+                .iter()
+                .take_while(move |other| other.start_ms < until)
+        };
         for chunk in out.chunks.iter_mut().filter(|c| c.channel == "them") {
             let mut votes: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
-            for word in &chunk.words {
-                for other in live.iter().filter(|w| !w.speaker.is_empty()) {
+            for word in chunk.words.iter().filter(|w| !w.turn.is_empty()) {
+                for other in overlapping(word) {
                     let overlap = word
                         .end_ms
                         .min(other.end_ms)
@@ -365,6 +380,16 @@ pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>)
             }
             for word in &mut chunk.words {
                 if word.speaker.is_empty() {
+                    if word.turn.is_empty() {
+                        if let Some(other) = overlapping(word).max_by_key(|other| {
+                            word.end_ms
+                                .min(other.end_ms)
+                                .saturating_sub(word.start_ms.max(other.start_ms))
+                        }) {
+                            word.speaker = other.speaker.clone();
+                        }
+                        continue;
+                    }
                     if let Some((name, _)) = votes
                         .get(&word.turn)
                         .and_then(|v| v.iter().max_by_key(|(_, n)| *n))
@@ -383,8 +408,11 @@ pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>)
             chunk.status = "pending".into();
             chunk.words.clear();
             chunk.text.clear();
-        } else if !chunk.words.is_empty() {
+        } else {
             chunk.provider["echo_ready"] = serde_json::json!(true);
+            if chunk.words.is_empty() {
+                continue;
+            }
             chunk.words = without_echo(&chunk.words, &them);
             chunk.text = chunk
                 .words

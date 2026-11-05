@@ -648,12 +648,7 @@ fn background_delivery_failure_is_visible_in_the_library_and_meeting_without_los
     );
     app.open(&record.id).unwrap();
     let meeting = full_view(&mut app)["meeting"]["data"].clone();
-    assert_eq!(
-        meeting["sync_error"],
-        format!(
-            "Tico sync needs attention: {error}. Audio and transcript remain saved on this Mac."
-        )
-    );
+    assert_eq!(meeting["sync_error"], error);
     assert_eq!(meeting["live"], "Private in Tico");
     assert_eq!(meeting["place"], "Shared live · ");
     let stored = app.store.get(&record.id).unwrap();

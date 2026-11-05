@@ -230,7 +230,7 @@ fn partials_show_live_finals_replace_what_they_cover_and_the_key_stays_in_the_he
         (turns[0].text.as_str(), turns[0].start_ms),
         ("We chip", 60_100)
     );
-    assert_eq!(turns[0].speaker, "S2");
+    assert_eq!(turns[0].speaker, "Speaker 1");
     gate.send(()).unwrap();
     wait_for("the restated final", || {
         texts(&store, &record.id, "them")
@@ -634,5 +634,37 @@ fn transport_failures_never_expose_protocol_internals() {
     assert_eq!(
         crate::retry::notice(&message, 3, "Transcription is retrying"),
         "Transcription is retrying"
+    );
+}
+
+#[test]
+fn sparse_service_speakers_keep_first_seen_numbers_across_final_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Provisional voices").unwrap();
+    let (_, receiver) = mpsc::channel();
+    let mut worker = Worker {
+        store: store.clone(),
+        id: record.id.clone(),
+        channel: "them".into(),
+        plan: plan("ws://127.0.0.1:1/v1/stt"),
+        receiver,
+        queued: Arc::default(),
+        dropped: Arc::default(),
+        reconnects: 0,
+        voices: BTreeMap::new(),
+    };
+    for (at, raw) in [(1.0, 3), (3.0, 0), (5.0, 3)] {
+        let mut event = result(true, true, at, 0.5, &[("Hello", at, at + 0.3)]);
+        event["words"][0]["speaker"] = json!(raw);
+        worker.event(&event.to_string(), &[(0, 0.)]).unwrap();
+    }
+    let words = store.live_words(&record.id).unwrap();
+    assert_eq!(
+        words["them"]
+            .iter()
+            .map(|w| w.speaker.as_str())
+            .collect::<Vec<_>>(),
+        ["Speaker 1", "Speaker 2", "Speaker 1"]
     );
 }

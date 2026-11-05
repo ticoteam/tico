@@ -5,7 +5,14 @@ pub fn transport(text: &str) -> bool {
     let text = text.to_lowercase();
     [
         "unexpected eof",
-        "connection",
+        "connection:",
+        "from connection",
+        "connection reset",
+        "connection refused",
+        "connection aborted",
+        "connection closed",
+        "closed connection",
+        "connect error",
         "error sending request",
         "error reading a body",
         "request or response body error",
