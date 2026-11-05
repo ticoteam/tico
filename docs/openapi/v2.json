@@ -59601,6 +59601,10 @@
             "type": "string",
             "description": "Display name of recipient_id"
           },
+          "sender_can_approve_send": {
+            "type": "boolean",
+            "description": "On GET /messages/{mid}: whether the human sender currently may manage the bot addressee's mail sending (Auth.bot_manager); false for bot senders or non-bot addressees. This checks authority only, not send intent or the draft's contents"
+          },
           "body_raw": {
             "type": "string",
             "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"

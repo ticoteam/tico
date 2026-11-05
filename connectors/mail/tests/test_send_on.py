@@ -81,6 +81,55 @@ class Chain(Stage2):
         self.assertTrue(pl._hub_message_check(ORDER, "mira")["ok"])
         self.assertFalse(pl._hub_message_check(ORDER, "inbox")["ok"])     # the label of another bot
 
+    def test_tico_authorizes_the_owner_admin_or_bot_manager_without_a_local_owner(self):
+        pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": False, "forward_to": []}
+        with mock.patch.object(pl, "OWNER", "owner"):
+            for person in ("ana", "ben", "cara"):      # owner, admin, and this bot's manager, as checked by Tico
+                with self.subTest(person=person):
+                    row = dict(owner_order(), sender_id=f"human:{person}", sender_can_approve_send=True)
+                    hub(row)
+                    approval = pl.approval_check(ORDER, [STRANGER], slug="inbox")
+                    self.assertTrue(approval["ok"] and approval["full"], approval)
+                    self.assertEqual(approval["owner_instruction"], {
+                        "source": "Tico message", "id": ORDER, "who": f"human:{person}", "text": row["body"]})
+                    self.assertIn(f"human:{person} told bot:inbox", approval["detail"])
+                    self.assertTrue(self.decide([STRANGER], approval=ORDER).allowed)
+
+    def test_a_plain_member_cannot_approve_a_send_by_messaging_the_bot(self):
+        with mock.patch.object(pl, "OWNER", "owner"):
+            hub(dict(owner_order(), sender_id="human:bob", sender_can_approve_send=False))
+            approval = pl.approval_check(ORDER, [STRANGER], slug="inbox")
+        self.assertFalse(approval["ok"], approval)
+        self.assertIn("from human:bob, who is not permitted to approve sends", approval["detail"])
+        self.assertNotIn("owner_instruction", approval)
+
+    def test_a_bot_sender_cannot_supply_a_send_instruction(self):
+        hub(dict(owner_order(), sender_id="bot:owner", sender_can_approve_send=True))
+        with mock.patch.object(pl, "OWNER", "owner"):
+            approval = pl.approval_check(ORDER, [STRANGER], slug="inbox")
+        self.assertFalse(approval["ok"], approval)
+        self.assertIn("only a person's message", approval["detail"])
+        self.assertNotIn("owner_instruction", approval)
+
+    def test_an_older_server_falls_back_to_the_configured_owner_only(self):
+        with mock.patch.object(pl, "OWNER", "ana"):
+            hub(dict(owner_order(), sender_id="human:ana"))
+            self.assertTrue(pl.approval_check(ORDER, [STRANGER], slug="inbox")["ok"])
+            hub(dict(owner_order(), sender_id="human:bob"))
+            self.assertFalse(pl.approval_check(ORDER, [STRANGER], slug="inbox")["ok"])
+            # A current server's refusal wins after the person loses their authority.
+            hub(dict(owner_order(), sender_id="human:ana", sender_can_approve_send=False))
+            self.assertFalse(pl.approval_check(ORDER, [STRANGER], slug="inbox")["ok"])
+
+    def test_server_authority_still_needs_send_intent_addressed_to_this_bot(self):
+        for change in ({"recipient_id": "bot:influencer"}, {"body": "Thanks for your help."}):
+            with self.subTest(change=change):
+                hub(dict(owner_order(), sender_id="human:ana", sender_can_approve_send=True, **change))
+                with mock.patch.object(pl, "OWNER", "owner"):
+                    approval = pl.approval_check(ORDER, [STRANGER], slug="inbox")
+                self.assertFalse(approval["ok"], approval)
+                self.assertNotIn("owner_instruction", approval)
+
     def test_the_sender_of_the_thread_being_answered_goes_without_approval(self):
         d = self.decide([AVA], thread_id=THREAD, thread_senders=[AVA])
         self.assertTrue(d.allowed, d)

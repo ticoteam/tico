@@ -712,21 +712,28 @@ def _files_text(files):
 
 
 def _hub_message_check(n, slug):
-    """The owner told this employee to send. That instruction is the per-message yes,
-    including the files attached to that send.
+    """A person who manages this bot told it to send: the per-message yes, including its files.
 
-    The September 15 legal send failed because the owner's 'message the case manager' lived in
-    Tico chat and `--approval-issue` only accepted a GitHub Issue. The second reviewer then
-    refused on the Role line 'never sends'. An owner instruction to this bot lifts both.
+    Tico checks the sender against the same rule as changing the bot's mail sending. Older servers
+    omit that answer, so the locally configured owner remains a fallback. The verified instruction
+    reaches the reviewer too, so it can judge the send against what the person authorized.
     """
     out = _blank_approval(n)
     row = _hub_row("messages", n)
     if not row:
         out["detail"] = f"Tico has no approval or message {n} this employee may read"
         return out
-    if row.get("sender_id") != f"human:{OWNER}":
-        out["detail"] = (f"Tico message {n} is from {row.get('sender_id') or 'nobody'}, "
-                         f"not {OWNER}")
+    sender = str(row.get("sender_id") or "")
+    if not sender.startswith("human:"):
+        out["detail"] = (f"Tico message {n} is from {sender or 'nobody'}; "
+                         "only a person's message can approve a send")
+        return out
+    can_approve = row.get("sender_can_approve_send") is True
+    if "sender_can_approve_send" not in row:
+        can_approve = sender == f"human:{OWNER}"
+    if not can_approve:
+        out["detail"] = (f"Tico message {n} is from {sender}, who is not permitted to approve sends "
+                         "for this bot (only the company owner or a person who manages the bot)")
         return out
     if slug and row.get("recipient_id") not in {f"bot:{name}" for name in _bot_names(slug)}:
         out["detail"] = (f"Tico message {n} was sent to {row.get('recipient_id') or 'nobody'}, "
@@ -737,7 +744,7 @@ def _hub_message_check(n, slug):
                          "(no send/message/email/reply)")
         return out
     out["ok"] = out["full"] = True
-    out["detail"] = (f"Tico message {n}: {OWNER} told "
+    out["detail"] = (f"Tico message {n}: {sender} told "
                      + (f"bot:{slug}" if slug else "this employee")
                      + " to send: per-message approval")
     out["owner_instruction"] = {"source": "Tico message", "id": n, "who": row["sender_id"],
