@@ -1199,9 +1199,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
         (json!(4), json!("and fiends"))
     );
     assert_eq!(chunks.as_array().unwrap().len(), 2);
-    // The synthetic source supplies a late final: retain its capture time rather than clamping.
-    // Real dual-input capture uses the shared frontier exercised below; a word absent from the
-    // finished transcript still goes provisionally.
+    // A late final retains its capture time locally and uses the shared delivery time frontier.
     streamed(&store, id, "them", 2_800, "late", "S2");
     streamed(&store, id, "me", 6_000, "uh", "");
     let (result, requests) = pass(vec![Some(json!({"accepted":[5,6]}))]);
@@ -1209,7 +1207,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":5,"speaker":"Speaker 2","start_ms":2800,"end_ms":3050,"text":"late"},
+            {"seq":5,"speaker":"Speaker 2","start_ms":3000,"end_ms":3050,"text":"late"},
             {"seq":6,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":"uh"},
         ])
     );
@@ -4740,6 +4738,50 @@ fn any_chunk_422_reconciles_the_outbox_and_later_speech_still_delivers() {
     }
 }
 
+#[test]
+fn a_refused_nonempty_correction_cannot_block_later_live_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Refused correction");
+    streamed(&store, &record.id, "me", 1000, "Helo", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    finished_chunk(
+        &store,
+        &record.id,
+        0,
+        2000,
+        vec![word(1000, 1250, "Hello", "")],
+    );
+    let (tico, _, worker) = server(vec![Some(
+        json!({"status":422,"error":{"code":"validation"}}),
+    )]);
+    tico.push_live(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    finished_chunk(
+        &store,
+        &record.id,
+        3000,
+        4000,
+        vec![word(3500, 3750, "Next", "")],
+    );
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+    tico.push_live(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap()[0].1["chunks"][0]["text"], "Next");
+    let refused: i64 = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM live_corrections WHERE state=2",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(refused, 1);
+}
+
 /// Owns only the Python process this test starts, including when an assertion fails.
 struct BackendBridge(std::process::Child);
 impl Drop for BackendBridge {
@@ -4780,7 +4822,7 @@ fn backend_bridge() -> (Tico, BackendBridge) {
 #[test]
 #[ignore = "requires Python backend dependencies; run on RunsOn with --ignored"]
 fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
-    for release in ["completion", "timeout", "legacy"] {
+    for release in ["completion", "timeout", "legacy", "validation"] {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         let (id, pending) = stopped_pending_chunk(&store, crate::audio::Channel::Microphone);
@@ -4807,11 +4849,11 @@ fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
                 json!({}),
             )
             .unwrap();
-        if release == "legacy" {
+        if ["legacy", "validation"].contains(&release) {
             // An old persisted outbox can still contain the reviewer's invalid sequence.
             store.db().unwrap().execute(
                 "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json) VALUES(?,?,?,?,?)",
-                rusqlite::params![id,"synthetic",2,pending.id,json!({"seq":2,"speaker":"Me","start_ms":1000,"end_ms":1200,"text":"Earlier"}).to_string()],
+                rusqlite::params![id,"synthetic",2,pending.id,json!({"seq":2,"speaker":"Me","start_ms":1000,"end_ms":if release == "validation" {0} else {1200},"text":"Earlier"}).to_string()],
             ).unwrap();
         }
         tico.push_live(&store, &id).unwrap();
