@@ -704,7 +704,8 @@ def create_app(settings=None):
         kind = response.headers.get("content-type", "").split(";", 1)[0]
         if kind == "text/event-stream":
             raise Problem("forbidden", "Scoped turns do not receive live events", 403)
-        if (kind != "application/json" and not kind.endswith("+json")
+        plain = kind == "text/plain"
+        if (kind != "application/json" and not kind.endswith("+json") and not plain
                 or request.method == "HEAD" or response.status_code in (204, 304)
                 or "content-disposition" in response.headers or "x-content-sha256" in response.headers):
             return response
@@ -714,7 +715,9 @@ def create_app(settings=None):
 
         def work():
             with store.read() as c:
-                return fast_json.dumps(turn_scope.project(c, turn_scope.scope(c, who), fast_json.loads(body), auth=auth))
+                payload = body.decode("utf-8") if plain else fast_json.loads(body)
+                shown = turn_scope.project(c, turn_scope.scope(c, who), payload, auth=auth)
+                return (shown or "").encode("utf-8") if plain else fast_json.dumps(shown)
         projected = await asyncio.to_thread(work)
         answer = Response(projected, status_code=response.status_code, background=response.background)
         # Preserve repeated headers such as Set-Cookie.
