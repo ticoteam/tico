@@ -1562,6 +1562,7 @@ def create_app(settings=None):
         return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
 
     def send(c, who, body):
+        body = routed_message(c, who, body)
         body.conversation_id = named_destination(c, who, body)
         in_assistant_room = False
         if str(body.to).lower() == "assistant":
@@ -3265,11 +3266,21 @@ def create_app(settings=None):
         return ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
                                     kind="question" if tref else "loose", asked=(body.refs or {}).get("questions"))
 
+    def routed_message(c, who, body):
+        body = body.model_copy(deep=True)
+        if body.kind == "ask":
+            from . import ask_routing
+            body.to, body.refs = ask_routing.resolve(c, who.actor, body.to, body.refs,
+                                                    body.conversation_id, body.in_reply_to)
+        return body
+
     def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
         anyway replays it: the org rule check's verdict, then ask ingest's, then the send. A hold names the audience the
         check read, so the audience is read again here, inside the write: a caller who lost access gets 404, and an
         audience that moved since the check is checked again (409)."""
+        body = routed_message(c, who, body)
+        body.conversation_id = named_destination(c, who, body)
         audience = rule_message_audience(c, who, body) if rc is not None else None
         replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
         rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
@@ -3299,11 +3310,10 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
-        if body.kind == "ask":
-            from . import ask_routing
-            with store.read() as c:
-                body.to, body.refs = ask_routing.resolve(c, who.actor, body.to, body.refs,
-                                                        body.conversation_id, body.in_reply_to)
+        if retry:
+            return None, None
+        with store.read() as c:
+            body = routed_message(c, who, body)
         if body.conversation_id:
             # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
             # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's

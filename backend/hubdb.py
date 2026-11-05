@@ -5703,8 +5703,10 @@ def task_ask_recipient(conn, actor, row, ask, *, route_system=True):
     if route_system:
         from . import ask_routing
         target, _ = ask_routing.resolve(conn, actor, target, {"task": row["id"]}, row["conversation_id"])
-    if task_private(conn, row) and target not in (row["owner_id"], row["requester_id"]):
-        refuse(conn, actor, "private", "Only the requester and assignee can receive private task questions")
+    if task_private(conn, row) and (is_human(target) or is_bot(target)):
+        from .auth import actor_reads_task
+        if not actor_reads_task(conn, target, row):
+            refuse(conn, actor, "private", "Only someone who can read the task can receive its questions")
     return target
 
 

@@ -196,3 +196,19 @@ def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_
                           "repository": {"full_name": "acme/other"}})
     with store.read() as c:
         assert H.approval(c, older["id"])["decision"] == "withdrawn"
+
+
+def test_only_the_docs_task_tells_its_reader_to_skip_private_tickets(api):
+    dev = _team(api)
+    visible = _ticket(api, dev, "Visual replies", 412)
+    secret = _ticket(api, dev, "Acme payroll export", 413)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+        tickets = RF.pending(c)
+        release = RF.request(c, "human:ana", source="release_now")
+        body = H.task(c, release["task"])["body"]
+        assert "1 private ticket" in body and "Skip them" not in body
+        assert secret["title"] not in body and "/413" not in body
+        assert visible["title"] in body and "Cut one release for them" in body
+        docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
+        assert "1 private ticket. Skip them: their owners handle any docs." in H.task(c, docs)["body"]

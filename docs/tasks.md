@@ -598,9 +598,11 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 ### When nobody answers a bot's ask
 
 `keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
-asker's first reachable person or active bot up its manager chain, else the company owner. Nearby reach and
-private-task rules still apply. The send says who received it. Existing open system asks are re-sent once with
-their text, sender and task kept; the old ask links to the new one and the hold names the new recipient.
+asker's first reachable person who can sign in or active bot up its manager chain, else the company owner.
+The recipient must be able to read the task and every source, including bot activity; Nearby reach still applies.
+The send says who received it. Existing open system asks are re-sent once with
+their text, sender, attachments and file reviews kept in the task conversation; the old ask links to the new one
+and the hold names the new recipient. A failed repair leaves that ask for Health and continues with the others.
 Health names a task waiting on a recipient who cannot read or answer.
 
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"

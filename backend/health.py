@@ -1455,18 +1455,31 @@ SILENT_WAIT_HOURS = 1       # a task set waiting on a person this long with noth
 
 
 def unreadable_waits(c):
-    """A system or missing recipient cannot answer a hold, even when its ask exists."""
+    """Name held questions whose recipient cannot sign in, run, or read every task source."""
+    from . import ask_routing
     fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
-    return [dict(r) for r in c.execute(
-        f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient FROM tasks t "
+    rows = c.execute(
+        f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
         "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE {H.MESSAGE_TASK_SQL}=t.id AND t.status='waiting' "
         f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-        f"UNION SELECT {fields},t.waiting_on AS recipient FROM tasks t "
+        f"UNION SELECT {fields},t.waiting_on AS recipient,NULL AS message_id FROM tasks t "
         "WHERE t.status='waiting' AND t.waiting_on IS NOT NULL) w "
-        "WHERE NOT EXISTS (SELECT 1 FROM humans h WHERE 'human:'||h.id=w.recipient) "
-        "AND NOT EXISTS (SELECT 1 FROM bots b WHERE 'bot:'||b.id=w.recipient AND b.state<>'archived') "
-        "ORDER BY w.id LIMIT 20")]
+        "ORDER BY w.id")
+    found, seen = [], set()
+    for r in rows:
+        row = dict(r)
+        key = row["id"], row["recipient"]
+        if key in seen:
+            continue
+        source = H.message(c, row.pop("message_id"))
+        if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source):
+            continue
+        seen.add(key)
+        found.append(row)
+        if len(found) == 20:
+            break
+    return found
 
 
 def silent_waits(c, at=None):

@@ -14,7 +14,7 @@ from clients import hubtools
 def system_task(c, manager="human:ben", private=False):
     c.execute("UPDATE bot_config SET reports_to=?,team=NULL WHERE bot='ops'", (manager,))
     return H.task_create(c, H.KEEPER, "Document the release", "Write the public changes.", "bot:ops",
-                         private=private, lint=False)
+                         private=private, lint=False, deduplicate=False)
 
 
 @pytest.mark.parametrize("manager,recipient", [("human:ben", "human:ben"), ("cpo", "bot:cpo"), (None, "human:ana")])
@@ -155,3 +155,188 @@ def test_health_names_a_system_hold_even_with_a_saved_ask_and_hides_private_text
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task["id"],))
     hidden = check("ben-test")
     assert "Document the release" not in json.dumps(hidden)
+
+
+@pytest.mark.parametrize("manager", ["human:cara", "bot:cpo"])
+@pytest.mark.parametrize("source", ["primary", "additional", "reply"])
+def test_routing_checks_every_sources_activity_permissions_for_people_and_bots(api, monkeypatch, manager, source):
+    from backend.auth import actor_reads_task
+    from backend.tests.test_api import restrict
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, manager)
+        restricted = H.task_create(c, "human:ana", "Check the ledger", "Read the figures.", "bot:inbox", lint=False)
+        restrict(c, "inbox", see={"everyone": True}, read={"bots": ["ops"]}, write={"people": ["ana"]})
+        assert actor_reads_task(c, "bot:ops", restricted)
+        assert not actor_reads_task(c, manager, restricted)
+        refs = {"task": restricted["id"]} if source == "primary" else {"task": [task["id"], restricted["id"]]}
+        reply = None
+        if source == "reply":
+            parent = H._write_message(c, "human:ana", "bot:ops", "Read these figures.",
+                                      H.conversation(c, task["conversation_id"]), "say", {"task": restricted["id"]}, None, None)
+            refs, reply = {"task": task["id"]}, parent["id"]
+        msg = H.say(c, "bot:ops", H.KEEPER, "Should I publish the figures?", kind="ask", refs=refs, in_reply_to=reply)
+        assert msg["recipient_id"] == "human:ana"
+
+
+@pytest.mark.parametrize("standing", [{"sign_in": False}, {"hidden": True}])
+def test_people_who_cannot_sign_in_are_skipped(api, monkeypatch, standing):
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara")
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in roster["people"] if p["id"] == "cara").update(standing)
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+        msg = H.task_ask(c, "bot:ops", task["id"], "Should this cover the beta?")
+        assert msg["recipient_id"] == "human:ana"
+
+
+@pytest.mark.parametrize("kind,explicit", [("plain", False), ("comment", False), ("comment", True), ("file", False), ("file", True)])
+def test_private_system_task_questions_reach_the_inheriting_manager(api, kind, explicit):
+    from backend.tests.test_task_review import ask
+    token = bot_token(api)
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara", private=True)
+    question = "Should this cover the beta?"
+    if kind == "plain":
+        result = post(api, f"tasks/{task['id']}/ask", {"text": question}, token=token)
+    elif kind == "comment":
+        result = post(api, f"tasks/{task['id']}/comments", {"text": question, "ask": ask("keeper" if explicit else None)},
+                      token=token)["comment"]
+    else:
+        post(api, f"tasks/{task['id']}/files", {"name": "release.md", "text": "# Release", "ask": ask("keeper" if explicit else None)},
+             token=token)
+        with api.app.state.store.read() as c:
+            result, = H.open_task_asks(c, H.task(c, task["id"]))
+    assert result["recipient_id"] == "human:cara"
+
+
+@pytest.mark.parametrize("destination", ["loose", "task"])
+def test_saved_message_retry_keeps_the_original_recipient_and_receipt(api, monkeypatch, destination):
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    token = bot_token(api)
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara")
+    body = {"to": "keeper", "kind": "ask", "text": "Should this cover the beta?"}
+    if destination == "task":
+        body.update(conversation_id=task["conversation_id"], refs={"task": task["id"]})
+    first = post(api, "messages", body, token=token, key="system-question")
+    assert first["recipient_id"] == "human:cara"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
+    assert post(api, "messages", body, token=token, key="system-question") == first
+
+
+def run_migration(c):
+    import importlib.util
+    migration = next(m for m in migrations.files() if m.version.endswith("_resend_system_asks"))
+    spec = importlib.util.spec_from_file_location("resend_system_asks", migration.path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.up(c)
+
+
+def test_migrated_direct_task_ask_stays_in_the_managers_decision_queue(api):
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara")
+        old = legacy_ask(c, task, direct=True)
+        assert H.task(c, task["id"])["waiting_on"] is None
+        run_migration(c)
+        msg, = H.open_task_asks(c, H.task(c, task["id"]))
+        assert msg["conversation_id"] == task["conversation_id"]
+        assert msg["refs"]["resent_from"] == old["id"]
+        assert task["id"] in [t["id"] for t in H.tasks_asked_of(c, "human:cara")]
+    needs = api.get("/api/v2/needs-you", headers=headers("cara-test")).json()
+    assert task["id"] in [t["id"] for t in needs["items"]]
+    post(api, f"tasks/{task['id']}/comments", {"text": "Yes, cover it."}, token="cara-test")
+    with api.app.state.store.read() as c:
+        assert not H.open_task_asks(c, H.task(c, task["id"]))
+        assert H.task(c, task["id"])["status"] == "open"
+
+
+def test_quarantined_senders_dead_letter_cannot_abort_the_migration(api):
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara")
+        room = H._pair_conversation(c, "bot:ops", H.KEEPER, "ask")
+        loose = H._write_message(c, "bot:ops", "human:cara", "Should this cover the beta?", room, "ask", {}, None, None)
+        c.execute("UPDATE messages SET recipient_id='keeper',created_at=? WHERE id=?", (H.shift(H.now(), days=-20), loose["id"]))
+        old = legacy_ask(c, task)
+        c.execute("UPDATE bots SET state='quarantined' WHERE id='ops'")
+        run_migration(c)
+        assert H.message(c, loose["id"])["superseded_at"] is None
+        assert H.message(c, old["id"])["superseded_at"]
+        assert H.open_task_asks(c, H.task(c, task["id"]))[0]["recipient_id"] == "human:cara"
+
+
+@pytest.mark.parametrize("failure", [H.Refused("quarantined", "Sender is quarantined"), RuntimeError("broken row")])
+def test_each_failed_repair_rolls_back_and_leaves_the_hold_for_health(api, monkeypatch, failure):
+    with api.app.state.store.transaction() as c:
+        first = system_task(c)
+        old = legacy_ask(c, first)
+        second = system_task(c)
+        good = legacy_ask(c, second)
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-20), old["id"]))
+        carry = ask_routing._carry_links
+        def fail_after_writing(c, before, after):
+            carry(c, before, after)
+            if before == old["id"]:
+                raise failure
+        monkeypatch.setattr(ask_routing, "_carry_links", fail_after_writing)
+        run_migration(c)
+        assert not H.message(c, old["id"])["superseded_at"]
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.resent_from')=?", (old["id"],)).fetchone()
+        assert H.message(c, good["id"])["superseded_at"]
+        assert {row["id"] for row in health.unreadable_waits(c)} == {first["id"]}
+
+
+def test_migrated_file_review_answers_the_replacement_and_keeps_attachments(api):
+    from backend.tests.test_task_review import ask
+    token = bot_token(api)
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara", private=True)
+    made = post(api, f"tasks/{task['id']}/files", {"name": "release.md", "text": "# Release"}, token=token)
+    with api.app.state.store.transaction() as c:
+        old = legacy_ask(c, task)
+        refs = {**old["refs"], **ask(), "target": {"file": made["file_id"], "version": 1}}
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), old["id"]))
+        c.execute("INSERT INTO task_file_reviews(file_id,version,ask_message_id,comment_id) VALUES(?,1,?,?) "
+                  "ON CONFLICT(file_id,version) DO UPDATE SET ask_message_id=excluded.ask_message_id,comment_id=excluded.comment_id",
+                  (made["file_id"], old["id"], old["id"]))
+        blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=1", (made["file_id"],)).fetchone()[0]
+        c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (old["id"], blob))
+        run_migration(c)
+        msg, = H.open_task_asks(c, H.task(c, task["id"]))
+        links = c.execute("SELECT ask_message_id,comment_id FROM task_file_reviews WHERE file_id=?", (made["file_id"],)).fetchone()
+        assert tuple(links) == (msg["id"], msg["id"])
+        assert c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (msg["id"],)).fetchone()[0] == blob
+    answer = post(api, f"tasks/{task['id']}/answers", {"target": {"file": made["file_id"], "version": 1},
+                                                     "answers": {"verdict": ["Approve"]}}, token="cara-test")
+    with api.app.state.store.read() as c:
+        assert H.message(c, answer["comment"]["id"])["in_reply_to"] == msg["id"]
+        assert not H.open_task_asks(c, H.task(c, task["id"]))
+        assert H.task(c, task["id"])["status"] == "open"
+
+
+@pytest.mark.parametrize("source", ["private_task", "activity", "additional"])
+def test_health_catches_recipients_who_lose_task_or_source_access(api, source):
+    from backend.tests.test_api import restrict
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "human:cara", private=source == "private_task")
+        refs = {"task": task["id"]}
+        restricted = task
+        if source == "additional":
+            restricted = H.task_create(c, "human:ana", "Check the ledger", "Read the figures.", "bot:inbox", lint=False)
+            restrict(c, "inbox", everyone=True)
+            refs["sources"] = [restricted["id"]]
+        msg = H.say(c, "bot:ops", H.KEEPER, "Should this cover the beta?", conversation_id=task["conversation_id"], kind="ask", refs=refs)
+        H.task_update(c, "bot:ops", task["id"], status="waiting")
+        assert not health.unreadable_waits(c)
+        if source == "private_task":
+            c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
+        else:
+            restrict(c, H.actor_id(restricted["owner_id"]), people=["ana"], bots=["ops"])
+            if source == "activity":
+                c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
+        found, = health.unreadable_waits(c)
+        assert (found["id"], found["recipient"]) == (task["id"], "human:cara")
+        assert H.message(c, msg["id"])["recipient_id"] == "human:cara"

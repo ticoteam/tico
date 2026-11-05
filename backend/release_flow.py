@@ -170,7 +170,7 @@ def _line(t):
     return f"- {_name(t)} (owner {t['owner_id']}){' ' + pr if pr else ''}"
 
 
-def _listing(c, tickets, more_where):
+def _listing(c, tickets, more_where, *, docs=False):
     """The ticket lines a team-visible task or routine may carry: a private ticket is counted, never named (its title,
     owner and pull request stay with its own audience)."""
     open_ = [t for t in tickets if not H.task_private(c, t)]
@@ -180,7 +180,8 @@ def _listing(c, tickets, more_where):
         lines.append(f"...and {len(open_) - len(shown)} more {more_where}.")
     if len(tickets) > len(open_):
         hidden = len(tickets) - len(open_)
-        lines.append(f"...and {hidden} private ticket{'s' if hidden != 1 else ''}. Skip them: their owners handle any docs.")
+        lines.append(f"...and {hidden} private ticket{'s' if hidden != 1 else ''}." +
+                     (" Skip them: their owners handle any docs." if docs else " Not named here."))
     return "\n".join(lines)
 
 
@@ -316,7 +317,7 @@ def _docs_task(c, writer, tag, tickets, url):
     title = f"{prefix} {len(tickets)} ticket{'s' if len(tickets) != 1 else ''}"
     body = (f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
             "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
-            "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}"))
+            "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}", docs=True))
     return H.task_create(c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag,
                          wake_refs={"wake": EVENT})["id"]
 

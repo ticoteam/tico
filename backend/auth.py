@@ -1070,22 +1070,30 @@ class Auth:
         return row
 
 
-def bot_reads_task(c, bot, row):
-    """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+def actor_reads_task(c, actor, row):
+    """Whether an actor may read this task under every rule in Auth.task_row, without server sign-in settings.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
+    from . import access, teammate_access
     policy = Auth.__new__(Auth)
     opened = not c.in_transaction
     if opened:
-        c.execute("SAVEPOINT bot_reads_task")
+        c.execute("SAVEPOINT actor_reads_task")
     try:
+        policy.bot_admins = set(access.owner_and_admin_emails(c))
         if opened and row:
             row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
-        policy.task_row(c, Identity(bot, "bot"), row)
+        who = teammate_access._viewer_for(c, actor)
+        if who is None:
+            return False
+        policy.task_row(c, who, row)
     except Problem:
         return False
     finally:
         if opened:
-            c.execute("RELEASE bot_reads_task")
+            c.execute("RELEASE actor_reads_task")
     return True
+
+
+def bot_reads_task(c, bot, row):
+    return actor_reads_task(c, bot, row)
