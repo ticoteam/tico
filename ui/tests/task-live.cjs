@@ -75,7 +75,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await a.waitForFunction(() => !taskModal().taskLive.draft.error && !taskModal().taskLive.draft.flight);
    assert.equal(task.title, 'Final title'); assert.equal(task.body, 'Sam changed only details');
    assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1).patch).sort(), ['title', 'version']);
-   await a.getByText('Ana edited · just now', {exact: true}).waitFor();
+   await a.getByText('You edited · just now', {exact: true}).waitFor();
    // A slow successful save coalesces the later title, still sharing the dialog's property queue.
    const slow = gate(); hold = slow;
    await title.fill('Slow title');
@@ -111,6 +111,22 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await a.locator('[data-task-edit-retry]').evaluate(el => el.click());
    await a.waitForFunction(() => !taskModal().taskLive.draft.error && !taskModal().taskLive.draft.flight);
    assert.equal(task.body, 'Remote details now');
+   const bodyWrite = gate(); hold = bodyWrite;
+   await details.fill('Only my details changed');
+   await a.waitForFunction(() => !!taskModal().taskLive.draft.flight);
+   await title.evaluate(el => { el.focus(); getSelection().setBaseAndExtent(el.firstChild, 2, el.firstChild, 5); });
+   task.title = 'Remote title now'; task.version++;
+   await update();
+   await a.waitForFunction(() => taskModal().taskLive.draft.base.title === 'Remote title now');
+   assert.equal(await title.textContent(), 'Keep these words');
+   bodyWrite.resolve();
+   await a.locator('[data-task-edit-current]:not([hidden])').waitFor();
+   assert.equal(await title.textContent(), 'Remote title now');
+   assert.deepEqual(await caret(), [true, 2, 5], '409 adopts the untouched title without moving its selection');
+   await a.locator('[data-task-edit-retry]').evaluate(el => el.click());
+   await a.waitForFunction(() => !taskModal().taskLive.draft.error && !taskModal().taskLive.draft.flight);
+   assert.equal(task.title, 'Remote title now'); assert.equal(task.body, 'Only my details changed');
+   assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1).patch).sort(), ['body', 'version']);
    // Presence uses the scoped subscription and per-window leave; a stale stream cannot close a new task.
    await emit({topic: 'presence', body: {place: 'task:' + task.id}});
    await a.getByText('Sam is here', {exact: true}).waitFor();

@@ -48,7 +48,7 @@ function taskLiveFocusRestore(d) {
 }
 function taskLiveHTML(t, original, waitText) {
   const may = taskPropRights(t).edit;
-  const preview = original ? `<div class="tdesc md" data-task-body-preview>${safeMd(original)}</div>` : '<p class="muted tdesc" data-task-body-preview>No details.</p>';
+  const preview = `<div class="tdesc md" data-task-body-preview>${original ? safeMd(original) : '<p class="muted">No details.</p>'}</div>`;
   const body = `<section data-task-edit-body>${may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button><textarea data-task-field="body" aria-label="Details" hidden></textarea>' : ''}${preview}</section>`;
   return original && waitText ? `<details class="task-orig"><summary>Original request</summary>${body}</details>` : body;
 }
@@ -63,7 +63,11 @@ function taskLiveBind(d, task) {
   // These nodes move into each redraw. No focused editor is destroyed and recreated by an invalidation or save.
   for (const selector of ['.tmodal-title', '[data-task-edit-body]']) {
     const slot = $(selector, d), kept = live.nodes[selector];
-    if (slot && kept && slot !== kept && !!slot.querySelector('textarea') === !!kept.querySelector('textarea')) slot.replaceWith(kept);
+    if (slot && kept && slot !== kept && !!slot.querySelector('textarea') === !!kept.querySelector('textarea')) {
+      const fold = slot.closest('details.task-orig'), prior = kept.closest('details.task-orig');
+      if (fold && prior) fold.open = prior.open;
+      slot.replaceWith(kept);
+    }
     else if (slot) live.nodes[selector] = slot;
   }
   const may = taskPropRights(task).edit;
@@ -97,10 +101,16 @@ function taskLivePaint(d, live) {
       const selection = field === document.activeElement ? [field.selectionStart, field.selectionEnd, field.selectionDirection] : null;
       field.value = value;
       if (selection) field.setSelectionRange(...selection);
-    } else if (field.textContent !== value) field.textContent = value;
+    } else if (field.textContent !== value) {
+      const focused = field === document.activeElement;
+      if (focused) taskLiveFocusKeep(d);
+      field.textContent = value;
+      if (focused) taskLiveFocusRestore(d);
+    }
   }
   const preview = $('[data-task-body-preview]', d);
-  if (preview) preview.innerHTML = shown.body ? safeMd(shown.body) : 'No details.';
+  const body = taskBody(shown), original = body.trim() === String(shown.title || '').trim() ? '' : body;
+  if (preview) preview.innerHTML = original ? safeMd(original) : '<p class="muted">No details.</p>';
   const error = $('[data-task-edit-error]', d);
   if (error) { error.hidden = !draft.error; error.title = draft.error || ''; }
   const conflict = $('[data-task-edit-current]', d);
