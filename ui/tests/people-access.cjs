@@ -144,7 +144,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
         const box = r.getBoundingClientRect();
         return [...r.querySelectorAll(':scope > *, .people-more')].filter(el => el.offsetParent)
           .filter(el => { const b = el.getBoundingClientRect(); return b.right > box.right + 0.5 || b.left < box.left - 0.5 || el.scrollWidth > el.clientWidth + 1; })
-          .map(el => el.className);
+          .map(el => { const b = el.getBoundingClientRect(); return `${el.className} ${Math.round(b.left)}-${Math.round(b.right)} in ${Math.round(box.left)}-${Math.round(box.right)} scroll ${el.scrollWidth}/${el.clientWidth}`; });
       }), [], `${id}'s cells fit at ${width}px`);
       if (shots) for (const theme of ['light', 'dark']) {
         await page.evaluate(v => window.ticoTheme?.set(v), theme);
