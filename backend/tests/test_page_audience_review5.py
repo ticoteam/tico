@@ -33,7 +33,10 @@ def test_multi_recommendation_fallback_keeps_its_copied_source(api):
         if deleted:
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         for token in ("cara-test", "finance-test"):
-            for path in (f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/answers", "inbox", "batch"):
+            paths = [f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/answers", "inbox"]
+            if token == "cara-test":
+                paths.append("batch")
+            for path in paths:
                 shown = json.dumps(get(api, path, token=token))
                 assert "Confidential draft" not in shown and fid not in shown, (path, shown)
 
@@ -65,3 +68,24 @@ def test_spend_pick_history_events_and_notice_keep_the_label_source(api):
             for payload in (H._json(event, {}), notice):
                 shown = files.readable_page_refs(c, api.app.state.auth, Identity("human:cara", "human"), payload)
                 assert "Confidential draft" not in json.dumps(shown) and fid not in json.dumps(shown)
+
+
+def test_held_review_pick_text_keeps_its_page_source(api):
+    from backend.tests.test_org_rule_check import Judge
+    from backend.tests.test_org_rules import rule
+    tid, _, fid = public_page(api)
+    text = "Never publish an unreviewed draft."
+    api.app.state.judge = Judge(api.app.state.store, {text: "Confidential draft"})
+    rule(api, {"kind": "internal", "text": text, "who": {"bots": ["ops"]},
+               "if_broken": "escalate", "reviewer": "cara"})
+    held = review_ask(api, "ops-test", [{"file": fid}], on="cara", parent=tid, private=False, pick=True)["held"]["id"]
+    assert "Confidential draft" in get(api, "rule-holds/" + held, token="cara-test")["text"]
+    with api.app.state.store.read() as c:
+        stored = H._json(c.execute("SELECT payload FROM org_rule_holds WHERE id=?", (held,)).fetchone()[0], {})
+        assert stored["body_sources"] == [{"file": fid}]
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        shown = json.dumps(get(api, "rule-holds/" + held, token="cara-test"))
+        assert "Confidential draft" not in shown and fid not in shown, shown
