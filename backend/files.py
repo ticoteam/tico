@@ -449,7 +449,8 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
     def clean(value, parent="", tid=task_id):
         direct = page_references(value, c) & denied.keys() if isinstance(value, str) else set()
         if isinstance(value, dict):
-            carried = value.get("refs") if isinstance(value.get("refs"), dict) else {}
+            carried = H._json(value.get("refs"), {}) or {}
+            carried = carried if isinstance(carried, dict) else {}
             tid = H.refs_task_id(carried) or H.refs_task_id(value) or value.get("task_id") or tid
             if "owner_id" in value and "title" in value:
                 tid = value.get("id") or tid
@@ -473,7 +474,8 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
                             label not in sources.get(qid, {}) and label in hidden_titles(tid))]
                                       for qid, picks in value[key].items()}
             answer = carried.get("answer", {})
-            shown_answer = shown.get("refs", {}).get("answer", {})
+            shown_refs = H._json(shown.get("refs"), {}) or {}
+            shown_answer = shown_refs.get("answer", {}) if isinstance(shown_refs, dict) else {}
             if (rejected(carried.get("body_sources")) or answer.get("answers") != shown_answer.get("answers") or
                     answer.get("not") != shown_answer.get("not")):
                 for key in ("body", "text"):

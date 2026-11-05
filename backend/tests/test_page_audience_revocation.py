@@ -144,7 +144,7 @@ def test_removed_person_and_archived_bot_lose_explicit_page_grants(api):
         assert audience["people"] == audience["bots"] == [] and not audience["everyone"]
 
 
-def test_page_refs_are_redacted_on_sql_timeline_and_undecorated_events(api):
+def test_review_refs_are_denied_on_sql_timeline_and_undecorated_events(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Read the attached plan", "body": "Review", "private": False})
     tid = task["id"]
     _, attempt = turn(api)
@@ -167,12 +167,12 @@ def test_page_refs_are_redacted_on_sql_timeline_and_undecorated_events(api):
             timeline = threads.timeline(c, threads.Viewer(api.app.state.auth, who), cid)
         with api.app.state.store.read() as c:
             delivered, _, reset, _ = events.read(c, api.app.state.auth, who, before, topics=("messages",), visuals=None)
-        assert not reset and delivered
+        assert not reset
         raw = post(api, "sql", {"sql": f"SELECT refs FROM messages WHERE id='{mid}'"}, token=token)["rows"]
-        assert raw
-        for value in (timeline, delivered, raw, get(api, "messages/" + mid, token=token)):
+        assert raw == []
+        assert api.get("/api/v2/messages/" + mid, headers=headers(token)).status_code == 404
+        for value in (timeline, delivered):
             text = json.dumps(value)
-            assert "A page you can't open" in text, text
             for secret in (fid, "Audience secret", "weekly.html", '"size"'):
                 assert secret not in text, (secret, text)
     assert fid in json.dumps(get(api, "messages/" + mid, token="ben-test"))
