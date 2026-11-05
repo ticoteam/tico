@@ -153,6 +153,22 @@ pub fn label_segments(
     label_from(store, id, None, segments, link)
 }
 
+/// Link finished service turns during capture without running full-meeting diarization. This
+/// also covers batch-only meetings; streaming labels are not required for voice continuity.
+pub fn label_provisional(store: &Store, id: &str) -> Result<usize> {
+    let record = store.get(id)?;
+    if !record
+        .chunks
+        .iter()
+        .filter(|c| c.channel == "them" && c.status == "done")
+        .flat_map(|c| &c.words)
+        .any(|w| !w.turn.is_empty() && w.speaker.is_empty())
+    {
+        return Ok(0);
+    }
+    label_from(store, id, None, vec![], Some(LINK_DISTANCE))
+}
+
 fn label_from(
     store: &Store,
     id: &str,
@@ -160,6 +176,7 @@ fn label_from(
     mut segments: Vec<SpeakerSegment>,
     link: Option<f32>,
 ) -> Result<usize> {
+    let provisional = config.is_none() && segments.is_empty();
     let record = store.get(id)?;
     let chunks: Vec<_> = record
         .chunks
@@ -262,7 +279,8 @@ fn label_from(
                 .iter()
                 .map(|word| Word {
                     speaker: match voices.next().flatten() {
-                        Some(voice) if !single => names[&voice].clone(),
+                        Some(voice) if !single || provisional => names[&voice].clone(),
+                        _ if provisional => word.speaker.clone(),
                         _ => String::new(),
                     },
                     ..word.clone()
@@ -285,11 +303,11 @@ fn link_turns(
     voices: Vec<Option<usize>>,
     distance: f32,
 ) -> Result<Vec<Option<usize>>> {
-    let mut extractor = pyannote_local::EmbeddingExtractor::new()?;
+    let mut extractor = None;
     let mut turns = vec![];
     for (chunk, members, clip) in speech {
         let print = if clip.len() >= SAMPLE_RATE as usize {
-            extractor.compute_optional(&clip)?
+            cached_voiceprint(&clip, &mut extractor)?
         } else {
             None
         };
@@ -328,6 +346,48 @@ fn link_turns(
     Ok(out)
 }
 
+type Prints = BTreeMap<[u8; 32], Option<Vec<f32>>>;
+static PRINTS: std::sync::Mutex<Prints> = std::sync::Mutex::new(BTreeMap::new());
+
+fn print_key(clip: &[f32]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for sample in clip {
+        digest.update(sample.to_le_bytes());
+    }
+    digest.finalize().into()
+}
+
+/// Keep voiceprints in memory so each new batch only runs the embedding model on new speech.
+/// Bounded and never persisted: private audio/prints leave no extra files on disk.
+fn cached_voiceprint(
+    clip: &[f32],
+    extractor: &mut Option<pyannote_local::EmbeddingExtractor>,
+) -> Result<Option<Vec<f32>>> {
+    let key = print_key(clip);
+    if let Some(print) = PRINTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return Ok(print);
+    }
+    if extractor.is_none() {
+        *extractor = Some(pyannote_local::EmbeddingExtractor::new()?);
+    }
+    let print = extractor
+        .as_mut()
+        .expect("extractor initialized")
+        .compute_optional(clip)?;
+    let mut cache = PRINTS.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() >= 512 {
+        cache.pop_first();
+    }
+    cache.insert(key, print.clone());
+    Ok(print)
+}
+
 /// Average-linkage clustering of (chunk, voiceprint) by cosine distance under `distance`; items
 /// of one chunk never share a cluster. Returns each item's cluster.
 fn join(items: &[(usize, Vec<f32>)], distance: f32) -> Vec<usize> {
@@ -336,10 +396,16 @@ fn join(items: &[(usize, Vec<f32>)], distance: f32) -> Vec<usize> {
         .map(|index| (vec![items[index].0], vec![index]))
         .collect();
     let prints: Vec<Vec<f32>> = items.iter().map(|(_, print)| normalize(print)).collect();
+    // Repeated live linking reuses pair distances instead of recomputing embedding dot products
+    // for every candidate cluster at every merge.
+    let distances: Vec<Vec<f32>> = prints
+        .iter()
+        .map(|a| prints.iter().map(|b| cosine_distance(a, b)).collect())
+        .collect();
     let average = |a: &[usize], b: &[usize]| {
         let total: f32 = a
             .iter()
-            .flat_map(|x| b.iter().map(|y| cosine_distance(&prints[*x], &prints[*y])))
+            .flat_map(|x| b.iter().map(|y| distances[*x][*y]))
             .sum();
         total / (a.len() * b.len()) as f32
     };
@@ -463,5 +529,61 @@ mod tests {
         assert!(out[..4].iter().all(|x| (x - 0.5).abs() < 0.01));
         assert!(out[4..20].iter().all(|x| *x == 0.));
         assert!(out[20..].iter().all(|x| (x + 0.5).abs() < 0.01));
+    }
+
+    #[test]
+    fn batch_only_voices_keep_names_when_service_labels_restart_each_chunk() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Store::open(folder.path()).unwrap();
+        let record = store.create("Batch voice continuity").unwrap();
+        store.state(&record.id, "recording").unwrap();
+        for (index, turn, sample, print) in [
+            (0, "4", 0.271, vec![1., 0.]),
+            (1, "0", 0.271, vec![1., 0.]),
+            (2, "0", -0.193, vec![0., 1.]),
+        ] {
+            let at = index * 2000;
+            store
+                .save_audio(
+                    &record.id,
+                    crate::audio::Channel::Meeting,
+                    at,
+                    at + 2000,
+                    &vec![sample; 32000],
+                    SAMPLE_RATE,
+                )
+                .unwrap();
+            let chunk = store.claim_transcription().unwrap().unwrap();
+            // Inject known voiceprints at the model boundary; exercise real WAV loading, service
+            // turns, linking, name order and persisted word labels without an inference download.
+            let clip = decode(&store.audio_path(&chunk).unwrap()).unwrap();
+            PRINTS.lock().unwrap().insert(print_key(&clip), Some(print));
+            store
+                .transcription_words(
+                    &chunk,
+                    "Hello",
+                    vec![Word {
+                        start_ms: at,
+                        end_ms: at + 2000,
+                        text: "Hello".into(),
+                        turn: turn.into(),
+                        ..Default::default()
+                    }],
+                    "",
+                    serde_json::json!({}),
+                )
+                .unwrap();
+            label_provisional(&store, &record.id).unwrap();
+            let current = store.get(&record.id).unwrap();
+            let labels: Vec<_> = current
+                .chunks
+                .iter()
+                .flat_map(|c| c.words.iter().map(|w| w.speaker.as_str()))
+                .collect();
+            assert_eq!(
+                labels,
+                ["Speaker 1", "Speaker 1", "Speaker 2"][..=index as usize]
+            );
+        }
     }
 }

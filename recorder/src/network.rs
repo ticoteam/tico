@@ -217,6 +217,15 @@ pub fn transcribe_next_with(
         &error,
         json!({"model":config.transcription_model,"outcome":outcome}),
     )?;
+    #[cfg(feature = "diarize")]
+    if chunk.channel == "them"
+        && error.is_empty()
+        && store.get(&chunk.recording_id)?.state == "recording"
+    {
+        // Capture and transcription stay usable if the local model is unavailable. Stream labels
+        // remain provisional; the full voiceprint/diarization pass after Stop is still authoritative.
+        let _ = crate::diarize::label_provisional(store, &chunk.recording_id);
+    }
     Ok(true)
 }
 

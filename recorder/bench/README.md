@@ -180,7 +180,9 @@ combine an STT provider's per-request speaker labels into one meeting. On the bu
 transcription (minimum other-audio ducking, AGC off); headphones and unsupported routes keep the
 original capture. A shared transcript filter also drops utterances with at least 60% echoed words,
 including unmatched short fragments, with punctuation, hyphen, number and small spelling tolerance.
-Live mic text waits for the meeting-audio reference, so it cannot escape to the page or Tico first. Speech defaults to English (Settings › Language;
+Live mic text waits for the meeting-audio reference, so it cannot escape to the page or Tico first.
+Finished service turns are also linked during capture by the existing WeSpeaker path, with an
+in-memory bounded print cache; full diarization after Stop still refines the final labels. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
 
 
