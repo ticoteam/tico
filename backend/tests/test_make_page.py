@@ -174,7 +174,8 @@ def test_identical_html_completes_each_make_page_request_without_a_new_version(a
         assert made.json()["page"]["version"] == 1
         assert status(api, t["id"])["message_id"] == message["id"]
         assert status(api, t["id"])["state"] == "made"
-        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+        post(api, f"attempts/{attempt['id']}/complete",
+             {"outcome": "completed", "text": "The page is published.", "last_seq": 0}, machine["token"])
         assert status(api, t["id"])["state"] == "made"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == 1
