@@ -5,7 +5,6 @@ from backend import cards
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_cards import page as seed_page
 from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
@@ -129,7 +128,10 @@ def test_logged_meeting_made_participants_only_blocks_publish_without_storing_a_
 
 def test_an_unlinked_logged_file_blocks_publish(api):
     t = task(api, private=False)
-    fid = seed_page(api, "cpo", task=t["id"])
+    _, publisher = turn(api, "cpo")
+    made = page(api, publisher, task=t["id"])
+    assert made.status_code == 200, made.text
+    fid = made.json()["page"]["file_id"]
     _, attempt, _ = start(api, t["id"])
     assert api.get("/api/v2/files/" + fid, headers=headers(attempt["token"])).status_code == 200
     with api.app.state.store.transaction() as c:
@@ -232,7 +234,8 @@ def test_every_task_publish_honors_the_pin_cap_but_republishing_an_existing_pin_
 def test_failed_request_survives_later_chat_and_ignores_an_unrelated_pin(api):
     t = task(api, private=False)
     machine, attempt, message = start(api, t["id"])
-    seed_page(api, "ops", task=t["id"])
+    _, publisher = turn(api, "cpo")
+    assert page(api, publisher, task=t["id"]).status_code == 200
     assert status(api, t["id"])["state"] == "making"
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     say(api, "Another question", "ben-test")
@@ -249,3 +252,14 @@ def test_participants_only_attempt_provenance_blocks_publish(api):
     result = page(api, attempt, task=t["id"])
     assert result.status_code == 403, result.text
     assert_no_page(api)
+
+
+def test_make_page_is_queued_separately_from_an_already_running_assistant_turn(api):
+    t = task(api, private=False)
+    machine, attempt = assistant_turn(api, "ben-test")
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "ordinary-chat"}, machine["token"])
+    message = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the project page"}, "ben-test")["message"]
+    inputs = post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])
+    assert message["id"] not in {m["id"] for m in inputs["messages"]}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (message["id"],)).fetchone()[0] == "queued"
