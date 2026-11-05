@@ -605,7 +605,7 @@ def TR_parent(c, task_id):
     return TR.parent_of(c, task_id)
 
 
-def _take_plan(c, wait, only=None):
+def _take_plan(c, wait, only=None, snapshots=None):
     """Read what taking a wait would do, so idle retries need no writer transaction."""
     ticket = H.task(c, wait["ticket_id"])
     if not ticket or ticket.get("step_id") != wait["step_id"] or ticket["status"] not in H.ACTIVE_STATUSES:
@@ -614,7 +614,7 @@ def _take_plan(c, wait, only=None):
     if not found:
         return {"drop": "the step has no pool"}
     step, slugs, limit = found
-    heads = [h for h in wait["heads"].split(",") if h]
+    heads = _heads(_prs(c, ticket, step), snapshots)
     if has_open_check(c, ticket, step, heads):
         return {"drop": "a check was filed"}
     free, reason = ranked(c, ticket, step, slugs, limit)
@@ -628,14 +628,23 @@ def _take_plan(c, wait, only=None):
     return {"ticket": ticket, "step": step, "heads": heads, "free": free, "reason": reason}
 
 
-def _take(c, wait, only=None):
+def _admission_problem(c, wait, plan, snapshots):
+    """Read the same gate as child creation, without recording a refusal for an idle wait."""
+    from . import review_gate
+    if "drop" not in plan and plan["free"] and review_gate.is_review(c, plan["ticket"], wait["title"]):
+        return review_gate.problem(c, plan["ticket"], plan["ticket"]["owner_id"], snapshots, require_pr=True)
+
+
+def _take(c, wait, only=None, snapshots=None):
     """Give a wait to `only` or its best free member; drop it if its ticket moved on or already has a check."""
-    plan = _take_plan(c, wait, only)
+    plan = _take_plan(c, wait, only, snapshots)
     if "drop" in plan:
         c.execute("UPDATE check_waits SET state='dropped',reason=?,updated_at=? WHERE id=?",
                   (plan["drop"], H.now(), wait["id"]))
         return None
     ticket, step, heads, free, reason = (plan[k] for k in ("ticket", "step", "heads", "free", "reason"))
+    if _admission_problem(c, wait, plan, snapshots):
+        return None
     for slug in free:
         # Taken before the request is filed, so the one-check-per-head rule does not see its own wait.
         c.execute("UPDATE check_waits SET state='filed',updated_at=? WHERE id=?", (H.now(), wait["id"]))
@@ -644,10 +653,10 @@ def _take(c, wait, only=None):
             child = H.task_update(c, ticket["owner_id"], child["id"], owner="bot:" + slug, status="open",
                                   note="Tico routed this waiting check to the first available reviewer.")
         else:
-            child = _file(c, ticket, step, slug, wait["title"], heads, None,
+            child = _file(c, ticket, step, slug, wait["title"], heads, snapshots,
                           "it finished a check and took the next waiting one" if slug == only else _why(c, slug))
         if child:
-            c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (child["id"], wait["id"]))
+            c.execute("UPDATE check_waits SET child_id=?,heads=? WHERE id=?", (child["id"], ",".join(heads), wait["id"]))
             return child
         c.execute("UPDATE check_waits SET state='waiting' WHERE id=?", (wait["id"],))
     if reason and reason != wait["reason"]:
@@ -730,8 +739,9 @@ def _retry_waits(c, limit, after, after_step=None):
     return waits
 
 
-def retry(store, limit=RETRY_LIMIT):
-    """Retry waits whose pools have room. Unchanged waits use only reads; filing rechecks under the writer."""
+def retry(store, limit=RETRY_LIMIT, *, service=None):
+    """Read fresh admission evidence outside the writer; a gate that still refuses a wait needs no writes."""
+    from . import review_gate
     limit = max(0, min(limit, RETRY_LIMIT))
     if not limit:
         return []
@@ -754,11 +764,18 @@ def retry(store, limit=RETRY_LIMIT):
             plan = _take_plan(c, dict(row))
             if "drop" not in plan and not plan["free"] and (not plan["reason"] or plan["reason"] == row["reason"]):
                 continue
+            prs = (review_gate.links(c, plan["ticket"]) if "drop" not in plan and plan["free"]
+                   and review_gate.is_review(c, plan["ticket"], row["title"]) else [])
+        snapshots = review_gate.snapshot(service, prs) if prs and service else None
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if not row or _admission_problem(c, dict(row), _take_plan(c, dict(row), snapshots=snapshots), snapshots):
+                continue
         with store.transaction() as c:
             # A completion, pool edit or another pass may have taken it since the read above.
             row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
             if row:
-                child = safely(c, _take, dict(row))
+                child = safely(c, _take, dict(row), None, snapshots)
                 if child:
                     out.append(child["id"])
     return out

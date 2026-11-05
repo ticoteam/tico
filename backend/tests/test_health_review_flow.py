@@ -290,3 +290,45 @@ def test_green_new_head_at_a_fixes_step_uses_merge_ready(environment):
     [item] = items(api)
     assert item['whose_move'] == 'bot:builder'
     assert 'bot:builder: merge PR #206' in item['fix']
+
+
+def test_same_head_qa_reentry_keeps_health_at_changes_until_a_new_head(environment):
+    from backend import verdict_moves as V
+    api = setup(environment)
+    task = ticket(api, step='In QA')
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute('UPDATE task_steps SET check_pool=NULL WHERE id=?', (task['step_id'],))
+        H._task_event(c, task['id'], H.KEEPER, 'step', None, task['step_id'], '')
+
+    def finish(value):
+        check = child(api, task, title='QA: PR #206', status='open')
+        with store.transaction() as c:
+            attempt = H.new_id()
+            c.execute('INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at) VALUES(?,?,?,?,?)',
+                      (attempt, 'reviewer', check['id'], H.now(), H.now()))
+            H.task_update(c, 'bot:reviewer', check['id'], status='done', note='Reviewed.',
+                          verdict=value, verdict_head=HEAD)
+            outcome = V.after_capture(c, check['id'], HEAD, attempt)
+            assert outcome and outcome['moved'] == 'QA Fixes'
+            assert V.step_of(c, H.task(c, task['id'])) == 'QA Fixes'
+            assert V.merge_ready(c, H.task(c, task['id'])) is None
+
+    finish('fail')
+    assert 'address review changes' in items(api)[0]['fix']
+    with store.transaction() as c:
+        H.task_update(c, 'bot:builder', task['id'], step='In QA')
+    finish('pass')
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:builder'
+    assert 'address review changes' in item['fix']
+    assert 'merge PR' not in item['fix'] and 'move PR' not in item['fix']
+
+    with store.transaction() as c:
+        link = next(p for p in H.task_links(c, task['id']) if p['kind'] == 'pr')
+        detail = H._json(link['detail'], {})
+        detail['head_sha'] = OLD
+        detail['health_wait']['head'] = OLD
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['id']))
+        assert V.merge_ready(c, H.task(c, task['id'])) is not None
+    assert 'bot:builder: merge PR #206' in items(api)[0]['fix']

@@ -265,9 +265,10 @@ def reviews_before(c, s):
     return [x for x in checks(c, s["type_id"], "review") if x["position"] < s["position"] and x["id"] != s["id"]]
 
 
-def fixes_for(c, s):
+def fixes_for(c, s, *, board=None):
     """The check step whose changes come to work step `s` (its `on_fail` is `s`), or None."""
-    return next((x for x in steps(c, s["type_id"]) if of(x).get("on_fail") == s["id"]), None)
+    return next((x for x in (steps(c, s["type_id"]) if board is None else board)
+                 if of(x).get("on_fail") == s["id"]), None)
 
 
 def at_or_past(c, row, target):

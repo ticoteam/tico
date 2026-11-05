@@ -1552,7 +1552,7 @@ def review_children_sql(visible, parents=1):
 
 def _review_actors(c, who, auth, tickets):
     """Check evidence and review roles in set reads. Unseen children cannot supply approval or an owner."""
-    from . import check_pools as P, step_flow as F, verdict_moves as V
+    from . import check_pools as P, step_flow as F
     states, actors = {}, {}
     if not tickets:
         return states, actors
@@ -1595,28 +1595,10 @@ def _review_actors(c, who, auth, tickets):
             events.setdefault(raw["subject_id"], []).append(dict(raw))
     for tid, state in states.items():
         ticket = state["ticket"]
-        board = check_boards.get(ticket["type_id"], [])
         state["step"] = steps.get(ticket["step_id"])
         state["events"] = events.get(tid, [])
-        filed = {e["new"] for e in state["events"] if e["kind"] == "check_filed"}
-        evidence = {"steps": steps, "step": state["step"], "boards": check_boards, "events": state["events"], "filed": filed}
-        children = []
-        for child in state["children"]:
-            check_step = F.check_step(c, child, evidence=evidence)
-            titled = F.titled(c, ticket["type_id"], child["title"], board=board)
-            if not (check_step or titled or child["id"] in filed or child["verdict"] or P.is_security(child["title"])):
-                continue
-            # Pool filing and verdict data survive a check being renamed after it was filed.
-            child["check_step"] = check_step
-            child["judged_head"] = next((e["new"] for e in reversed(events.get(child["id"], []))
-                                         if e["kind"] == "review_head"), "")
-            children.append(child)
-        state["children"] = children
-        fixes = next((s for s in boards.get(ticket["type_id"], [])
-                      if F.of(s).get("on_fail") == ticket["step_id"]), None)
-        judged = next((t for t in reversed(children) if H.is_bot(t["owner_id"]) and V._verdict(t) and fixes
-                       and (t["check_step"] or {}).get("id") == fixes["id"]), None)
-        state["judged"] = str(judged.get("verdict_head") or judged["judged_head"] or "").split(",")[0].lower() if judged else None
+        state.update(steps=steps, boards=check_boards, board=boards.get(ticket["type_id"], []),
+                     filed={e["new"] for e in state["events"] if e["kind"] == "check_filed"}, child_events=events)
     # Pool status for a missing request is read for every pool together, never by calling ranked per PR.
     slugs = sorted({slug for state in states.values() for slug in P.members((state["step"] or {}).get("check_pool")) or []})
     online, held = set(), {}
@@ -1649,24 +1631,17 @@ def _review_move(c, link, state, actors):
     from . import step_flow as F, verdict_moves as V
     owner, number = link["owner_id"], link["number"]
     head = V._head(link)
-    children, step = state["children"], state["step"]
-    judged = [t for t in children if H.is_bot(t["owner_id"]) and V._verdict(t) and head and
-              any(h and head.startswith(h.lower()) for h in str(t["verdict_head"] or t["judged_head"] or "-").split(","))]
-    latest = max(judged, key=lambda t: (t["updated_at"], t["created_at"], t["id"]), default=None)
-    checks = [t for t in children if H.is_bot(t["owner_id"]) and (t["check_step"] or {}).get("id") == (step or {}).get("id")]
-    verdict = V.verdict_at(checks, head)
-    if (latest and V._verdict(latest) not in V.GOOD) or (verdict and verdict not in V.GOOD):
+    children, step = V.review_checks(c, link, evidence=state), state["step"]
+    route = V.verdict_route(c, link, head, evidence=state)
+    if route and route["verdict"] not in V.GOOD:
         return owner, f"{owner}: address review changes on PR #{number}"
-    skipped = bool(step and F.skip_target(c, {**link, "tags": state["tags"]}, step)) or any(
-        e["kind"] == "round_skipped" and e["new"] == f"{(step or {}).get('id')}:{head}" for e in state["events"])
-    ready = state["complete"] and V.merge_ready(c, link, evidence={**state, "checks": checks,
-                                                                 "skipped": skipped and (not verdict or verdict in V.GOOD)})
+    ready = state["complete"] and V.merge_ready(c, link, evidence=state)
     if ready:
         return owner, f"{owner}: merge PR #{number}"
-    if state["complete"] and (verdict in V.GOOD or (not F.is_check(step) and judged)):
+    if state["complete"] and route and route["target"] and route["target"] != F.MERGE:
         return owner, f"{owner}: move PR #{number} on"
     # A bot check at this step judges the current head when it runs, including a push since it was filed.
-    assigned = {t["id"] for t in checks}
+    assigned = {t["id"] for t in V._checks(c, link, step, evidence=state)} if step else set()
     opened = [t for t in children if t["status"] in H.ACTIVE_STATUSES and
               (t["id"] in assigned or not t["judged_head"] or not head or
                any(h and head.startswith(h.lower()) for h in t["judged_head"].split(",")))]
@@ -1677,7 +1652,8 @@ def _review_move(c, link, state, actors):
     pool = f"{step['name']} pool" if step and F.check_kind(step) else "reviewer (not assigned)"
     if not state["complete"]:
         return pool, f"{pool}: check review status for PR #{number}"
-    old = any(H.is_bot(t["owner_id"]) and V._verdict(t) for t in children) and not judged
+    old = any(V._verdict(t) for t in children) and not any(
+        V.verdict_at([t], head) for t in children)
     if wait:
         return pool, f"{pool}: {'re-review' if old else 'check'} PR #{number} waiting for a free reviewer; {wait['reason'][:300]}"
     if step and F.check_kind(step):

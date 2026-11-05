@@ -206,8 +206,9 @@ def run_now(store, auth, key, actor):
 
 
 class Scheduler:
-    def __init__(self, store, execution, onboarding=None, auth=None):
+    def __init__(self, store, execution, onboarding=None, auth=None, github_app=None):
         self.store, self.execution = store, execution
+        self.github_app = github_app
         self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
         self.onboarding, self.auth = onboarding, auth   # the Bookkeeper is built the tick Finance is set up
         self.swept = None
@@ -730,7 +731,7 @@ class Scheduler:
                 retried = []
                 try:
                     from . import check_pools
-                    retried = check_pools.retry(self.store)
+                    retried = check_pools.retry(self.store, service=self.github_app)
                 except Exception as exc:
                     failures.append({"check_pool_retry": type(exc).__name__})
                 acted = {"checks timed out": timed_out, "tickets allocated": allocated, "waiting checks filed": retried}

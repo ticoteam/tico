@@ -2,13 +2,15 @@
 import importlib
 import json
 import sqlite3
+from contextlib import contextmanager
 
 import pytest
 
-from backend import check_pools as P, hubdb as H
-from backend.tests.test_check_pools import busy, checks, team
+from backend import check_pools as P, hubdb as H, review_gate
+from backend.tests.test_check_pools import busy, checks, set_pool, team
 from backend.tests.test_github import api  # noqa: F401
-from backend.tests.test_review_gate import HEAD
+from backend.tests.test_review_gate import HEAD, OLD, move, ticket
+from backend.tests.test_review_gate_fresh import github
 
 
 def waiting_ticket(api, number, reviewer):
@@ -196,3 +198,88 @@ def test_retry_index_migration_preserves_existing_waits_and_is_idempotent():
         plan = [r[3] for r in c.execute('EXPLAIN QUERY PLAN ' + P.RETRY_WAITS_SQL, ('step', '', '', 20))]
         assert any('check_waits_retry' in line for line in plan), plan
         assert not any('TEMP B-TREE' in line for line in plan), plan
+
+
+def ci_only_wait(api, monkeypatch):
+    team(api, seen=H.shift(H.now(), minutes=-10))
+    task = ticket(api)
+    set_pool(api, task, 'Review 1', ['rev-a'], limit=1)
+    reads = github(api, monkeypatch, {'python': 'success'})
+    response = move(api, task)
+    assert response.status_code == 200, response.text
+    assert checks(api, task) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
+        wait = dict(c.execute("SELECT * FROM check_waits WHERE ticket_id=? AND state='waiting'", (task['id'],)).fetchone())
+        assert not H.task(c, task['id'])['note']
+    reads.clear()
+    return task, wait, reads
+
+
+def test_scheduler_files_a_review_admitted_by_fresh_ci_without_a_receipt(api, monkeypatch):
+    from backend.scheduler import Scheduler
+    task, wait, reads = ci_only_wait(api, monkeypatch)
+    store, service = api.app.state.store, api.app.state.github_app
+    transaction, writers = store.transaction, 0
+
+    @contextmanager
+    def writing(*args, **kwargs):
+        nonlocal writers
+        with transaction(*args, **kwargs) as c:
+            writers += 1
+            try:
+                yield c
+            finally:
+                writers -= 1
+
+    snapshot = review_gate.snapshot
+
+    def fresh(*args):
+        assert writers == 0, 'GitHub reads must not hold the writer'
+        return snapshot(*args)
+
+    monkeypatch.setattr(store, 'transaction', writing)
+    monkeypatch.setattr(review_gate, 'snapshot', fresh)
+    scheduler = Scheduler(store, api.app.state.execution, github_app=service)
+    result = scheduler.tick(H.parse_ts(H.now()))
+    assert not any('check_pool_retry' in failure for failure in result['failures'])
+    [check] = checks(api, task)
+    assert check['owner_id'] == 'bot:rev-a'
+    assert any('/commits/' + HEAD + '/check-runs' in path for path in reads)
+    assert P.retry(store, service=service) == []
+    with store.read_transaction() as c:
+        assert c.execute('SELECT state,child_id FROM check_waits WHERE id=?', (wait['id'],)).fetchone()[:] == ('filed', check['id'])
+        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'",
+                         (check['id'],)).fetchone()[0] == HEAD
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='check_not_filed'",
+                             (task['id'],)).fetchone()
+
+
+@pytest.mark.parametrize('conclusion', ['failure', None])
+def test_refused_ci_only_waits_need_no_writer_until_gate_inputs_change(api, monkeypatch, conclusion):
+    task, wait, _ = ci_only_wait(api, monkeypatch)
+    store, service = api.app.state.store, api.app.state.github_app
+    github(api, monkeypatch, {'python': conclusion})
+    with store.read_transaction() as c:
+        before = tuple(c.execute('SELECT * FROM check_waits WHERE id=?', (wait['id'],)).fetchone())
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('a refused wait needs no writer or filing attempt')
+
+    with monkeypatch.context() as patched:
+        patched.setattr(store, 'transaction', unexpected)
+        patched.setattr(P, '_file', unexpected)
+        for _ in range(3):
+            assert P.retry(store, service=service) == []
+    assert checks(api, task) == []
+    with store.read_transaction() as c:
+        assert tuple(c.execute('SELECT * FROM check_waits WHERE id=?', (wait['id'],)).fetchone()) == before
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='check_not_filed'",
+                             (task['id'],)).fetchone()
+    current_head = OLD if conclusion == 'failure' else HEAD
+    github(api, monkeypatch, {'python': 'success'}, head=current_head)
+    [cid] = P.retry(store, service=service)
+    assert [t['id'] for t in checks(api, task)] == [cid]
+    with store.read_transaction() as c:
+        assert c.execute('SELECT heads FROM check_waits WHERE id=?', (wait['id'],)).fetchone()[0] == current_head
+        assert c.execute("SELECT new FROM history_events WHERE subject_id=? AND kind='review_head'", (cid,)).fetchone()[0] == current_head

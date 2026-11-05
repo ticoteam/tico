@@ -15,8 +15,8 @@ STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
 
 
-def github(api, monkeypatch, checks):
-    """A configured GitHub App whose PR #412 is at HEAD with these check-run conclusions; returns the paths read."""
+def github(api, monkeypatch, checks, head=HEAD):
+    """A configured GitHub App whose PR #412 has this head and check-run conclusions; returns the paths read."""
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
@@ -24,7 +24,7 @@ def github(api, monkeypatch, checks):
     def fetch(method, path, **kw):
         reads.append(path)
         if '/pulls/' in path:
-            data = {'head': {'sha': HEAD}}
+            data = {'head': {'sha': head}}
         elif path.endswith('check-runs'):
             data = {'check_runs': [{'id': i, 'name': name, 'conclusion': result}
                                    for i, (name, result) in enumerate(checks.items(), 1)]}
