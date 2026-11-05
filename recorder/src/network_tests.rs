@@ -4137,7 +4137,7 @@ fn recorder_picker_and_link_queue_accept_tasks_without_a_number() {
         Some(json!({"tasks":[task.clone()]})),
         Some(json!({"tasks":[task]})),
     ]);
-    let page = tico.search_tasks("pricing", 0).unwrap();
+    let page = tico.search_tasks("pricing", "", 0).unwrap();
     assert!(page["tasks"][0]["number"].is_null());
     tico.queue_links(&store, &record.id, &["no-number".into()])
         .unwrap();
@@ -4147,6 +4147,36 @@ fn recorder_picker_and_link_queue_accept_tasks_without_a_number() {
         "no-number"
     );
     assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn recorder_picker_reads_task_types_and_searches_a_bare_number() {
+    let (tico, seen, worker) = server(vec![
+        Some(
+            json!({"types":[{"id":"general","name":"General","steps":[]},{"id":"bug","name":"Bug","numbered":true}]}),
+        ),
+        Some(json!({"tasks":[],"next_offset":null})),
+        Some(json!({"tasks":[],"next_offset":null})),
+    ]);
+    assert_eq!(
+        tico.task_types().unwrap(),
+        json!([{"id":"general","name":"General"},{"id":"bug","name":"Bug"}])
+    );
+    tico.search_tasks(" 19118 ", "bug", 0).unwrap();
+    tico.search_tasks("property manager", "", 0).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[0].0.starts_with("GET /api/v2/task-types "));
+    assert!(
+        calls[1]
+            .0
+            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0&type=bug ")
+    );
+    assert!(
+        calls[2]
+            .0
+            .starts_with("GET /api/v2/tasks?q=property+manager&limit=30&brief=true&offset=0 ")
+    );
 }
 
 #[test]

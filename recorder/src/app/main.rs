@@ -166,26 +166,35 @@ commands! {
 async fn task_picker(
     state: State<'_, Shared>,
     query: String,
+    kind: Option<String>,
     offset: usize,
 ) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
+    let kind = kind.unwrap_or_default();
     picker_search(
         move || tico_recorder_native::network::Tico::saved(&config, &destination),
-        query,
-        offset,
+        move |tico| tico.search_tasks(&query, &kind, offset),
     )
     .await
 }
 
+#[tauri::command]
+async fn task_types(state: State<'_, Shared>) -> Result<Value, String> {
+    let (config, destination) = lock(&state).task_picker_context();
+    picker_search(
+        move || tico_recorder_native::network::Tico::saved(&config, &destination),
+        |tico| tico.task_types(),
+    )
+    .await
+}
+
+/// The picker's reads are blocking HTTP, so they run off the Tauri runtime.
 async fn picker_search(
     connect: impl FnOnce() -> anyhow::Result<tico_recorder_native::network::Tico> + Send + 'static,
-    query: String,
-    offset: usize,
+    read: impl FnOnce(tico_recorder_native::network::Tico) -> anyhow::Result<Value> + Send + 'static,
 ) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        connect()
-            .and_then(|tico| tico.search_tasks(&query, offset))
-            .map_err(|e| e.to_string())
+        connect().and_then(read).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -433,6 +442,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             more_task_links,
             task_picker,
+            task_types,
             link_selected_tasks,
             accept_link_item,
             unlink_item,
