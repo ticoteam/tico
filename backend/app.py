@@ -260,51 +260,14 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
 
-        def start_jobs():
-            """Start work no request depends on, run beside the server once it serves, so a restart answers sooner
-            (store.initialize, the stop_running fixes, grace leases and the company file stay before serving, above).
-            Each is idempotent and does its own transaction, in the order they always ran in; a failure is captured and
-            the next one still runs."""
-            # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
-            # adds them; until this runs, a page shows the company as it was before the update.
-            try:
-                with store.transaction() as c:
-                    onboarding.ensure_librarian(c)
-                    onboarding.ensure_goal_manager(c)
-                    onboarding.ensure_task_manager(c)
-                    onboarding.ensure_counsel(c)
-            except Exception as exc:
-                telemetry.capture("librarian", exc)
-            # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
-            try:
-                from . import listening
-                with store.transaction() as c:
-                    listening.seed_market(c, settings)
-            except Exception as exc:
-                telemetry.capture("listening", exc)
-            # A message bot made before the server linked it to its person is linked now, when there is no doubt whose
-            # it is. A backfill: the bot works unlinked meanwhile, as it did before.
-            try:
-                from . import message_bots
-                with store.transaction() as c:
-                    message_bots.backfill(c)
-            except Exception as exc:
-                telemetry.capture("message_bots", exc)
-            # This release may contain merged pull requests attached to tasks: their links become shipped
-            # (backend/github.py). It reads every pull request link, the slowest of these on a big company; a link
-            # still shows merged until it runs.
-            try:
-                from .github import ship_deployed
-                with store.transaction() as c:
-                    ship_deployed(c, settings)
-            except Exception as exc:
-                telemetry.capture("github", exc)
+        # Work no request depends on runs beside the server; initialization and the restart repairs stay above.
+        from . import start_jobs
         # TICO_START_JOBS=inline (the tests, conftest.py) runs them before serving, as a start did before.
         if os.environ.get("TICO_START_JOBS") == "inline":
-            start_jobs()
+            start_jobs.run(store, onboarding, telemetry)
             start_jobs_task = None
         else:
-            start_jobs_task = asyncio.create_task(asyncio.to_thread(start_jobs))
+            start_jobs_task = asyncio.create_task(asyncio.to_thread(start_jobs.run, store, onboarding, telemetry))
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
@@ -1870,8 +1833,8 @@ def create_app(settings=None):
 
     @app.get("/api/v2/gateway")
     def gateway_overview(request: Request):
-        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use and the
-        services."""
+        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use, the
+        models and the services."""
         who = request.state.identity
         auth.domain(who)
         if who.role == "owner":
@@ -4445,6 +4408,13 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
+        from . import meeting_audience
+        meeting_participants = meeting_audience.check(
+            c, auth, who, owner, live_id=body.live_meeting_id, roles=body.roles) if body.live_meeting_id else None
+        if meeting_participants is not None:
+            if body.visibility == "public":
+                raise Problem("meeting_audience", meeting_audience.REFUSAL, 409)
+            body = body.model_copy(update={"private": True})
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
         reach.check(c, who, owner, "task", task_id=parent_id)
@@ -4667,6 +4637,12 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
+        if body.live_meeting_id:
+            meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
+                                   roles=body.roles, guest=H.task(c, row["id"]).get("guest"),
+                                   requester=H.task(c, row["id"])["requester_id"])
+            c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
+            meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
@@ -8540,6 +8516,8 @@ def create_app(settings=None):
     install_team_icon(app, store)
     from .meeting_items import install_meeting_items
     install_meeting_items(app, store, mutate, task_create, auth)
+    from . import presence
+    presence.install(app, store, mutate, auth)
     from .meeting_task_links import install as install_meeting_task_links
     install_meeting_task_links(app, store, auth, mutate)
     from .connectors import install_connectors

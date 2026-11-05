@@ -2,12 +2,14 @@
 
 Besides its owner, any number of people or bots can be on a task, each under a role: a row of
 `task_roles` (`task_id`, `role`, `actor`). A role is a short name the team chooses (`developer`,
-`reviewer`, `qa`, `designer`); Tico keeps no list of them and gives them no meaning or rights. A
-person may hold several roles on one task, and the owner may hold any of them too. What a role
-means downstream (which column waits on whom, a dependency monitor) is the client's to decide.
+`reviewer`, `qa`, `designer`); Tico keeps no list of them. The reserved `participant` role grants
+read access only on a private task sent from a private meeting. A person may hold several roles on one task, and
+the owner may hold any of them too. What a role means downstream (which column waits on whom, a dependency
+monitor) is the client's to decide.
 
-`set_roles` is the only writer (task update and create, the task page, `hub task update --role`,
-the MCP tools). Whoever may change the task's other fields may change who is on it.
+`set_roles` writes ordinary role changes (task update and create, the task page, `hub task update --role`,
+the MCP tools). A checked private meeting send grants its audience through `meeting_audience.grant`.
+Whoever may change the task's other fields may change who is on it.
 
 This module imports nothing from hubdb at load, so hubdb can import it; the writer reaches hubdb
 through `_H()`.

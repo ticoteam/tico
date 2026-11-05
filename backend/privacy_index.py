@@ -26,18 +26,9 @@ class ReadIndex:
         # Read private rows by their partial index. Ordinary task identifiers and
         # room references load lazily, without task bodies or room participants.
         self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
-        # A private task's answer depends only on its parties, guest and private flag, and many tasks share them
-        # (one bot owns most). Ask once per distinct set rather than once per task.
-        answers = {}
-        self.denied = set()
+        # Meeting participant grants belong to one task, even when its parties match another task's.
+        self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         from . import counsel
-        page_copies = counsel.page_copies(c)
-        for tid, row in self.private.items():
-            key = (row["owner_id"], row["requester_id"], row["guest"], row["private"], tid if tid in page_copies else None)
-            if key not in answers:
-                answers[key] = privacy.task_readable(c, who, row)
-            if not answers[key]:
-                self.denied.add(tid)
         self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.

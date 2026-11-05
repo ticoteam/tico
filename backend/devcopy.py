@@ -68,6 +68,8 @@ EMPTY = (
     # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's
     # batch marks only settle that relay's usage reports (backend/browser_exit.py)
     "browser_exits", "bot_browser_exits", "browser_exit_marks",
+    # Open windows and their heartbeats belong to the source, not the rehearsal.
+    "presences",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",

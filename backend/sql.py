@@ -390,7 +390,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
-    # A meeting saved "Participants only" (media.participants_only) is read only by the people it names, owner too.
+    # A meeting saved "Participants only" is read only by the people it names, owner too.
     audience = "coalesce(json_extract(metadata,'$.audience'),'')='participants'"
     if bot or not who.email:
         meetings = f"NOT ({audience})" if owner else "0"
