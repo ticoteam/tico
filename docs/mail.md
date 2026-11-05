@@ -4,8 +4,8 @@
 
 In the web app, each connected mailbox and Slack channel is listed in the Team sidebar under the bot that covers it:
 an Inbox Manager's under **Message bots**, a team bot's under that bot. Open one to see that bot's instructions and routines on the
-left and example messages on the right. Whole Workspace email threads are read live from Gmail; the mail tool still
-handles Gmail actions. A messaging icon beside a human in the team chart opens their message bot.
+left and example messages on the right. Whole Workspace email threads are read and organized live in Gmail.
+A messaging icon beside a human in the team chart opens their message bot.
 The old `#/mail` route remains available for existing deep links.
 
 ## Reading mail
@@ -19,6 +19,17 @@ same mailbox access. Output is Markdown by default; add `--json` for the API res
 The mail API requires a mailbox for live lists; it does not combine Workspace inboxes. Personal Connect Google grants
 and legacy connections keep their existing stored reads; live reading needs Whole Workspace. Existing mail sync and
 stored copies are unchanged by live reads. Opening a message or thread checks access and records `mail.read`.
+
+## Organizing live
+
+With Whole Workspace, use `hub email archive|unarchive|mark-read|mark-unread <address> <id> ...` or
+`hub email label|unlabel <address> <label> <id> ...`. Supply ids (up to 500) or `--query "<Gmail query>"` with
+`--limit` (default 100, maximum 500). Each call needs Read and write and the company's **What Tico may do >
+Organize mail** switch; the Assistant acts as its person, bots at their own level. Gmail keeps the mail;
+`mail.organize` records only ids and action details. Output gives count and undo; `--json` includes all ids.
+Undo applies the inverse to those ids, including mail already in that state. Only labeling creates a missing user
+label. These commands never delete, trash, or change Spam, Sent or Draft labels.
+API: `POST /api/v2/mail/messages/organize`.
 
 Mail is one shared tool, `$HUB_DIR/scripts/mail.sh`. One Google service account acts as every
 mailbox; who may act as which one comes from the `tools:` block in your `bot.yaml`

@@ -7158,6 +7158,35 @@ def email_message(api, args):
     return api.get('mail/messages/' + quote(args['id'], safe=''), mailbox=args['mailbox'])
 
 
+EMAIL_ORGANIZE = ('archive', 'unarchive', 'mark_read', 'mark_unread', 'label', 'unlabel')
+
+
+def _register_email_organize(action):
+    properties = {'mailbox': _s('Whole Workspace mailbox address'),
+                  'ids': {'type': 'array', 'items': {'type': 'string', 'maxLength': 128},
+                          'minItems': 1, 'maxItems': 500},
+                  'query': _s('Gmail query instead of ids; resolved live before changing messages'),
+                  'limit': {'type': 'integer', 'minimum': 1, 'maximum': 500, 'default': 100}}
+    required = ('mailbox',)
+    if action in ('label', 'unlabel'):
+        properties['label'] = _s('Gmail label name; label creates a missing user label, unlabel never does')
+        required += ('label',)
+
+    @tool('hub_email_' + action, 'Organize live Gmail: ' + action.replace('_', ' ') +
+          '. Supply ids or query, up to 500 messages. Needs your organize access and the company switch. '
+          'Never deletes or trashes. Returns count, ids and the inverse action for undo.',
+          properties, required=required, writes=True)
+    def organize_email(api, args):
+        body = {k: args[k] for k in ('mailbox', 'query', 'limit', 'label') if args.get(k) is not None}
+        if args.get('ids'):
+            body['ids'] = args['ids']
+        return api.post('mail/messages/organize', {**body, 'action': action}, key=_key(args))
+
+
+for _email_action in EMAIL_ORGANIZE:
+    _register_email_organize(_email_action)
+
+
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)
 @tool('hub_mail_list','Physical mail the company received, newest first: kind (legal, government_tax, bill, check, financial, '
       'junk, other), a one-line summary, the response deadline, status, task and scan file. Summaries come from outside '
@@ -7863,6 +7892,7 @@ ASSISTANT_WRITES = {"hub_email_cancel", "hub_goal_read_back", "hub_goal_save", "
                     "hub_assistant_withdraw",
                     "hub_assistant_change_restore",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
+ASSISTANT_WRITES.update('hub_email_' + action for action in EMAIL_ORGANIZE)
 AUDIENCE = {
     **{name: HUMANS_AND_ASSISTANT for name in ("hub_email_mailboxes", "hub_email_inbox", "hub_email_search",
                                               "hub_email_thread", "hub_email_message")},

@@ -176,6 +176,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub email search <address> "<gmail query>" [--limit N] [--cursor C] [--json]
     hub email thread <address> <thread-id> [--json]
     hub email message <address> <message-id> [--json]
+    hub email archive|unarchive|mark-read|mark-unread <address> [<id> ...] [--query Q] [--limit N] [--json]
+    hub email label|unlabel <address> <label> [<id> ...] [--query Q] [--limit N] [--json]
     hub inbound audience <inbox-id> company|team [--group G]
                                            who reads a Tico address or number (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
@@ -1078,7 +1080,7 @@ def parser():
     item.add_argument('--after'); item.add_argument('--limit', type=int)
     item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
 
-    email = sub.add_parser('email', help='read email, set sending policy, and manage pending sends').add_subparsers(dest='sub')
+    email = sub.add_parser('email', help='read and organize email, set sending policy, and manage pending sends').add_subparsers(dest='sub')
     item = email.add_parser('policy'); item.set_defaults(fn='email policy')
     item.add_argument('--mailbox'); item.add_argument('--bot')
     item.add_argument('--settings', type=json.loads, help='JSON policy fields; omit to read')
@@ -1101,6 +1103,16 @@ def parser():
                 item.add_argument('q', help='Gmail search syntax')
         if action in ('thread', 'message'):
             item.add_argument('id', metavar=action + '-id')
+    for action in ('archive', 'unarchive', 'mark-read', 'mark-unread', 'label', 'unlabel'):
+        item = email.add_parser(action)
+        item.set_defaults(fn='email ' + action)
+        item.add_argument('mailbox', metavar='address')
+        if action in ('label', 'unlabel'):
+            item.add_argument('label')
+        item.add_argument('ids', nargs='*', metavar='message-id')
+        item.add_argument('--query', help='Gmail query instead of explicit message ids')
+        item.add_argument('--limit', type=int, default=100, help='query cap, 1 to 500 (default 100)')
+        item.add_argument('--json', action='store_true', help='print the API response as JSON')
 
     # The Company page, read-only (docs/company-page.md): owners and admins; nothing here publishes or changes a reader.
     sub.add_parser('company-page', help='the Company page: transparency, address, last update').set_defaults(fn='company-page')

@@ -3417,6 +3417,37 @@ export type Locations = {
   next_cursor: string | null;
 };
 
+export type MailOrganizeBody = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids: Array<string>;
+  label?: string;
+  limit?: number;
+  mailbox: string;
+  query?: string;
+} | {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids?: Array<string>;
+  label?: string;
+  limit?: number;
+  mailbox: string;
+  query: string;
+};
+
+export type MailOrganizeResult = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  count: number;
+  ids: Array<string>;
+  label?: string;
+  mailbox: string;
+  undo: MailOrganizeUndo;
+};
+
+export type MailOrganizeUndo = {
+  action: "archive" | "unarchive" | "mark_read" | "mark_unread" | "label" | "unlabel";
+  ids: Array<string>;
+  label?: string;
+};
+
 export type Mailbox = {
   address: string;
   connection: "workspace" | "personal";
@@ -9893,6 +9924,13 @@ export type OrderPlaceParams = {
 };
 export type OrderPlaceBody = PlaceOrder;
 export type OrderPlaceResponse = Place;
+
+/** POST /api/v2/mail/messages/organize */
+export type OrganizeMailMessagesParams = {
+  "Idempotency-Key": string;
+};
+export type OrganizeMailMessagesBody = MailOrganizeBody;
+export type OrganizeMailMessagesResponse = MailOrganizeResult;
 
 /** POST /api/v2/editions/{edition_id}/override */
 export type OverrideEditionParams = {

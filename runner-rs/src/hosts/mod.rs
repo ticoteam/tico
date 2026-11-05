@@ -332,8 +332,9 @@ const HUB_PATHS: &[&str] = &[
     "credential request", "credential revoke", "credential set", "db", "decision", "decision ask",
     "decision outcome", "decision readout", "decisions", "doc", "doc archive", "doc ask", "doc ask-status",
     "doc fetch", "doc history", "doc link-list", "doc list", "doc read", "doc search", "doc write", "docs",
-    "docs links", "editions", "editions list", "editions show", "email", "email cancel", "email inbox", "email mailboxes",
-    "email message", "email policy", "email search", "email sends", "email thread", "event-types", "external", "external sync",
+    "docs links", "editions", "editions list", "editions show", "email", "email archive", "email cancel", "email inbox",
+    "email label", "email mailboxes", "email mark-read", "email mark-unread", "email message", "email policy",
+    "email search", "email sends", "email thread", "email unarchive", "email unlabel", "event-types", "external", "external sync",
     "feedback", "feedback give", "feedback list", "feedback markers", "feedback reasons", "feedback remove",
     "feedback rule", "feedback rule-draft", "file", "file approved", "file archive", "file delete",
     "file import", "file link", "file list", "file publish", "file read", "file review", "file search",
@@ -1284,6 +1285,10 @@ mod tests {
         assert_eq!(command_program("hub task close 7f3a"), "hub task close");
         assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
         assert_eq!(command_program("hub bot status history"), "hub bot status history");
+        for action in ["archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"] {
+            assert_eq!(command_program(&format!("hub email {action} ana@acme.example private-label private-id")),
+                       format!("hub email {action}"));
+        }
         assert_eq!(command_program("hub nosuch command"), "hub");
     }
 
