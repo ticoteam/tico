@@ -5660,7 +5660,9 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
                 text = shown.get("body") or ""
             # Preserve the review's references and run inputs when readers' access changes later.
             refs["inputs"] = [source]
-            refs["body_sources"] = [body_sources(shown["refs"])]
+            sources = body_sources(shown["refs"])
+            if sources:
+                refs["body_sources"] = [sources]
             refs.update({k: v for k, v in shown["refs"].items() if k in ("turn_id", "run")})
     silent = quiet or parent["status"] in ("done", "closed", "declined")
     # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes
@@ -8905,7 +8907,8 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
     ask = ("Send this to Tico support? " + _clip(shown.get("message", ""), 200) if kind == "support"
            else f"Approve this {kind}: " + _clip(json.dumps(shown, sort_keys=True, default=str), 200))
     from .scope_projection import body_sources
-    notice_refs = {"approval": "pending", "task": task_id, "body_sources": [body_sources(shown)]}
+    sources = body_sources(shown)
+    notice_refs = {"approval": "pending", "task": task_id, **({"body_sources": [sources]} if sources else {})}
     msg = _write_message(conn, actor, owner, ask,
                          _pair_conversation(conn, actor, owner, "notice"), "notice",
                          notice_refs, None, None)

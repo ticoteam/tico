@@ -1742,7 +1742,9 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     from .turn_scope import message_view
     from .scope_projection import body_sources
     message = message_view(c, message)
-    refs["body_sources"] = [body_sources(H._json(message.get("refs"), {}) or {})]
+    sources = body_sources(H._json(message.get("refs"), {}) or {})
+    if sources:
+        refs["body_sources"] = [sources]
     if rule:
         refs["rule"] = rule
     if way == "queue":
