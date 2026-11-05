@@ -162,6 +162,8 @@ when no person or bot did; it is not shown as a name.
 | One of your automations | A small gray line; the name opens the automation. |
 | System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
 
+A gray line is always one line. Text that does not fit ends in "…"; hover over a long line to read its text.
+
 Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
 unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task
 history and the Log read the same rule, from the row's actor and what it names.
