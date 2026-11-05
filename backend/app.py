@@ -642,7 +642,7 @@ def create_app(settings=None):
     app.state.timing.recorder = recorder
     app.state.flight = recorder
 
-    from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
+    from .assistant import write_allowed as assistant_writes, create_proposal
     from .assistant import valid_operation as assistant_valid
     from .assistant import describe as describe_action
     from .assistant import instruction as assistant_instruction

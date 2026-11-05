@@ -211,7 +211,8 @@ def resolve(c, actor, target, refs=None, conversation_id=None, in_reply_to=None,
         at = managers.get(at)
     if ctx["owner"] not in seen and ctx["owner"]:
         candidates.append(ctx["owner"])
-    who = who or Identity(actor, H.actor_kind(actor))
+    from .teammate_access import _viewer_for
+    who = who or _viewer_for(c, actor) or Identity(actor, H.actor_kind(actor))
     auth = auth or _recipient_auth(c)
     last = None
     for candidate in candidates:
