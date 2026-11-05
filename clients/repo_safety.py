@@ -33,8 +33,8 @@ def _git_identity(path):
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Cannot check repository identity: {path}") from exc
     if done.returncode:
-        # Broken Git metadata must not look like a safe clone or a confirmed install match.
-        raise ValueError(f"Cannot check repository identity: {path}")
+        # Missing or broken repos keep their normal handling; only resolved metadata proves an install match.
+        return ()
     names = done.stdout.splitlines()
     if len(names) != 2 or any(not Path(name).is_absolute() for name in names):
         raise ValueError(f"Cannot check repository identity: {path}")

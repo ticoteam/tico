@@ -31,8 +31,8 @@ fn git_identity(path: &Path) -> Result<Vec<PathBuf>, String> {
         .env_clear().envs(crate::safegit::clean_environment(&crate::env::process_environment()))
         .stdin(std::process::Stdio::null()).output().map_err(|_| unchecked())?;
     if !out.status.success() {
-        // Broken Git metadata must not look like a safe clone or a confirmed install match.
-        return Err(unchecked());
+        // Missing or broken repos keep their normal handling; only resolved metadata proves an install match.
+        return Ok(vec![]);
     }
     let text = std::str::from_utf8(&out.stdout).map_err(|_| unchecked())?;
     if text.lines().count() != 2 || text.lines().any(|p| !Path::new(p).is_absolute()) {
@@ -180,7 +180,11 @@ mod tests {
             let broken = dir.join("broken");
             std::fs::create_dir_all(broken.join("playbooks")).unwrap();
             std::fs::write(broken.join(".git"), "invalid gitdir\n").unwrap();
-            assert!(outside(&broken.join("playbooks"), &install).unwrap_err().starts_with("Cannot check repository identity:"));
+            for path in [broken.clone(), broken.join("playbooks"), broken.join("new/deep")] {
+                assert_eq!(outside(&path, &install).unwrap(), path);
+            }
+            std::fs::write(broken.join(".git"), format!("gitdir: {}\n", dir.join("missing").display())).unwrap();
+            assert_eq!(outside(&broken, &install).unwrap(), broken);
             std::fs::remove_dir_all(dir).unwrap();
         }
     }

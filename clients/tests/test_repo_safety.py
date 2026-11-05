@@ -61,9 +61,16 @@ def test_git_metadata_aliases_of_the_install_are_refused(tmp_path, monkeypatch, 
         for path in (repo, repo / "playbooks", repo / ".state", repo / "new/deep"):
             assert repo_safety.outside_installation(path) == path
     assert repo_safety.outside_installation(tmp_path / "new") == tmp_path / "new"
+    broken = tmp_path / "broken"
+    (broken / "playbooks").mkdir(parents=True)
+    (broken / ".git").write_text("invalid gitdir\n")
+    for path in (broken, broken / "playbooks", broken / "new/deep"):
+        assert repo_safety.outside_installation(path) == path
+    (broken / ".git").write_text("gitdir: " + str(tmp_path / "missing") + "\n")
+    assert repo_safety.outside_installation(broken) == broken
 
 
-def test_probe_failure_is_reported_without_claiming_install_metadata(tmp_path, monkeypatch):
+def test_unsuccessful_probe_leaves_repository_errors_to_the_caller(tmp_path, monkeypatch):
     install = tmp_path / "install"
     install.mkdir()
     repo = tmp_path / "bot"
@@ -71,5 +78,4 @@ def test_probe_failure_is_reported_without_claiming_install_metadata(tmp_path, m
     (repo / "playbooks").mkdir()
     monkeypatch.setattr(repo_safety, "ROOT", install)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 128, "", "probe failed"))
-    with pytest.raises(ValueError, match="^Cannot check repository identity:"):
-        repo_safety.outside_installation(repo / "playbooks")
+    assert repo_safety.outside_installation(repo / "playbooks") == repo / "playbooks"
