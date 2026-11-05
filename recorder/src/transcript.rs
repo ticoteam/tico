@@ -8,6 +8,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 const ECHO_MS: u64 = 1000;
+/// Live reference waits never hide speech for more than eight seconds of recording time.
+const REFERENCE_WAIT_MS: u64 = 8000;
 /// A pause this long inside one chunk ends an utterance, so the other side can interleave.
 const UTTERANCE_GAP_MS: u64 = 800;
 /// Same-speaker utterances closer than this join one line.
@@ -71,7 +73,7 @@ fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Conservative spelling tolerance: short acknowledgements still require an exact match.
+/// Conservative spelling tolerance within a matching word run.
 fn similar(a: &str, b: &str) -> bool {
     if a == b {
         return true;
@@ -100,28 +102,13 @@ fn similar(a: &str, b: &str) -> bool {
     row[b.len()] <= limit
 }
 
-/// Meeting-audio tokens by time, including joined tokens for differently split hyphenated words.
+/// Ordered meeting-audio tokens. Only matching runs are echo; adjacent unmatched speech stays.
 struct Heard(Vec<(u64, String)>);
 impl Heard {
     fn of<'a>(words: impl Iterator<Item = &'a Word>) -> Self {
         let mut heard: Vec<_> = words
             .flat_map(|w| tokens(&w.text).into_iter().map(move |t| (w.start_ms, t)))
             .collect();
-        heard.sort_by_key(|(at, _)| *at);
-        let joined: Vec<_> = heard
-            .windows(2)
-            .filter(|w| w[1].0.saturating_sub(w[0].0) < UTTERANCE_GAP_MS)
-            .flat_map(|w| {
-                let mut forms = vec![(w[0].0, format!("{}{}", w[0].1, w[1].1))];
-                if let (Ok(tens), Ok(units)) = (w[0].1.parse::<u32>(), w[1].1.parse::<u32>()) {
-                    if tens >= 20 && tens <= 90 && tens % 10 == 0 && units < 10 {
-                        forms.push((w[0].0, (tens + units).to_string()));
-                    }
-                }
-                forms
-            })
-            .collect();
-        heard.extend(joined);
         heard.sort_by_key(|(at, _)| *at);
         Self(heard)
     }
@@ -131,55 +118,83 @@ impl Heard {
                 .chunks
                 .iter()
                 .filter(|c| c.channel != "me")
-                .flat_map(|c| c.words.iter()),
+                .flat_map(|c| &c.words),
         )
     }
-    fn echo(&self, start: u64, text: &str) -> bool {
-        let first = self
-            .0
-            .partition_point(|(at, _)| at.saturating_add(ECHO_MS) < start);
-        let nearby: Vec<_> = self.0[first..]
-            .iter()
-            .take_while(|(at, _)| *at <= start.saturating_add(ECHO_MS))
-            .collect();
-        let words = tokens(text);
-        !words.is_empty()
-            && (words
-                .iter()
-                .all(|word| nearby.iter().any(|(_, other)| similar(word, other)))
-                || nearby
-                    .iter()
-                    .any(|(_, other)| similar(&normal(text), other)))
-    }
     fn clean(&self, words: &[Word]) -> Vec<Word> {
-        let mut out = vec![];
-        let mut from = 0;
-        while from < words.len() {
-            let mut to = from + 1;
-            while to < words.len()
-                && words[to].start_ms.saturating_sub(words[to - 1].end_ms) < UTTERANCE_GAP_MS
-            {
-                to += 1;
+        let mic: Vec<_> = words
+            .iter()
+            .enumerate()
+            .flat_map(|(i, w)| tokens(&w.text).into_iter().map(move |t| (w.start_ms, t, i)))
+            .collect();
+        let form = |parts: &[&str]| {
+            if parts.len() == 2 {
+                if let (Ok(tens), Ok(units)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                    if (20..=90).contains(&tens) && tens % 10 == 0 && units < 10 {
+                        return (tens + units).to_string();
+                    }
+                }
             }
-            let utterance = &words[from..to];
-            let echoes: Vec<_> = utterance
-                .iter()
-                .map(|w| self.echo(w.start_ms, &w.text))
-                .collect();
-            // Drop the entire echoed utterance, including recognition debris such as "an" or "uh".
-            // Separate genuine local speech in the same chunk keeps its own decision.
-            if echoes.iter().filter(|e| **e).count() * 5 < utterance.len() * 3 {
-                out.extend(
-                    utterance
-                        .iter()
-                        .zip(echoes)
-                        .filter(|(_, echo)| !echo)
-                        .map(|(w, _)| w.clone()),
-                );
+            parts.concat()
+        };
+        let mut removed = vec![false; mic.len()];
+        for from in 0..mic.len() {
+            let first = self
+                .0
+                .partition_point(|(at, _)| at.saturating_add(ECHO_MS) < mic[from].0);
+            for reference in first..self.0.len() {
+                if self.0[reference].0 > mic[from].0.saturating_add(ECHO_MS) {
+                    break;
+                }
+                let (mut m, mut r) = (from, reference);
+                while m < mic.len() && r < self.0.len() {
+                    if mic[m].0.abs_diff(self.0[r].0) > ECHO_MS {
+                        break;
+                    }
+                    if m > from && mic[m].0.saturating_sub(mic[m - 1].0) >= UTTERANCE_GAP_MS {
+                        break;
+                    }
+                    let mut matched = None;
+                    'forms: for mc in 1..=2 {
+                        for rc in 1..=2 {
+                            if m + mc > mic.len() || r + rc > self.0.len() {
+                                continue;
+                            }
+                            let a: Vec<_> = mic[m..m + mc].iter().map(|x| x.1.as_str()).collect();
+                            let b: Vec<_> =
+                                self.0[r..r + rc].iter().map(|x| x.1.as_str()).collect();
+                            if similar(&form(&a), &form(&b)) {
+                                matched = Some((mc, rc));
+                                break 'forms;
+                            }
+                        }
+                    }
+                    let Some((mc, rc)) = matched else {
+                        break;
+                    };
+                    m += mc;
+                    r += rc;
+                }
+                // A lone acknowledgement or name is never enough evidence to delete Me.
+                if m - from >= 3 && r - reference >= 3 {
+                    removed[from..m].fill(true);
+                }
             }
-            from = to;
         }
-        out
+        words
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                let indexes: Vec<_> = mic
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.2 == *i)
+                    .map(|(j, _)| j)
+                    .collect();
+                indexes.is_empty() || indexes.iter().any(|j| !removed[*j])
+            })
+            .map(|(_, w)| w.clone())
+            .collect()
     }
 }
 
@@ -299,7 +314,10 @@ pub fn covered(record: &Recording, channel: &str, at_ms: u64) -> bool {
 /// Whether meeting-audio transcription has reached a microphone range. Silence counts as a
 /// completed reference; a later streaming final also settles the preceding quiet interval.
 pub fn echo_ready(record: &Recording, from: u64, to: u64, them: &[Word]) -> bool {
-    if !record.meeting_audio {
+    if !record.meeting_audio || record.state != "recording" {
+        return true;
+    }
+    if recording_ms(record).is_some_and(|now| now >= from.saturating_add(REFERENCE_WAIT_MS)) {
         return true;
     }
     if them.iter().map(|w| w.end_ms).max().unwrap_or(0) >= to.saturating_add(ECHO_MS) {
@@ -317,7 +335,40 @@ pub fn echo_ready(record: &Recording, from: u64, to: u64, them: &[Word]) -> bool
         && chunks
             .iter()
             .filter(|c| c.start_ms < to && c.end_ms > from)
-            .all(|c| ["done", "silence"].contains(&c.status.as_str()))
+            .all(|c| ["done", "silence", "failed"].contains(&c.status.as_str()))
+}
+
+fn recording_ms(record: &Recording) -> Option<u64> {
+    let start = chrono::DateTime::parse_from_rfc3339(&record.started_at).ok()?;
+    Some(
+        chrono::Utc::now()
+            .signed_duration_since(start)
+            .num_milliseconds()
+            .max(0) as u64,
+    )
+}
+
+/// Both sharing channels stop at the first microphone word still waiting for a reference.
+/// Compute this before the snapshot hides pending mic words.
+pub fn delivery_frontier(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> u64 {
+    let them = reference_words(record, streamed);
+    let pending_stream = streamed
+        .get("me")
+        .into_iter()
+        .flatten()
+        .filter(|w| !covered(record, "me", w.start_ms))
+        .filter(|w| !echo_ready(record, w.start_ms, w.end_ms, &them))
+        .map(|w| w.start_ms);
+    let pending_chunks = record
+        .chunks
+        .iter()
+        .filter(|c| c.channel == "me")
+        .filter(|c| !echo_ready(record, c.start_ms, c.end_ms, &them))
+        .map(|c| c.words.first().map_or(c.start_ms, |w| w.start_ms));
+    pending_stream
+        .chain(pending_chunks)
+        .min()
+        .unwrap_or(u64::MAX)
 }
 
 /// Hold a whole microphone utterance until its reference is ready, before echo decisions or
@@ -534,7 +585,7 @@ pub fn live_turns(
         let me = partial.channel == "me";
         if me {
             // A changing mic tail cannot establish that unmatched fragments are local speech.
-            // Wait for a settled meeting reference, then apply the whole-utterance rule.
+            // Wait for a settled meeting reference, then remove only matching word runs.
             if !echo_ready(record, partial.start_ms, partial.end_ms, &reference) {
                 continue;
             }
@@ -578,18 +629,24 @@ pub fn live_turns(
                 .map_or_else(
                     || "Meeting audio".to_owned(),
                     |word| {
-                        if word.speaker.starts_with("Speaker ") {
-                            return word.speaker.clone();
-                        }
-                        let mut labels: Vec<_> =
-                            reference.iter().filter(|w| !w.speaker.is_empty()).collect();
-                        labels.sort_by_key(|w| w.start_ms);
-                        let mut names = BTreeMap::new();
-                        for w in labels {
-                            let n = names.len() + 1;
-                            names.entry(&w.speaker).or_insert(n);
-                        }
-                        format!("Speaker {}", names.get(&word.speaker).copied().unwrap_or(1))
+                        record
+                            .speaker_labels
+                            .get(&word.speaker)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                let mut named = record.clone();
+                                named.register_speakers(
+                                    reference
+                                        .iter()
+                                        .map(|w| (w.speaker.clone(), w.speaker.clone()))
+                                        .collect(),
+                                );
+                                named
+                                    .speaker_labels
+                                    .get(&word.speaker)
+                                    .cloned()
+                                    .unwrap_or_else(|| "Meeting audio".into())
+                            })
                     },
                 )
         };
@@ -624,37 +681,27 @@ pub fn chunk_texts(record: &Recording) -> BTreeMap<String, String> {
 pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
     let heard = Heard::chunks(record);
     let mut out = BTreeMap::new();
-    let mut labelled: Vec<_> = record
-        .chunks
-        .iter()
-        .filter(|c| c.channel != "me")
-        .flat_map(|c| c.words.iter().map(move |w| (w.start_ms, identity(c, w))))
-        .chain(
-            record
-                .chunks
-                .iter()
-                .filter(|c| c.channel != "me" && c.words.is_empty())
-                .map(|c| (c.start_ms, identity(c, &Word::default()))),
-        )
-        .filter(|(_, label)| !label.is_empty())
-        .collect();
-    labelled.sort_by_key(|w| w.0);
-    let mut next = labelled
-        .iter()
-        .filter_map(|(_, label)| label.strip_prefix("Speaker ")?.parse::<usize>().ok())
-        .max()
-        .unwrap_or(0)
-        + 1;
-    let mut names = BTreeMap::new();
-    for (_, label) in labelled {
-        if label.starts_with("Speaker ") {
-            continue;
-        }
-        if !names.contains_key(&label) {
-            names.insert(label, format!("Speaker {next}"));
-            next += 1;
-        }
-    }
+    let mut named = record.clone();
+    named.register_speakers(
+        record
+            .chunks
+            .iter()
+            .filter(|c| c.channel == "them")
+            .flat_map(|c| {
+                c.words
+                    .iter()
+                    .map(move |w| (speaker_identity(c, w), w.speaker.clone()))
+            })
+            .chain(
+                record
+                    .chunks
+                    .iter()
+                    .filter(|c| c.channel == "them" && c.words.is_empty())
+                    .map(|c| (speaker_identity(c, &Word::default()), c.speaker.clone())),
+            )
+            .collect(),
+    );
+    let names = &named.speaker_labels;
     for chunk in record.chunks.iter().filter(|c| !c.text.trim().is_empty()) {
         let me = chunk.channel == "me";
         if me
@@ -679,7 +726,7 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
             words
                 .into_iter()
                 .map(|word| {
-                    let label = identity(chunk, &word);
+                    let label = speaker_identity(chunk, &word);
                     Word {
                         speaker: names.get(&label).cloned().unwrap_or(label),
                         ..word
@@ -692,11 +739,11 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
     out
 }
 
-fn identity(chunk: &Chunk, word: &Word) -> String {
-    if !word.speaker.is_empty() {
+pub(crate) fn speaker_identity(chunk: &Chunk, word: &Word) -> String {
+    if !word.turn.is_empty() {
+        format!("chunk:{}:turn:{}", chunk.id, word.turn)
+    } else if !word.speaker.is_empty() {
         word.speaker.clone()
-    } else if !word.turn.is_empty() {
-        format!("{}:{}", chunk.id, word.turn)
     } else if !["Meeting audio", "Me"].contains(&chunk.speaker.as_str()) {
         chunk.speaker.clone()
     } else {
@@ -745,7 +792,8 @@ mod tests {
                     (600, "hear?", ""),
                     // The far end's reply, played on speakers, reaches the mic 40 ms later.
                     (2040, "yes,", ""),
-                    (2340, "fine.", ""),
+                    (2240, "all", ""),
+                    (2440, "fine.", ""),
                     (5000, "Great.", ""),
                 ],
             ),
@@ -755,7 +803,8 @@ mod tests {
                 0,
                 &[
                     (2000, "Yes,", "Speaker 1"),
-                    (2300, "fine.", "Speaker 1"),
+                    (2200, "all", "Speaker 1"),
+                    (2400, "fine.", "Speaker 1"),
                     (3500, "Me", "Speaker 2"),
                     (3800, "too.", "Speaker 2"),
                 ],
@@ -769,7 +818,7 @@ mod tests {
             got,
             [
                 ("Me", "Can you hear?"),
-                ("Speaker 1", "Yes, fine."),
+                ("Speaker 1", "Yes, all fine."),
                 ("Speaker 2", "Me too."),
                 ("Me", "Great.")
             ]
@@ -859,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn whole_echo_utterances_drop_short_unmatched_fragments_but_keep_local_speech() {
+    fn matching_runs_keep_unmatched_fragments_and_local_speech() {
         let mic = chunk(
             "m",
             "me",
@@ -890,8 +939,8 @@ mod tests {
             ],
         );
         let record = record(vec![mic, them]);
-        assert_eq!(chunk_texts(&record)["m"], "My different proposal");
-        assert_eq!(chunk_words(&record)["m"].len(), 3);
+        assert_eq!(chunk_texts(&record)["m"], "Uh, an My different proposal");
+        assert_eq!(chunk_words(&record)["m"].len(), 5);
     }
 
     #[test]
@@ -932,7 +981,13 @@ mod tests {
             ],
             1020,
         );
-        assert!(without_echo(&mic, &remote).is_empty());
+        assert_eq!(
+            without_echo(&mic, &remote)
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>(),
+            ["uh"]
+        );
         assert_eq!(
             without_echo(&words(&["no", "my", "local", "idea"], 1000), &remote).len(),
             4
@@ -956,7 +1011,11 @@ mod tests {
             "m",
             "me",
             0,
-            &[(1020, "Ship", ""), (1320, "tomorrow", ""), (1620, "uh", "")],
+            &[
+                (1020, "Ship", ""),
+                (1320, "this", ""),
+                (1620, "tomorrow", ""),
+            ],
         );
         let mut remote = chunk("t", "them", 0, &[]);
         remote.status = "running".into();
@@ -972,7 +1031,11 @@ mod tests {
             "t",
             "them",
             0,
-            &[(1000, "Ship", ""), (1300, "tomorrow", "")],
+            &[
+                (1000, "Ship", ""),
+                (1300, "this", ""),
+                (1600, "tomorrow", ""),
+            ],
         );
         assert!(!chunk_texts(&record).contains_key("m"));
         assert_eq!(live_lines(&record, &BTreeMap::new()).len(), 1);
@@ -986,7 +1049,11 @@ mod tests {
             "m",
             "me",
             0,
-            &[(1020, "Ship", ""), (1320, "tomorrow", ""), (1620, "uh", "")],
+            &[
+                (1020, "Ship", ""),
+                (1320, "this", ""),
+                (1620, "tomorrow", ""),
+            ],
         );
         let mut remote = chunk("t", "them", 0, &[]);
         remote.status = "pending".into();
@@ -1004,6 +1071,12 @@ mod tests {
                 Word {
                     start_ms: 1300,
                     end_ms: 1500,
+                    text: "this".into(),
+                    ..Default::default()
+                },
+                Word {
+                    start_ms: 1600,
+                    end_ms: 1800,
                     text: "tomorrow".into(),
                     ..Default::default()
                 },
@@ -1025,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn streamed_microphone_finals_and_partials_wait_and_drop_whole_echo() {
+    fn streamed_microphone_finals_and_partials_wait_and_drop_matching_run() {
         let mut record = record(vec![]);
         record.state = "recording".into();
         let me = vec![
@@ -1038,13 +1111,13 @@ mod tests {
             Word {
                 start_ms: 1220,
                 end_ms: 1400,
-                text: "tomorrow".into(),
+                text: "this".into(),
                 ..Default::default()
             },
             Word {
                 start_ms: 1420,
                 end_ms: 1500,
-                text: "uh".into(),
+                text: "tomorrow".into(),
                 ..Default::default()
             },
         ];
@@ -1053,7 +1126,7 @@ mod tests {
             channel: "me".into(),
             start_ms: 1020,
             end_ms: 1500,
-            text: "Ship tomorrow uh".into(),
+            text: "Ship this tomorrow".into(),
             words: me,
         };
         assert!(live_turns(&record, &streamed, &[partial.clone()]).is_empty());
@@ -1069,6 +1142,12 @@ mod tests {
                 Word {
                     start_ms: 1200,
                     end_ms: 1400,
+                    text: "this".into(),
+                    ..Default::default()
+                },
+                Word {
+                    start_ms: 1400,
+                    end_ms: 1500,
                     text: "tomorrow".into(),
                     ..Default::default()
                 },
@@ -1172,7 +1251,11 @@ mod tests {
             "t",
             "them",
             0,
-            &[(1000, "Ship", ""), (1300, "tomorrow", "")],
+            &[
+                (1000, "Ship", ""),
+                (1300, "this", ""),
+                (1600, "tomorrow", ""),
+            ],
         )]);
         let mic = vec![
             Word {
@@ -1184,16 +1267,137 @@ mod tests {
             Word {
                 start_ms: 1320,
                 end_ms: 1500,
-                text: "tomorrow".into(),
+                text: "this".into(),
                 ..Default::default()
             },
             Word {
                 start_ms: 1620,
                 end_ms: 1700,
-                text: "uh".into(),
+                text: "tomorrow".into(),
                 ..Default::default()
             },
         ];
         assert!(live_microphone(&record, &mic, &[]).is_empty());
+    }
+    #[test]
+    fn echoed_run_keeps_the_reply_and_short_genuine_shared_words() {
+        let remote: Vec<_> = "we should ship the release before next monday"
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, text)| Word {
+                start_ms: 1000 + i as u64 * 200,
+                end_ms: 1180 + i as u64 * 200,
+                text: text.into(),
+                ..Default::default()
+            })
+            .collect();
+        let mut mic = vec![Word {
+            start_ms: 800,
+            end_ms: 980,
+            text: "Wait".into(),
+            ..Default::default()
+        }];
+        mic.extend(remote.iter().map(|w| Word {
+            start_ms: w.start_ms + 20,
+            end_ms: w.end_ms + 20,
+            ..w.clone()
+        }));
+        mic.extend([
+            Word {
+                start_ms: 2620,
+                end_ms: 2800,
+                text: "I".into(),
+                ..Default::default()
+            },
+            Word {
+                start_ms: 2820,
+                end_ms: 3000,
+                text: "disagree".into(),
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            without_echo(&mic, &remote)
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Wait", "I", "disagree"]
+        );
+        for text in ["yes", "okay", "Acme"] {
+            let word = Word {
+                start_ms: 1000,
+                end_ms: 1200,
+                text: text.into(),
+                ..Default::default()
+            };
+            assert_eq!(without_echo(&[word.clone()], &[word.clone()]), [word]);
+        }
+    }
+
+    #[test]
+    fn missing_failed_stopped_and_timed_out_references_release_every_view() {
+        for reason in ["mic-only", "failed", "stopped", "timeout"] {
+            let mic = chunk("m", "me", 0, &[(1000, "I disagree", "")]);
+            let mut remote = chunk("t", "them", 0, &[]);
+            remote.status = if reason == "failed" {
+                "failed"
+            } else {
+                "running"
+            }
+            .into();
+            let mut record = record(vec![mic, remote]);
+            record.state = if reason == "stopped" {
+                "stopped"
+            } else {
+                "recording"
+            }
+            .into();
+            record.meeting_audio = reason != "mic-only";
+            if reason == "timeout" {
+                record.started_at =
+                    (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+            }
+            let streamed = BTreeMap::from([(
+                "me".into(),
+                vec![Word {
+                    start_ms: 46_000,
+                    end_ms: 46_200,
+                    text: "My reply".into(),
+                    ..Default::default()
+                }],
+            )]);
+            let mut live_record = record.clone();
+            // The live final precedes the missing reference in capture time for timeout coverage.
+            live_record.chunks.clear();
+            let early = BTreeMap::from([(
+                "me".into(),
+                vec![Word {
+                    start_ms: 1000,
+                    end_ms: 1200,
+                    text: "My reply".into(),
+                    ..Default::default()
+                }],
+            )]);
+            if reason != "failed" {
+                assert!(
+                    live_turns(&live_record, &early, &[])
+                        .iter()
+                        .any(|l| l.text == "My reply"),
+                    "{reason}"
+                );
+            }
+            assert_eq!(lines(&record)[0].text, "I disagree", "{reason}: export");
+            assert!(
+                live_lines(&record, &streamed)
+                    .iter()
+                    .any(|l| l.text == "I disagree"),
+                "{reason}: display"
+            );
+            assert_eq!(
+                echo_snapshot(&record, &BTreeMap::new()).chunks[0].status,
+                "done",
+                "{reason}: share"
+            );
+        }
     }
 }

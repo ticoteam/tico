@@ -133,6 +133,46 @@ pub struct Recording {
     /// Speaker labels for meeting audio: "" (not run), "running", "done" or the error.
     #[serde(default)]
     pub speakers: String,
+    /// Stable voice/turn ids to their first displayed label; names can attach to these ids later.
+    #[serde(default)]
+    pub speaker_labels: BTreeMap<String, String>,
+}
+impl Recording {
+    pub(crate) fn register_speakers(&mut self, mut identities: Vec<(String, String)>) {
+        identities.retain(|(id, _)| !id.is_empty());
+        // Reserve model identities first, then bind each stable chunk/turn to that identity.
+        for (_, preferred) in &identities {
+            if !preferred.is_empty() && !self.speaker_labels.contains_key(preferred) {
+                self.reserve_speaker(preferred, preferred);
+            }
+        }
+        for (id, preferred) in identities {
+            if !id.is_empty() && !self.speaker_labels.contains_key(&id) {
+                let label = self.speaker_labels.get(&preferred).cloned();
+                if let Some(label) = label {
+                    self.speaker_labels.insert(id, label);
+                } else {
+                    self.reserve_speaker(&id, "");
+                }
+            }
+        }
+    }
+    fn reserve_speaker(&mut self, id: &str, preferred: &str) {
+        let used = |label: &str| self.speaker_labels.values().any(|v| v == label);
+        let label = if preferred.starts_with("Speaker ") && !used(preferred) {
+            preferred.to_owned()
+        } else {
+            let next = self
+                .speaker_labels
+                .values()
+                .filter_map(|v| v.strip_prefix("Speaker ")?.parse::<usize>().ok())
+                .max()
+                .unwrap_or(0)
+                + 1;
+            format!("Speaker {next}")
+        };
+        self.speaker_labels.insert(id.to_owned(), label);
+    }
 }
 /// One recognised word, in recording time. `speaker` is set when diarization named a voice;
 /// `turn` is the transcription service's own speaker label, which only holds within one chunk.
@@ -383,6 +423,7 @@ impl Store {
             chunks: vec![],
             deliveries: vec![],
             speakers: String::new(),
+            speaker_labels: BTreeMap::new(),
         };
         self.db()?.execute(
             "INSERT INTO recordings VALUES(?,?)",
@@ -462,7 +503,8 @@ impl Store {
     }
     pub fn get(&self, id: &str) -> Result<Recording> {
         clean_id(id)?;
-        let db = self.db()?;
+        let mut connection = self.db()?;
+        let db = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let text: String = db
             .query_row("SELECT document FROM recordings WHERE id=?", [id], |r| {
                 r.get(0)
@@ -476,6 +518,7 @@ impl Store {
             .query_map([id], |r| r.get::<_, String>(0))?
             .map(|text| Ok(serde_json::from_str(&text?)?))
             .collect::<Result<_>>()?;
+        drop(query);
         value.chunks.sort_by(|a, b| {
             a.start_ms
                 .cmp(&b.start_ms)
@@ -489,6 +532,45 @@ impl Store {
             .query_map([id], |r| r.get::<_, String>(0))?
             .map(|text| Ok(serde_json::from_str(&text?)?))
             .collect::<Result<_>>()?;
+        drop(query);
+        let before = value.speaker_labels.clone();
+        let mut identities: Vec<_> = value
+            .chunks
+            .iter()
+            .filter(|c| c.channel == "them")
+            .flat_map(|c| {
+                c.words
+                    .iter()
+                    .map(move |w| (crate::transcript::speaker_identity(c, w), w.speaker.clone()))
+            })
+            .chain(
+                value
+                    .chunks
+                    .iter()
+                    .filter(|c| c.channel == "them" && c.words.is_empty())
+                    .map(|c| {
+                        (
+                            crate::transcript::speaker_identity(c, &Word::default()),
+                            c.speaker.clone(),
+                        )
+                    }),
+            )
+            .collect();
+        let mut query = db.prepare("SELECT words FROM live_words WHERE recording_id=? AND channel='them' ORDER BY start_ms,rowid")?;
+        for row in query.query_map([id], |r| r.get::<_, String>(0))? {
+            identities.extend(
+                serde_json::from_str::<Vec<Word>>(&row?)?
+                    .into_iter()
+                    .map(|w| (w.speaker.clone(), w.speaker)),
+            );
+        }
+        drop(query);
+        value.register_speakers(identities);
+        if value.speaker_labels != before {
+            db.execute("UPDATE recordings SET document=json_set(document,'$.speaker_labels',json(?)) WHERE id=?",
+                params![serde_json::to_string(&value.speaker_labels)?, id])?;
+        }
+        db.commit()?;
         Ok(value)
     }
     pub fn mutate(
@@ -882,6 +964,18 @@ impl Store {
         transaction.commit()?;
         Ok(())
     }
+    /// Reserve partial-stream voices before their first display, including across reconnects.
+    pub(crate) fn register_stream_speakers(&self, id: &str, words: &[Word]) -> Result<()> {
+        self.mutate(id, |record| {
+            record.register_speakers(
+                words
+                    .iter()
+                    .map(|w| (w.speaker.clone(), w.speaker.clone()))
+                    .collect(),
+            );
+            Ok(())
+        })
+    }
     /// Saves one final result of the live stream. It replaces the streamed words that start
     /// within `[from_ms, to_ms]` on this channel, then adds `words`. Streamed words show live
     /// text and early drafts, and reach a live meeting at once; the recording's own transcript is
@@ -1254,5 +1348,68 @@ mod tests {
         let chunk = &store.get(&record.id).unwrap().chunks[0];
         assert_eq!(chunk.status, "pending");
         assert!(chunk.text.is_empty() && chunk.error.contains("oversized"));
+    }
+    #[test]
+    fn displayed_speaker_ids_keep_their_labels_after_new_voices_and_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Stable voices").unwrap();
+        let add = |start, speaker: &str, turn: &str| {
+            store
+                .save_audio(
+                    &record.id,
+                    Channel::Meeting,
+                    start,
+                    start + 1000,
+                    &[0.2; 1600],
+                    16000,
+                )
+                .unwrap();
+            let claimed = store.claim_transcription().unwrap().unwrap();
+            store
+                .transcription_words(
+                    &claimed,
+                    "Hello",
+                    vec![Word {
+                        start_ms: start,
+                        end_ms: start + 300,
+                        text: "Hello".into(),
+                        speaker: speaker.into(),
+                        turn: turn.into(),
+                    }],
+                    "",
+                    serde_json::json!({}),
+                )
+                .unwrap();
+        };
+        add(0, "Speaker 1", "first");
+        add(2000, "", "short");
+        let before = store.get(&record.id).unwrap();
+        let key = format!("chunk:{}:turn:short", before.chunks[1].id);
+        assert_eq!(before.speaker_labels[&key], "Speaker 2");
+        add(4000, "Speaker 2", "new");
+        let after = store.get(&record.id).unwrap();
+        assert_eq!(after.speaker_labels[&key], "Speaker 2");
+        assert_eq!(
+            crate::transcript::lines(&after)
+                .iter()
+                .map(|l| l.speaker.as_str())
+                .collect::<Vec<_>>(),
+            ["Speaker 1", "Speaker 2", "Speaker 3"]
+        );
+        let reopened = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened.get(&record.id).unwrap().speaker_labels,
+            after.speaker_labels
+        );
+        let mut relabelled = after.chunks[1].words.clone();
+        relabelled[0].speaker = "Speaker 9".into();
+        store
+            .label_speakers(&record.id, &[(after.chunks[1].id.clone(), relabelled)])
+            .unwrap();
+        assert_eq!(
+            crate::transcript::lines(&store.get(&record.id).unwrap())[1].speaker,
+            "Speaker 2"
+        );
     }
 }

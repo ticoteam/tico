@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::{
     Arc,
-    atomic::{AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 pub const PACKET_SAMPLES: usize = 1024;
@@ -106,6 +106,12 @@ pub trait CaptureStream: Send {
     fn stop(&mut self) -> Result<()>;
 }
 
+/// Optional processed samples for live text. The saved source always remains unprocessed.
+pub struct LiveInput {
+    pub consumer: Consumer<Packet>,
+    pub processed: Arc<AtomicBool>,
+}
+
 pub struct Source {
     pub channel: Channel,
     pub name: String,
@@ -114,6 +120,7 @@ pub struct Source {
     pub health: Arc<Health>,
     pub consumer: Consumer<Packet>,
     pub stream: Box<dyn CaptureStream>,
+    pub live_input: Option<LiveInput>,
 }
 
 impl Drop for Source {
@@ -220,6 +227,7 @@ pub fn start_microphone(name: Option<&str>) -> Result<Source> {
         health,
         consumer,
         stream: Box::new(Microphone(stream)),
+        live_input: None,
     })
 }
 
@@ -290,6 +298,7 @@ pub fn start_paced(
         health,
         consumer,
         stream: Box::new(Paced(stop)),
+        live_input: None,
     }
 }
 

@@ -432,6 +432,7 @@ fn replay_test(
             health,
             consumer,
             stream: Box::new(Synthetic),
+            live_input: None,
         }
     }
     let config = Settings {

@@ -58,7 +58,7 @@ def main(args=None):
     if a.save:
         a.save.mkdir(parents=True, exist_ok=True)
         (a.save / "bleed-replay.json").write_text(json.dumps(dict(result=result,record=record,output=out),indent=2))
-    if result["after_bleed_words"] or result["local_words_after"] != 20:
+    if result["after_bleed_words"] != 5 or result["local_words_after"] != 20:
         raise SystemExit("Bleed replay regressed")
 
 

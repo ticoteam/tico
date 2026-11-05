@@ -530,6 +530,7 @@ fn a_full_stream_queue_drops_streamed_audio_and_never_recorded_audio() {
                     health,
                     consumer,
                     stream: Box::new(Synthetic),
+                    live_input: None,
                 }],
                 String::new(),
             ))
@@ -725,7 +726,6 @@ fn sparse_service_speakers_keep_first_seen_numbers_across_final_events() {
         queued: Arc::default(),
         dropped: Arc::default(),
         reconnects: 0,
-        voices: BTreeMap::new(),
         settings_version: None,
     };
     for (at, raw) in [(1.0, 3), (3.0, 0), (5.0, 3)] {
@@ -738,6 +738,14 @@ fn sparse_service_speakers_keep_first_seen_numbers_across_final_events() {
         words["them"]
             .iter()
             .map(|w| w.speaker.as_str())
+            .collect::<Vec<_>>(),
+        ["stream:S4", "stream:S1", "stream:S4"]
+    );
+    let record = store.get(&record.id).unwrap();
+    assert_eq!(
+        words["them"]
+            .iter()
+            .map(|w| record.speaker_labels[&w.speaker].as_str())
             .collect::<Vec<_>>(),
         ["Speaker 1", "Speaker 2", "Speaker 1"]
     );

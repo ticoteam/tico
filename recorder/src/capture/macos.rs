@@ -338,18 +338,23 @@ pub fn start() -> Result<Source> {
         health,
         consumer,
         stream: Box::new(tap),
+        live_input: None,
     })
 }
 
 unsafe extern "C" {
     fn tico_voice_start(
         selected: *const std::ffi::c_char,
-        context: *mut c_void,
+        raw: *mut c_void,
+        voice: *mut c_void,
         receive: unsafe extern "C" fn(*mut c_void, *const *const f32, u32, u32, u64, f64),
         release: unsafe extern "C" fn(*mut c_void),
-        rate: *mut f64,
+        state: unsafe extern "C" fn(*mut c_void, bool),
+        testing: bool,
     ) -> *mut c_void;
     fn tico_voice_stop(capture: *mut c_void);
+    #[cfg(test)]
+    fn tico_voice_test_configuration(capture: *mut c_void, fail_voice: bool);
 }
 
 struct VoiceInput {
@@ -357,6 +362,7 @@ struct VoiceInput {
     origin: u64,
     numer: u32,
     denom: u32,
+    processed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 unsafe extern "C" fn voice_receive(
     context: *mut c_void,
@@ -364,10 +370,12 @@ unsafe extern "C" fn voice_receive(
     channels: u32,
     frames: u32,
     host_time: u64,
-    rate: f64,
+    _rate: f64,
 ) {
-    // AVAudioEngine serializes the tap, and its block owns this context until the final callback.
-    let state = unsafe { &mut *context.cast::<VoiceInput>() };
+    // Each engine owns a separate context and serializes its own tap callbacks.
+    let pointer = context.cast::<VoiceInput>();
+    let (origin, numer, denom) = unsafe { ((*pointer).origin, (*pointer).numer, (*pointer).denom) };
+    let sink = unsafe { &mut *ptr::addr_of_mut!((*pointer).sink) };
     if data.is_null() || channels == 0 || channels > 32 {
         return;
     }
@@ -375,20 +383,22 @@ unsafe extern "C" fn voice_receive(
     if data.iter().any(|p| p.is_null()) {
         return;
     }
-    let nanos =
-        host_time.saturating_sub(state.origin) as u128 * state.numer as u128 / state.denom as u128;
-    state
-        .sink
-        .set_frame((nanos as f64 * rate / 1_000_000_000.) as u64);
-    state.sink.push_frames(frames as usize, |i| {
+    let nanos = host_time.saturating_sub(origin) as u128 * numer as u128 / denom as u128;
+    sink.set_frame((nanos * 16000 / 1_000_000_000) as u64);
+    sink.push_frames(frames as usize, |i| {
         data.iter().map(|p| unsafe { *p.add(i) }).sum::<f32>() / channels as f32
     });
+}
+unsafe extern "C" fn voice_state(context: *mut c_void, processed: bool) {
+    // State changes may run concurrently with raw capture; only the atomic is accessed here.
+    let flag = unsafe { &*ptr::addr_of!((*context.cast::<VoiceInput>()).processed) };
+    flag.store(processed, Ordering::Release);
 }
 unsafe extern "C" fn voice_release(context: *mut c_void) {
     drop(unsafe { Box::from_raw(context.cast::<VoiceInput>()) });
 }
 struct VoiceCapture(*mut c_void);
-// Only stop touches the handle after construction; the engine owns and serializes its callback.
+// Only stop touches the handle after construction; native restart/stop share one serial queue.
 unsafe impl Send for VoiceCapture {}
 impl CaptureStream for VoiceCapture {
     fn stop(&mut self) -> Result<()> {
@@ -406,9 +416,17 @@ impl Drop for VoiceCapture {
 }
 
 pub fn start_voice_microphone(name: Option<&str>) -> Result<Source> {
+    start_voice_microphone_inner(name, false).map(|(source, _)| source)
+}
+fn start_voice_microphone_inner(
+    name: Option<&str>,
+    testing: bool,
+) -> Result<(Source, *mut c_void)> {
     let selected = name.map(std::ffi::CString::new).transpose()?;
     let (sink, consumer) = AudioSink::channel();
     let health = sink.health.clone();
+    let (aid, live_consumer) = AudioSink::channel();
+    let processed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut clock = Timebase { numer: 0, denom: 0 };
     checked(
         unsafe { mach_timebase_info(&mut clock) },
@@ -416,35 +434,71 @@ pub fn start_voice_microphone(name: Option<&str>) -> Result<Source> {
     )?;
     ensure!(clock.denom != 0, "Invalid microphone clock");
     let started = std::time::Instant::now();
-    let context = Box::into_raw(Box::new(VoiceInput {
-        sink,
-        origin: unsafe { mach_absolute_time() },
-        numer: clock.numer,
-        denom: clock.denom,
-    }));
-    // The bridge takes ownership on success and failure and sets rate before starting callbacks.
-    let mut rate = 0.;
+    let origin = unsafe { mach_absolute_time() };
+    let context = |sink| {
+        Box::into_raw(Box::new(VoiceInput {
+            sink,
+            origin,
+            numer: clock.numer,
+            denom: clock.denom,
+            processed: processed.clone(),
+        }))
+        .cast()
+    };
+    // Both contexts transfer to the bridge on success and failure.
     let capture = unsafe {
         tico_voice_start(
             selected.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
-            context.cast(),
+            context(sink),
+            context(aid),
             voice_receive,
             voice_release,
-            &mut rate,
+            voice_state,
+            testing,
         )
     };
     ensure!(
         !capture.is_null(),
         "Voice processing is unavailable for this microphone route"
     );
-    let rate = rate as u32;
-    Ok(Source {
-        channel: Channel::Microphone,
-        name: name.unwrap_or("Built-in microphone").into(),
-        sample_rate: rate,
-        started,
-        health,
-        consumer,
-        stream: Box::new(VoiceCapture(capture)),
-    })
+    Ok((
+        Source {
+            channel: Channel::Microphone,
+            name: name.unwrap_or("Built-in microphone").into(),
+            sample_rate: 16000,
+            started,
+            health,
+            consumer,
+            stream: Box::new(VoiceCapture(capture)),
+            live_input: Some(super::LiveInput {
+                consumer: live_consumer,
+                processed,
+            }),
+        },
+        capture,
+    ))
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::*;
+    #[test]
+    fn configuration_change_restarts_and_failure_keeps_raw_capture() {
+        let (mut source, handle) = start_voice_microphone_inner(None, true).unwrap();
+        for failed in [false, true, false] {
+            unsafe {
+                tico_voice_test_configuration(handle, failed);
+            }
+            let raw = source.consumer.pop().unwrap();
+            assert_eq!(raw.samples[0], 0.25, "saved mic must stay raw");
+            let aid = source.live_input.as_mut().unwrap();
+            assert_eq!(aid.processed.load(Ordering::Acquire), !failed);
+            if failed {
+                assert!(aid.consumer.pop().is_err());
+            } else {
+                assert_eq!(aid.consumer.pop().unwrap().samples[0], 0.75);
+            }
+        }
+        source.stream.stop().unwrap();
+    }
 }

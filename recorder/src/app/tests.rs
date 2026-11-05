@@ -688,6 +688,7 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
             health,
             consumer,
             stream: Box::new(Synthetic),
+            live_input: None,
         }
     };
     let directory = tempfile::tempdir().unwrap();
@@ -794,6 +795,7 @@ fn delete_during_capture_stop(fail_stop: bool, shutdown: bool) {
                     started: Instant::now(),
                     health,
                     consumer,
+                    live_input: None,
                     stream: Box::new(GatedStop {
                         entered,
                         release: Some(gate),

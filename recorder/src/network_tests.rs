@@ -4406,8 +4406,8 @@ fn speaker_bleed_never_enters_the_live_outbox_when_microphone_finishes_first() {
         5000,
         vec![
             word(1020, 1200, "Ship", ""),
-            word(1320, 1500, "tomorrow", ""),
-            word(1620, 1700, "uh", ""),
+            word(1320, 1500, "this", ""),
+            word(1620, 1800, "tomorrow", ""),
         ],
     );
     store
@@ -4437,13 +4437,14 @@ fn speaker_bleed_never_enters_the_live_outbox_when_microphone_finishes_first() {
     let remote = store.claim_transcription().unwrap().unwrap();
     let mut words = vec![
         word(1000, 1200, "Ship", ""),
-        word(1300, 1500, "tomorrow", ""),
+        word(1300, 1500, "this", ""),
+        word(1600, 1800, "tomorrow", ""),
     ];
     for word in &mut words {
         word.turn = "remote-4".into();
     }
     store
-        .transcription_words(&remote, "Ship tomorrow", words, "", json!({}))
+        .transcription_words(&remote, "Ship this tomorrow", words, "", json!({}))
         .unwrap();
     let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
     tico.push_live(&store, id).unwrap();
@@ -4451,6 +4452,70 @@ fn speaker_bleed_never_enters_the_live_outbox_when_microphone_finishes_first() {
     let seen = seen.lock().unwrap();
     let sent = seen[0].1["chunks"].as_array().unwrap();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0]["text"], "Ship tomorrow");
+    assert_eq!(sent[0]["text"], "Ship this tomorrow");
     assert_ne!(sent[0]["speaker"], "Me");
+}
+
+#[test]
+fn held_microphone_and_remote_turn_share_one_frontier_and_keep_capture_timestamps() {
+    for release in ["reference", "failure", "stop", "timeout"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Ordered held turns");
+        let id = record.id.as_str();
+        store
+            .mutate(id, |r| {
+                r.meeting_audio = true;
+                Ok(())
+            })
+            .unwrap();
+        streamed(&store, id, "me", 1000, "I disagree", "");
+        streamed(&store, id, "them", 1500, "remote reply", "S1");
+        let (tico, seen, worker) = server(vec![]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "remote must wait behind Me: {release}"
+        );
+        match release {
+            "reference" => {
+                streamed(&store, id, "them", 3000, "later", "S1");
+            }
+            "failure" => {
+                store
+                    .save_audio(
+                        id,
+                        crate::audio::Channel::Meeting,
+                        0,
+                        5000,
+                        &[0.2; 1600],
+                        16000,
+                    )
+                    .unwrap();
+                store.db().unwrap().execute("UPDATE chunks SET document=json_set(document,'$.status','failed') WHERE recording_id=?", [id]).unwrap();
+            }
+            "stop" => {
+                store.state(id, "stopped").unwrap();
+            }
+            _ => {
+                store
+                    .mutate(id, |r| {
+                        r.started_at =
+                            (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
+        let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2,3]}))]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let sent = calls[0].1["chunks"].as_array().unwrap();
+        assert_eq!(sent[0]["text"], "I disagree", "{release}");
+        assert_eq!(sent[0]["start_ms"], 1000, "{release}");
+        assert_eq!(sent[1]["text"], "remote reply", "{release}");
+        assert_eq!(sent[1]["start_ms"], 1500, "{release}");
+    }
 }

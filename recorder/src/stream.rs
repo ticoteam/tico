@@ -277,7 +277,6 @@ impl Streams {
             queued: queued.clone(),
             dropped: dropped.clone(),
             reconnects: 0,
-            voices: BTreeMap::new(),
             settings_version: self.plan.follow_settings.then(settings::version),
         };
         let spawned = thread::Builder::new()
@@ -319,7 +318,6 @@ struct Worker {
     queued: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
     reconnects: u32,
-    voices: BTreeMap<String, String>,
     settings_version: Option<u64>,
 }
 
@@ -641,17 +639,14 @@ impl Worker {
                                 if raw.is_empty() {
                                     String::new()
                                 } else {
-                                    let next = self.voices.len() + 1;
-                                    self.voices
-                                        .entry(raw)
-                                        .or_insert_with(|| format!("Speaker {next}"))
-                                        .clone()
+                                    format!("stream:{raw}")
                                 }
                             },
                             turn: String::new(),
                         })
                     })
                     .collect();
+                self.store.register_stream_speakers(&self.id, &words)?;
                 let start_s = event["start"].as_f64().unwrap_or(0.);
                 let end_s = start_s + event["duration"].as_f64().unwrap_or(0.);
                 let text = event["text"].as_str().unwrap_or("").trim().to_owned();
