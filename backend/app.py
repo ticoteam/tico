@@ -700,6 +700,22 @@ def create_app(settings=None):
             # them onto the static files ("/download/../index.html").
             if any(part in (".", "..") for part in request.url.path.split("/")):
                 raise Problem("not_found", "Not found", 404)
+            # Public/static exemptions must not become extra routes for an explicit turn credential.
+            # Reuse a valid bearer on the normal authentication path below.
+            bearer_identity = None
+            if request.headers.get("authorization"):
+                try:
+                    bearer_identity = await asyncio.get_running_loop().run_in_executor(
+                        AUTH_POOL, auth.authenticate, request.headers, request.url.path, request.method)
+                except Problem:
+                    pass  # Public routes keep their own credentials; protected routes authenticate below.
+                if bearer_identity and bearer_identity.attempt_id and bearer_identity.role != "runner":
+                    request.state.identity = bearer_identity
+                    def scoped_bearer_route():
+                        from .scoped_routes import require_route
+                        with store.read() as c:
+                            require_route(c, auth, bearer_identity, request.method, request.url.path)
+                    await asyncio.to_thread(scoped_bearer_route)
             if request.url.path.startswith('/public/roadmaps/'):
                 from .public_roadmaps import guard as public_roadmap_guard
                 return await public_roadmap_guard(request, call_next, store)
@@ -782,8 +798,8 @@ def create_app(settings=None):
                           and request.method == "GET")
             if request.url.path != "/api/v2/runners/enroll" and not agent_door:
                 began = time.perf_counter()
-                who = await asyncio.get_running_loop().run_in_executor(AUTH_POOL, auth.authenticate, request.headers,
-                                                                       request.url.path, request.method)
+                who = bearer_identity or await asyncio.get_running_loop().run_in_executor(
+                    AUTH_POOL, auth.authenticate, request.headers, request.url.path, request.method)
                 if who.support:
                     # Again on the path as sent, still percent-encoded: the gate then reads the address the router
                     # will, not a decoded one that could differ from it.
@@ -794,11 +810,12 @@ def create_app(settings=None):
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
-                if who.attempt_id and who.role != "runner":
-                    def scoped_read():
+                if bearer_identity is None and who.attempt_id and who.role != "runner":
+                    def scoped_route():
+                        from .scoped_routes import require_route
                         with store.read() as c:
-                            turn_scope.require_read_route(c, who, request.method, request.url.path)
-                    await asyncio.to_thread(scoped_read)
+                            require_route(c, auth, who, request.method, request.url.path)
+                    await asyncio.to_thread(scoped_route)
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)

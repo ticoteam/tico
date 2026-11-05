@@ -88,7 +88,8 @@ def comment_file(c, auth, files, who, task_id, fid, number):
 def file_added(c, who, task_id, item, number, poster=None):
     """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
     the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
-    H._task_event(c, task_id, who.actor, "file", None, item["name"], "" if number == 1 else f"version {number}")
+    H._task_event(c, task_id, who.actor, "file", None, item["name"], "" if number == 1 else f"version {number}",
+                  data={"source": {"blob_id": item["id"]}})
     H.event(c, who.actor, "task.file", task_id, {"file": item["id"], "name": item["name"], "size": item["size"]})
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
@@ -185,7 +186,8 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             return version_review(c, fid, number, actor=privacy.actor(who))
         if value:
             msg = H.task_comment(c, who.actor, task_id, body.note or f'Review "{version["name"]}" v{number}.',
-                                 ask=value, extra_refs={"target": {"file": fid, "version": number}})
+                                 ask=value, extra_refs={"target": {"file": fid, "version": number},
+                                     **({"body_sources": [{"file": fid, "version": number}]} if not body.note else {})})
             c.execute("UPDATE task_file_reviews SET ask_message_id=? WHERE file_id=? AND version=?",
                       (msg["id"], fid, number))
     return version_review(c, fid, number, actor=privacy.actor(who))
@@ -311,6 +313,17 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}
+    # Selected and passed labels, and the generated prose that copies them, retain source provenance.
+    label_sources = {qid: {o["label"]: o.get("source") or {"file": o["file"]}
+                           for o in q["options"] if o.get("source") or o.get("file")}
+                     for qid, q in questions.items()}
+    label_sources = {qid: sources for qid, sources in label_sources.items() if sources}
+    if label_sources:
+        value["label_sources"] = label_sources
+    body_sources = [source for qid, sources in label_sources.items() for label, source in sources.items()
+                    if label in body.answers.get(qid, []) or label in passed.get(qid, [])]
+    if version:
+        body_sources.append({"file": body.target.file, "version": body.target.version})
     # Files under review (backend/file_reviews.py): the answer says what it judged of each exact version.
     from . import file_reviews
     review, spend = asked["refs"].get("review"), asked["refs"].get("spend")
@@ -330,7 +343,8 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
     msg = H.task_comment(c, who.actor, task_id, text, wake=wake,
-                         extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
+                         extra_refs={"answer": value, **({"body_sources": body_sources} if body_sources else {})},
+                         answer_to=asked["id"], answer_text=body.other or "")
     if value.get("reviewed"):
         file_reviews.record(c, who, task_id, asked["id"], msg["id"], value["reviewed"])
     still_wanted.act(c, who.actor, task_id, picked)

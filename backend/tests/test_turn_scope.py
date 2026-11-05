@@ -79,9 +79,9 @@ def test_task_turn_meetings_and_pages_use_containment_on_every_read(api):
     get(api, "meetings/transcript?id=" + hidden, token, expected=404)
     for fid in (botwide, team):
         for suffix in ("", "/meta", "/versions", "/activity"):
-            get(api, "files/" + fid + suffix, token, expected=404)
+            get(api, "files/" + fid + suffix, token, expected=403 if suffix == "" else 404)
         get(api, "pages/" + fid, token, expected=404)
-        get(api, "files/" + blob(api, fid), token, expected=404)
+        get(api, "files/" + blob(api, fid), token, expected=403)
     assert api.get("/api/v2/files/" + dashboard, headers=headers(token)).status_code == 200
     assert api.get("/api/v2/files/" + blob(api, dashboard), headers=headers(token)).status_code == 200
     context = get(api, "tasks/" + t["id"] + "/context", token)
@@ -111,7 +111,7 @@ def test_filed_bot_party_pages_are_local_to_that_task_and_multiple_tasks_interse
     get(api, "pages/" + public, attempt["token"])
     carry(api, attempt, other["id"])
     get(api, "pages/" + fid, attempt["token"], expected=404)
-    get(api, "files/" + blob(api, fid), attempt["token"], expected=404)
+    get(api, "files/" + blob(api, fid), attempt["token"], expected=403)
     get(api, "pages/" + public, attempt["token"])
 
 
@@ -287,7 +287,7 @@ def test_make_page_file_reads_log_file_identity_and_obey_the_ten_item_list(api):
     make_scope(api, attempt, t["id"])
     token = attempt["token"]
     get(api, "pages/" + outside, token, expected=404)
-    get(api, "files/" + outside + "/versions", token, expected=404)
+    get(api, "files/" + outside + "/versions", token, expected=403)
     for target in (fid, blob(api, fid)):
         response = api.get("/api/v2/files/" + target, headers=headers(token))
         assert response.status_code == 200, response.text
@@ -308,13 +308,9 @@ def test_notes_read_pages_through_notes_without_repeating_them_at_transcript_off
 
 def test_scoped_sql_cannot_name_or_count_a_page_the_file_hook_refuses(api):
     t, attempt = task_turn(api)
-    # The same bot owns both pages, so SQL's ordinary bot ownership filter admits both candidates.
-    fid = published(api, attempt, task=t["id"], name="project.html")
-    hidden = seed_page(api, "ops", title="Private bot-wide title")
-    answer = post(api, "sql", {"sql": "SELECT id,title FROM bot_files ORDER BY id"}, attempt["token"])
-    assert answer["rows"] == [[fid, "project.html"]]
-    counted = post(api, "sql", {"sql": f"SELECT count(*) FROM bot_files WHERE id='{hidden}'"}, attempt["token"])
-    assert counted["rows"] == [[0]]
+    published(api, attempt, task=t["id"], name="project.html")
+    for sql in ("SELECT id,title FROM bot_files", "SELECT hex(detail) FROM events"):
+        post(api, "sql", {"sql": sql}, attempt["token"], expected=403)
 
 
 def test_botops_borrowing_a_persons_rights_keeps_its_task_scope(api):
@@ -423,7 +419,7 @@ def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
     assert ordinary["attachments"] and ordinary["cover"]
     token = attempt["token"]
     get(api, "files/" + fid + "/meta", token, expected=404)
-    get(api, "files/" + legacy["id"], token, expected=404)
+    get(api, "files/" + legacy["id"], token, expected=403)
     single = get(api, "tasks/" + other["id"], token)["task"]
     listed = next(row for row in get(api, "tasks", token)["tasks"] if row["id"] == other["id"])
     for projected in (single, listed):
@@ -433,13 +429,8 @@ def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
     comments = get(api, f'tasks/{other["id"]}/comments', token)["comments"]
     projected_refs = next(row for row in comments if row["id"] == comment["id"])["refs"]
     assert projected_refs["attachments"] == projected_refs["files"] == []
-    for query in ("SELECT task_id,blob_id FROM task_assets", "SELECT count(*) FROM task_assets",
-                  "SELECT message_id,blob_id FROM message_assets", "SELECT count(*) FROM message_assets"):
-        rows = post(api, "sql", {"sql": query}, token)["rows"]
-        assert rows == ([[0]] if "count" in query else [])
-    refs = post(api, "sql", {"sql": "SELECT refs FROM messages WHERE id=?", "params": [comment["id"]]}, token)["rows"]
-    projected_refs = json.loads(refs[0][0])
-    assert projected_refs["attachments"] == projected_refs["files"] == []
+    for query in ("SELECT task_id,blob_id FROM task_assets", "SELECT refs FROM messages"):
+        post(api, "sql", {"sql": query}, token, expected=403)
     # A legacy upload on the carried task stays visible, including its cover and SQL row.
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM message_assets WHERE blob_id=?", (legacy["id"],))
@@ -449,11 +440,9 @@ def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
     assert [r["id"] for r in own["attachments"]] == [legacy["id"]]
     assert legacy["id"] in own["cover"]["url"]
     assert [r["id"] for r in get(api, f'tasks/{t["id"]}/files', token)["files"]] == [legacy["id"]]
-    assert post(api, "sql", {"sql": "SELECT task_id,blob_id FROM task_assets"}, token)["rows"] == [[t["id"], legacy["id"]]]
+    post(api, "sql", {"sql": "SELECT task_id,blob_id FROM task_assets"}, token, expected=403)
     comments = get(api, f'tasks/{other["id"]}/comments', token)["comments"]
     assert next(row for row in comments if row["id"] == comment["id"])["refs"]["files"] == [legacy["id"] + "@1"]
-    refs = post(api, "sql", {"sql": "SELECT refs FROM messages WHERE id=?", "params": [comment["id"]]}, token)["rows"]
-    assert json.loads(refs[0][0])["files"] == [legacy["id"] + "@1"]
 
 
 def test_claim_replay_rebuilds_context_after_meeting_and_page_access_narrow(api):

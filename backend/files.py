@@ -92,7 +92,7 @@ def new_id():
 def removed_event(c, task_id, actor, fid, title):
     """The task's activity says which file was taken off it, by its newest name."""
     row = c.execute("SELECT name FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (fid,)).fetchone()
-    H._task_event(c, task_id, actor, "file", row["name"] if row else title, None, "")
+    H._task_event(c, task_id, actor, "file", row["name"] if row else title, None, "", data={"source": {"file": fid}})
 
 
 def is_file_id(value):
@@ -727,7 +727,8 @@ class Files:
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
                 blob = c.execute("SELECT name FROM blobs WHERE id=?", (fid,)).fetchone()
                 for task in linked:
-                    H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "")
+                    H._task_event(c, task["task_id"], who.actor, "file", blob["name"] if blob else fid, None, "",
+                                  data={"source": {"file": fid}})
                     c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["task_id"]))
                     for published in c.execute("SELECT f.id FROM bot_files f JOIN bot_file_versions v "
                                                "ON v.file_id=f.id "

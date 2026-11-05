@@ -1029,6 +1029,9 @@ def install_sql(app, store, auth):
                                                    "use a personal API token", 403)
                     principal = auth.identity_for_actor(c, "human:" + row["owner_id"])
                     detail["as"] = principal.actor
+                from . import turn_scope
+                if turn_scope.scope(c, principal) is not None:
+                    raise Problem("forbidden", "SQL unavailable to a scoped turn", 403)
                 cap, seconds = LIMITS[principal.role]
                 if body.max_rows:
                     cap = min(cap, body.max_rows)

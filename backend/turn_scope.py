@@ -5,9 +5,7 @@ Publishing can recheck that log in its own transaction, without trusting the run
 """
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
-import json
 import re
-from urllib.parse import unquote
 
 from . import read_cache, task_privacy as privacy, task_rights
 from .auth import Identity
@@ -54,170 +52,9 @@ def scope(c, who):
 
 
 def project(c, scoped, payload, *, auth=None):
-    """Remove source references at the delivery boundary, including stored JSON and runner wire copies.
-
-    Reference discovery is independent of field names: ids in URLs, compact file@version references,
-    nested reviews and SQL JSON cells all resolve against the same snapshot. Only candidate ids are
-    looked up, in batches; ordinary prose does not cause a database query per word. Removed reference
-    objects disappear with their metadata, rather than leaving a title or a placeholder behind.
-    """
-    if scoped is None:
-        return payload
-    auth = auth or AUTH.get()
-    if auth is None or scoped.who is None:
-        raise Problem("privacy", "Source projection requires a scoped principal", 403)
-    from . import context_search
-    from .files import file_visible, prime_visible
-
-    tokens = re.compile(r"[A-Za-z0-9_-]+")
-    source_id = re.compile(r"file-[A-Za-z0-9_-]+|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
-    parsed, names, explicit, digest_refs = {}, set(), set(), set()
-
-    def source_ref(value):
-        if not isinstance(value, str):
-            return
-        value = unquote(value)
-        found = re.findall(r"(?:page:|file:|/pages?/|/files/|[?&]page=)([A-Za-z0-9_-]+)", value)
-        compact = value.rsplit("@", 1)[0]
-        if source_id.fullmatch(compact):
-            found.append(compact)
-        explicit.update(ref for ref in found if source_id.fullmatch(ref))
-
-    def strings(value, parent=""):
-        if isinstance(value, str):
-            if value.lstrip()[:1] in ("{", "["):
-                try:
-                    decoded = json.loads(value)
-                except ValueError:
-                    pass
-                else:
-                    if isinstance(decoded, (dict, list)):
-                        parsed[value] = decoded
-                        strings(decoded)
-                        return
-            names.update(tokens.findall(unquote(value)))
-            if parent in {"file", "files", "ref", "page", "path", "url", "href", "src", "item"}:
-                source_ref(value)
-            if value and parent in {"file_id", "blob_id", "page_id", "meeting_id", "digest", "source_digest"}:
-                explicit.add(value)
-            if parent in {"digest", "source_digest"} and value:
-                digest_refs.add(value)
-        elif isinstance(value, dict):
-            # Other namespaces also call their rows pages (the public manual, for example).
-            if (parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str)
-                    and source_id.fullmatch(value["id"])):
-                explicit.add(value["id"])
-            for key, item in value.items():
-                strings(key)
-                strings(item, key)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                strings(item, parent)
-    strings(payload)
-    names.update(explicit)
-    denied, files, blob_rows, meeting_ids, live = set(), {}, {}, set(), {}
-    # Blob digests have their own index. Version source digests may differ from stored bytes.
-    digests = digest_refs | {s for s in names if re.fullmatch(r"[0-9a-fA-F]{64}", s)}
-    for chunk in H.chunks(sorted(names)):
-        marks = ",".join("?" * len(chunk))
-        files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
-        blob_rows.update((r["id"], r) for r in c.execute(f"SELECT id,digest FROM blobs WHERE id IN ({marks})", chunk))
-        meeting_ids.update(r[0] for r in c.execute(f"SELECT id FROM meetings WHERE id IN ({marks})", chunk))
-        live.update(c.execute(f"SELECT id,imported_meeting_id FROM live_meetings WHERE id IN ({marks})", chunk))
-    meeting_ids.update(mid for mid in live.values() if mid)
-    versions = []
-    for chunk in H.chunks(sorted(digests)):
-        marks = ",".join("?" * len(chunk))
-        blob_rows.update((r["id"], r) for r in c.execute(f"SELECT id,digest FROM blobs WHERE digest IN ({marks})", chunk))
-        versions.extend(c.execute(f"SELECT file_id,digest,source_digest FROM bot_file_versions "
-                                  f"WHERE digest IN ({marks}) OR source_digest IN ({marks})", (*chunk, *chunk)))
-    for chunk in H.chunks(sorted({v["file_id"] for v in versions} - files.keys())):
-        marks = ",".join("?" * len(chunk))
-        files.update((r["id"], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
-    prime_visible(c, list(files.values()))
-    visible = {fid: not row["archived"] and file_visible(c, auth, scoped.who, row, {}) for fid, row in files.items()}
-    denied.update(fid for fid, ok in visible.items() if not ok)
-    # A digest alone needs an independently readable source; another private alias cannot grant it.
-    digest_access = {}
-    for bid, row in blob_rows.items():
-        ok = blob_allowed(c, auth, scoped.who, bid) is True
-        if not ok:
-            denied.add(bid)
-        digest_access[row["digest"]] = digest_access.get(row["digest"], False) or ok
-    for row in versions:
-        for key in ("digest", "source_digest"):
-            digest = row[key]
-            if digest:
-                digest_access[digest] = digest_access.get(digest, False) or visible.get(row["file_id"], False)
-    denied.update(digest for digest, ok in digest_access.items() if not ok)
-    known = files.keys() | blob_rows.keys() | meeting_ids | live.keys() | digest_access.keys()
-    denied.update(explicit - known)
-    for mid in meeting_ids:
-        try:
-            context_search.readable(c, scoped.who, mid, auth=auth)
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
-            denied.add(mid)
-    from .live_meetings import _require_read
-    for rid, mid in live.items():
-        if not mid or mid in denied:
-            denied.add(rid)
-            continue
-        try:
-            _require_read(c, auth, scoped.who, rid)
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
-            denied.add(rid)
-    # Missing structured file ids must not leave stale attachment metadata behind either.
-    denied.update(s for s in names if re.fullmatch(r"file-[0-9a-f]{24}", s) and s not in visible)
-    gone = object()
-
-    def rejected(value):
-        if not isinstance(value, str) or value in parsed:
-            return False
-        decoded = unquote(value)
-        return decoded in denied or bool(denied.intersection(tokens.findall(decoded)))
-
-    def walk(value, parent=""):
-        if isinstance(value, str):
-            if value in parsed:
-                shown = walk(parsed[value])
-                return gone if shown is gone else json.dumps(shown, ensure_ascii=False, separators=(",", ":"))
-            return gone if rejected(value) else value
-        if isinstance(value, dict):
-            # These fields identify a reference object; its siblings describe that same source.
-            identity = {"id", "file_id", "blob_id", "page_id", "meeting_id", "file", "ref", "digest", "source_digest", "item"}
-            if any(rejected(item) for key, item in value.items() if key in identity):
-                return gone
-            if (any(rejected(item) for key, item in value.items() if key in {"page", "meeting", "url", "href", "src", "path"})
-                    and {"title", "name", "version"}.intersection(value)):
-                return gone
-            out = {}
-            for key, item in value.items():
-                if rejected(key):
-                    continue
-                shown = walk(item, key)
-                if (shown is gone and key in {"file", "page", "meeting"}
-                        and {"title", "label", "name", "version"}.intersection(value)):
-                    return gone
-                if shown is not gone:
-                    out[key] = shown
-            return out
-        if isinstance(value, (list, tuple)):
-            out = []
-            for item in value:
-                # SQL positional rows carry metadata beside their source id.
-                if parent == "rows" and isinstance(item, (list, tuple)) and any(rejected(cell) for cell in item):
-                    continue
-                shown = walk(item, parent)
-                if shown is not gone:
-                    out.append(shown)
-            return out
-        return value
-    result = walk(payload)
-    return None if result is gone else result
+    """Project the reviewed task/source schemas; ordinary text and unknown references stay opaque."""
+    from .scope_projection import project as project_sources
+    return project_sources(c, scoped, payload, auth=auth)
 
 
 def project_attempt(c, auth, aid, payload):
@@ -383,17 +220,14 @@ def require_private_context(c, who):
 
 
 def require_read_route(c, who, method, path):
-    """Make page reads only the shared source APIs; new private read surfaces fail closed."""
+    """Private context is a 404 for Make page; scoped_routes decides the reviewed shared surfaces."""
     scoped = scope(c, who)
     if not scoped or not scoped.make_page or method not in ("GET", "HEAD"):
         return
-    if path == "/api/v2/events" or path.endswith("/events"):
-        raise Problem("forbidden", "Scoped turns do not receive live events", 403)
-    if (path == "/api/v2/me" or re.fullmatch(r"/api/v2/(?:files|pages|meetings)(?:/.*)?", path)
-            or re.fullmatch(r"/api/v2/tasks/[^/]+/context", path)
-            or path.startswith(("/api/meetings/", "/visuals/"))):
-        return
-    raise Problem("not_found", "Context not found", 404)
+    if (re.fullmatch(r"/api/(?:v2/)?(?:messages|conversations|threads|assistant|inbox|notes|learnings|memory)(?:/.*)?", path)
+            or re.fullmatch(r"/api/v2/bots/[^/]+/memory(?:/.*)?", path)
+            or re.fullmatch(r"/api/v2/tasks/[^/]+/(?:chat|comments|answers)", path)):
+        raise Problem("not_found", "Context not found", 404)
 
 
 def require_meeting(c, who, row, auth=None):
