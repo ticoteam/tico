@@ -227,10 +227,38 @@ Linger is checked at install time; if it is off the command prints `loginctl ena
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
 A checkout with uncommitted changes, or on a branch other than `main`, is refused: nothing is
-stashed, reset or discarded. Before checking changes, the updater repairs tracked `AGENTS.md` and
-`CLAUDE.md` symlinks flattened by copy tools, but only if they still contain exactly the committed
-link or its unchanged target's contents. Staged changes and different instruction edits stay intact.
-Instruction content reads are limited to 1 MiB and require regular files opened nonblocking without
+stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
+commits or stashes them.
+
+There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
+with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.
+The target must still be unchanged, and nothing may be staged. A different file, different bytes, changed target,
+or any staged change blocks the whole repair. The blocked message marks any matching flattened links by name.
+A refused repair uses the same blocked-checkout status as other local changes. Busy work and locks still use
+the update's usual retry delays.
+Health and BotOps say when only flattened Tico links remain: they are repaired on the next update and need no
+decision about local work. The same check applies on Mac and Linux, including `core.symlinks=false`; the repair
+uses real links without changing that Git setting.
+Both runners use the same repair: move each original into the checkout's Git directory under
+`tico-flattened-links/<UTC timestamp>/<path>`, create the HEAD link, then check the saved bytes and index again.
+The originals stay there, so an editor with an open file can still write to them after the checks. The newest
+five repair backups are kept; older ones are removed after a successful repair. In a linked worktree the backups
+live in its Git directory, not in the worktree's `.git` file.
+If an edit or staged change arrives during the swap, restore the saved files and block the update, keeping the
+backups too. The repair never writes the index. If an editor also replaces the new link, keep that replacement
+in the same backup folder under a `.tico-link-replacement-...` name.
+
+The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next to it.
+A repair records "restored N flattened links; originals kept in ..." with the full backup path in both.
+No other local work is stashed, reset or discarded.
+Bot repositories and shared or named checkouts must resolve outside the active Tico install, including through
+linked parents. Template refresh also refuses file or folder links that lead outside the bot's repo; it writes
+through a new file and rename in a checked folder.
+
+The updater also keeps the instruction-link repair for tracked `AGENTS.md` and `CLAUDE.md` files
+that contain exactly the committed link text. It does not run a second repair on a refused batch
+of flattened target copies. Staged changes and different instruction edits stay intact.
+This instruction repair's content reads are limited to 1 MiB and require regular files opened nonblocking without
 following the final symlink. FIFOs, devices and oversized files stay untouched; unreadable retained
 backups remain for review, without holding up the updater on a file read.
 Retained backups are compared with their accepted content hash, so later releases can change or
@@ -245,9 +273,7 @@ start if another environment moved the shared checkout to an older release.
 Git lock files also stay in place: once a lock is 30 minutes old, the updater
 reports its full path, age and one removal command. Check no Git is running for that repository
 before running that command on the Computer.
-Settings > Health and Computers name the changed files until someone commits or stashes them.
-The update process logs to `state-<runner id>/update.log`; the outcome is in `update-status.json` next
-to it. `scripts/tico update` still works by hand and still follows `main`.
+`scripts/tico update` still works by hand and still follows `main`.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead
@@ -280,6 +306,12 @@ Before anything changes, the updater also renders the compose files with the tar
 refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets
 `image:` would keep it on the old one. After the switch the server must run the image just pulled and report the target
 release on `/healthz`; otherwise the update counts as unhealthy and is rolled back.
+
+A Docker step that runs over its time limit is named in the update status: which step ran over, and its limit in
+seconds. Until the new version has passed its health and version checks, any failure rolls back like any other. After
+that, a front door or tunnel that runs over its time limit is kept and named in the status, and so is a later failure
+(old images not removed, another service not restarting): nothing is rolled back for it. Any other error starting the
+front door or tunnel after that point still rolls back.
 
 `GET /api/v2/system/update` also says which release the server is `running`, the one it ran `previous`ly and a short
 `history`. The server writes these itself at startup, so they stay right after an update done outside the updater.
@@ -376,7 +408,7 @@ checkout: it immediately returns claims parked in queues, finishes preparation a
 any remaining turns. Once all claims settle it asks the sidecar for the release its server names; it pulls `ghcr.io/ticoteam/tico-runner:vX.Y.Z`, replaces `runner.compose.yaml` with the release's copy (same checksum check, rolled back with the image), recreates the runner
 container, waits up to three minutes for the container's health check, and puts the old image back if it does not
 turn healthy. The runner then reports the outcome (`rolled_back`, `failed`) from the sidecar's `/status`, and does not
-ask for that release again unless the failure was disk space and space has since freed. A sidecar that does not answer, or refuses the call, cannot start an update, so the runner reports `failed` ("the updater did not answer", or "the updater answered" and the status code) and keeps taking work; it asks the sidecar again on its next check. While the sidecar says `pulling` or `restarting` the runner takes no work, so the sidecar always finishes: each Docker command it runs has a time limit and is stopped when it runs over, an overrun is rolled back like any failure, and it says `rolled_back` or `failed` only after its last command. Stopping a command does not cancel what Docker already accepted (a stop it accepted runs to its end), so when a command that changes containers runs over, the outcome is unknown: the sidecar says `uncertain`, and the runner takes no work, whatever its version. The sidecar then recreates the runner on the old version until Docker answers and that recreate's container is the only one (an earlier stop can act only on the containers it was given, which the recreate removed), and only then says `rolled_back`, or `failed` if it is not healthy. It retries every minute, says why in its message, picks this up again after it restarts (it saves `restarting` before the switch, so an updater stopped mid-switch settles it too), and refuses a new update meanwhile. Once the runner sees `restarting` or `uncertain`, it keeps its hold in its state directory until the sidecar reports `rolled_back`, `failed` or `healthy` for that same update: a sidecar that stops answering, answers `idle` (its status lost) or reports an older update does not end it, and neither does a runner restart. The runner also keeps the hold in memory, so one it could not save (a full disk) still holds while it runs, its error says the save failed, and the save is tried again on every check (with or without an answer from the sidecar) until it is on disk; a saved hold that cannot be read holds until someone removes it. A sidecar that lost its status (it answers `idle`, for example an older updater restarted mid-switch) never reports the outcome, so that hold ends only by hand. In the install directory, check that `docker compose ps -a runner` shows a single runner container, then run `docker compose exec runner sh -c 'rm /home/runner/state-*/docker-update-hold.json' && docker compose restart runner`. The same ends a saved hold that cannot be read. Removing the file alone is not enough, because the running runner saves its hold again. An updater stopped after a switch that went well also settles back to the old version and says `rolled_back`; as after any rollback, the runner does not ask for that release again, and the next release updates it as usual. Only a sidecar that does not answer when no update was changing containers leaves the runner claiming, as above. The sign-in and the bots' repositories are in the `runner-home` volume and are kept.
+ask for that release again unless the failure was disk space and space has since freed. A sidecar that does not answer, or refuses the call, cannot start an update, so the runner reports `failed` ("the updater did not answer", or "the updater answered" and the status code) and keeps taking work; it asks the sidecar again on its next check. While the sidecar says `pulling` or `restarting` the runner takes no work, so the sidecar always finishes: each Docker command it runs has a time limit and is stopped when it runs over, an overrun is rolled back like any failure before the new version is healthy (after that it is kept and named, as on the server), and it says `rolled_back` or `failed` only after its last command. Stopping a command does not cancel what Docker already accepted (a stop it accepted runs to its end), so when a command that changes containers runs over, the outcome is unknown: the sidecar says `uncertain`, and the runner takes no work, whatever its version. The sidecar then recreates the runner on the old version until Docker answers and that recreate's container is the only one (an earlier stop can act only on the containers it was given, which the recreate removed), and only then says `rolled_back`, or `failed` if it is not healthy. It retries every minute, says why in its message, picks this up again after it restarts (it saves `restarting` before the switch, so an updater stopped mid-switch settles it too), and refuses a new update meanwhile. Once the runner sees `restarting` or `uncertain`, it keeps its hold in its state directory until the sidecar reports `rolled_back`, `failed` or `healthy` for that same update: a sidecar that stops answering, answers `idle` (its status lost) or reports an older update does not end it, and neither does a runner restart. The runner also keeps the hold in memory, so one it could not save (a full disk) still holds while it runs, its error says the save failed, and the save is tried again on every check (with or without an answer from the sidecar) until it is on disk; a saved hold that cannot be read holds until someone removes it. A sidecar that lost its status (it answers `idle`, for example an older updater restarted mid-switch) never reports the outcome, so that hold ends only by hand. In the install directory, check that `docker compose ps -a runner` shows a single runner container, then run `docker compose exec runner sh -c 'rm /home/runner/state-*/docker-update-hold.json' && docker compose restart runner`. The same ends a saved hold that cannot be read. Removing the file alone is not enough, because the running runner saves its hold again. An updater stopped after a switch that went well also settles back to the old version and says `rolled_back`; as after any rollback, the runner does not ask for that release again, and the next release updates it as usual. Only a sidecar that does not answer when no update was changing containers leaves the runner claiming, as above. The sign-in and the bots' repositories are in the `runner-home` volume and are kept.
 
 The Docker socket is mounted into the `updater` service only, never into the runner. The two share a `runner-control`
 volume that holds a token the updater writes and the runner reads; the sidecar answers on the compose network and

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 from clients import git_repository
+from clients.repo_safety import outside_installation
 
 from . import git_credentials, isolation, safe_git
 
@@ -62,12 +63,13 @@ def mirror_warning(mirror):
 def worktree_base(workspace, repo, env):
     """Fetch a managed base using this bot's own credentials, also usable inside a turn."""
     source_env = env
-    env = safe_git.machine_environment(env) if repo.get('machine_git') else safe_git.environment(env)
     name = repo['full_name']
     if not valid_repository(name) or not repo.get('machine_git') and not valid_name(name):
         raise ValueError('Invalid repository name')
     root = Path(workspace) / 'repos'
     path = root / base_folder(name)
+    outside_installation(path)
+    env = safe_git.machine_environment(env) if repo.get('machine_git') else safe_git.environment(env)
     if root.is_symlink() or path.is_symlink() or path.resolve().parent != root.resolve():
         raise ValueError('Base clone points outside repos')
     isolation.mkdir(root, mode=0o755)

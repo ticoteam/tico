@@ -220,6 +220,13 @@ NO_SUPERVISOR = ("no supervisor would start this runner again after an update: r
                  "once on this computer and it updates itself")
 
 
+def only_flattened_links(update):
+    """The runner checks content and the index; file names alone cannot prove that a repair is safe."""
+    return (update.get("update_state") == "blocked"
+            and str(update.get("error") or "").startswith("only flattened Tico links:")
+            and "repaired automatically on the next update" in update["error"])
+
+
 def view(row, server=None):
     row = row or {}
     release = row.get("release") or ""
