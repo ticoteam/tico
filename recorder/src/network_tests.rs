@@ -732,6 +732,156 @@ fn tico_settings(id: &str, base_url: &str) -> Settings {
         ..Default::default()
     }
 }
+
+fn wait_settings_reload(what: &str, mut done: impl FnMut() -> bool) {
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < until,
+            "Timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn settings_reload_services_retry_cached_auth_failures_after_a_credential_save() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_services_retry_cached_auth_failures_after_a_credential_save",
+    ) {
+        return;
+    }
+    let (tico, seen, server) = server(vec![
+        Some(json!({"status":401,"error":"Sign in again"})),
+        Some(json!({"transcribe":true,"stream":true,"assist":true})),
+    ]);
+    settings::save_secret("tico:synthetic", "old-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    assert!(crate::speech::refresh(&tico.destination).is_err());
+    assert!(crate::speech::current(&tico.destination).is_err());
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    settings::save_secret("tico:synthetic", "new-token").unwrap();
+    assert!(
+        crate::speech::current(&tico.destination)
+            .unwrap()
+            .transcribe
+    );
+    server.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let mut changed = tico.destination.clone();
+    changed.base_url = "https://other.acme.example".into();
+    assert!(crate::speech::known(&changed).is_none());
+}
+
+#[test]
+fn settings_reload_live_worker_uses_a_connection_saved_after_startup_and_clears_status() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_live_worker_uses_a_connection_saved_after_startup_and_clears_status",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Sign in after startup");
+    let (tico, seen, server) = server(vec![Some(json!({"accepted":[1]}))]);
+    settings::save_secret("tico:synthetic", "synthetic-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    store
+        .update_context(&record.id, |context| {
+            context.live_destination = "synthetic".into();
+            context.live_id = "live-fixture".into();
+            context.live_state = "live".into();
+            Ok(())
+        })
+        .unwrap();
+    let live = crate::live::LiveSync::start(store.clone());
+    wait_settings_reload("the initial missing connection", || {
+        live.error(&record.id).contains("Choose a Tico connection")
+    });
+    assert!(seen.lock().unwrap().is_empty());
+    settings::write(
+        dir.path(),
+        &Settings {
+            destinations: vec![tico.destination],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    wait_settings_reload("the saved connection and cleared status", || {
+        !seen.lock().unwrap().is_empty() && live.errors().is_empty()
+    });
+    server.join().unwrap();
+    assert_eq!(
+        seen.lock().unwrap()[0].0,
+        "POST /api/v2/live-meetings/live-fixture/chunks HTTP/1.1"
+    );
+    assert_eq!(
+        seen.lock().unwrap()[0].1["chunks"][0]["text"],
+        "I will send the proposal"
+    );
+    drop(live);
+}
+
+#[test]
+fn settings_reload_transcription_drainer_uses_a_connection_saved_after_startup() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_transcription_drainer_uses_a_connection_saved_after_startup",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Sign in with queued audio").unwrap();
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            0,
+            1000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    settings::write(
+        dir.path(),
+        &Settings {
+            speech_source: crate::speech::TICO.into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (tico, seen, server) = server(vec![
+        Some(json!({"transcribe":true,"stream":false,"assist":false})),
+        Some(json!({"text":"Transcribed after sign-in"})),
+    ]);
+    settings::save_secret("tico:synthetic", "synthetic-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    // The actual services endpoint is read once before the two drainers share its cached answer.
+    crate::speech::refresh(&tico.destination).unwrap();
+    let drainer = Transcriber::start(store.clone());
+    wait_settings_reload("the initial missing connection", || {
+        drainer.status().contains("Sign in to Tico")
+    });
+    settings::write(
+        dir.path(),
+        &Settings {
+            destinations: vec![tico.destination],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    wait_settings_reload("transcription and cleared status", || {
+        store.get(&record.id).unwrap().chunks[0].text == "Transcribed after sign-in"
+            && drainer.status().is_empty()
+    });
+    server.join().unwrap();
+    assert!(
+        seen.lock().unwrap()[1]
+            .0
+            .starts_with("POST /api/v2/recorder/audio/transcriptions ")
+    );
+    drop(drainer);
+}
 #[test]
 fn speech_goes_through_the_tico_once_connected_unless_own_keys_were_already_set_up() {
     use crate::speech::{self, OWN, TICO};
