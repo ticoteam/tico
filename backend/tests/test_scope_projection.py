@@ -241,7 +241,7 @@ def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkey
     _, attempt = assistant_turn(api, "ana-test")
     make_scope(api, attempt, t["id"])
 
-    @api.app.get("/api/v2/projection-fixture")
+    @api.app.get("/api/v2/pages/projection-fixture")
     def fixture(request: Request, plain: str = ""):
         if plain:
             return PlainTextResponse("Forbidden live title " + live if plain == "hidden" else "Allowed source " + fid)
@@ -251,15 +251,15 @@ def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkey
     # The production static mount is last; put this test route before that catch-all.
     api.app.router.routes.insert(0, api.app.router.routes.pop())
 
-    response = api.get("/api/v2/projection-fixture", headers={**headers(attempt["token"]), "Accept-Encoding": "gzip"})
+    response = api.get("/api/v2/pages/projection-fixture", headers={**headers(attempt["token"]), "Accept-Encoding": "gzip"})
     assert response.status_code == 409 and fid in response.text
     assert live not in response.text and "Forbidden live title" not in response.text
     store = api.app.state.store
     with store.read() as c:
         assert c.execute("SELECT 1 FROM attempt_reads WHERE attempt_id=? AND ref=?", (attempt["id"], fid)).fetchone()
-    response = api.get("/api/v2/projection-fixture?plain=hidden", headers=headers(attempt["token"]))
+    response = api.get("/api/v2/pages/projection-fixture?plain=hidden", headers=headers(attempt["token"]))
     assert response.status_code == 200 and response.content == b""
-    response = api.get("/api/v2/projection-fixture?plain=allowed", headers=headers(attempt["token"]))
+    response = api.get("/api/v2/pages/projection-fixture?plain=allowed", headers=headers(attempt["token"]))
     assert response.status_code == 200 and response.text == "Allowed source " + fid
     original = store.mutate
 
@@ -269,6 +269,6 @@ def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkey
         return original(who, operation, *args, **kwargs)
 
     monkeypatch.setattr(store, "mutate", unavailable)
-    response = api.get("/api/v2/projection-fixture", headers=headers(attempt["token"]))
+    response = api.get("/api/v2/pages/projection-fixture", headers=headers(attempt["token"]))
     assert response.status_code == 503
     assert fid not in response.text and "Allowed source" not in response.text

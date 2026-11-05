@@ -19,10 +19,11 @@ def page(api, turn, **fields):
                     content=data, headers={**headers(turn["token"]), "Content-Type": "text/html"})
 
 
-def start(api, tid, person="ben-test", key=None):
-    machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
+def start(api, tid, person="ben-test", key=None, machine=None):
+    if machine is None:
+        machine = runner(api)
+        assign(api, machine, "coo")
+        ready(api, machine, ["coo"])
     sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
     attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"]
     assert attempt["message"]["id"] == sent["message"]["id"]
@@ -163,8 +164,9 @@ def test_forged_make_page_refs_are_forbidden_on_generic_message_and_chat_routes(
 def test_identical_html_completes_each_make_page_request_without_a_new_version(api):
     t = task(api, private=False)
     requests = []
+    machine = None
     for _ in range(2):
-        machine, attempt, message = start(api, t["id"])
+        machine, attempt, message = start(api, t["id"], machine=machine)
         requests.append(attempt["id"])
         made = page(api, attempt, task=t["id"])
         assert made.status_code == 200, made.text
