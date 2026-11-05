@@ -2,6 +2,7 @@
 # `tico`: this computer's commands go to scripts/tico-computer, everything else to scripts/hub (the teamwork CLI).
 # Usage: tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open|env|enroll|profile|screen|server|help ...
 #        tico [-e ENV] bot create ...      the same as tico-computer ... (see scripts/tico-computer help)
+#        tico update list|show|create|reply ...   the bots' updates: hub update ... (a bare tico update updates Tico)
 #        tico <anything else>              the same as hub <anything else>: tico task list = hub task list
 # A scripts/tico from before tico-computer ends `update` with `scripts/tico [-e ENV] restart all`: that lands here.
 set -euo pipefail
@@ -11,8 +12,9 @@ DIR="$(dirname "$SELF")"
 
 case "${1:-help}" in
   # Only the computer commands take an environment.
-  -e|--env|-e=*|--env=*|install|uninstall|restart|status|doctor|logs|update|open|env|enroll|profile|screen|server|help|-h|--help)
+  -e|--env|-e=*|--env=*|install|uninstall|restart|status|doctor|logs|open|env|enroll|profile|screen|server|help|-h|--help)
     exec "$DIR/tico-computer" "$@" ;;
   bot) [ "${2:-}" != create ] || exec "$DIR/tico-computer" "$@" ;;
+  update) [ $# -gt 1 ] || exec "$DIR/tico-computer" "$@" ;;
 esac
 exec "$DIR/hub" "$@"

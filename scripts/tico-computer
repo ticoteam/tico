@@ -636,10 +636,10 @@ PY
     ;;
   restart)
     retire_processing
-    while IFS= read -r kind; do restart_one "$kind"; done < <(targets "${2:-all}")
     # An update run by a scripts/tico from before tico-computer ends here (through the scripts/tico that took its
-    # place), so a computer that has the tico command gets tico-computer beside it.
+    # place), so a computer that has the tico command gets tico-computer beside it, even if a restart fails.
     [ ! -e "$HOME/.local/bin/tico" ] || link_commands tico-computer
+    while IFS= read -r kind; do restart_one "$kind"; done < <(targets "${2:-all}")
     ;;
   status)
     require_setup

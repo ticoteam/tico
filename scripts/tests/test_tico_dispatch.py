@@ -51,6 +51,8 @@ def linked(tmp_path):
     (['--env=acme', 'status'], 'computer: --env=acme status'),
     (['-e', 'acme', 'task', 'list'], 'computer: -e acme task list'),   # an environment is only ever the computer's
     (['update'], 'computer: update'),
+    (['-e', 'acme', 'update'], 'computer: -e acme update'),
+    (['update', 'list'], 'hub: update list'),          # the bots' daily updates
     (['doctor'], 'computer: doctor'),
     (['env', 'list'], 'computer: env list'),
     (['bot', 'create', 'ops'], 'computer: bot create ops'),
