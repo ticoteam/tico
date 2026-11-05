@@ -29,7 +29,7 @@ def _git_identity(path):
         done = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
                                "-c", "safe.directory=" + str(root), "-C", str(root),
                                "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
-                              env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
+                              env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Cannot check repository identity: {path}") from exc
     if done.returncode:
