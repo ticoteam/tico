@@ -253,14 +253,11 @@ fn write_status(directory: &Path, fields: Value) {
 }
 
 fn updater_running(directory: &Path) -> Result<bool, String> {
-    use std::os::unix::io::AsRawFd;
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(directory.join(PROCESS_LOCK)).map_err(|e| e.to_string())?;
-    // SAFETY: flock acts on this open file; closing it releases a successful probe.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(false);
+    match crate::lock::acquire(&directory.join(PROCESS_LOCK)) {
+        Ok(_probe) => Ok(false),
+        Err(error) if error == crate::lock::HELD => Ok(true),
+        Err(error) => Err(error),
     }
-    let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::WouldBlock { Ok(true) } else { Err(error.to_string()) }
 }
 
 fn update_unit(pid: u32) -> String {
