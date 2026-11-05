@@ -153,7 +153,30 @@ def check_ask(c, task_id, ask, auth, who, lint=True):
                           422)
         # Stored in UTC as every timestamp is, so it compares with them as text.
         value["if_no_answer"]["by"] = H.shift(by.astimezone(timezone.utc).isoformat())
+    default_source(value)
     return value
+
+
+def default_source(ask):
+    """A fallback that copies an option's label keeps that option's source too."""
+    default = ask.get("if_no_answer") or {}
+    wanted = str(default.get("do") or "").strip().casefold()
+    for question in ask.get("questions", []):
+        for option in question.get("options", []):
+            if wanted and str(option.get("label") or "").strip().casefold() == wanted and option.get("source"):
+                default["source"] = option["source"]
+
+
+def answer_sources(questions, answers, passed=None):
+    """Source maps travel with every copied answer, including an automatic deadline fallback."""
+    passed = passed or {}
+    sources = {q["id"]: {o["label"]: o.get("source") or {"file": o["file"]}
+                         for o in q["options"] if o.get("source") or o.get("file")}
+               for q in questions}
+    sources = {qid: labels for qid, labels in sources.items() if labels}
+    body = [source for qid, labels in sources.items() for label, source in labels.items()
+            if label in answers.get(qid, []) or label in passed.get(qid, [])]
+    return sources, body
 
 
 def version_review(c, fid, number, *, actor):
@@ -334,14 +357,9 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}
     # Selected and passed labels, and the generated prose that copies them, retain source provenance.
-    label_sources = {qid: {o["label"]: o.get("source") or {"file": o["file"]}
-                           for o in q["options"] if o.get("source") or o.get("file")}
-                     for qid, q in questions.items()}
-    label_sources = {qid: sources for qid, sources in label_sources.items() if sources}
+    label_sources, body_sources = answer_sources(questions.values(), body.answers, passed)
     if label_sources:
         value["label_sources"] = label_sources
-    body_sources = [source for qid, sources in label_sources.items() for label, source in sources.items()
-                    if label in body.answers.get(qid, []) or label in passed.get(qid, [])]
     if version:
         body_sources.append({"file": body.target.file, "version": body.target.version})
     # Files under review (backend/file_reviews.py): the answer says what it judged of each exact version.

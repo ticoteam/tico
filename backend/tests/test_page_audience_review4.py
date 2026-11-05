@@ -143,3 +143,30 @@ def test_legacy_exact_title_labels_are_task_local_and_survive_title_purge(api, p
             shown = files.readable_page_refs(c, api.app.state.auth, Identity("human:cara", "human"),
                                              H.message(c, comment["id"]), task_id=tid)
             assert "Confidential draft" not in json.dumps(shown)
+
+
+@pytest.mark.parametrize("kind,outcome", [("reversible", "went_ahead"), ("send", "expired")])
+def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
+    from backend import ask_deadlines
+    tid, _, fid = public_page(api)
+    ordinary = post(api, f"tasks/{tid}/files", {"name": "public.txt", "text": "Public choice"})["file_id"]
+    made = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="ben", parent=tid,
+                      private=False, pick=True, if_no_answer={"do": "Confidential draft", "kind": kind, "by": H.shift(H.now(), days=1)})
+    assert made["question"]["refs"]["if_no_answer"]["source"] == {"file": fid, "version": 1}
+    with api.app.state.store.transaction() as c:
+        settled = ask_deadlines.sweep(c, H.shift(H.now(), days=6))
+        assert made["question"]["id"] in settled[outcome]
+        answer = c.execute("SELECT refs FROM messages WHERE in_reply_to=? AND kind='answer'",
+                           (made["question"]["id"],)).fetchone()
+        refs = H._json(answer["refs"], {})
+        assert refs["body_sources"] == [{"file": fid, "version": 1}]
+        if outcome == "went_ahead":
+            assert refs["answer"]["label_sources"] == {"decision": {"Confidential draft": {"file": fid, "version": 1},
+                                                                      "public": {"file": ordinary, "version": 1}}}
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        for token in ("cara-test", "finance-test"):
+            shown = json.dumps(get(api, "tasks/" + made["task"]["id"], token=token))
+            assert fid not in shown and "Confidential draft" not in shown, shown

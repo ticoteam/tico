@@ -108,11 +108,16 @@ def settle(conn, asked, task, text, outcome, *, answers=None):
     """Answer the ask as the keeper with `text`, which wakes the bot that asked, and take it off the person's list."""
     conv = H.conversation(conn, asked["conversation_id"])
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), "if_no_answer": outcome}
+    from .task_review import answer_sources
+    copied = answers or _picked(asked, (asked.get("refs") or {}).get("if_no_answer") or {}) or {}
+    label_sources, body_sources = answer_sources((asked.get("refs") or {}).get("questions") or [], copied)
+    if body_sources:
+        refs["body_sources"] = body_sources
     if task:
         refs.update({"task": task["id"], "comment": True})
     if answers:
         refs["answer"] = {"target": {"comment": asked["id"]}, "answers": answers, "other": None, "dismiss": False,
-                          "by": H.KEEPER, "at": H.now()}
+                          "by": H.KEEPER, "at": H.now(), **({"label_sources": label_sources} if label_sources else {})}
     H._write_message(conn, H.KEEPER, asked["sender_id"], text, conv, "answer", refs, asked["id"], None)
     person = asked["recipient_id"]
     if task:
@@ -120,7 +125,8 @@ def settle(conn, asked, task, text, outcome, *, answers=None):
         if task.get("waiting_on") == person:
             # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you.
             conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task["id"],))
-            H._task_event(conn, task["id"], H.KEEPER, "waiting_on", person, None, text)
+            H._task_event(conn, task["id"], H.KEEPER, "waiting_on", person, None, text,
+                          data={"body_sources": body_sources} if body_sources else None)
     H.event(conn, H.KEEPER, "ask." + outcome, asked["id"],
             {"to": person, "bot": asked["sender_id"], **({"task": task["id"]} if task else {})})
     H._recount(conn, person)

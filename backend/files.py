@@ -454,8 +454,10 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
             tid = H.refs_task_id(carried) or H.refs_task_id(value) or value.get("task_id") or tid
             if "owner_id" in value and "title" in value:
                 tid = value.get("id") or tid
-            if parent == "options" and (rejected(value.get("source")) or
-                    not value.get("source") and not value.get("file") and value.get("label") in hidden_titles(tid)):
+            if (rejected(value.get("source")) or parent == "options" and
+                    not value.get("source") and not value.get("file") and value.get("label") in hidden_titles(tid) or
+                    parent in ("if_no_answer", "recommend") and not value.get("source") and
+                    value.get("do") in hidden_titles(tid)):
                 return {"removed": True, "label": "A page you can't open"}
             direct = {fid for v in value.values() if isinstance(v, str) and not v.startswith(("{", "["))
                       for fid in page_references(v, c) if fid in denied}
@@ -509,6 +511,9 @@ def retain_page_label_sources(c, row):
     def annotate(value):
         changed = False
         if isinstance(value, dict):
+            if value.get("do") == row["title"] and not value.get("source"):
+                value["source"] = source
+                changed = True
             for option in value.get("options") or []:
                 if isinstance(option, dict) and option.get("label") == row["title"] and not option.get("source"):
                     option["source"] = source

@@ -767,6 +767,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                     for option in question["options"]:
                         if option["label"] in sources:
                             option["source"] = sources[option["label"]]
+                from .task_review import default_source
+                default_source(ask)
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
         if spend:
