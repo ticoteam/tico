@@ -194,6 +194,7 @@ def render(text):
 
 def pdf_text(data):
     from pypdf import PdfReader
+    from pypdf.errors import PyPdfError
     if len(data) > MAX_PDF or not data.startswith(b"%PDF-"):
         raise Problem("pdf", "Use a PDF of at most 5 MiB", 422)
     try:
@@ -201,7 +202,7 @@ def pdf_text(data):
         if pdf.is_encrypted or not 1 <= len(pdf.pages) <= 100:
             raise ValueError()
         return "\n".join((page.extract_text() or "")[:6000] for page in pdf.pages)[:12000]
-    except Exception:
+    except (PyPdfError, ValueError, TypeError, KeyError, IndexError, RecursionError, OverflowError):
         raise Problem("pdf", "Use an unencrypted PDF with 1 to 100 pages", 422) from None
 
 
@@ -247,7 +248,7 @@ class Letters:
             result = engine({"recipient": recipient, "text": text}, questions, "Letters out recipient")
             choice, confidence = J.choice(J.check_answers(result.get("answers"), questions), "recipient_kind")
             return choice != "other" or confidence < 0.8
-        except Exception:
+        except (J.JudgeError, OSError, ValueError, TypeError, KeyError, AttributeError):
             return True
 
     def source(self, who, body):
@@ -553,7 +554,7 @@ class Letters:
         while not stop.is_set():
             try:
                 await asyncio.to_thread(self.drain)
-            except Exception as exc:
+            except (Problem, OSError, ValueError) as exc:
                 LOG.warning("Letters sync failed: %s", type(exc).__name__)
             try:
                 await asyncio.wait_for(stop.wait(), 30)
