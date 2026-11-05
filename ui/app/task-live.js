@@ -188,7 +188,7 @@ async function taskLiveSave(d, live) {
     settled: () => {
       if (d.taskLive !== live && TASK_EDIT_DRAFTS.get(live.id) === live.draft && !live.draft.error && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
       taskLivePaint(d, live);
-      if (!live.draft.error) return taskLiveRead(d, live);
+      return taskLiveRead(d, live);
     }
   });
 }

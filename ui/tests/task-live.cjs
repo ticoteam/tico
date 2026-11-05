@@ -111,8 +111,11 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await update();
    await a.waitForFunction(() => taskModal().taskLive.draft.base.body === 'Remote details now');
    assert.equal(await details.inputValue(), 'Sam changed only details', 'ordinary invalidations leave focused fields alone');
+   // This deadline change has no event: the 409 read must update untouched task properties too.
+   task.due_at = '2026-12-01T12:00:00Z'; task.version++;
    await a.locator('[data-task-edit-retry]').evaluate(el => el.click());
    await a.locator('[data-task-edit-current]:not([hidden])').waitFor();
+   await a.waitForFunction(() => document.querySelector('#task-modal [data-prop-date]').value === '2026-12-01');
    assert.equal(await details.inputValue(), 'Remote details now');
    assert.deepEqual(await details.evaluate(el => [document.activeElement === el, el.selectionStart, el.selectionEnd]), [true, 2, 5]);
    assert.equal(await title.textContent(), 'Keep these words');
