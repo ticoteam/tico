@@ -1673,7 +1673,7 @@ def parser():
                         "with no value (put the flag after the parent id), the company's check model, from a provider other "
                         "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
-                   help="with --check-model: what the other model is asked for (default check)")
+                   help="review files a review child; with --check-model, what that model is asked for (default check)")
     s.set_defaults(fn="task child create")
     s = task.add_parser("tree", help="show nested subtasks")
     s.add_argument("id")

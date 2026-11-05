@@ -780,7 +780,7 @@ def task_create(api, args):
        "check_model": _s("A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
                          "the company's check model, from a provider other than the parent's author when one can run it"),
        "check_role": {"type": "string", "enum": ["review", "check"],
-                      "description": "With check_model: a review of work, or a check of a claim (default check)"}},
+                      "description": "review files a normal review child; with check_model, review work or check a claim"}},
       required=("parent", "title"), writes=True)
 def task_child_create(api, args):
     owner = args.get("owner") or ("me" if args.get("check_model") else None)

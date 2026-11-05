@@ -191,6 +191,36 @@ def test_a_retired_or_switched_off_task_model_falls_back_too(api):
     assert "to be enabled" in get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
 
 
+def test_a_saved_held_terra_task_model_runs_as_the_saved_default_with_no_fallback_note(api):
+    """Ruling 3 (Dev 693): a saved held default keeps running. A bot whose task model was saved as gpt-6.1-terra before
+    the hold runs its tasks on it, and the run says nothing fell back. A held row that is not the saved default stays
+    refused as a pick."""
+    from backend import task_models
+    machine = ops_on_sonnet(api)
+    company(api, "anthropic", "xai", "openai")
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex"}
+        BS.write(c, 'ops', config)
+    rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
+                                  "codex": {"installed": True, "authenticated": "ready"}})
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["runtime"], turn["config"]["model"]) == ("codex", "gpt-6.1-terra"), turn["config"]
+    finish(api, machine, turn, {"model": "gpt-6.1-terra", "runtime": "codex", "harness": "codex", "effort": "medium",
+                                "billing": "api"})
+    ran = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]
+    assert ran["task_model"]["source"] == "task" and "could not run" not in ran["task_model"]["note"], ran["task_model"]
+    store = api.app.state.store
+    with store.read() as c:
+        terra = {"harness": "codex", "model": "gpt-6.1-terra", "runtime": "codex"}
+        assert "is retired" in task_models.why_not(c, store.settings, "ops", terra, "runner-1")
+        assert "is retired" in task_models.why_not(c, store.settings, "ops", terra, "runner-1",
+                                                   kept="claude-haiku-5-5")
+        assert "is retired" not in task_models.why_not(c, store.settings, "ops", terra, "runner-1",
+                                                       kept="gpt-6.1-terra")
+
+
 def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(api):
     machine = ops_on_sonnet(api)
     set_task_model(api, HAIKU)

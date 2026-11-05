@@ -5197,9 +5197,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if kind == "pr" and match:
         # GitHub treats owner and repository names case-insensitively, so one pull request is one link.
         # A duplicate made before this matched by exact URL stays reachable through its own URL.
-        have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
-                          "ORDER BY url=? DESC, created_at LIMIT 1",
-                    (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url))
+        from . import pr_identity as PR
+        candidates = _rows(conn.execute(
+            "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
+            "ORDER BY url=? DESC, created_at",
+            (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url)))
+        have = next((p for p in candidates if PR.same(p, url)), None)
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
@@ -5625,12 +5628,13 @@ CHECK_MODEL_SQL = ("SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task
                    "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner_id=?")
 
 
-def _subtask_result_parent(conn, row):
-    """The bot-owned parent allowed to receive this child's result, without widening its readers."""
+def _subtask_result_parent(conn, row, *, bot_only=True):
+    """The parent allowed to receive this child's result, without widening its readers."""
     parent = task(conn, TR.parent_of(conn, row["id"]) or "")
-    if not parent or not is_bot(parent["owner_id"]):
+    if not parent or bot_only and not is_bot(parent["owner_id"]):
         return None
-    if not bot_reads_task(conn, parent["owner_id"], parent) or not task_private_readable(conn, parent["owner_id"], row):
+    if ((is_bot(parent["owner_id"]) and not bot_reads_task(conn, parent["owner_id"], parent))
+            or not task_private_readable(conn, parent["owner_id"], row)):
         return None
     if task_private(conn, row) and (not task_private(conn, parent) or not all(
             task_private_readable(conn, who, row) for who in (parent["owner_id"], parent["requester_id"]) if who)
@@ -5750,8 +5754,9 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     if resume_hint:
         text = ("Subtask result returned to this task's session. Continue this task here; the result needs "
                 "no relay, separate delivery turn or task run command.\n\n" + text)
-    _wake(conn, parent, parent["owner_id"], text, refs=refs, source=source or row["id"],
-          quiet_bots=silent, quiet=silent)
+    verdict_moves.forward(conn, parent, parent["owner_id"], text, refs,
+                          sources=[*(moved or {}).get("source_tasks", []), row["id"]], source=source,
+                          quiet_bots=silent, quiet=silent)
 
 
 def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
@@ -6497,10 +6502,6 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent and review_gate.is_review(conn, parent, title):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
-    if parent:
-        review_gate.refuse_second(conn, actor, parent, title, review_prs)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -6529,6 +6530,13 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    if parent:
+        audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "guest": None}
+        body = review_gate.bind_prs(conn, actor, parent, title, body, child=audience)
+        if review_gate.is_review(conn, parent, title):
+            review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
+                              prs=review_gate.request_prs(conn, parent, title, body))
+        review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     title = str(title or "").strip()
     body = str(body or "")
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
@@ -7404,6 +7412,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, verdict_moves.skip, after)
         else:
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
+    elif row.get("blocked_since") and not after.get("blocked_since"):
+        from . import check_pools, verdict_moves
+        check_pools.safely(conn, verdict_moves.resumed, task_id)
     from . import task_check_backs
     task_check_backs.ensure(conn, after)
     if check_back_at is not None or check_back_note is not None:
