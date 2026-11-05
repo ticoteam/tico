@@ -82,7 +82,7 @@ EMPTY = (
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "mailboxes", "mailbox_accesses", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
-    # Settings > Google: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    # Settings > Inboxes: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
     # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
     "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",

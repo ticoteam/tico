@@ -3284,6 +3284,7 @@ export type Mailbox = {
   id: string;
   kind: "personal" | "shared";
   level: "none" | "read" | "read_write";
+  newest_epoch: number | null;
   person_id: string | null;
   person_name: string;
   provider: string;
@@ -3293,6 +3294,14 @@ export type Mailbox = {
 }>;
   state: "connected" | "not_connected" | "awaiting_person" | "stopped";
   status: "active" | "stopped";
+  sync: "" | "signin" | "failed";
+  sync_error: string;
+  synced_at: string | null;
+  used_by: {
+  bots: number;
+  names: Array<string>;
+  people: number;
+};
 };
 
 export type MailboxAccessCreate = {

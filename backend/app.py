@@ -352,7 +352,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("calls_sweep", exc)
                 try:
-                    # Settings > Google's pending and failing Workspace key is checked again (backend/google_workspace.py).
+                    # Settings > Inboxes' pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
                     await asyncio.to_thread(workspace_checks.tick, store)
                 except Exception as exc:
@@ -720,7 +720,7 @@ def create_app(settings=None):
                 return await call_next(request)
             # A Hermes profile with no credential pairs itself (backend/agents.py): it asks for a code, polls with its own
             # secret, and fetches the source-available connector it runs. The person's approval is the authenticated step.
-            # Settings > Google's setup command (backend/google_workspace.py): the script, and the key upload and its keep
+            # Settings > Inboxes' setup command (backend/google_workspace.py): the script, and the key upload and its keep
             # check when they carry the command's code. Nothing else passes without a session. The body is read here,
             # bounded, the way the relay's is, and the route reads it again from the buffer.
             from . import google_workspace as workspace_setup

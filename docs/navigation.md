@@ -30,8 +30,8 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
-| Connect your Google account, or the whole Workspace (admins) | Settings → Google: pick One account at a time or Whole Workspace |
-| Manage shared email and phone numbers | Settings → More → Email & Phone |
+| Connect your Google account, or the whole Workspace (admins) | Settings → Inboxes → Settings → Email: pick One account at a time or Whole Workspace |
+| See and manage every mailbox, Tico address, number and mailing address | Settings → Inboxes |
 | Choose AI providers | Settings → Models |
 | Connect the Tico AI Gateway | Settings → Models → Tico Gateway → Advanced ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |

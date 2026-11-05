@@ -232,7 +232,7 @@ class Settings:
     oidc_client_id: str = ""
     oidc_client_secret: str = field(default="", repr=False)
     oidc_client_secret_file: Path | None = None
-    # Tico's own Google OAuth web client for Settings > Inbox > Connect Google (backend/google_connect.py).
+    # Tico's own Google OAuth web client for Settings > Inboxes > Connect Google (backend/google_connect.py).
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = field(default="", repr=False)
     oidc_allowed_domains: tuple[str, ...] = ()
