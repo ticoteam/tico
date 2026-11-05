@@ -435,6 +435,52 @@ def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api,
         assert callbacks == [fallback]
 
 
+def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
+    from backend import sql as S
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import page
+
+    made = page(api, world['attempt'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    edit(api, fid, {'people': ['ana']}, token='ana-test')
+    assert api.get('/api/v2/pages/' + fid, headers=headers('cara-test')).status_code == 404
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        plain = [H.say(c, 'human:ben', 'human:ana', 'Synthetic plain', conversation_id=room, refs=refs)['id']
+                 for refs in (None, {}, {'task': world['coo_task']['id']})]
+        reviews = []
+        for refs in [{'target': fid}, {'answer': {'file': fid}}, {'review': [fid]}, {'body_sources': [{'file': fid}]}]:
+            reviews.append(H.say(c, 'human:ben', 'human:ana', 'Synthetic review', conversation_id=room, refs=refs)['id'])
+        # SQLite reads the first duplicate key and Python the last; escaped keys must also reach Python.
+        for raw in ('{"target":null,"target":' + json.dumps(fid) + '}',
+                    '{"t\\u0061rget":' + json.dumps(fid) + '}'):
+            mid = H.say(c, 'human:ben', 'human:ana', 'Synthetic encoded review', conversation_id=room)['id']
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (raw, mid))
+            reviews.append(mid)
+
+    called, register = [], S.ReadConnection.create_function
+
+    def counted(conn, name, arity, fn, **kwargs):
+        if name.endswith('_privacy_page_message'):
+            def check(refs):
+                called.append(refs)
+                return fn(refs)
+            return register(conn, name, arity, check, **kwargs)
+        return register(conn, name, arity, fn, **kwargs)
+    monkeypatch.setattr(S.ReadConnection, 'create_function', counted)
+
+    def count(ids, token):
+        marks = ','.join('?' for _ in ids)
+        return query(api, f'SELECT count(*) FROM messages WHERE id IN ({marks})', token, params=ids)['rows']
+
+    assert count(plain, 'cara-test') == [[3]]
+    assert called == []
+    for token, expected in (('cara-test', 0), ('ana-test', len(reviews))):
+        assert count(reviews, token) == [[expected]]
+    assert called
+
+
 def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, world, monkeypatch):
     from collections import Counter
     from backend.auth import Identity
@@ -619,6 +665,33 @@ def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api,
         assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
         plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created_at>=?", (H.now(),))
         assert any('attempts_created (created_at>?)' in row[3] for row in plan)
+
+
+def test_message_visibility_index_upgrades_history_and_covers_sql_counts(api, world):
+    import sqlite3
+    from contextlib import closing
+    from backend import migrations, sql as S
+    from backend.auth import Identity
+
+    store = api.app.state.store
+    version = '20261105115005_sql_message_visibility_index'
+    with store.transaction() as c:
+        before = [dict(row) for row in c.execute('SELECT * FROM messages ORDER BY id')]
+        c.execute('DROP INDEX messages_sql_visibility')
+        c.execute('DELETE FROM schema_migrations WHERE version=?', (version,))
+    # Reapply just the migration authority; full startup can also publish unrelated onboarding notices.
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+        migrations.apply(c)
+    with store.read() as c:
+        assert [dict(row) for row in c.execute('SELECT * FROM messages ORDER BY id')] == before
+        assert c.execute('SELECT count(*) FROM schema_migrations WHERE version=?', (version,)).fetchone()[0] == 1
+        conn = S.connect(store.settings.db_path, c, api.app.state.auth, Identity('human:ben', 'human'))
+        try:
+            plan = list(conn.execute('EXPLAIN QUERY PLAN SELECT count(*) FROM messages'))
+            assert any('COVERING INDEX messages_sql_visibility' in row[3] for row in plan), [tuple(row) for row in plan]
+        finally:
+            conn.close()
 
 
 def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world, monkeypatch):
@@ -863,8 +936,9 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
                 found = S.run(conn, 'SELECT * FROM tasks ORDER BY id', [], 5000, 20)
                 actual = json.dumps([dict(zip(found['columns'], row)) for row in found['rows']], sort_keys=True)
                 assert actual == expected
-                with pytest.raises(__import__("sqlite3").DatabaseError):
-                    conn.execute('SELECT * FROM "' + conn.private_prefix + 'visible_tasks"').fetchall()
+                for name in ('visible_tasks', 'known_tasks', 'plain_refs'):
+                    with pytest.raises(__import__("sqlite3").DatabaseError):
+                        conn.execute('SELECT * FROM "' + conn.private_prefix + name + '"').fetchall()
             finally:
                 conn.close()
     for who in callers:

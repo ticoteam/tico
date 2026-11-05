@@ -582,7 +582,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
 
 
 # Per-request sets, each an indexed temp table only this request's views may read.
-SETS = ("visible_tasks", "readable_conversations", "denied_tasks", "unreadable_rooms", "run_carriers", "denied_reads")
+SETS = ("visible_tasks", "known_tasks", "plain_refs", "readable_conversations", "denied_tasks", "unreadable_rooms",
+        "run_carriers", "denied_reads")
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
@@ -604,10 +605,11 @@ class Gates:
 
     def __init__(self, inner, private, denied):
         self.inner, self.denied = inner, bool(denied)
-        self.tasks, self.messages = inner("tasks"), inner("messages")
+        self.tasks, self.messages = '"' + private("known_tasks") + '"', inner("messages")
         self.denied_tasks = '"' + private("denied_tasks") + '"'
         self.rooms = '"' + private("unreadable_rooms") + '"'
         self.carriers = '"' + private("run_carriers") + '"'
+        self.plain_refs = '"' + private("plain_refs") + '"'
 
     def strings(self, value):
         """No string in this JSON names a denied task the way ReadIndex.references finds one."""
@@ -630,29 +632,36 @@ class Gates:
                 f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
                 f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))")
 
-    def refs(self, refs, top):
+    def refs(self, refs, top, cached=True):
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.
 
         Only the message being read (`top`) may name ancestors, a bounded few, and a run, which must itself pass."""
-        once = " AND ".join(f"(instr({refs},'\"{key}\"')=0 OR "
-                            f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0)" for key in self.KEYS)
+        once = {key: (f"(instr({refs},'\"{key}\"')=0 OR "
+                      f"instr(substr({refs},instr({refs},'\"{key}\"')+1),'\"{key}\"')=0)") for key in self.KEYS}
         checks = (f"json_valid({refs}) AND json_type({refs})='object' AND instr({refs},'\\')=0 "
-                  f"AND instr({refs},'live_meeting')=0 AND {once} "
+                  f"AND instr({refs},'live_meeting')=0 AND {once['task']} AND {once['task_id']} "
                   f"AND {self.task(refs, 'task')} AND {self.task(refs, 'task_id')} AND {self.strings(refs)}")
         # CASE's WHEN short-circuits the checks. Plain refs need no JSON walk, absent keys need no duplicate-key
         # scan, and a failed root stops before probing its run, inputs and retained events.
+        plain = f"WHEN {refs} IN (SELECT id FROM {self.plain_refs}) THEN 1 " if cached else ""
         if not top:
-            return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 WHEN {checks} "
+            return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}WHEN {checks} "
                     f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0 THEN 1 ELSE 0 END)")
         turn, run_id = f"json_extract({refs},'$.turn_id')", f"json_extract({refs},'$.run.attempt_id')"
-        checks += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
-                   f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
-                   f"AND coalesce(json_array_length({refs},'$.answers'),0)+coalesce(json_array_length({refs},'$.inputs'),0)<=48 "
-                   f"AND CASE WHEN json_type({refs},'$.turn_id') IS NOT NULL "
-                   f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
-                   f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
-                   f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
-        return f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 WHEN {checks} THEN 1 ELSE 0 END)"
+        # With no inherited keys there is no run or ancestor array to parse or check for duplicates. A root's
+        # run is not inherited at all, so only the top message needs these checks.
+        direct = " AND ".join(f"instr({refs},'\"{key}\"')=0" for key in ("turn_id", "run", "answers", "inputs"))
+        inherited = " AND ".join(once[key] for key in self.KEYS if key not in ("task", "task_id"))
+        inherited += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
+                      f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
+                      f"AND coalesce(json_array_length({refs},'$.answers'),0)+coalesce(json_array_length({refs},'$.inputs'),0)<=48 "
+                      f"AND CASE WHEN json_type({refs},'$.turn_id') IS NOT NULL "
+                      f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
+                      f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
+                      f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
+        return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}"
+                f"WHEN {checks} AND (CASE WHEN {direct} THEN 1 WHEN {inherited} THEN 1 ELSE 0 END) "
+                "THEN 1 ELSE 0 END)")
 
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
@@ -709,6 +718,7 @@ def materialize(conn, index, tables, inner, function, private):
     tables = {table: (predicate.replace("IN (SELECT id FROM conversations)", rooms), hidden)
               for table, (predicate, hidden) in tables.items()}
     tables["conversations"] = ("id " + rooms, tables["conversations"][1])
+    create("known_tasks", "SELECT id FROM main.tasks")
     create("denied_tasks", sorted(index.denied))
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     create("run_carriers", sorted(aid for tid, aid in conn.execute(
@@ -718,8 +728,23 @@ def materialize(conn, index, tables, inner, function, private):
     create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
                            f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
+    # Task-only refs repeat across a room's history. Validate the compact and spaced object encodings once per
+    # task, without reading message history; every other encoding or shape keeps the ordinary refs gate.
+    task_refs = gates.refs("json_object('task',id)", top=False, cached=False)
+    allowed = f"WITH allowed AS MATERIALIZED (SELECT id FROM main.tasks WHERE {task_refs}) "
+    objects = " UNION ALL ".join(
+        f"SELECT {value} AS refs FROM allowed"
+        for key in ("task", "task_id")
+        for value in (f"json_object('{key}',id)", f"'{{\"{key}\": '||json_quote(id)||'}}'"))
+    create("plain_refs", allowed + objects)
     message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
+    page = function("page_message") + "(refs)"
+    # A page review can narrow a message independently of task/run provenance. Only these top-level keys enter
+    # that check; escaped keys and every non-object keep Python's JSON parsing and page permissions.
+    no_page = " AND ".join(f"instr(refs,'\"{key}\"')=0" for key in privacy.PAGE_MESSAGE_KEYS)
+    page_gate = (f"(CASE WHEN coalesce(refs,'') IN ('','{{}}') THEN 1 WHEN json_valid(refs) "
+                 f"AND json_type(refs)='object' AND instr(refs,'\\')=0 AND {no_page} THEN 1 ELSE {page} END)")
 
     def settled(prefix, fast):
         """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
@@ -729,7 +754,8 @@ def materialize(conn, index, tables, inner, function, private):
     # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
     # the function first, and passing the fast answer to a function still calls Python for every history row.
     return {table: (predicate.replace(message, f"(CASE WHEN {settled('m', gates.message())} THEN 1 ELSE {message} END)")
-                    .replace(attempt, f"(CASE WHEN {settled('a', gates.attempt('source.id'))} THEN 1 ELSE {attempt} END)"),
+                    .replace(attempt, f"(CASE WHEN {settled('a', gates.attempt('source.id'))} THEN 1 ELSE {attempt} END)")
+                    .replace(page, page_gate),
                     hidden)
             for table, (predicate, hidden) in tables.items()}
 
