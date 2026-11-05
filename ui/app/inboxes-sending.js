@@ -11,7 +11,16 @@ const ibSendOptions = (items, selected) => items.map(([key, label]) => `<option 
 const ibSendEffective = e => `${IB_SEND_MODES.find(([key]) => key === e.mode)?.[1] || 'Ask first'} · ${IB_SEND_SOURCES[e.sources?.mode] || 'Company'}`;
 const IB_SEND_WHAT = {replies_only: 'Replies only', replies_and_new: 'Replies and new'};
 const IB_SEND_ASKS = [['ask_new_address', 'New addresses'], ['ask_legal_money', 'Legal or money'], ['ask_attachments', 'Attachments'],
-  ['ask_many_recipients', 'Over 10 recipients']];
+  ['ask_many_recipients', 'Many recipients'], ['ask_outside_cc', 'Outside Cc'], ['ask_lint', 'Writing check'],
+  ['second_review', 'Second review']];
+// The checkboxes of the form, in IB_SEND_ASKS order: a child layer can turn one on, never off (backend/email_sending.py).
+const IB_SEND_ASK_LABELS = {ask_new_address: 'A first message to a new address', ask_legal_money: 'Legal or money matters',
+  ask_attachments: 'Attachments', ask_many_recipients: 'More than 10 recipients, or more outside people than allowed',
+  ask_outside_cc: 'Outside people in Cc', ask_lint: 'A bot\'s email fails the writing check',
+  second_review: 'A second reviewer flags a bot\'s email'};
+const IB_SEND_NUMBERS = ['daily_cap', 'mailbox_daily_cap', 'company_daily_cap', 'max_outside_recipients', 'pacing_seconds', 'undo_seconds'];
+const IB_SEND_LISTS = ['blocked_recipients', 'owner_handles'];
+const ibSendList = value => String(value).split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
 const IB_SEND_APPROVERS = {bot_managers: 'Bot managers', inbox_admins: 'Inbox admins', named_people: 'Named people'};
 const ibSendNum = n => Number(n || 0).toLocaleString('en-US');
 const ibSendUndo = sec => !Number(sec) ? 'None' : Number(sec) % 60 ? `${Number(sec)} s` : `${Number(sec) / 60} min`;
@@ -25,11 +34,12 @@ function ibSendForm(document, company = false, disabled = false) {
     ${select('to', 'To', [['anyone', 'Anyone'], ['known_addresses', 'Known addresses'], ['internal', 'Only inside the company']])}
     ${['daily_cap', 'mailbox_daily_cap', 'company_daily_cap'].map((key, i) => ibSendField(['Per bot, per day', 'Per inbox, per day', 'Per company, per day'][i], `<input name="${key}" type="number" min="0" max="${i === 2 ? 1000000 : 100000}" value="${Number(e[key])}">`)).join('')}
     ${ibSendField('Undo window', `<select name="undo_seconds">${ibSendOptions([['0', 'None'], ['30', '30 seconds'], ['120', '2 minutes'], ['600', '10 minutes']], String(e.undo_seconds))}</select>`)}
+    ${ibSendField('Outside people per email', `<input name="max_outside_recipients" type="number" min="0" max="100" value="${Number(e.max_outside_recipients ?? 1)}">`)}
     ${ibSendField('Seconds between sends', `<input name="pacing_seconds" type="number" min="0" max="3600" value="${Number(e.pacing_seconds)}">`)}
-    <div class="ib-field"><span class="ib-field-label">Always ask for</span><div class="ib-send-checks">${[
-      ['ask_new_address', 'A first message to a new address'], ['ask_legal_money', 'Legal or money matters'],
-      ['ask_attachments', 'Attachments'], ['ask_many_recipients', 'More than 10 recipients']].map(([key, label]) =>
-      `<label><input type="checkbox" name="${key}"${e[key] ? ' checked' : ''}>${esc(label)}</label>`).join('')}</div></div>
+    <div class="ib-field"><span class="ib-field-label">Always ask for</span><div class="ib-send-checks">${IB_SEND_ASKS.map(([key]) =>
+      `<label><input type="checkbox" name="${key}"${e[key] ? ' checked' : ''}>${esc(IB_SEND_ASK_LABELS[key])}</label>`).join('')}</div></div>
+    ${ibSendField('Never send to', `<input name="blocked_recipients" value="${esc((stored.blocked_recipients || []).join(', '))}" placeholder="Addresses or domains">`)}
+    ${ibSendField('Owner handles personally', `<input name="owner_handles" value="${esc((stored.owner_handles || []).join(', '))}" placeholder="Addresses or domains">`)}
     ${select('who_can_ok', 'Who can OK', [['bot_managers', 'Bot managers'], ['inbox_admins', 'Inbox admins'], ['named_people', 'Named people']])}
     ${ibSendField('People', `<input name="approvers" value="${esc((stored.approvers || e.approvers || []).join(', '))}" placeholder="Person IDs, separated by commas">`)}
     <div class="ib-send-effective">${esc(ibSendEffective(e))}</div>
@@ -61,10 +71,11 @@ function ibSendBind(host, path, ctx) {
     const data = new FormData(form), body = {};
     for (const [key, value] of data.entries()) {
       if (key === 'approvers') body[key] = String(value).split(',').map(s => s.trim()).filter(Boolean);
-      else if (['daily_cap', 'mailbox_daily_cap', 'company_daily_cap', 'pacing_seconds', 'undo_seconds'].includes(key)) body[key] = Number(value);
-      else if (!key.startsWith('ask_')) body[key] = value;
+      else if (IB_SEND_NUMBERS.includes(key)) body[key] = Number(value);
+      else if (IB_SEND_LISTS.includes(key)) body[key] = ibSendList(value);
+      else if (!IB_SEND_ASKS.some(([ask]) => ask === key)) body[key] = value;
     }
-    for (const key of ['ask_new_address', 'ask_attachments', 'ask_many_recipients', 'ask_legal_money']) body[key] = data.has(key);
+    for (const [key] of IB_SEND_ASKS) body[key] = data.has(key);
     if (body.mode === '') body.mode = null;
     save(body);
   });
@@ -102,7 +113,9 @@ function ibSendSummary(e) {
   return `<dl class="tt-kv ib-send-summary">${row('Always ask for', asks.join(', ') || 'Nothing')}
     ${row('This mailbox', `${ibSendNum(e.mailbox_daily_cap)} a day`)}${row('Company', `${ibSendNum(e.company_daily_cap)} a day`)}
     ${row('Pacing', `${ibSendNum(e.pacing_seconds)} s between sends`)}${row('Undo', ibSendUndo(e.undo_seconds))}
-    ${e.blocked?.length ? row('Blocked', e.blocked.join(', ')) : ''}
+    ${row('Outside people', `${ibSendNum(e.max_outside_recipients ?? 1)} per email`)}
+    ${e.blocked_recipients?.length ? row('Never send to', e.blocked_recipients.join(', ')) : ''}
+    ${e.owner_handles?.length ? row('Owner handles', e.owner_handles.join(', ')) : ''}
     ${row('Who approves', approvers + (e.who_can_ok === 'named_people' && e.approvers?.length ? ' · ' + e.approvers.map(personDisplay).join(', ') : ''))}</dl>`;
 }
 
