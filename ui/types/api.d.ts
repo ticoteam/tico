@@ -3234,6 +3234,16 @@ export type MeetingTaskLinks = {
   tasks: Array<MeetingTaskLink>;
 };
 
+export type MeetingTaskProposalAccepted = {
+  item: {
+  id: string;
+  proposed_task_id: string | null;
+  result_ref: string | null;
+  status: string;
+};
+  pushed: boolean;
+};
+
 export type MeetingTaskRemoved = {
   ok: boolean;
 };
@@ -5961,6 +5971,15 @@ export type AcceptInboundPhoneQuoteParams = {
 };
 export type AcceptInboundPhoneQuoteBody = AcceptPhone;
 export type AcceptInboundPhoneQuoteResponse = unknown;
+
+/** POST /api/v2/meetings/{rid}/items/{iid}/link */
+export type AcceptMeetingTaskProposalParams = {
+  "Idempotency-Key": string;
+  iid: string;
+  rid: string;
+};
+export type AcceptMeetingTaskProposalBody = Empty;
+export type AcceptMeetingTaskProposalResponse = MeetingTaskProposalAccepted;
 
 /** POST /api/v2/rules/{rule_id}/accept */
 export type AcceptRuleParams = {

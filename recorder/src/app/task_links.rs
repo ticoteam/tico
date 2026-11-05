@@ -39,6 +39,9 @@ impl Recorder {
             .context
             .items
             .iter()
+            .filter(|item| {
+                item.task_destination.is_empty() || item.task_destination == self.router()
+            })
             .flat_map(|item| [&item.task_id, &item.proposed_task_id])
             .filter(|id| !id.is_empty())
             .cloned()

@@ -793,7 +793,10 @@ impl Tico {
                 };
                 let at_ms = (!item.quote.is_empty()).then_some(item.at_ms);
                 let mut payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
-                if !item.proposed_task_id.is_empty() {
+                if !item.proposed_task_id.is_empty()
+                    && (item.task_destination.is_empty()
+                        || item.task_destination == self.destination.id)
+                {
                     payload["proposed_task_id"] = json!(item.proposed_task_id);
                 }
                 let mut item_id = delivery.receipt["items"][&item.id]["id"]
@@ -953,8 +956,11 @@ impl Tico {
             .as_str()
             .or(who["email"].as_str())
             .unwrap_or("me");
-        let body = json!({"title":item.title.chars().take(300).collect::<String>(),
+        let mut body = json!({"title":item.title.chars().take(300).collect::<String>(),
             "body":crate::assist::task_body(&record, &item, sender, &link),"owner":owner,"private":private});
+        if !item.due.is_empty() {
+            body["due"] = json!(item.due);
+        }
         let reply = if let Some(entry) = filed.filter(|entry| entry.status == "sent") {
             let server_item = entry.receipt["items"][item_id]["id"]
                 .as_str()

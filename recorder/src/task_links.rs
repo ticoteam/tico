@@ -171,6 +171,10 @@ impl Tico {
             item.task_destination.is_empty() || item.task_destination == self.destination.id,
             "This proposal belongs to another Tico"
         );
+        ensure!(
+            !item.proposed_task_id.is_empty(),
+            "This item has no task to link"
+        );
         let tasks = self.readable_tasks(&[item.proposed_task_id.clone()])?;
         ensure!(
             !item.proposed_task_id.is_empty() && !tasks.is_empty(),
