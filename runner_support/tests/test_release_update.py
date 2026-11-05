@@ -34,31 +34,26 @@ def test_deferral_statuses_against_the_released_followers_due_and_claim_rules(ol
     cases = json.loads((Path(__file__).parent / "fixtures/update-status-cases.json").read_text())
     for case in cases:
         ru.write_status(follower.directory, state=case["state"], target="0.3.45", error="test cause",
-                        at=now[0] - case["age"])
+                        at=now[0] - case["age"],
+                        **({"not_before": now[0] + case["retry_in"]} if "retry_in" in case else {}))
         follower.pending_since = now[0] - 21 * 60
         follower.decide()
-        assert (follower.pending is not None) == case["due"], case
-        assert follower.blocks_claims(True) == (case["due"] or case["state"] == "updating"), case
-        if not case["due"] and case["state"] != "updating":
+        assert (follower.pending is not None) == case["python_due"], case
+        assert follower.blocks_claims(True) == (case["python_due"] or case["state"] == "updating"), case
+        if not case["python_due"] and case["state"] != "updating":
             assert not follower.blocks_claims(False), case
             assert follower.pending_since is None, case
 
 
 @pytest.mark.slow
-def test_all_deferrals_share_a_bounded_count_and_release_old_runners_between_retries(old_follower):
+def test_old_runners_release_claims_for_the_legacy_fallback(old_follower, monkeypatch):
+    monkeypatch.delenv("TICO_UPDATE_RETRY", raising=False)
     follower, now = old_follower
-    reasons = ("the update lock cannot be checked", "another update holds the checkout lock",
-               "this computer still has work running", "the runner binary is not published yet")
-    for attempt, reason in enumerate(reasons, 1):
-        if attempt > 1:
-            follower.decide()
-            assert follower.pending == "0.3.45"             # the six-hour cooldown ended
-            # A lock wait publishes updating, but it cannot reset the count or erase the final reason.
-            ru.write_status(follower.directory, state="updating", target="0.3.45", error="", at=now[0])
-        result = ru.defer_update(follower.directory, "v0.3.45", reason, clock=lambda: now[0])
-        assert result["state"] == ("blocked" if attempt >= ru.MAX_DEFERRALS else "failed")
-        assert reason in result["error"]
-        assert ru.read_status(follower.directory)["deferrals"] == min(attempt, ru.MAX_DEFERRALS)
+    for reason in ("the update lock cannot be checked", "another update holds the checkout lock",
+                   "this computer still has work running", "this computer still has work running"):
+        result = ru.defer_update(follower.directory, "v0.3.45", reason, clock=lambda: now[0], transient=True)
+        assert result["state"] == "failed" and reason in result["error"]
+        assert "not_before" not in ru.read_status(follower.directory)
         for elapsed in (0, 6 * 3600 - 1):
             follower.pending_since = now[0] - 21 * 60
             now[0] += elapsed
@@ -67,16 +62,53 @@ def test_all_deferrals_share_a_bounded_count_and_release_old_runners_between_ret
             assert not follower.blocks_claims(True) and not follower.blocks_claims(False)
             now[0] -= elapsed
         now[0] += 6 * 3600
-
-    # A new release or an actual outcome starts a fresh series of deferrals.
-    result = ru.defer_update(follower.directory, "0.3.46", reasons[0], clock=lambda: now[0])
-    assert result["state"] == "failed" and ru.read_status(follower.directory)["deferrals"] == 1
-    ru.write_status(follower.directory, state="healthy", target="0.3.46", at=now[0])
-    ru.defer_update(follower.directory, "0.3.46", reasons[0], clock=lambda: now[0])
-    assert ru.read_status(follower.directory)["deferrals"] == 1
+        follower.decide()
+        assert follower.pending == "0.3.45"
+        ru.write_status(follower.directory, state="updating", target="0.3.45", error="", at=now[0])
 
 
-def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_path, monkeypatch):
+def test_transient_deferrals_grow_to_an_hour_without_becoming_blocked(tmp_path, monkeypatch):
+    reason = "active work"
+    monkeypatch.setenv("TICO_UPDATE_RETRY", "short")
+    now = [1000.0]
+    for delay in (120, 300, 900, 1800, 3600, 3600, 3600):
+        result = ru.defer_update(tmp_path, "0.3.45", reason, clock=lambda: now[0], transient=True)
+        status = ru.read_status(tmp_path)
+        assert result["state"] == "idle" and status["not_before"] == now[0] + delay
+        assert status["cause_count"] == 0
+        now[0] += delay
+        ru.write_status(tmp_path, state="updating", target="0.3.45", at=now[0])
+    # A new release or an actual outcome starts a fresh schedule.
+    ru.defer_update(tmp_path, "0.3.46", reason, clock=lambda: now[0], transient=True)
+    assert ru.read_status(tmp_path)["deferrals"] == 1
+    ru.write_status(tmp_path, state="healthy", target="0.3.46", at=now[0])
+    ru.defer_update(tmp_path, "0.3.46", reason, clock=lambda: now[0], transient=True)
+    assert ru.read_status(tmp_path)["deferrals"] == 1
+
+
+def test_only_persistent_causes_become_blocked_and_transient_work_resets_them(tmp_path, monkeypatch):
+    monkeypatch.setenv("TICO_UPDATE_RETRY", "short")
+    now = [1000.0]
+    for reason in ("binary missing", "other cause", "binary missing"):
+        assert ru.defer_update(tmp_path, "0.3.45", reason, clock=lambda: now[0])["state"] == "idle"
+        now[0] += 60
+        ru.write_status(tmp_path, state="updating", target="0.3.45", at=now[0])
+    for _ in range(2):
+        result = ru.defer_update(tmp_path, "0.3.45", "binary missing", clock=lambda: now[0])
+        ru.write_status(tmp_path, state="updating", target="0.3.45", at=now[0])
+    assert result["state"] == "blocked" and "3 tries" in result["error"]
+    ru.defer_update(tmp_path, "0.3.45", "active work", clock=lambda: now[0], transient=True)
+    now[0] += 3 * 3600
+    assert ru.defer_update(tmp_path, "0.3.45", "binary missing", clock=lambda: now[0])["state"] == "idle"
+    now[0] += ru.DEFERRAL_LIMIT_S
+    result = ru.defer_update(tmp_path, "0.3.45", "other cause", clock=lambda: now[0])
+    assert result["state"] == "blocked" and "two hours" in result["error"]
+    assert ru.read_status(tmp_path)["not_before"] == now[0] + 3600
+
+
+@pytest.mark.parametrize("policy,expected", [("short", "idle"), ("legacy", "failed")])
+def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_path, monkeypatch, policy, expected):
+    monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
     now = [0.0]
     monkeypatch.setattr(ru.time, "time", lambda: now[0])
     monkeypatch.setattr(ru.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
@@ -86,8 +118,7 @@ def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_p
     for attempt in range(1, ru.MAX_DEFERRALS + 1):
         assert ru.run_update(args) == 1
         status = ru.read_status(tmp_path)
-        assert status["deferrals"] == attempt
-        assert status["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "failed")
+        assert status["deferrals"] == attempt and status["state"] == expected
         assert "work running" in status["error"]
     assert now[0] == 600 * ru.MAX_DEFERRALS
 
@@ -510,17 +541,19 @@ def test_a_release_whose_new_runner_binary_is_not_published_yet_waits_without_mo
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.3.0"
 
 
-def test_a_runner_binary_that_never_comes_is_blocked_after_bounded_retries(repos):
+@pytest.mark.parametrize("policy,paused", [("short", "idle"), ("legacy", "failed")])
+def test_a_runner_binary_that_never_comes_is_blocked_after_bounded_retries(repos, monkeypatch, policy, paused):
+    monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
     public, checkout, state = repos
     runner_release(public, checkout)
     now = [1000.0]
     wait = dict(version="0.3.0", which=lambda name: None, listed=lambda version: False, clock=lambda: now[0])
     for attempt in range(1, ru.MAX_DEFERRALS + 1):
         result, calls = run_apply(checkout, state, **wait)
-        assert result["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else "failed")
+        assert result["state"] == ("blocked" if attempt == ru.MAX_DEFERRALS else paused)
         assert ru.read_status(state)["deferrals"] == attempt
         assert calls.restarts == 0
-        now[0] += 6 * 3600
+        now[0] += ru.DEFERRAL_DELAYS_S[attempt - 1]
     assert "runner binary" in result["error"] and "3 tries" in result["error"]
 
 
@@ -620,7 +653,8 @@ def hold(checkout):
 
 
 @pytest.mark.slow
-def test_alternating_deferrals_keep_their_count_and_release_claims_without_changing_the_checkout(repos, old_follower, monkeypatch):
+def test_alternating_deferrals_release_old_runners_without_changing_the_checkout(repos, old_follower, monkeypatch):
+    monkeypatch.delenv("TICO_UPDATE_RETRY", raising=False)
     public, checkout, state = repos
     runner_release(public, checkout)
     before, index = head(checkout), (checkout / ".git/index").read_bytes()
@@ -643,8 +677,8 @@ def test_alternating_deferrals_keep_their_count_and_release_claims_without_chang
                 if held:
                     held.close()
         status = ru.read_status(state)
-        assert status["state"] == result["state"] == ("blocked" if attempt >= ru.MAX_DEFERRALS else "failed")
-        assert status["deferrals"] == min(attempt, ru.MAX_DEFERRALS)
+        assert status["state"] == result["state"] == "failed"
+        assert status["deferrals"] == attempt
         assert status["error"] == result["error"] and status["error"]
         follower.decide()
         assert not follower.blocks_claims(True) and not follower.blocks_claims(False)
@@ -658,7 +692,9 @@ def test_alternating_deferrals_keep_their_count_and_release_claims_without_chang
 
 
 @pytest.mark.slow
-def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(repos, monkeypatch):
+@pytest.mark.parametrize("policy,paused", [("short", "idle"), ("legacy", "failed")])
+def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(repos, monkeypatch, policy, paused):
+    monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
     _, checkout, state = repos
     before = head(checkout)
     index = (checkout / ".git/index").read_bytes()
@@ -684,8 +720,8 @@ def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(rep
 
         monkeypatch.setattr(ru, "git", release_after_lookup)
         result, calls = run_apply(checkout, state, run=run, lock_wait=0)
-        assert result["state"] == "failed" and len(waited) == 1 and waited[0] >= 10
-        assert ru.read_status(state)["state"] == "failed"
+        assert result["state"] == paused and len(waited) == 1 and waited[0] >= 10
+        assert ru.read_status(state)["state"] == paused
         assert commands == []                                      # B never fetched or checked out without A's lock
         assert calls.installs == [] and calls.prepared == [] and calls.checks == [] and calls.restarts == 0
         assert head(checkout) == before and (checkout / ".git/index").read_bytes() == index
@@ -695,7 +731,9 @@ def test_a_git_gate_timeout_defers_even_when_the_gate_clears_before_checkout(rep
     assert result["state"] == "healthy" and calls.restarts == 1     # the deferred update can retry normally
 
 
-def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeypatch):
+@pytest.mark.parametrize("policy,paused", [("short", "idle"), ("legacy", "failed")])
+def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeypatch, policy, paused):
+    monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
     def git(root, *args, **kwargs):
         assert args == ("rev-parse", "--git-common-dir")
         return subprocess.CompletedProcess([], 1, "", "cannot read Git metadata")
@@ -706,7 +744,7 @@ def test_an_unresolved_update_lock_exits_with_retryable_status(tmp_path, monkeyp
     assert ru.main(["--root", str(tmp_path), "--version", "v0.2.0", "--state-dir", str(tmp_path),
                     "--pid", "42"]) == 1
     status = ru.read_status(tmp_path)
-    assert status["state"] == "failed" and status["target"] == "0.2.0" and status["at"] > 1
+    assert status["state"] == paused and status["target"] == "0.2.0" and status["at"] > 1
     assert "update lock cannot be checked" in status["error"]
 
 

@@ -6,7 +6,8 @@
 //! `kind`, `commit`, `update`), so Settings > Computers and Health see a Rust computer as they see a Python one.
 //!
 //! A failed update is tried again after six hours, on the server's next release, or as soon as disk space frees
-//! after one that ran out of it. On a server that names no release (a development server) a supervised checkout
+//! after one that ran out of it. Deferrals release claims until the status file's not_before time, with growing
+//! waits capped at an hour. On a server that names no release (a development server) a supervised checkout
 //! follows origin/main instead (service.py checkout_status, self_update), restarting only once the new runner binary
 //! is prepared, and the heartbeat's `checkout` says how it stands against main (backend/models.py Checkout).
 
@@ -26,7 +27,9 @@ const PROCESS_LOCK: &str = "update-process.lock";
 /// The Docker update this runner saw changing containers, until the updater reports how it ended (Follower::unsettled).
 const HOLD_FILE: &str = "docker-update-hold.json";
 const DRAIN_S: u64 = 20 * 60; // older servers retain their claim window
+const DRAIN_WAIT_S: u64 = 10 * 60; // release_update.py waits this long for a drain to settle
 const RETRY_AFTER_S: f64 = 6.0 * 3600.0;
+const DEFERRAL_DELAYS_S: &[u64] = &[120, 300, 900, 1800, 3600]; // release_update.py DEFERRAL_DELAYS_S
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
@@ -410,6 +413,7 @@ pub struct Follower {
     started: String,
     commit: String,
     pinned: bool,
+    drain_timeout: Duration,
     /// Supervised, and neither `self_update: false` nor TICO_RUNNER_SELF_UPDATE=0 (service.py under_supervisor).
     self_update: bool,
     /// Gets the runner binary for the checkout as it now is (`python -m runner_support.engine prepare`); non-zero on failure.
@@ -440,6 +444,7 @@ pub fn init(config: &Map<String, Value>, directory: &Path) {
         release,
         commit,
         pinned,
+        drain_timeout: Duration::from_secs(config.get("drain_timeout_seconds").and_then(Value::as_u64).filter(|s| *s > 0).unwrap_or(crate::drain::DEFAULT_LIMIT_S).max(DRAIN_WAIT_S)),
         self_update,
         prepare: [crate::env::python().to_string_lossy().into_owned(), "-m".into(), "runner_support.engine".into(), "prepare".into()].into(),
         sidecar: Sidecar::from_env(),
@@ -538,6 +543,11 @@ impl Follower {
         }
         let at = status["at"].as_f64().or_else(|| text_of(&status["at"]).parse().ok()).unwrap_or(0.0);
         let age = epoch_s() - at;
+        if matches!(status["state"].as_str(), Some("idle" | "waiting" | "busy" | "blocked")) {
+            if let Some(not_before) = status["not_before"].as_f64() {
+                return (epoch_s() < not_before).then(|| (text_of(&status["state"]), text_of(&status["error"])));
+            }
+        }
         match status["state"].as_str().unwrap_or_default() {
             "updating" if age < STALE_UPDATING_S => Some(("updating".into(), String::new())),
             "updating" => {
@@ -701,6 +711,23 @@ impl Follower {
             self.launch(&pending).await;
             return true;
         }
+        if self.kind != "docker" && since.is_some_and(|t| t.elapsed() >= if drain { self.drain_timeout } else { Duration::from_secs(DRAIN_S + DRAIN_WAIT_S) }) {
+            // Preparation can outlast the turn cap. Give claims back instead of draining without an end.
+            let before = read_status(&self.directory);
+            let count = if before["target"] == pending { before["deferrals"].as_u64().unwrap_or(0) } else { 0 };
+            let count = count.saturating_add(1).min(DEFERRAL_DELAYS_S.len() as u64);
+            let delay = DEFERRAL_DELAYS_S[count as usize - 1];
+            let error = format!("update paused: this computer still has work running; retrying in {} minutes", delay / 60);
+            let now = epoch_s();
+            write_status(&self.directory, json!({"state": "idle", "target": pending, "error": error,
+                "at": now, "not_before": now + delay as f64, "deferrals": count}));
+            let mut s = self.inner.lock().unwrap();
+            s.pending = None;
+            s.pending_since = None;
+            s.state = "idle".into();
+            s.error = error;
+            return false;
+        }
         drain || since.is_some_and(|t| t.elapsed().as_secs() >= DRAIN_S)
     }
 
@@ -774,6 +801,7 @@ impl Follower {
             }
             cmd.arg(format!("--setenv=TICO_SYSTEMD_UNIT={unit}"));
             cmd.arg(format!("--setenv=TICO_GIT_OWNED_ROOTS={owned}"));
+            cmd.arg("--setenv=TICO_UPDATE_RETRY=short");
             let log = log_path.to_string_lossy();
             cmd.args(["-p", &format!("StandardOutput=append:{log}"), "-p", &format!("StandardError=append:{log}")]);
             cmd.arg(&python).args(&args).stdin(Stdio::null());
@@ -785,7 +813,7 @@ impl Follower {
         let out = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&python);
-        cmd.args(&args).env("TICO_GIT_OWNED_ROOTS", &owned).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
+        cmd.args(&args).env("TICO_GIT_OWNED_ROOTS", &owned).env("TICO_UPDATE_RETRY", "short").current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
         if unit.ends_with(".service") && !unit.contains('/') {
             cmd.envs(&bus);
         }
@@ -959,6 +987,11 @@ mod tests {
             };
             let roots: Vec<String> = serde_json::from_str(&owned).unwrap();
             assert!(roots.contains(&projects.to_string_lossy().into_owned()));
+            if systemd {
+                assert!(args.iter().any(|a| a == "--setenv=TICO_UPDATE_RETRY=short"));
+            } else {
+                assert_eq!(cmd.get_envs().find(|(k, _)| *k == "TICO_UPDATE_RETRY").unwrap().1.unwrap(), "short");
+            }
             let module = args.iter().position(|a| a == "-m").unwrap();
             assert_eq!(args[module + 1], "runner_support.release_update");
             // Execute only origin/main's real parser, without starting an update or touching its status.
@@ -1112,18 +1145,20 @@ scope['main'](sys.argv[1:])
 
     #[tokio::test]
     async fn deferral_statuses_obey_the_due_and_claim_rules() {
-        // The released Python follower runs this same table; waiting/busy would keep either runner drained.
+        // The released Python follower runs the same table but ignores not_before.
         let cases: Vec<Value> = serde_json::from_str(include_str!("../../runner_support/tests/fixtures/update-status-cases.json")).unwrap();
         let f = checkout_follower();
         std::env::set_var("TICO_SUPERVISED", "1");
         for case in cases {
             let state = case["state"].as_str().unwrap();
-            let due = case["due"].as_bool().unwrap();
-            write_status(&f.directory, json!({"state": state, "target": "0.3.45", "error": "test cause", "at": epoch_s() - case["age"].as_f64().unwrap()}));
+            let due = case["rust_due"].as_bool().unwrap();
+            let mut status = json!({"state": state, "target": "0.3.45", "error": "test cause", "at": epoch_s() - case["age"].as_f64().unwrap()});
+            if let Some(wait) = case["retry_in"].as_f64() { status["not_before"] = json!(epoch_s() + wait); }
+            write_status(&f.directory, status);
             {
                 let mut s = f.inner.lock().unwrap();
                 s.desired = Some("0.3.45".into());
-                s.pending_since = Instant::now().checked_sub(Duration::from_secs(21 * 60));
+                s.pending_since = Some(Instant::now());
                 s.features = json!({"runner_drain": true});
             }
             f.decide().await;
@@ -1139,6 +1174,42 @@ scope['main'](sys.argv[1:])
                 assert_eq!(body["update"]["error"], "test cause");
             }
         }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unfinished_drains_release_claims_on_the_short_schedule_and_reset_after_a_new_release() {
+        let f = checkout_follower();
+        std::env::set_var("TICO_SUPERVISED", "1");
+        for delay in [120, 300, 900, 1800, 3600, 3600] {
+            {
+                let mut s = f.inner.lock().unwrap();
+                s.desired = Some("0.3.45".into());
+                s.pending = Some("0.3.45".into());
+                s.pending_since = Some(Instant::now());
+                s.features = json!({"runner_drain": true});
+            }
+            assert!(f.blocks_claims(true).await); // quiet work still gets its normal drain time
+            f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(f.drain_timeout);
+            assert!(!f.blocks_claims(true).await);
+            assert!(!f.draining());
+            let status = read_status(&f.directory);
+            assert_eq!(status["state"], "idle");
+            assert_eq!(status["not_before"].as_f64().unwrap() - status["at"].as_f64().unwrap(), delay as f64);
+            f.decide().await;
+            assert!(!f.blocks_claims(false).await && !f.blocks_claims(true).await);
+            let restarted = checkout_follower();
+            write_status(&restarted.directory, status.clone());
+            assert_eq!(restarted.outcome("0.3.45").await.unwrap().0, "idle");
+            assert!(restarted.outcome("0.3.46").await.is_none());
+            std::fs::remove_dir_all(restarted.directory).unwrap();
+        }
+        f.inner.lock().unwrap().desired = Some("0.3.46".into());
+        f.decide().await;
+        assert!(f.draining());
+        f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(f.drain_timeout);
+        assert!(!f.blocks_claims(true).await);
+        assert_eq!(read_status(&f.directory)["deferrals"], 1);
         std::fs::remove_dir_all(f.directory).unwrap();
     }
 
@@ -1184,6 +1255,7 @@ scope['main'](sys.argv[1:])
             started: String::new(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar { url: String::new(), token_file: dir.join("t") },
@@ -1227,6 +1299,7 @@ scope['main'](sys.argv[1:])
             started: String::new(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["true".into()],
             // Nothing listens on the discard port: the sidecar is stopped.
@@ -1269,6 +1342,7 @@ scope['main'](sys.argv[1:])
             started: String::new(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar { url: url.into(), token_file: dir.join("t") },
@@ -1435,6 +1509,7 @@ scope['main'](sys.argv[1:])
             started: head.clone(),
             commit: String::new(),
             pinned: false,
+            drain_timeout: Duration::from_secs(DRAIN_WAIT_S),
             self_update: true,
             prepare: vec!["sh".into(), "-c".into(), "echo no cargo >&2; exit 1".into()],
             sidecar: Sidecar { url: String::new(), token_file: dir.join("t") },

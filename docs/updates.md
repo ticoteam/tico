@@ -173,12 +173,21 @@ turns on a lock in the checkout's git directory, so one never moves the checkout
 If the Git gate stays busy for ten seconds, or Git cannot find that shared update lock, the updater exits with
 a reason and lets the runner take new work. The same rule covers a ten-minute wait for another updater's checkout
 lock, work still running after the drain wait, work that starts before the final check, and a release whose runner
-binary is not published yet. All these delays use the same six-hour retry pause. The first two tries report
-`failed`; the third and later tries report `blocked`, with the cause in Settings > Computers and Health. The count
-survives lock waits and changes of cause. A new target release or a completed update clears it. A blocked update
-still retries every six hours, so fixing the cause lets it finish. This also lets older Python runners, including
-v0.3.45, take work between tries: they already honor `failed` and `blocked`, while `waiting` and `busy` are due at
-once. It never installs, restarts or rolls back without the shared update lock.
+binary is not published yet. Current Rust runners retry these delays after 2, 5, 15, 30, then 60 minutes,
+capped at 60 minutes. The status file saves a `not_before` time, so a restart keeps the wait. Between tries the
+runner reports `idle` for the update and takes new work. If a drain has not finished within ten minutes
+(or the configured active-turn limit, when longer), it ends that attempt and uses the same short wait. The
+updater's second check for active work also ends after ten minutes.
+Active work and busy locks never count as blocked. Other causes report `blocked` only after the same cause occurs
+three times in a row, or after two hours of such delays. Active work or a busy lock resets that cause history.
+Blocked deferrals keep the short retry schedule, with the cause in Settings > Computers and Health. Lock waits
+preserve the retry history; a new target release or a completed update clears it.
+
+The Rust follower sets `TICO_UPDATE_RETRY=short` for the updater, including under systemd. Older Python followers,
+including v0.3.45, ignore `not_before` and treat `waiting` and `busy` as due at once. For them alone, the updater
+uses `failed` and the six-hour wait they already honor, so they take work between tries instead of draining
+without an end. Persistent causes use the same blocked rule. It never installs, restarts or rolls back without
+the shared update lock.
 
 ### Linux from a checkout: run `scripts/tico install` once
 

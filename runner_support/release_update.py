@@ -30,7 +30,10 @@ HEALTH_S = 180
 LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under follow.rs STALE_UPDATING_S
 LOCK_FILE = "tico-update.lock"
 PROCESS_LOCK = "update-process.lock"  # follow.rs probes this before starting an updater or declaring one stale
-MAX_DEFERRALS = 3           # consecutive deferrals of one release before Health asks for help
+MAX_DEFERRALS = 3           # repeats of the same non-transient cause before Health asks for help
+DEFERRAL_DELAYS_S = (120, 300, 900, 1800, 3600)
+DEFERRAL_LIMIT_S = 2 * 3600
+DEFERRAL_FIELDS = ("deferrals", "deferred_since", "deferral_cause", "cause_count")
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
 
@@ -220,31 +223,48 @@ def read_status(directory):
 
 def write_status(directory, **fields):
     if fields.get("state") == "updating":
-        # Waiting on a shared lock must not erase the retry count before this attempt can defer again.
+        # Waiting on a shared lock must not erase the deferral history before this attempt can defer again.
         before = read_status(directory)
-        if before.get("target") == fields.get("target") and "deferrals" in before:
-            fields["deferrals"] = before["deferrals"]
+        if before.get("target") == fields.get("target"):
+            fields.update({name: before[name] for name in DEFERRAL_FIELDS if name in before})
     path = Path(directory) / STATUS_FILE
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(fields))
     os.replace(tmp, path)
 
 
-def defer_update(directory, version, reason, *, clock=time.time):
-    """End this attempt and release claims for the six-hour cooldown both current and old followers honor.
-
-    waiting/busy are immediately due even in v0.3.45: a new status or a new timer field cannot release its drain.
-    Count all deferrals together so alternating causes cannot keep hiding a blocked update.
-    """
+def defer_update(directory, version, reason, *, clock=time.time, transient=False):
+    """Release claims until the next try; old followers need failed because they ignore not_before."""
     target = version.lstrip("v")
     before = read_status(directory)
-    count = before.get("deferrals", 0) if before.get("target") == target else 0
+    before = before if before.get("target") == target else {}
+    now = clock()
+    count = before.get("deferrals", 0)
     count = count if type(count) is int and count >= 0 else 0
-    count = min(count + 1, MAX_DEFERRALS)
-    state = "blocked" if count == MAX_DEFERRALS else "failed"
-    error = (f"update blocked after {count} tries: " if state == "blocked" else "update paused: ") + reason
-    error = error[:250] + "; retrying in six hours"
-    write_status(directory, state=state, target=target, error=error, at=clock(), deferrals=count)
+    count = min(count + 1, len(DEFERRAL_DELAYS_S))
+    repeats = before.get("cause_count", 0)
+    repeats = repeats if type(repeats) is int and repeats >= 0 else 0
+    since = before.get("deferred_since", now) if repeats else now
+    since = since if type(since) in (int, float) and 0 <= since <= now else now
+    if transient:
+        repeats = 0
+    elif before.get("deferral_cause") == reason:
+        repeats = min(repeats + 1, MAX_DEFERRALS)
+    else:
+        repeats = 1
+    blocked = not transient and (repeats == MAX_DEFERRALS or now - since >= DEFERRAL_LIMIT_S)
+    short = os.environ.get("TICO_UPDATE_RETRY") == "short"
+    delay = DEFERRAL_DELAYS_S[count - 1] if short else 6 * 3600
+    state = "blocked" if blocked else "idle" if short else "failed"
+    prefix = "update paused: "
+    if blocked:
+        prefix = f"update blocked after {repeats} tries: " if repeats == MAX_DEFERRALS else "update blocked after two hours: "
+    error = prefix + reason
+    error = error[:250] + (f"; retrying in {delay // 60} minutes" if short else "; retrying in six hours")
+    timer = {"not_before": now + delay} if short else {}
+    write_status(directory, state=state, target=target, error=error, at=now, deferrals=count,
+                 deferred_since=now if transient else since, deferral_cause="" if transient else reason,
+                 cause_count=repeats, **timer)
     return {"state": state, "target": target, "error": error}
 
 
@@ -460,7 +480,7 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
     path = lock_path(root, run)
     target = version.lstrip("v")
     if path is None:
-        return defer_update(directory, target, "the checkout is busy or its update lock cannot be checked", clock=clock)
+        return defer_update(directory, target, "the checkout is busy or its update lock cannot be checked", clock=clock, transient=True)
     with open_regular_lock(path) as handle:
         deadline, said = time.time() + lock_wait, False
         while True:
@@ -469,7 +489,7 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
                 break
             except BlockingIOError:
                 if time.time() >= deadline:
-                    return defer_update(directory, target, "another update still holds the checkout lock", clock=clock)
+                    return defer_update(directory, target, "another update still holds the checkout lock", clock=clock, transient=True)
                 if not said:
                     write_status(directory, state="updating", target=target, error="", at=clock())
                     said = True
@@ -535,7 +555,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     if not target:
         return say("failed", f"release {tag} does not name a commit")
     if busy and busy():
-        return defer_update(directory, version, "this computer still has work running", clock=clock)
+        return defer_update(directory, version, "this computer still has work running", clock=clock, transient=True)
     if target == old and started in ("", target):
         return say("healthy")
     if target != old:
@@ -632,7 +652,7 @@ def run_update(args):
     while in_flight(args.state_dir) and time.time() < deadline:   # the runner waits for quiet first; this is the second look
         time.sleep(10)
     if in_flight(args.state_dir):
-        result = defer_update(args.state_dir, args.version, "this computer still has work running")
+        result = defer_update(args.state_dir, args.version, "this computer still has work running", transient=True)
         print(json.dumps(result))
         return 1
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
