@@ -380,9 +380,9 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
     const letIn = v.page.locator('dialog[aria-label="Let the Tico team in"]');
     assert.equal(await letIn.locator('[name=tier][value=full]').isDisabled(), true, "full access is the owner's to give");
-    assert.equal(await letIn.locator('[name=hours]').inputValue(), '24');
+    assert.equal(await letIn.locator('[name=hours]').inputValue(), '72');
     assert.deepEqual(await letIn.locator('[name=hours] option').evaluateAll(options => options.map(o => [o.value, o.textContent])),
-      [['1', '1 hour'], ['4', '4 hours'], ['24', '24 hours'], ['168', '7 days'], ['720', '30 days'], ['2160', '90 days'], ['8760', '365 days'], ['custom', 'Other…']]);
+      [['1', '1 hour'], ['4', '4 hours'], ['24', '24 hours'], ['72', '3 days'], ['168', '7 days'], ['720', '30 days'], ['2160', '90 days'], ['8760', '365 days'], ['custom', 'Other…']]);
     await letIn.locator('[name=hours]').selectOption('4');
     await letIn.locator('[type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();

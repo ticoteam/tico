@@ -85,7 +85,7 @@ def test_default_and_maximum_duration_reach_hq_without_a_cap(environment, hq, ho
     response = start(api, **({} if hours is None else {"hours": hours}))
     assert response.status_code == 200, response.text
     session = response.json()
-    duration = timedelta(hours=24 if hours is None else hours)
+    duration = timedelta(hours=72 if hours is None else hours)
     assert H.parse_ts(session["expires_at"]) - H.parse_ts(session["started_at"]) == duration
     opened = json.loads(next(x for x in hq.seen if x.url.path.endswith("/access")).content)
     assert opened == {"tier": "app", "expires_at": support_access.hq_stamp(session["expires_at"])}
@@ -97,7 +97,7 @@ def test_default_and_maximum_duration_reach_hq_without_a_cap(environment, hq, ho
     assert event["actor"] == "human:morgan"
     assert json.loads(event["detail"])["hours"] == int(duration.total_seconds() / 3600)
     schema = api.app.openapi()["components"]["schemas"]["AccessStart"]["properties"]["hours"]
-    assert (schema["minimum"], schema["maximum"], schema["default"]) == (1, 8760, 24)
+    assert (schema["minimum"], schema["maximum"], schema["default"]) == (1, 8760, 72)
 
 
 @pytest.mark.parametrize("hours", [0, 8761])

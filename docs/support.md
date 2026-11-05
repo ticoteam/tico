@@ -168,7 +168,7 @@ start it, it always starts from your open conversation with the team, and it end
      What it changes the owner's way can outlast Stop, such as a webhook, a credential, the GitHub App, Slack's tokens,
      directory sync or a computer's model sign-in (which account its AI tool runs on), and it reads what the owner reads, mail and raw run streams included: give it only when you want
      support to have that.
-3. Choose how long: 1 hour, 4 hours, 24 hours (the default), 7 days, 30 days, 90 days, 365 days, or any whole number of
+3. Choose how long: 1 hour, 4 hours, 24 hours, 3 days (the default), 7 days, 30 days, 90 days, 365 days, or any whole number of
    hours from 1 to 8760 (365 days). Longer access can cover managed services. Press **Start**.
 
 While it lasts, everyone on your Tico sees a banner on every screen: "Tico team has access (App only), 23 h 12 min left ·

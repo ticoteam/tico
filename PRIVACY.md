@@ -422,7 +422,7 @@ How the team works tickets: [docs/support.md](docs/support.md).
 
 ### Letting Tico support in
 
-Only if an owner or admin starts it, from one of their own requests, for the time they choose (24 hours unless they pick
+Only if an owner or admin starts it, from one of their own requests, for the time they choose (3 days unless they pick
 another; 365 days at most). A banner on every screen says it is on, and Stop ends it at once
 ([docs/support.md](docs/support.md#letting-tico-support-in)).
 
