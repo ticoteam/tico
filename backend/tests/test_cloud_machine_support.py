@@ -187,6 +187,26 @@ def test_full_app_support_cannot_enable_its_own_machine_access(api, hq, monkeypa
     assert hq.calls == [] and audit(api) == []
 
 
+@pytest.mark.parametrize("reason", ["trial_over", "unpaid"])
+def test_locked_owner_can_read_and_revoke_but_cannot_enable(api, hq, reason):
+    cloud_access.apply(api.app.state.store, cloud_access.parse({"access": "locked", "reason": reason}))
+    assert api.get(PATH).status_code == 401
+    assert api.put(PATH, json={"on": False}).status_code == 401
+    for token in ("ben-test", "cara-test"):
+        assert api.get(PATH, headers=headers(token)).status_code == 402
+        assert api.put(PATH, json={"on": False}, headers=headers(token)).status_code == 402
+    assert api.get(PATH, headers=headers()).json()["on"] is True
+    off = api.put(PATH, json={"on": False}, headers=headers())
+    assert off.status_code == 200 and off.json()["on"] is False
+    assert api.get(PATH, headers=headers()).json()["on"] is False
+    refused = api.put(PATH, json={"on": True}, headers=headers())
+    assert refused.status_code == 402 and refused.json()["error"]["code"] == "locked"
+    assert api.get("/api/v2/cloud-machines", headers=headers()).status_code == 402
+    assert hq.on is False
+    assert hq.calls == [("GET", None), ("PUT", {"on": False}), ("GET", None)]
+    assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}})]
+
+
 def test_owner_assistant_needs_the_same_confirmation_as_the_support_access_rule(api, hq):
     _, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]

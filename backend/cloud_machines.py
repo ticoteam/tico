@@ -1522,6 +1522,8 @@ def install(app, settings, store, auth, execution, mutate):
 
         def claim(c):
             nonlocal claimed
+            if body.on:
+                cloud_access.require_unlocked(store)
             claimed = True
             return {"pending": True}
 
