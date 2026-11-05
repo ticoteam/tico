@@ -1127,12 +1127,12 @@ def routing_refs(value):
 def routing_refs_sql(column):
     """The same control-only refs for SQLite's message deduplication trigger."""
     keys = ','.join("'" + key + "'" for key in SOURCED_TEXT_SOURCES)
-    source = f"SELECT fullkey FROM json_tree(value) WHERE key IN ({keys})"
+    source = f"SELECT fullkey FROM json_tree(refs.value) WHERE key IN ({keys})"
     # Remove whole source containers, including those beside a nested answer, using native SQLite so a
     # persisted trigger also works for migrations and maintenance writers without Python callbacks.
     return (f"(WITH RECURSIVE control_refs(value) AS (SELECT json({column}) UNION ALL "
-            f"SELECT json_remove(value,({source} LIMIT 1)) FROM control_refs WHERE EXISTS({source})) "
-            f"SELECT value FROM control_refs WHERE NOT EXISTS({source}))")
+            f"SELECT json_remove(refs.value,({source} LIMIT 1)) FROM control_refs refs WHERE EXISTS({source})) "
+            f"SELECT refs.value FROM control_refs refs WHERE NOT EXISTS({source}))")
 
 
 def clear_sourced_text(value, shown, rejected, *, hidden=False, replacement=""):
