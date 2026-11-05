@@ -1264,10 +1264,15 @@ preference: with none that can run, it runs on an author's own, and the subtask'
 Every task a bot owns has its own thread (a `kind: task` thread), even one filed from a thread: its comments,
 notices, notes and replies go there, and the thread it was filed from gets one quiet line, "Started task: <title>"
 (`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
-say, notice or ask in its task's thread reaches a person only when it @-mentions them: to get someone's attention on
-a task, the bot @-mentions them; otherwise the comment stays on the task (no Inbox row, digest or push). A bot's
-open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A
-person's own tasks, and the Assistant's (whose turns act for the person of the thread), keep their thread.
+say or notice in its task's thread reaches a person only when it @-mentions them. To get someone's attention on a task,
+the bot @-mentions them; otherwise the comment stays on the task, with no Inbox row, digest or push. A bot's ask in its
+task's thread goes to the person or bot it names. With no name, the owner bot's ask goes to the requester,
+and the requester's or a manager's ask goes to the owner. When the recipient is a person, that person's
+**Needs you** lists the task, with no Inbox row, digest or push unless the asking bot @-mentions them. When
+the recipient is a bot, the ask goes to that bot on the task, and no person's **Needs you** lists it. A bot's
+open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed;
+its earlier messages stay in the thread, and the new thread opens with a line saying so. A person's own tasks,
+and the Assistant's (whose turns act for the person of the thread), keep their thread.
 A turn reads only its own lane's messages: the main session reads the Home, with no task traffic, and a task's
 session reads that task (and its subtasks that share the session). The Home hears where its bot's tasks got to
 from short quiet lines (`refs.task_report`): `<title>: blocked.` when the task waits on a person (a person's subtask
