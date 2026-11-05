@@ -89,7 +89,7 @@ def close_item(c, task_id, note):
     if not row or row["status"] not in H.ACTIVE_STATUSES:
         return
     try:
-        H.task_close(c, H.KEEPER, task_id, note=note)
+        H.task_close(c, H.KEEPER, task_id, note=note, strict=False)
     except H.Refused:
         log.warning("Could not close the Needs-you task %s", task_id)
 

@@ -49,7 +49,7 @@ from typing import Literal
 from . import google_rights
 from . import models as M
 from . import routines
-from .google_workspace import oauth_client
+from .google_workspace import acts as acts_allowed, oauth_client, permissions
 from .store import H, P, Problem
 
 SCHEMA = """
@@ -148,6 +148,11 @@ MESSAGES = {
 UPGRADE = {
     "both": ("This connection only reads your mail and calendar.",
              "Connect Google again to let Tico also label, archive and draft mail, and add calendar events."),
+    # One missing while the other is not in use either (held but turned off, or never given).
+    "mail_only": ("This connection only reads your mail.",
+                  "Connect Google again to let Tico also label, archive and draft mail."),
+    "calendar_only": ("This connection only reads your calendar.",
+                      "Connect Google again to let Tico also add calendar events."),
     "mail": ("This connection can add calendar events, but only reads your mail.",
              "Connect Google again to let Tico also label, archive and draft mail."),
     "calendar": ("This connection can label, archive and draft mail, but only reads your calendar.",
@@ -181,10 +186,14 @@ def app_source(c, settings):
     return client[2] if client else None
 
 
-def grantable(source):
-    """The scopes a sign-in asks Google for with this OAuth client: read only with the shared app, and the act scopes
-    too with the company's own app."""
-    return READ_SCOPES + ACT_SCOPES if source == "settings" else READ_SCOPES
+def grantable(source, may=None):
+    """The scopes a sign-in asks Google for with this OAuth client: read only with the shared app, and with the
+    company's own app also each act scope What Tico may do allows (Settings > Google; `may` None is all of them, the
+    most this app may ever be given)."""
+    if source != "settings":
+        return READ_SCOPES
+    allowed = acts_allowed(may)
+    return READ_SCOPES + [scope for scope, service in zip(ACT_SCOPES, ("gmail", "calendar"), strict=True) if allowed[service]]
 
 
 def overbroad(answer, source):
@@ -204,11 +213,14 @@ def granted_scopes(answer, source):
     return sorted(set(told) & set(grantable(source)))
 
 
-def refresh_scopes(service, recorded):
+def refresh_scopes(service, recorded, may=None):
     """The scopes a refresh for `service` may ask Google for, on a grant holding `recorded` (the JSON list that
-    `granted_scopes` stored). NULL is a grant from before scopes were recorded, which was read only."""
+    `granted_scopes` stored), and with `may` (What Tico may do) only the act scope it allows. NULL is a grant from
+    before scopes were recorded, which was read only. The grant keeps what Google gave: a box turned back on needs no
+    new sign-in."""
     given = set(json.loads(recorded)) if recorded is not None else set(READ_SERVICE_SCOPES)
-    return given & (SERVICE_SCOPES[service] | SERVICE_ACT_SCOPES[service])
+    acts = SERVICE_ACT_SCOPES[service] if acts_allowed(may)[service] else set()
+    return given & (SERVICE_SCOPES[service] | acts)
 
 
 def redirect_uri(settings):
@@ -293,23 +305,32 @@ def expire(c):
               "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?", (H.now(), now - CLAIM_SECONDS))
 
 
-def view(row, mailbox, syncing, source):
-    """What the person sees. `source` is the OAuth client a connect would use now (see app_source). A connected grant
-    shows the scopes Google gave it, and `acts` says, per service, whether the grant has that service's write access
-    (mail: labels, archive and drafts; calendar: events). A connection made with the company's own app that lacks
-    either is told what a reconnect would add; nothing changes until the person reconnects."""
+def view(row, mailbox, syncing, source, may=None):
+    """What the person sees. `source` is the OAuth client a connect would use now (see app_source), `may` What Tico may
+    do. A connected grant shows the scopes Google gave it, and `acts` says, per service, whether Tico uses that
+    service's write access now (mail: labels, archive and drafts; calendar: events): the grant has it and What Tico may
+    do allows it. A connection made with the company's own app that lacks one What Tico may do allows is told what a
+    reconnect would add; nothing changes until the person reconnects."""
     status = row["status"] if row else "none"
+    wanted = acts_allowed(may)
+    wanted = {"mail": wanted["gmail"], "calendar": wanted["calendar"]}
     out = {"configured": source is not None, "app": APPS.get(source), "mailbox": mailbox, "syncing": syncing,
-           "status": status, "scopes": grantable(source) if source else READ_SCOPES, "can": [],
+           "status": status, "scopes": grantable(source, may) if source else READ_SCOPES, "can": [],
            "acts": {"mail": False, "calendar": False},
            "updated_at": row["updated_at"] if row else None, "kind": None, "message": None, "hint": None}
     if row and status == "connected":
         given = set(json.loads(row["grant_scopes"]) if row["grant_scopes"] is not None else READ_SERVICE_SCOPES)
-        acts = {"mail": bool(given & SERVICE_ACT_SCOPES["gmail"]),
+        held = {"mail": bool(given & SERVICE_ACT_SCOPES["gmail"]),
                 "calendar": bool(given & SERVICE_ACT_SCOPES["calendar"])}
+        acts = {name: held[name] and wanted[name] for name in held}
         out.update(can=json.loads(row["can"] or "[]"), scopes=sorted(given), acts=acts)
-        if source == "settings" and not all(acts.values()):
-            lacks = "both" if not any(acts.values()) else "mail" if acts["calendar"] else "calendar"
+        missing = [name for name in ("mail", "calendar") if wanted[name] and not held[name]]
+        if source == "settings" and missing:
+            if len(missing) == 2:
+                lacks = "both"
+            else:
+                other = "calendar" if missing[0] == "mail" else "mail"
+                lacks = missing[0] if acts[other] else missing[0] + "_only"
             out.update(message=UPGRADE[lacks][0], hint=UPGRADE[lacks][1])
     if row and status == "failed":
         kind = row["kind"] or "error"
@@ -377,7 +398,7 @@ def install(app, store, member, mutate):
         row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (pid,)).fetchone()
         if row and row["mailbox"] != mailbox:
             row = None                  # their mailbox changed since: the old connection says nothing about this one
-        return view(row, mailbox, syncing, app_source(c, settings))
+        return view(row, mailbox, syncing, app_source(c, settings), permissions(c))
 
     @app.get("/api/v2/mail/google")
     def google_status(request: Request):
@@ -404,7 +425,7 @@ def install(app, store, member, mutate):
             verifier = secrets.token_urlsafe(64)
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
             query = {"client_id": client[0], "redirect_uri": redirect_uri(settings),
-                     "response_type": "code", "scope": " ".join(grantable(client[2])), "access_type": "offline",
+                     "response_type": "code", "scope": " ".join(grantable(client[2], permissions(c))), "access_type": "offline",
                      "prompt": "consent", "login_hint": mailbox, "state": state, "code_challenge": challenge,
                      "code_challenge_method": "S256"}
             now = H.now()
@@ -567,6 +588,12 @@ def install(app, store, member, mutate):
             if not wanted <= refresh_scopes(body.service, held["grant_scopes"]):
                 raise Problem("scope", f"This Connect Google grant does not hold all the {body.service} scopes asked "
                                        "for. Connect Google again in Settings > Google to add them.", 422)
+            # What Tico may do narrows the token, not the grant: a write turned off is left out of what Google is
+            # asked for, and the computer reads the narrower list back (`scopes`), so it refuses that write itself.
+            wanted &= refresh_scopes(body.service, held["grant_scopes"], permissions(c))
+            if not wanted:
+                raise Problem("scope", f"What Tico may do (Settings > Google) leaves none of the {body.service} "
+                                       "scopes asked for", 422)
         with store.read() as c:
             client = oauth_client(c, settings)
         if client is None:

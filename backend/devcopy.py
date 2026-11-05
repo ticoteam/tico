@@ -37,6 +37,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
+    "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
@@ -72,7 +74,7 @@ EMPTY = (
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
-    "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
+    "mail_mailboxes", "mailboxes", "mailbox_accesses", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     # Settings > Google: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
     # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
     "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
@@ -116,9 +118,12 @@ AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhoo
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
-           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day"}
+           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day",
+           # Run steps before their runs: a step row points at its run.
+           "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_settings", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
@@ -140,7 +145,7 @@ KEEP = frozenset((
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys",
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
-    "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
+    "meeting_items", "meeting_task_links", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",

@@ -68,6 +68,46 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_an_existing_cloud_machine_gains_the_pending_start_marker_without_losing_its_wake(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machines DROP COLUMN start_asked_at")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105004523_cloud_machine_start_asked'")
+        c.execute("INSERT INTO cloud_machines(bot,state,wake_key,woke_at) VALUES('ops','stopped','job:a',1000)")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT state,wake_key,woke_at,start_asked_at FROM cloud_machines WHERE bot='ops'").fetchone() == (
+            "stopped", "job:a", 1000, None)
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
+    known = migrations.files()
+    # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.
+    main = [m for m in known if m.version <= '0093_withdraw_still_wanted' and not m.version.endswith('_meeting_task_links')]
+    assert main[-1].version == '0093_withdraw_still_wanted'
+    path = tmp_path / 'main.sqlite'
+    with monkeypatch.context() as patch:
+        patch.setattr(migrations, 'files', lambda directory=None: main)
+        boot(path)
+    with sqlite3.connect(path) as c:
+        assert '0093_withdraw_still_wanted' in _versions(c)
+        assert 'meeting_task_links' not in _tables(c)
+        before = c.execute('SELECT * FROM schema_migrations ORDER BY version').fetchall()
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert '20261105003629_meeting_task_links' in _versions(c)
+        assert 'meeting_task_links' in _tables(c)
+        assert c.execute('PRAGMA foreign_key_check').fetchall() == []
+        after = c.execute('SELECT * FROM schema_migrations').fetchall()
+        assert all(row in after for row in before)
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
@@ -244,7 +284,7 @@ def test_failed_migration_rolls_back_its_ddl_and_row_then_runs_once_fixed(tmp_pa
     directory = tmp_path / "migrations"
     directory.mkdir()
     (directory / "0001_base.sql").write_text("CREATE TABLE base(x);\n")
-    later = directory / f"0002_half.{kind}"
+    later = directory / f"20261104235959_half.{kind}"
     later.write_text(BROKEN[kind])
     conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
     try:
@@ -255,23 +295,72 @@ def test_failed_migration_rolls_back_its_ddl_and_row_then_runs_once_fixed(tmp_pa
         later.write_text(GOOD[kind])
         migrations.apply(conn, directory)
         assert "half" in _tables(conn)
-        assert _versions(conn) == ["0001_base", "0002_half"]
+        assert _versions(conn) == ["0001_base", "20261104235959_half"]
     finally:
         conn.close()
 
 
-def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("name", ["0001_audit_log.sql", "20261104235959_probe.sql"])
+def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch, name):
     directory = tmp_path / "migrations"
     directory.mkdir()
     for migration in migrations.files():
         shutil.copy(migration.path, directory / migration.path.name)
-    shipped = directory / "0001_audit_log.sql"
+    shipped = directory / name
+    if not shipped.exists():
+        shipped.write_text("CREATE TABLE probe(x);\n")
     monkeypatch.setattr(migrations, "DIRECTORY", directory)
     path = tmp_path / "hub.sqlite"
     boot(path)
     shipped.write_text(shipped.read_text() + "\n-- edited after it ran\n")
-    with pytest.raises(migrations.MigrationError, match="0001_audit_log was applied"):
+    before = snapshot(path)
+    with pytest.raises(migrations.MigrationError, match=f"{shipped.stem} was applied"):
         boot(path)
+    assert snapshot(path) == before
+
+
+def test_pending_files_run_in_mixed_version_order_even_below_an_applied_version(tmp_path):
+    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
+    conn.execute("CREATE TABLE ran(version TEXT)")
+    (tmp_path / "0002_base.sql").write_text("INSERT INTO ran VALUES('0002_base');\n")
+    (tmp_path / "20261105000000_newer.py").write_text(
+        "def up(conn):\n    conn.execute(\"INSERT INTO ran VALUES('20261105000000_newer')\")\n")
+    try:
+        migrations.apply(conn, tmp_path)
+        recorded = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
+        # Another PR lands after the newer migration has run, with both legacy and timestamp pending files.
+        (tmp_path / "0001_earlier.sql").write_text("INSERT INTO ran VALUES('0001_earlier');\n")
+        (tmp_path / "20261104235959_pending.py").write_text(
+            "def up(conn):\n    conn.execute(\"INSERT INTO ran VALUES('20261104235959_pending')\")\n")
+        (tmp_path / "20261106000000_last.sql").write_text("INSERT INTO ran VALUES('20261106000000_last');\n")
+        expected = ["0001_earlier", "0002_base", "20261104235959_pending", "20261105000000_newer", "20261106000000_last"]
+        assert [m.version for m in migrations.files(tmp_path)] == expected
+        migrations.apply(conn, tmp_path)
+        assert _versions(conn) == expected
+        assert conn.execute("SELECT version FROM ran ORDER BY rowid").fetchall() == [(v,) for v in (
+            "0002_base", "20261105000000_newer", "0001_earlier", "20261104235959_pending", "20261106000000_last")]
+        assert conn.execute("SELECT * FROM schema_migrations WHERE version IN (?,?) ORDER BY version",
+                            ("0002_base", "20261105000000_newer")).fetchall() == recorded
+        before = conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall()
+        migrations.apply(conn, tmp_path)
+        assert conn.execute("SELECT * FROM schema_migrations ORDER BY version").fetchall() == before
+        assert conn.execute("SELECT count(*) FROM ran").fetchone()[0] == 5
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("version", ["0001", "20261104235959"])
+def test_duplicate_versions_across_sql_and_python_are_refused_before_either_runs(tmp_path, version):
+    (tmp_path / f"{version}_a.sql").write_text("CREATE TABLE should_not_exist(x);\n")
+    (tmp_path / f"{version}_b.py").write_text("def up(conn): pass\n")
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        with pytest.raises(migrations.MigrationError, match="Two migration files share a number"):
+            migrations.apply(conn, tmp_path)
+        assert "should_not_exist" not in _tables(conn)
+        assert _versions(conn) == []
+    finally:
+        conn.close()
 
 
 def test_every_shipped_migration_file_keeps_its_checksum():
@@ -288,7 +377,9 @@ def test_every_shipped_migration_file_keeps_its_checksum():
     assert not changed, "Shipped migrations edited or removed (write a new migration instead): " + ", ".join(changed)
 
 
-@pytest.mark.parametrize("version", ["0099_from_the_future", f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}"])
+@pytest.mark.parametrize("version", ["0099_from_the_future", "20261104235959_from_the_future",
+                                     f"legacy_user_version_{migrations.NEWEST_USER_VERSION + 1}",
+                                     f"legacy_cloud_{migrations.CLOUD_VERSION + 1}"])
 def test_a_database_with_a_migration_this_code_does_not_know_is_refused_untouched(tmp_path, version):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:

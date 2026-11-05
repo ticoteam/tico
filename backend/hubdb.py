@@ -201,7 +201,7 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
@@ -210,6 +210,8 @@ APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "task_cap": ("sender", "receiver"),
                    # The redesign's other proposal (backend/proposals.py checks its whole shape): a spend limit.
                    "spend_limit": (),
+                   # A bot's mail sending a person has not approved (backend/proposals.py `MailAlert`, raised by Check health).
+                   "mail_alert": ("bot",),
                    # A report to the Tico team (backend/support.py `file_approved`): the message, its hash, and whether
                    # the version and install ID go with it. Nothing else may: no email, no diagnostics bundle.
                    "support": ("message", "content_sha256")}
@@ -1685,6 +1687,8 @@ VIA = contextvars.ContextVar("hub_via", default="")
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
+# Close preflight reads the same rules as a close without recording or escalating a refusal.
+CLOSE_PROBE = contextvars.ContextVar("hub_close_probe", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `attempts.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
@@ -1796,6 +1800,8 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""
+    if CLOSE_PROBE.get():
+        raise Refused(rule, detail, severity, task)
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
@@ -2926,7 +2932,7 @@ def _learner(conn, actor):
                "your manager in chat; a person above you marks onboarding complete when you are ready.")
 
 
-# The built-in Health Monitor's slug (backend/health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+# The retired Health Monitor's slug (archived by backend/migrations/0096_retire_health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
 HEALTH_MONITOR = "health-monitor"
 
 
@@ -4401,12 +4407,17 @@ def declared_hold(conn, actor, row, step, step_id):
     return is_human(actor)
 
 
-def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=()):
+def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=(), notify_parties=True,
+                cascade=True):
     """Every task status write keeps its type and step consistent, including old runners. A task
     that enters a step joins its end; one that lands on a numbered type without a number gets one."""
     from . import task_holds
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
+    # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
+    # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
+    finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
+    left_open = _check_finish_children(conn, actor, row, None, strict=False) if finishing else set()
     ts = now()
     from .task_blocked import transition
     transition(conn, row, effective, step_id, note, ts,
@@ -4432,21 +4443,22 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
             TS.clear_finished(conn, actor, row)     # review hands it on: the requester looks now, not at the date
         if effective in ("done", "closed", "declined"):
             # A finished task's open questions to people are moot, every kind. A question lives and dies with its own
-            # task: one on an open task below it carries on (an open subtask says it is still needed), so a bot asking on
-            # a subtask and then finishing the parent no longer withdraws it seconds later (Dev 627).
+            # task: closing or finishing also closes each open descendant through task_close, so its asks end there.
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
             from . import task_holds
             task_holds.withdrawn(conn, row["id"], supersede_asks(conn, row["id"]),
-                                 f"its task was {TASK_ENDED[effective]}", by=actor)
+                                 f"its task was {TASK_ENDED[effective]}", by=actor, told=notify_parties)
             supersede_ask_cards(conn, row, effective)
             # ...and so is a yes it was waiting for: nothing will act on it now.
-            withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
+            withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.", notify=notify_parties)
             # Its parent and the tasks it blocked lose a hold: their reason follows, and the last one clearing frees them.
             task_holds.ended(conn, {**row, "status": effective}, effective)
         elif row.get("status") in ("done", "closed", "declined"):
             # Reopened: it holds its parent and the tasks it blocks again.
             from . import task_holds
             task_holds.holders(conn, row["id"])
+    if finishing:
+        _finish_children(conn, actor, task(conn, row["id"]), left_open=left_open, strict=False)
     from .roadmap_flow import changed as roadmap_changed
     # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
     roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
@@ -4864,6 +4876,8 @@ def _unblock(conn, done_task, told=()):
     """A finished task frees whatever waited on it; a bot owner hears about it once nothing else
     blocks the task. `told` are the tasks already woken about it (_answered)."""
     from .roadmap_flow import delivers
+    from .task_trigger_rules import unblocked
+    notified = unblocked(conn)
     # A quiet task a run deferred until this one is done gets its run (backend/quiet_work.py).
     from . import quiet_work
     quiet_work.finished(conn, done_task)
@@ -4885,7 +4899,8 @@ def _unblock(conn, done_task, told=()):
             conn, "SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                   "AND json_extract(refs,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
-        if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
+        if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told and row["id"] not in notified:
+            notified.add(row["id"])
             outcome = "was declined" if done_task["status"] == "declined" else "is finished"
             _wake(conn, row, row["owner_id"], f"Unblocked: {row['title']}\n{done_task['title']} {outcome}.",
                   refs={"blocker_done": done_task["id"], "blocker_status": done_task["status"]}, source=done_task["id"])
@@ -6612,7 +6627,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
                 verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
-                wake_others=True, check_back_at=None, check_back_note=None, owner_event_data=None):
+                wake_others=True, check_back_at=None, check_back_note=None, owner_event_data=None, *, strict=True):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6627,6 +6642,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     it names the person again, as does anything that leaves the task unreadable to them.
     `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
+    Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
+    Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
     """
     _writer(conn, actor)
     row = task(conn, task_id)
@@ -6692,10 +6709,15 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if queue_return and is_bot(actor) and not str(note or '').strip():
         refuse(conn, actor, 'lint', 'Putting your task back to open requires a note: '
                f'hub task update {task_id} --status open --note "why it goes back"')
+    left_open = set()
     if state_change:
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
             status = effective
+        # Descendant permission refusals precede every write, including recovered verdicts and review-gate work.
+        if (status == "done" and row["status"] != "done"
+                or status == "closed" and step is not None and row["status"] != "closed"):
+            left_open = _check_finish_children(conn, actor, row, mover, strict=strict)
         if effective == "done":
             from . import profiles
             from .wake_rules import verdict_fields
@@ -6763,7 +6785,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # The hold keeps the ticket where it asked to go, but not in the working step it named.
         self_wait.append('Task remains Blocked: ' + (row.get('blocked_reason') or 'a hold is still outstanding'))
     if closing_step:
-        _task_close_allowed(conn, actor, row, note, mover, step, type)
+        _check_task_close(conn, actor, row, note, mover, step, type)
     if waiting_on is not None:
         waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
     # A close is the requester's or a person's decision; a bot's update that started before it (a late
@@ -6999,9 +7021,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     elif args.get("owner_id", row["owner_id"]) != row["owner_id"]:
         RT.turn_result(conn, actor, row, "overridden", event)
     if closing_step:
-        task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
+        task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover, strict=strict)
     elif state_change:
-        _set_status(conn, actor, row, status, type, step, note or "", skip_step_wake=skip_step_wake)
+        _set_status(conn, actor, row, status, type, step, note or "", skip_step_wake=skip_step_wake, cascade=False)
     if queue_return:
         returned = task(conn, task_id)
         if returned.get('blocked_since'):
@@ -7070,12 +7092,13 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if plain:
         _task_event(conn, task_id, KEEPER, "lint", None, "; ".join(plain), "")
         event(conn, actor, "task.lint", task_id, {"problems": plain})
-    still_open = open_children(conn, task_id) if status == "done" and row["status"] != "done" else []
-    if still_open:
-        # Done with subtasks still open: they stay open, and the record says which.
-        _task_event(conn, task_id, KEEPER, "children", None, "Still open: " + "; ".join(still_open), "")
+    # Automatic finishes leave descendants the actor cannot close open. Reopening never reopens closed children.
+    ended = (_finish_children(conn, actor, task(conn, task_id), mover, quiet, left_open=left_open, strict=strict)
+             if status == "done" and row["status"] != "done" else None)
+    if reopening:
+        _children_kept_closed(conn, task_id)
     event(conn, actor, "task.update", task_id, {"status": status, "note": note,
-                                                **({"still_open": still_open} if still_open else {})})
+                                                **({"children": ended} if ended and any(ended.values()) else {})})
     after = isolate_private_task(conn, task(conn, task_id))
     if after.get("waiting_on") and not task_private_readable(conn, after["waiting_on"], after):
         # Made private, or moved under a private parent: it no longer goes in front of that person.
@@ -7140,8 +7163,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
               (_marked_done(conn, actor, after["title"]) if status == "done" and is_human(actor)
                and is_bot(after["requester_id"]) else
                f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}")
-              + (f"\n{note}" if note and not quiet else "")
-              + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""),
+              + (f"\n{note}" if note and not quiet else "") + _children_said(ended),
               refs={**(refs or {}), "news": "task_done" if status == "done" else "task_declined",
                     **({"wake_batch": "completion"} if status == "done" and is_bot(actor)
                        and not _awaited_by(conn, after, after["requester_id"]) else {})},
@@ -7162,7 +7184,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             idle = (who == after["owner_id"] and not (note and not quiet) and who not in askers
                     and who != (parent or {}).get("owner_id"))
             _wake(conn, after, who, _marked_done(conn, actor, after["title"]) + (f"\n{note}" if note and not quiet else "")
-                  + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), {"news": "task_done"},
+                  + _children_said(ended), {"news": "task_done"},
                   quiet_bots=True, quiet=idle, human_completion=is_human(actor),
                   completion_actionable=bool(str(note or '').strip()) and not quiet or who in askers
                   or who == row['owner_id'] and row.get('waiting_on') in (actor, actor_id(actor)))
@@ -7370,14 +7392,15 @@ def supersede_ask_cards(conn, row, status):
     candidates = set(ended)
     for tid in ended:
         candidates.update(TR.blocker_ids(conn, tid))
-    for tid in candidates - {row["id"]}:
+    # Done and close retire descendants through the cascade, with its actor and history note.
+    for tid in candidates - (ended if status in ("done", "closed") else {row["id"]}):
         card = task(conn, tid)
         if not card or card["status"] not in ACTIVE_STATUSES or not ask_card(conn, card):
             continue
         if any(blocked not in ended and (task(conn, blocked) or {}).get("status") in ACTIVE_STATUSES
                for blocked in TR.blocked_ids(conn, tid)):
             continue
-        task_close(conn, KEEPER, tid, note=f"Ask superseded: its task was {TASK_ENDED[status]}.", quiet=True)
+        task_close(conn, KEEPER, tid, note=f"Ask superseded: its task was {TASK_ENDED[status]}.", quiet=True, strict=False)
 
 
 def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
@@ -7493,7 +7516,8 @@ def _marketing_outcome(conn, actor, row, step, type=None):
 
 
 def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None):
-    _task_private_writer(conn, actor, row)
+    if actor != KEEPER and not task_private_readable(conn, actor, row):
+        refuse(conn, actor, "not-found", "Task not found")
     # A person closes a task they can edit, as task_update decides: on it (_task_close_party), or a mover. The person
     # it waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
     # someone refused its status and note must not be able to end it.
@@ -7515,40 +7539,158 @@ def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
 
+def _check_task_close(conn, actor, row, note, mover=None, step=None, type=None, *, check_only=False):
+    """All close authority and state checks, shared by direct closes and descendant preflight."""
+    token = CLOSE_PROBE.set(CLOSE_PROBE.get() or check_only)
+    try:
+        _writer(conn, actor)
+        _task_close_allowed(conn, actor, row, note, mover, step, type)
+        return _task_state(conn, actor, row, status="closed", type=type, step=step)
+    finally:
+        CLOSE_PROBE.reset(token)
+
+
+def _child_name(conn, kid):
+    """A parent's readers need not be readers of its private descendants."""
+    return "a private subtask" if task_private(conn, kid) else kid["title"]
+
+
+def _closed_with_note(parent):
+    return f"Closed with #{parent['number']}" if parent.get("number") is not None else "Closed with its parent task"
+
+
+def _check_finish_children(conn, actor, parent, mover, *, strict=True):
+    """Check the whole tree before closing anything, including children below finished subtasks."""
+    left_open = set()
+    for kid in descendants(conn, parent["id"]):
+        if kid["status"] not in ACTIVE_STATUSES:
+            continue
+        try:
+            _check_task_close(conn, actor, kid, _closed_with_note(parent), mover, check_only=not strict)
+        except Exception as exc:
+            from .batch_work import storage_error
+            if storage_error(exc):
+                raise
+            if not strict:
+                left_open.add(kid["id"])
+                if not isinstance(exc, Refused):
+                    logging.getLogger(__name__).warning("Automatic descendant preflight failed for %s", kid["id"], exc_info=True)
+                continue
+            if not isinstance(exc, Refused):
+                raise
+            shown = kid["title"] if task_private_readable(conn, actor, kid) else "a private subtask"
+            why = "" if task_private(conn, kid) else f" ({exc.detail})"
+            raise Refused(exc.rule, f"The open subtask {shown} is not yours to close{why}. "
+                                   "Finish it first or ask whoever requested it to close it", exc.severity) from exc
+    return left_open
+
+
+def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=(), strict=True):
+    """Close every open descendant through task_close, leaving finished tasks and parent links untouched."""
+    from . import task_trigger_rules
+    changed = {"closed": []}
+    kids = descendants(conn, parent["id"])
+    # A dependent inside this cascade needs no new run just before it closes. Keep removing its blocker links.
+    closing_tasks = {parent["id"]} | {kid["id"] for kid in kids
+                                      if kid["status"] in ACTIVE_STATUSES and kid["id"] not in left_open}
+    for kid in kids:
+        if (task(conn, kid["id"]) or {}).get("status") not in ACTIVE_STATUSES:
+            continue
+        closed = False
+        if kid["id"] not in left_open:
+            try:
+                # A descendant's hooks can change state after preflight. Automatic completion must still land,
+                # with neither partial child writes nor queued Task Triggers from a rolled-back close.
+                with task_trigger_rules.savepoint(conn):
+                    task_close(conn, actor, kid["id"], note=_closed_with_note(parent), quiet=quiet,
+                               mover=mover, with_parent=parent["id"], strict=strict, closing_tasks=closing_tasks)
+                    if "version" in kid:       # the standalone hub schema predates API optimistic concurrency
+                        conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (kid["id"],))
+                closed = True
+            except Exception as exc:
+                from .batch_work import storage_error
+                if strict or storage_error(exc):
+                    raise
+                closing_tasks.discard(kid["id"])
+                if not isinstance(exc, Refused):
+                    logging.getLogger(__name__).warning("Automatic descendant close failed for %s", kid["id"], exc_info=True)
+        if not closed:
+            changed.setdefault("open", []).append(_child_name(conn, kid))
+            _wake(conn, kid, kid["requester_id"],
+                  f"Still open: {kid['title']}\nIts parent finished; please close this subtask when ready.",
+                  refs={"finish_left_open": parent["id"], "needs_action": True})
+        else:
+            changed["closed"].append(_child_name(conn, kid))
+    if changed["closed"]:
+        _task_event(conn, parent["id"], KEEPER, "children", None, "Closed with it: " + "; ".join(changed["closed"]), "")
+    if changed.get("open"):
+        _task_event(conn, parent["id"], KEEPER, "children", None, "Still open: " + "; ".join(changed["open"]), "")
+    return changed
+
+
+def _children_said(changed):
+    """Name closed and left-open subtasks once in the parent's completion notice."""
+    return "".join("\n" + label + ": " + "; ".join(changed[key])
+                   for key, label in (("closed", "Closed with it"), ("open", "Still open"))
+                   if changed and changed.get(key))
+
+
+def _children_kept_closed(conn, task_id):
+    """A reopened task leaves the subtasks that closed with it closed; its record names those still closed, so whoever
+    reopened it sees what to reopen by hand."""
+    kept = [_child_name(conn, kid) for kid in descendants(conn, task_id) if kid["status"] == "closed" and _one(
+        conn, "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
+              "AND kind='closed_with' AND new=? LIMIT 1", (kid["id"], task_id))]
+    if kept:
+        _task_event(conn, task_id, KEEPER, "children", None, "Still closed from when it closed: " + "; ".join(kept), "")
+
+
 @private_task_write
-def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None, mover=None):
+def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None, mover=None, with_parent=None, strict=True,
+               closing_tasks=()):
     """Rule 5. Closing is an explicit requester, keeper or decision of a person who can edit the task; work delegation
-    is not acceptance. `mover` says whether a person may move any task (the caller knows the environment owner)."""
+    is not acceptance. `mover` says whether a person may move any task (the caller knows the environment owner).
+    Open descendants close with it. `with_parent` names the ancestor whose finish closes this task; that
+    ancestor handles the rest of the tree, and its parties hear about the subtasks in its own notice."""
     _writer(conn, actor)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_close_allowed(conn, actor, row, note, mover, step, type)
+    _check_task_close(conn, actor, row, note, mover, step, type)
     if row["status"] == "closed":
         if type is not None or step is not None:
-            _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
+            _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "", cascade=False)
         return task(conn, task_id)
+    left_open = _check_finish_children(conn, actor, row, mover, strict=strict) if not with_parent else set()
+    running = with_parent and _has_table(conn, "attempts") and _one(
+        conn, "SELECT 1 FROM attempts WHERE task_id=? AND state IN ('leased','running') LIMIT 1", (task_id,))
     ts = now()
-    _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
+    _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "",
+                notify_parties=not with_parent or bool(running), cascade=False)
     conn.execute("UPDATE tasks SET closed_at=?, closed_by_id=?, updated_at=?, "
                  "note=COALESCE(NULLIF(?, ''), note) WHERE id=?", (ts, actor, ts, note or "", task_id))
-    still_open = open_children(conn, task_id)
-    if still_open:
-        # Closed with subtasks still open: they stay open, and the record says which.
-        _task_event(conn, task_id, KEEPER, "children", None, "Still open: " + "; ".join(still_open), "")
-    event(conn, actor, "task.close", task_id, {"note": note, **({"still_open": still_open} if still_open else {})})
+    if row.get("waiting_on"):
+        conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
+        _task_event(conn, task_id, actor, "waiting_on", row["waiting_on"], None, "")
+    if with_parent:
+        _task_event(conn, task_id, actor, "closed_with", None, with_parent, "")
+        changed = None
+    else:
+        changed = _finish_children(conn, actor, task(conn, task_id), mover, quiet, left_open=left_open, strict=strict)
+    event(conn, actor, "task.close", task_id, {"note": note, **({"children": changed} if changed and any(
+        changed.values()) else {}), **({"with_parent": with_parent} if with_parent else {})})
     after = task(conn, task_id)
     # A person closing a subtask under a bot's task: the bot hears it once, on the parent.
-    subtask_told = _subtask_wake(conn, actor, after, row["status"], note, quiet)
+    subtask_told = None if with_parent else _subtask_wake(conn, actor, after, row["status"], note, quiet)
     # Closing an open ask card (_ask_in_subtask) settles the ask like a decline: each task blocked on it opens again.
     answered = set()
     if row["status"] not in ("done", "declined"):
-        answered = {tid for tid in TR.blocked_ids(conn, task_id) if _answered(conn, actor, tid, after, subtask_told)}
+        answered = {tid for tid in TR.blocked_ids(conn, task_id)
+                    if tid not in closing_tasks and _answered(conn, actor, tid, after, subtask_told)}
     if subtask_told:
         answered.add(TR.parent_of(conn, task_id))
-    _unblock(conn, after, told=answered)
-    said = (f"Closed: {after['title']}" + (f"\n{note}" if note else "")
-            + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""))
+    _unblock(conn, after, told=answered | set(closing_tasks))
+    said = f"Closed: {after['title']}" + (f"\n{note}" if note else "") + _children_said(changed)
     # Closing work that was already done, with nothing said, is acceptance: news, not work. It
     # goes to the bot's inbox without a run. Hundreds of runs were a bot
     # waking to read "Closed:" and saying "acknowledged", hours of agent time. The keeper's
@@ -7567,6 +7709,10 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
                 and (actor in (row["requester_id"], KEEPER) or is_human(actor)))
     new_note = str(note or "").strip() and str(note or "").strip() != str(row.get("note") or "").strip()
     told = [who for who in dict.fromkeys([after["owner_id"], after["requester_id"]]) if who != actor]
+    # The parent's notice covers every idle descendant, including review and waiting. A live run still hears the
+    # direct-close notice so it stops working, even when its owner is also a party to the parent.
+    if with_parent and not running:
+        told = []
     for who in told:   # everyone but whoever tapped
         if who == subtask_told or (finished and who == after["owner_id"] and not new_note):
             continue
@@ -7577,10 +7723,11 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
               quiet_bots=True,
               quiet=accepted or bool(finished and who == after["owner_id"] and not new_note),
               human_completion=is_human(actor), completion_actionable=bool(new_note) and not quiet)
-    parent = task(conn, TR.parent_of(conn, after["id"]) or "")
+    parent = None if with_parent else task(conn, TR.parent_of(conn, after["id"]) or "")
     if parent and parent["owner_id"] != actor and parent["owner_id"] not in told and parent["owner_id"] != subtask_told:
         _wake(conn, after, parent["owner_id"], f"Child closed: {after['title']}", quiet_bots=True, quiet=True)
-    _parent_finished(conn, after, row["status"], actor, told=subtask_told)
+    if not with_parent:
+        _parent_finished(conn, after, row["status"], actor, told=subtask_told)
     _recount(conn, after["owner_id"])
     _recount(conn, after["requester_id"])
     return after
@@ -8272,7 +8419,7 @@ def setup_finished(conn, slug, archived=False):
     found = _open_setup_reminder(conn, slug)
     if found:
         name = (bot(conn, slug) or {}).get("display_name") or slug
-        task_update(conn, KEEPER, found["id"], status="done",
+        task_update(conn, KEEPER, found["id"], status="done", strict=False,
                     note=f"{name} was archived." if archived else f"{name} finished onboarding; its work starts now.")
 
 
@@ -8546,7 +8693,7 @@ def approval_target(kind, payload):
         else None
 
 
-def approval_withdraw(conn, approval_id, note):
+def approval_withdraw(conn, approval_id, note, *, notify=True):
     """An undecided approval nobody needs any more leaves the person's queue as `withdrawn`: its task ended, a newer
     request replaced it, or nobody decided it in APPROVAL_STALE_DAYS. Only the keeper withdraws, so a withdrawal is
     never mistaken for a person's no; the bot that asked hears once, quietly, and may ask again."""
@@ -8562,7 +8709,7 @@ def approval_withdraw(conn, approval_id, note):
         task_holds.refresh(conn, row["task_id"], f"Your {row['kind']} approval was withdrawn")
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
-    if conv and _actor_exists(conn, row["requested_by_id"]):
+    if notify and conv and _actor_exists(conn, row["requested_by_id"]):
         _write_message(conn, KEEPER, row["requested_by_id"], f"Withdrawn: your {row['kind']} approval. {note}",
                        conv, "notice", {"approval": approval_id, "quiet": True}, None, None)
     _recount(conn, row["requested_by_id"])
@@ -8570,11 +8717,11 @@ def approval_withdraw(conn, approval_id, note):
     return approval(conn, approval_id)
 
 
-def withdraw_task_approvals(conn, task_id, note):
+def withdraw_task_approvals(conn, task_id, note, *, notify=True):
     """Withdraw every undecided approval on a task that ended."""
     return [aid for (aid,) in conn.execute("SELECT id FROM approvals WHERE task_id=? AND decision IS NULL "
                                            "ORDER BY created_at", (task_id,)).fetchall()
-            if approval_withdraw(conn, aid, note)]
+            if approval_withdraw(conn, aid, note, notify=notify)]
 
 
 def _approval_facts(row):
@@ -9375,7 +9522,7 @@ STEP_POSITION = "(SELECT position FROM task_steps WHERE task_steps.id=tasks.step
 
 def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, label=None,
           offset=0, order="queue", visible=None, type_id=None, step_ids=None, number=None,
-          updated_since=None, tickets=True, member=None, role=None, ids=None, snoozed=None):
+          updated_since=None, tickets=True, member=None, role=None, ids=None, snoozed=None, q=None):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `order="step"` is
     a board's: by step, then each task's place in it. `updated_since` is a stored timestamp.
@@ -9384,6 +9531,15 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
     `limit=None` reads every match."""
     sql, args, where = "SELECT * FROM tasks", [], []
+    if q and q.strip():
+        query = q.strip()[:1000]
+        if re.fullmatch(r"#\d+", query):
+            where.append("number=?")
+            args.append(int(query[1:]) if len(query) <= 10 else -1)
+        else:
+            for word in query.split():
+                where.append("instr(lower(title),lower(?))>0")
+                args.append(word)
     if member:
         where.append(TRo.member_sql(role))
         args += [member] + ([role] if role else [])

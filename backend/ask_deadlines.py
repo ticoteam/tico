@@ -173,7 +173,7 @@ def sweep(conn, at=None):
         with isolated(conn, "ask_deadlines", task["id"]):
             note = (f"No answer from {_name(conn, task['owner_id'])} in {EXPIRE_DAYS} days, so this ask expired and "
                     f"closed. {_name(conn, task['requester_id'])}: drop the work it was for, or ask again if it still matters.")
-            H.task_close(conn, H.KEEPER, task["id"], note)
+            H.task_close(conn, H.KEEPER, task["id"], note, strict=False)
             H.event(conn, H.KEEPER, "ask.expired", task["id"], {"to": task["owner_id"], "bot": task["requester_id"]})
             done["closed"].append(task["id"])
     return done

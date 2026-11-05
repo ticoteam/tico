@@ -1,5 +1,5 @@
 """System routines 2/3 (backend/system_routines.py CONTROLS): on/off and a schedule preset for the timed jobs (those that use
-AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; Health scan only the owner; enforced on the server), the
+AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; enforced on the server), the
 flat list's WHEN/THEN rows, department tag and search words, and the stale review and Topic changed switches moved from
 Settings > General > Team. Routines spec tests 3-9 and 12, task-rules spec tests 1-3 (built-in rows). Ana owns the
 team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
@@ -18,8 +18,8 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {"stale_review", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-         "bookkeeper_check", "memory_tidy", "auto_dream", "task_roundup"}   # the jobs with a schedule preset
+TIMED = {"stale_review", "kpi_asks", "learnings", "ask_deadlines", "task_manager_report",
+         "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
 
 
 def rows(api, token="ana-test"):
@@ -30,15 +30,14 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_h
     jobs = rows(api, "ben-test")
     timed = {k for k, j in jobs.items() if j["presets"]}
     assert timed == TIMED | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "stall_triage", "task-rule-close-after-done"}
-    for key in TIMED - {"health_scan"}:
+    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "task-rule-close-after-done"}
+    for key in TIMED:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
         if job["needed"]:
             assert not job["switch"] and not job["presets"] and not job["can_change"], key
     assert jobs["stale_review"]["schedule"] == "Hourly" and "still_wanted" not in jobs
     assert jobs["learnings"]["on"] is True and jobs["learnings"]["schedule"] == "Nightly at 03:00"
-    assert jobs["auto_dream"]["on"] is True and jobs["auto_dream"]["schedule"] == "Nightly at 02:00"
 
 
 def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(api):
@@ -48,7 +47,7 @@ def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(ap
     assert [p["key"] for p in jobs["kpi_asks"]["presets"]] == ["15m", "hourly", "4h", "daily"]
     put(api, "system-routines/stale_review", {"preset": "15m"}, expected=422)
     put(api, "system-routines/learnings", {"preset": "hourly"}, expected=422)
-    put(api, "system-routines/task_roundup", {"preset": "daily", "at": "25:00"}, expected=422)
+    put(api, "system-routines/kpi_asks", {"preset": "daily", "at": "25:00"}, expected=422)
     put(api, "system-routines/cleanup", {"on": False}, expected=404)        # housekeeping has no controls
 
 
@@ -62,17 +61,30 @@ def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_th
     post(api, "learnings/run", {}, token="cara-test", expected=403)      # the Learnings API's run is the same run
 
 
-def test_health_scan_is_owner_only_an_admin_reads_it_and_the_owner_changes_it(api):
-    assert rows(api, "ben-test")["health_scan"]["can_change"] is False
-    assert rows(api, "ben-test")["health_scan"]["owner_only"] is True
-    assert "Health Monitor is off" in rows(api)["health_scan"]["note"], "its switch alone does not make it find things"
-    put(api, "system-routines/health_scan", {"on": False}, token="ben-test", expected=403)
-    post(api, "system-routines/health_scan/run", {}, token="ben-test", expected=403)
-    assert rows(api)["health_scan"]["can_change"] is True
-    job = put(api, "system-routines/health_scan", {"preset": "4h"})["job"]
-    assert job["schedule"] == "Every 4 hours"
-    assert put(api, "system-routines/health_scan", {"on": False})["job"]["on"] is False
-    assert rows(api)["health_scan"]["next"] is None, "off: no next run"
+def test_health_scan_is_replaced_by_the_maintenance_step(api):
+    for token in ("ana-test", "ben-test", "cara-test"):
+        assert "health_scan" not in rows(api, token)
+        put(api, "system-routines/health_scan", {"on": True}, token=token, expected=404)
+        post(api, "system-routines/health_scan/run", {}, token=token, expected=404)
+
+
+def test_an_old_saved_health_scan_schedule_cannot_bypass_paused_maintenance(api, monkeypatch):
+    from backend import maintenance, maintenance_health
+    store = api.app.state.store
+    scans = []
+    monkeypatch.setattr(maintenance_health, "check", lambda *args, **kwargs: scans.append(True) or {})
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (SR.CONFIG_KEY, json.dumps({"health_scan": {"on": True, "preset": "15m", "at": "09:00"}})))
+        maintenance.save_settings(c, "human:ana", paused=True)
+    scheduler = Scheduler(store, api.app.state.execution)
+    at = datetime.now(timezone.utc)
+    scheduler.tick(at)
+    scheduler.tick(at + timedelta(hours=1))
+    assert scans == []
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='health_scan'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM maintenance_runs").fetchone()[0] == 0
 
 
 def test_stale_review_every_4_hours_spaces_its_passes_and_its_next_run_follows(api):
@@ -133,7 +145,7 @@ def test_daily_at_a_time_runs_once_a_day_after_that_time():
         datetime(2026, 10, 23, 9, 0, tzinfo=pt)
 
 
-def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
+def test_three_daily_presets_anchor_to_the_next_company_time():
     # Three times a day, at 6am, noon and 6pm company time (Pacific: PST on 3 November 2026, UTC-8).
     cfg = {"on": True, "preset": SR.THREE_DAILY, "at": "06:00"}
     pt = SR.zone()
@@ -143,49 +155,49 @@ def test_the_task_roundup_never_run_is_next_at_its_next_company_time_not_now():
     assert SR.next_due(cfg, None, datetime(2026, 11, 3, 6, tzinfo=pt)) == datetime(2026, 11, 3, 12, tzinfo=pt)
 
 
-def _simulated_clock(api, at):
-    """A run's start is stamped with the wall clock (H.now), and the scheduler reads its last start from that row.
-    Put the tick's own time back on any run stamped later than it, so a fixed test day is not blocked by today's clock."""
-    stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE system_runs SET started_at=?, finished_at=? WHERE job='task_roundup' AND started_at>?",
-                  (stamp, stamp, stamp))
-
-
-def test_the_task_roundup_first_runs_at_its_next_company_time_after_a_deploy_not_at_once(api, monkeypatch):
-    from backend import task_roundup
+def test_the_old_roundup_timer_stays_off_even_with_its_saved_switch_on(api, monkeypatch):
+    from backend import maintenance, task_roundup
     sent = []
-    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
+    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (json.dumps({"task_roundup": {"on": True, "preset": "three_daily"}}),))
+        maintenance.save_settings(c, H.human_actor("ana"), paused=True)
     pt = SR.zone()
-    # One process: the wait for the first run starts at its first tick.
-    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-
-    def tick(at):
-        scheduler.tick(at)
-        _simulated_clock(api, at)
-    tick(datetime(2026, 11, 3, 2, tzinfo=pt))
-    tick(datetime(2026, 11, 3, 5, 59, tzinfo=pt))
-    assert sent == [], "a deploy at 2am company time does not send every bot its list at once"
-    tick(datetime(2026, 11, 3, 6, 0, 5, tzinfo=pt))
-    assert len(sent) == 1
-    tick(datetime(2026, 11, 3, 9, tzinfo=pt))
-    assert len(sent) == 1, "no second run before noon"
-    tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
-    assert len(sent) == 2
-    tick(datetime(2026, 11, 3, 18, 0, 5, tzinfo=pt))
-    assert len(sent) == 3
+    scheduler = Scheduler(store, api.app.state.execution)
+    for hour in (2, 6, 9, 12, 18):
+        scheduler.tick(datetime(2026, 11, 3, hour, 0, 5, tzinfo=pt))
+    # A fresh scheduler cannot revive the retired timer, even when Maintenance is paused.
+    scheduler = Scheduler(store, api.app.state.execution)
+    for hour in (7, 12, 18):
+        scheduler.tick(datetime(2026, 11, 4, hour, 0, 5, tzinfo=pt))
+    assert sent == [], "the saved legacy schedule sends no lists"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
-def test_the_task_roundup_deployed_after_a_company_time_waits_for_the_next_one(api, monkeypatch):
-    from backend import task_roundup
-    sent = []
-    monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])   # one call per run
-    pt = SR.zone()
-    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    scheduler.tick(datetime(2026, 11, 3, 7, tzinfo=pt))
-    assert sent == []
-    scheduler.tick(datetime(2026, 11, 3, 12, 0, 5, tzinfo=pt))
-    assert len(sent) == 1
+def test_the_retired_roundup_control_redirects_run_now_to_find_stuck_and_keeps_its_switch(api, monkeypatch):
+    from backend import maintenance
+    store = api.app.state.store
+    monkeypatch.setattr(maintenance, "_start", lambda s, a, run_id, only, wait: maintenance._execute(s, a, run_id, only))
+    assert "task_roundup" not in rows(api)
+    put(api, "system-routines/task_roundup", {"on": False}, expected=404)
+    put(api, "system-routines/task_roundup", {"preset": "daily"}, expected=404)
+    post(api, "system-routines/task_roundup/run", {}, token="cara-test", expected=403)
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": False})
+    reply = post(api, "system-routines/task_roundup/run", {}, token="ben-test")
+    assert reply["started"] and reply["run"]["step"] == "find_stuck"
+    [step] = reply["run"]["steps"]
+    assert step["step"] == "find_stuck" and step["status"] == "off"
+    with store.transaction() as c:
+        maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": True})
+    reply = post(api, "system-routines/task_roundup/run", {}, token="ben-test")
+    [step] = reply["run"]["steps"]
+    assert step["step"] == "find_stuck" and step["status"] == "ran"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='task_roundup'").fetchone()[0] == 0
 
 
 def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_that_night(api, monkeypatch):
@@ -297,4 +309,3 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     done = {k for k, j in jobs.items() if "done" in j["search"]}
     assert {"stale_review", "approval_expiry"} <= done
     assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["due_reminders"]["search"]
-    assert "engineering" in jobs["cleanup"]["search"] and "housekeeping" in jobs["cleanup"]["search"]

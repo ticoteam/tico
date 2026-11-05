@@ -390,17 +390,21 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
-    if owner:
-        meetings = "1"
-    elif bot or not who.email:
-        meetings = "0"
+    # A meeting saved "Participants only" (media.participants_only) is read only by the people it names, owner too.
+    audience = "coalesce(json_extract(metadata,'$.audience'),'')='participants'"
+    if bot or not who.email:
+        meetings = f"NOT ({audience})" if owner else "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
-                    "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
-                    f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
-                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
-                    f"WHERE lower(json_extract(value,'$.email'))={email})))")
+        named = (f"EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.audience_emails')) "
+                 f"WHERE lower(trim(value))={email})")
+        meetings = "1" if owner else (
+            f"json_extract(metadata,'$.kind')='meeting' AND ("
+            "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
+            f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
+            "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
+            f"WHERE lower(json_extract(value,'$.email'))={email}))")
+        meetings = f"lower(owner)={email} OR (CASE WHEN {audience} THEN {named} ELSE ({meetings}) END)"
     goals = f"owner_id NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
     admin = who.role == "owner" or auth.bot_admin(who)
@@ -437,7 +441,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
+                      ("1" if owner else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
         "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_settings": bots_visible("bot_id"),

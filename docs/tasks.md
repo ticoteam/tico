@@ -22,6 +22,11 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
+**Needs you** counts the tasks waiting on you in the selected type and filters, plus approvals and
+questions outside any task. The count includes those on unread pages and stays the same on a phone
+and desktop. Tasks folded or merged into another card count only through that card, even before it loads.
+Thread mentions, unread DMs and held messages are counted in Inbox.
+
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
 
@@ -1037,9 +1042,27 @@ Only the task's owner, requester, their managers or a human mover can re-parent 
 request or manage the new parent. Moving or detaching a subtask also requires its current
 parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
-A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
-subtasks stay open, and the parent's history and its Finished or Closed notice end with
-"Still open:" and their titles. Finishing or moving away the last open subtask wakes the
+Closing a task, or finishing it (status `done`, or a step whose status is done or closed),
+closes every open descendant, including those below an already finished subtask. There is no prompt
+or detach choice. Each subtask keeps its parent link and records "Closed with #N" in its history,
+where N is the task that finished; an unnumbered parent is recorded as "Closed with its parent task".
+The usual close events and question cleanup run for each changed subtask. The parent's
+history and Finished or Closed notice list "Closed with it:" and the subtask titles, keeping private
+titles hidden even when the parent is private. A closed subtask sends no separate notice to its parties,
+unless it has a leased or running turn: then its parties receive the usual direct-close notice so the
+bot stops working. Already Done, Closed or Declined subtasks keep their status, notes and history.
+Dependency links still clear, but a task closing in the same cascade receives no "Unblocked" notice;
+tasks outside the cascade that become unblocked receive their usual notice.
+An explicit close or finish through the API, CLI or MCP requires the actor's usual close permission
+and status rules on every open descendant, including steps-only types; a refusal leaves the whole action
+unchanged, without detaching anything.
+An automatic finish, including roadmap completion or a runner reporting its task goal met, closes every open descendant
+the actor may close and leaves the rest open. The parent's history and completion notice list
+"Still open:" with those titles (private subtasks are always "a private subtask"), and each left-open
+subtask's requester receives one notice asking them to close it when ready. Runner output and the
+final result are still saved. Reopening the parent leaves its subtasks closed;
+its history lists which ones to reopen by hand.
+Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
 that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).
@@ -1146,7 +1169,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
   goes on, on its own model, and the bot is not marked limited. Held 12 hours with every turn stopped on the limit,
-  it is a Health Monitor setup finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
+  it is a Check health finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on

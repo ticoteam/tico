@@ -1,12 +1,15 @@
 """Stop quarantined turns through the normal Stop protocol and preserve their reason.
 
 The first runner call records the quarantine reason on the attempt. Renewal returns
-it with Stop. Completion requeues the work of a run that is safe to repeat (`requeues`) until the bot becomes
-active again; any other run is held for review like a lost one, so a lift never repeats an outside action.
+it with Stop. Completion requeues the work of the run (`requeues`) until the bot becomes active again. A quarantine
+stops the run the hub itself chose to cut, so it is judged as a computer's reported restart is (retry_facts): only a
+consumed approval, a fallback whose work is unknown or a named outside action (merge, publish, send, payment) holds it
+for review. Such a run resumes with a note (`requeue`) that says it was stopped by a quarantine and to check what it
+already did first.
 
 A restart (`restart`) is the same keeper Stop for another reason: a computer's model subscription changed under the
 run (backend/model_subscriptions.py), so its work goes back in the queue to start fresh on the new login. It is judged
-as a computer restart is (retry_facts): only a named outside action or a used approval holds it for review.
+the same way.
 """
 import json
 
@@ -73,23 +76,33 @@ def restarted(c, row):
 
 
 def requeues(c, row):
-    """Whether a quarantine-stopped attempt's work goes back in the queue: only when running it again repeats nothing,
-    judged by `retry_facts` as the sweep judges any other lost run (read-only calls, a host that reports its calls, no
-    approval used), or when it never started and reported nothing. Any other run may already have pushed, sent or
-    paid, so its jobs are held for review (`auto_reconcile`) instead of running again when the quarantine lifts."""
+    """Whether a quarantine-stopped attempt's work goes back in the queue to run when the quarantine lifts. Judged as a
+    computer's reported restart is (`retry_facts`): a consumed approval, a fallback whose work is unknown or a named
+    outside action (a merge, publish, send or payment, which may already have happened) holds it for review
+    (`auto_reconcile`). Any other run, a shell or an edit included, goes back in the queue; one that never started has
+    nothing to repeat."""
     from .execution import outside_actions, retry_facts
     job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
     if not job:
         return False
     facts = retry_facts(c, {**dict(job), "attempt_id": row["id"]}, row["started_at"], H.now())
-    if restarted(c, row):
-        # Judged as a computer restart: only a named outside action, a used approval or a fallback's unknown work
-        # holds it for review.
-        if facts["consumed"] or facts["fallback_unknown"]:
-            return False
-        return not row["started_at"] or not outside_actions(c, {**dict(job), "attempt_id": row["id"]},
-                                                         row["started_at"], H.now())
-    return facts["safe"] or not row["started_at"] and not facts["calls"] and not facts["consumed"]
+    if facts["consumed"] or facts["fallback_unknown"]:
+        return False
+    return not row["started_at"] or not outside_actions(c, {**dict(job), "attempt_id": row["id"]},
+                                                     row["started_at"], H.now())
+
+
+def resume_note(at):
+    """The note a run stopped by a quarantine resumes with: what stopped it, and to check what it already did first."""
+    return (f"You were interrupted at {at} UTC by a quarantine. Check what already happened first, then continue from "
+            "there. No consumed approval or named irreversible outside action was recorded.")
+
+
+def requeue(c, row, at):
+    """Record, as the sweep records a resume (`job_recovery`), the note a requeued quarantine-stopped run starts with:
+    the claim hands it to the bot with the run."""
+    c.execute("INSERT OR REPLACE INTO job_recovery(job_id,attempt_id,decision,note,actor,created_at) "
+              "VALUES(?,?,?,?,?,?)", (row["job_id"], row["id"], "resume", resume_note(at), H.KEEPER, H.now()))
 
 
 def then(c, row, held):
@@ -99,7 +112,9 @@ def then(c, row, held):
     return HELD if held else REQUEUED
 
 
-REQUEUED = "This run goes back in the queue and runs again when the quarantine lifts."
-HELD = "This run may already have changed something outside Tico, so it is held for review instead of running again."
+REQUEUED = ("This run goes back in the queue and runs again when the quarantine lifts, after checking what it already "
+            "did.")
+HELD = ("This run may already have done something outside Tico that running it again could repeat (a named merge, "
+        "send or payment, or an approval it used), so it is held for review instead of running again.")
 RESTARTED = "This run goes back in the queue and starts fresh on the new sign-in."
 RESTART_HELD = HELD

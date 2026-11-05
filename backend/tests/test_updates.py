@@ -5,6 +5,8 @@ message in the bot's chat."""
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from backend import updates
 from backend.store import H, Problem, digest
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
@@ -27,6 +29,38 @@ def bot_id(c, slug):
 def bid(api, slug):
     with api.app.state.store.read() as c:
         return bot_id(c, slug)
+
+
+@pytest.mark.parametrize("kind", ["daily", "weekly"])
+def test_update_requests_never_wake_counsel_which_cannot_publish(api, kind):
+    from backend.tests.test_counsel import counsel_on
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        # Older installs may have both switches on. The posting boundary still applies.
+        c.execute("INSERT OR REPLACE INTO update_settings(bot,daily,weekly) VALUES(?,1,1)", (H.COUNSEL,))
+        updates.build_queue(c, "2026-09-29", kind)
+        assert not c.execute("SELECT 1 FROM update_queue WHERE bot=?", (H.COUNSEL,)).fetchone()
+        assert c.execute("SELECT 1 FROM update_queue WHERE bot='ops'").fetchone()
+        assert H.COUNSEL not in updates.redo(c, kind, "2026-09-29")
+        with pytest.raises(Problem):
+            updates.redo(c, kind, "2026-09-29", [H.COUNSEL])
+        assert updates.settings(c, H.COUNSEL) == {"daily": False, "weekly": False}
+        with pytest.raises(Problem):
+            updates.set_settings(c, H.COUNSEL, **{kind: True})
+
+
+def test_an_old_queued_counsel_update_is_skipped_without_sending_a_request(api):
+    from backend.tests.test_counsel import counsel_on
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,'daily',?,0,'queued')",
+                  ("old-counsel-update", H.COUNSEL, MORNING.date().isoformat()))
+        assert updates.dispatch(c, MORNING) is None
+        row = c.execute("SELECT state,message_id FROM update_queue WHERE id='old-counsel-update'").fetchone()
+        assert tuple(row) == ("skipped", None)
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (H.COUNSEL,)).fetchone()
 
 
 def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):

@@ -12,9 +12,16 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.MeetingTaskLinkRow: "meeting_task_links",
     rows.TaskRow: "tasks",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.TaskHoldRow: "task_holds",
+    rows.MaintenanceStepRow: "maintenance_steps",
+    rows.MaintenanceRunRow: "maintenance_runs",
+    rows.MaintenanceRunStepRow: "maintenance_run_steps",
+    rows.MaintenanceListingRow: "maintenance_listings",
+    rows.MaintenanceHandoffRow: "maintenance_handoffs",
+    rows.MaintenanceRequestRow: "maintenance_requests",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
     rows.RunnerStateRow: "runner_states",
@@ -94,7 +101,7 @@ UNTYPED = frozenset({
     "linked_docs", "listen_items", "listen_judgments", "listen_runs", "listening_destinations", "live_meeting_access",
     "live_meeting_bots", "live_meeting_chat", "live_meeting_chat_routes", "live_meeting_chunk_versions",
     "live_meeting_chunks", "live_meeting_events", "live_meeting_humans", "live_meeting_turns", "live_meeting_windows",
-    "live_meetings", "mail_agent_instructions", "mail_intake", "mail_items", "mail_mailboxes", "mail_messages",
+    "live_meetings", "mail_agent_instructions", "mail_intake", "mail_items", "mail_mailboxes", "mail_messages", "mailbox_accesses", "mailboxes",
     "mail_private_backfill", "mail_reads", "main_pushes", "market_briefings", "market_citations", "market_edges",
     "market_entities", "market_entity_keys", "market_evidence", "market_figures", "market_insights",
     "market_pages", "market_sizes", "market_sources", "market_turn_sources", "market_watches", "media_assets",

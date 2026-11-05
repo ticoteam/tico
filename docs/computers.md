@@ -4,6 +4,13 @@ A computer runs your bots. **Settings → Computers** lists every computer: its 
 Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
 [Install](install.md#add-computers-to-run-your-bots).
 
+Re-enrolling the same physical computer can leave an older registration behind. The hourly cleanup removes that
+registration after more than 24 hours offline only when a newer, active registration has the same reported device
+identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
+The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
+keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
+
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
@@ -71,8 +78,10 @@ take the last start reservation together. Codex's shared ChatGPT login does not 
 
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
-its work returns to the queue without changing the task. After 10 missed starts for one job since the server last
-started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
+its work returns to the queue without changing the task. After 10 missed starts for one job within the last 24 hours,
+including starts missed before a server restart, Tico reports a pre-start failure instead of retrying forever.
+Leases cut by a hub restart or update and planned pauses do not count as missed starts. Check the computer named
+in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
 Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
@@ -127,7 +136,6 @@ One person, or no people with sign-in access, gives **40** and **100**.
 
 Just below the stop, while the count is still at or above the warning, work that waited through the stop keeps first claim on each freed place, in order across computers. Below the warning that list is cleared and each computer starts from its own queue again. Work still waiting for a login, quota or computer remains held for that reason.
 Below the warning level, Health marks the incident resolved and records the time. Crossing the warning again opens a new incident.
-The Health record works even when the optional [Health Monitor](health-monitor.md) is off.
 
 These settings provide the warning record and start limit. See [The turn fixer](#the-turn-fixer) for automatic recovery.
 The company-limit message does not confirm that an automatic repair has run.
@@ -641,7 +649,7 @@ The rest of this page is for administrators and integrators: where readings come
 
 Weekly reports are scoped to a Computer, profile and runtime. Codex reports its seven-day window when its running host emits one. Claude Code may report the seven-day reset and limit state without a percentage; that percentage stays unknown. No API calls or token-to-percentage estimates are used to invent a provider balance. Usage elsewhere on the same provider account counts toward that allowance.
 
-The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Health Monitor](health-monitor.md), `default_login_limited`).
+The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
 
 Computers report the account each login is signed in to: email, plan and organization from `claude auth status --json`, and email and plan from Codex app-server's `account/read`, always requested with `refreshToken: false`. A Codex turn's or refresh's `planType` keeps the plan current. This deliberately reverses the earlier rule that Tico kept no account records: it is the first stored account identity, so the page can show which account each Computer and profile uses (`signed in as <email> · <plan>`). Credential files and `codex login status` output are never read for it, only allow-listed fields are kept, and a value that looks like a key or token is dropped on the computer and refused by the server, without affecting the sign-in state. The account is read alongside the existing one-minute sign-in probe; Codex's app-server read runs in the background at most every ten minutes. A signed-out login shows no account. An account stays one login's report: two profiles that show the same email are not merged.
 

@@ -1232,7 +1232,9 @@ RUNS_FROM = {"routine": "Automations", "wake_rule": "rules.py, read from its Wha
              "task_rule": "the task rules engine; shown read-only", "system_job": "the scheduler; shown read-only",
              "health_monitor": "its bot; shown read-only"}
 GONE_JOBS = {"job:routine_timer": "Bot routine timer: the automations tick runs schedules now",
-             "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor"}
+             "job:task_roundup": "Task roundup: scheduled lists moved to Maintenance Find stuck",
+             "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor",
+             "job:health_scan": "Health scan: Check health runs in Maintenance now"}
 
 
 def inventory(c):

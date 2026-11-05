@@ -3320,9 +3320,6 @@ mod tests {
 
     #[test]
     fn a_claude_turn_signs_in_with_the_key_added_for_this_computer() {
-        if ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"].iter().any(|k| std::env::var_os(k).is_some()) {
-            return; // a key in this process's environment is the terminal's and comes first
-        }
         let dir = std::env::temp_dir().join(format!("tico-turn-key-{}", uuid::Uuid::new_v4().simple()));
         let secrets = dir.join("projects/secrets");
         std::fs::create_dir_all(&secrets).unwrap();
@@ -3330,7 +3327,10 @@ mod tests {
         std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
-        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let mut runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        // A key in this process's environment is the terminal's and would come first: the test starts with none, on
+        // any machine, so every assertion below runs everywhere (the test never returns early).
+        runner.sign_in.process_env.clear();
         let (computer, team) = (secrets.join(crate::signin::COMPUTER_KEYS_FILE), secrets.join(crate::signin::TEAM_KEYS_FILE));
         let signed_in = |detail: &str| {
             *runner.runtime_rows.lock().unwrap() = [("claude".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();

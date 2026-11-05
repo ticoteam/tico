@@ -1166,7 +1166,7 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] not in ("done", "closed"):
-        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True)
+        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True, strict=False)
 
 
 def _decide(c, who, hold, state, event=""):
@@ -1601,7 +1601,7 @@ def stats(c, settings):
 
 
 def health_findings(c, settings):
-    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/health_monitor.py)."""
+    """A high share of unchecked outputs in a day: the rules are not being enforced (backend/maintenance_health.py)."""
     try:
         if not on(c):
             return []

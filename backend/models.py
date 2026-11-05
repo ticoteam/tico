@@ -41,7 +41,10 @@ Repo = Annotated[str, Field(max_length=200), AfterValidator(repo_reference)]
 
 
 class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # defer_build: a model's validator is built when it is first used (a route's body, a model_validate), not when this
+    # module is imported. The server imports about 300 of them on every start and many are only parts of others; the
+    # schema, the validation and the OpenAPI document are the same either way (subclasses inherit this).
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, defer_build=True)
 
 
 class TurnLevels(Contract):
@@ -998,6 +1001,7 @@ class Enrollment(Contract):
     code: str = Field(min_length=32, max_length=200)
     label: str = Field(min_length=1, max_length=100)
     platform: str = Field(default="", max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SlashCommand(Contract):
@@ -1430,6 +1434,7 @@ class Heartbeat(Contract):
     repositories: list[RepositoryStatus] | None = None
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
     capabilities: list[Literal[
@@ -2175,7 +2180,6 @@ class AccessRules(Contract):
     support_access: bool | None = None
     stale_review: bool | None = None
     topic_fresh: bool | None = None
-    stall_triage: bool | None = None
     managers_manage_reports: bool | None = None
     org_rule_checks: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
@@ -2412,6 +2416,11 @@ class UsageDefault(UsageLimit):
     count_subscription: bool = True
 
 
+class QueuePurge(Contract):
+    """`company`, or `group:<id>` for that group and the groups nested under it."""
+    scope: str = Field(default="company", max_length=200)
+
+
 class SubscriptionUnavailable(Contract):
     profile: str = Field(min_length=1, max_length=80)
     runtime: str = Field(max_length=80)
@@ -2562,6 +2571,33 @@ class SystemRoutineUpdate(Contract):
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)
+
+
+MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+
+
+class MaintenanceStepChange(Contract):
+    """One step's switch, frequency or bot limit (backend/maintenance.py save_step); only what is sent changes."""
+    key: MaintenanceStepKey
+    enabled: bool | None = None
+    frequency: Literal["run", "day", "week", "custom"] | None = None
+    custom_every: int | None = Field(default=None, ge=1, le=999)
+    custom_unit: Literal["hours", "days"] | None = None
+    max_bots: int | None = Field(default=None, ge=1, le=20)
+
+
+class MaintenanceUpdate(Contract):
+    """The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and
+    save_step); only what is sent changes."""
+    schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
+    paused: bool | None = None
+    monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
+
+
+class MaintenanceRunRequest(Contract):
+    """Run now: every step, or the one named (backend/maintenance.py run_now)."""
+    step: MaintenanceStepKey | None = None
 
 
 class ReleaseScheduleUpdate(Contract):
@@ -3102,3 +3138,22 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+MailboxLevel = Literal["read", "read_write"]
+
+
+class MailboxCreate(Contract):
+    address: Annotated[str, Field(min_length=3, max_length=254)]
+    shared: StrictBool = False
+
+
+class MailboxAccessCreate(Contract):
+    grantee_type: Literal["person", "bot"]
+    grantee_id: ID
+    level: MailboxLevel
+
+
+class MailboxAccessUpdate(Contract):
+    level: MailboxLevel

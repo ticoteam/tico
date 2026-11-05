@@ -39,6 +39,7 @@ class Calendar:
     def __init__(self, service, mailbox):
         self.service, self.mailbox = service, mailbox
         self.granted = getattr(service, "_tico_granted", None)   # a connected account's scopes; None: service account
+        self.company = None          # the company's What Tico may do for this run (oauth.company_allows); None: unset
 
     def _exec(self, request, what):
         try:
@@ -159,6 +160,7 @@ class Calendar:
                      send_updates="none", calendar_id="primary", status="tentative",
                      event_id=""):
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"summary": summary, "description": description,
                 "start": {"dateTime": start.isoformat()},
                 "end": {"dateTime": end.isoformat()},
@@ -180,6 +182,7 @@ class Calendar:
 
     def create_scheduling_event(self, start, end, attendee, event_id, description, summary="Meeting"):
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"id": event_id, "summary": summary, "status": "confirmed",
                 "start": {"dateTime": start.isoformat(), "timeZone": "America/Los_Angeles"},
                 "end": {"dateTime": end.isoformat(), "timeZone": "America/Los_Angeles"},
@@ -193,6 +196,7 @@ class Calendar:
                          add_meet=True):
         """Create the deterministic event claimed from the Hub connector queue."""
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"id": event_id, "summary": summary, "description": description,
                 "status": "confirmed",
                 "start": {"dateTime": start.isoformat()},
@@ -217,6 +221,7 @@ class Calendar:
 
     def delete_event(self, event_id, calendar_id="primary"):
         oauth.require(self.granted, "calendar-write", self.mailbox, "delete calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "delete calendar events")
         return self._exec(
             self.service.events().delete(calendarId=calendar_id, eventId=event_id,
                                          sendUpdates="none"), "events.delete")

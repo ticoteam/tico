@@ -254,6 +254,7 @@ last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` sti
 route since the start.
 
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
+Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.
 Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.
 These are elapsed timings, so time waiting for CPU can also appear within SQL time. Compare the same
 window's CPU and event-loop lag before attributing the remaining request time to a lock.

@@ -913,6 +913,7 @@ def save_extra_repos(c, bot, repos):
 
 def install_github_app(app, settings, store):
     service = app.state.github_app = GitHubApp(settings, store, getattr(app.state, "vault", None))
+    store.github_app = service      # the Check health step reads the App's health for the Health page (no network)
 
     from . import repositories as R
     R.install(app, store, service)
