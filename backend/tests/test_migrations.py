@@ -68,6 +68,28 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_native_hub_participant_access_observes_meeting_deletion_without_cloud_boot(tmp_path):
+    from backend import meeting_audience
+    c = H.connect(tmp_path / 'native.sqlite')
+    try:
+        H.sync_registry(c, {}, {'people': [{'id': 'ana', 'email': 'ana@acme.example'},
+                                         {'id': 'ben', 'email': 'ben@acme.example'}]})
+        task = H.task_create(c, 'human:ana', 'Prepare the plan', '', 'human:ana', private=True, lint=False)
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) "
+                  "VALUES('source','Planning','ana@acme.example',?, 'now','now')",
+                  (json.dumps({'kind': 'meeting', 'private': True,
+                               'participants': [{'email': 'ben@acme.example'}]}),))
+        c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,status,created_by,result_ref,created_at,updated_at) "
+                  "VALUES('sent','source','task','Prepare the plan','pushed','human:ana',?,'now','now')", (task['id'],))
+        meeting_audience.grant(c, task['id'], ['human:ben'], 'human:ana')
+        assert H.task_private_readable(c, 'human:ben', task)
+        c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('source','now')")
+        assert not H.task_private_readable(c, 'human:ben', task)
+        assert H.task_private_readable(c, 'human:ana', task)
+    finally:
+        c.close()
+
+
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
     known = migrations.files()
     # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.

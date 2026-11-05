@@ -30,6 +30,11 @@ def up(conn):
                  "DELETE FROM task_roles WHERE role='participant' AND task_id IN "
                  "(SELECT id FROM tasks WHERE live_meeting_id=OLD.id); END")
 
+    # Native hub databases need tombstones too: task reads use this policy before Store initializes its schema.
+    conn.execute("""CREATE TABLE IF NOT EXISTS media_control(
+        meeting_id TEXT PRIMARY KEY REFERENCES meetings(id), version INTEGER NOT NULL DEFAULT 1,
+        deleted_at TEXT, next_seq INTEGER NOT NULL DEFAULT 0, received_bytes INTEGER NOT NULL DEFAULT 0,
+        last_chunk_at TEXT)""")
     # A view keeps the source policy out of the parser stack of nested task/Health queries.
     conn.execute("""CREATE VIEW IF NOT EXISTS meeting_participant_readers AS
         SELECT m.id AS meeting_id, h.id AS human_id FROM meetings m CROSS JOIN humans h
