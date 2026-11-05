@@ -530,6 +530,7 @@ mod tests {
     async fn make_page_does_not_publish_shared_reports_with_runner_credentials() {
         let dir = checkout();
         let state = State::open(&dir.join("state")).unwrap();
+        state.with(|c| c.execute_batch(TABLES)).unwrap();
         std::fs::write(dir.join("reports/private.txt"), "Earlier private report").unwrap();
         std::fs::write(dir.join("reports/page.html"), "<h1>Shared page</h1>").unwrap();
         let (url, seen) = hub(vec![200, 200]).await;
