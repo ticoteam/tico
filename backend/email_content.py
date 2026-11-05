@@ -25,13 +25,16 @@ class VisibleHTML(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.text, self.ignored = [], 0
+        self.complete = True
 
     def handle_starttag(self, tag, attrs):
+        if tag in ("img", "svg", "video", "audio", "canvas", "object", "iframe"):
+            self.complete = False
         if tag in ("script", "style"):
             self.ignored += 1
         if not self.ignored:
             self.text.append("\n")
-            self.text.extend(value for name, value in attrs if name in ("alt", "title", "href") and value)
+            self.text.extend(value for name, value in attrs if name in ("alt", "title", "href", "src") and value)
 
     def handle_endtag(self, tag):
         if tag in ("script", "style") and self.ignored:
@@ -101,22 +104,26 @@ def snapshot(raw, mailbox):
                 if len(part.get_all(key, [])) > 1:
                     raise ValueError("Ambiguous MIME header")
             payload = part_bytes(part)
-            if not any(part is body for body in bodies):
+            is_body = any(part is body for body in bodies)
+            if not is_body:
                 name = str(part.get_filename() or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin"))[:255]
                 files.append({"name": name, "sha256": digest(payload), "size": len(payload),
                               "type": part.get_content_type(), "part": index})
-                continue
+                if part.get_content_type() not in ("text/plain", "text/html") or part.get_content_disposition() == "attachment" or part.get_filename():
+                    continue
             try:
                 text = payload.decode(part.get_content_charset() or "utf-8", errors="strict")
             except (UnicodeDecodeError, LookupError):
                 text, complete = payload.decode("utf-8", errors="replace"), False
             if part.get_content_type() == "text/plain":
-                texts.append(text)
+                if is_body:
+                    texts.append(text)
                 visible.append({"type": "text/plain", "text": text})
             else:
                 html = VisibleHTML()
                 html.feed(text)
                 html.close()
+                complete = complete and html.complete
                 visible.append({"type": "text/html", "text": "".join(html.text)})
         if len(str(msg.get("subject", ""))) > 1000 or len(files) > 50 or sum(len(p["text"]) for p in visible) > MAX_PREVIEW:
             raise ValueError("The email cannot be previewed in full")

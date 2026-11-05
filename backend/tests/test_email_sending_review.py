@@ -168,6 +168,14 @@ def test_classifier_sees_html_as_well_as_plain_text_and_never_truncates_to_a_no(
         result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
     assert result["legal_or_money"] is True and "$100000" in seen[0]["body"] and "Thanks" in seen[0]["body"]
     assert "<p>" not in seen[0]["body"] and "bad()" not in seen[0]["body"]
+    inline = EmailMessage()
+    inline.set_content("<p>Also agree to pay $500000.</p>", subtype="html")
+    inline["Content-Disposition"] = "inline"
+    msg.make_mixed()
+    msg.attach(inline)
+    with mock.patch.object(judge, "server_engine", return_value=object()), mock.patch.object(judge, "audit_detail", return_value={}), mock.patch.object(judge, "ask", side_effect=lambda engine, context, *args: seen.append(context) or {"answers": {"legal_or_money": {"value": "yes"}}}):
+        S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
+    assert "$500000" in seen[-1]["body"]
     with mock.patch.object(judge, "server_engine", return_value=object()), mock.patch.object(judge, "ask") as ask:
         result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(mime(body="a" * 16001 + "Pay $100000"), BOX))
         assert result["legal_or_money"] is None
