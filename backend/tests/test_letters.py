@@ -855,6 +855,15 @@ def test_decline_and_cancel_close_unsent_letters_and_provider_refusal_passes_thr
     assert error["error"]["code"] == "cannot_cancel" and fetch(api, row)["status"] == "submitted"
 
 
+def test_sql_provenance_sources_do_not_expose_letter_or_agent_tables(api, hq):
+    quote(api)
+    for table in ("letters", "letter_proofs", "letter_outbox_grants", "agents"):
+        result = post(api, "sql", {"sql": "SELECT * FROM " + table}, expected=422)
+        assert result["error"]["code"] == "sql"
+        result = post(api, "sql", {"sql": "SELECT * FROM main." + table}, expected=422)
+        assert result["error"]["code"] == "sql"
+
+
 def test_renderer_is_deterministic_us_letter_and_does_not_execute_markup():
     from pypdf import PdfReader
     data = L.render("# Heading\n\nHello <script>world</script>.\n\n" + "word " * 2000)
