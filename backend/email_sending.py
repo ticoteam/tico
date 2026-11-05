@@ -73,6 +73,7 @@ class PolicyUpdate(Contract):
 class Enqueue(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
     raw: str = Field(min_length=1, max_length=MAX_RAW * 4 // 3 + 8)
+    draft_id: str = Field(default="", max_length=200)
     thread_id: str = Field(default="", max_length=200)
     reply_to_id: str = Field(default="", max_length=200)
     approval_id: str = Field(default="", max_length=200)
@@ -112,15 +113,18 @@ def effective(c, mailbox="", bot=""):
             never = never or label
         for key in DEFAULTS:
             if key in settings:
-                value = settings[key]
+                value, source = settings[key], label
                 if label != "company":
                     if key in ASKS:
-                        value = company[key] or value
+                        if out[key]:
+                            value, source = True, sources[key]
                     elif key in CAPS:
-                        value = min(company[key], value)
+                        if out[key] <= value:
+                            value, source = out[key], sources[key]
                     elif key in ("pacing_seconds", "undo_seconds"):
-                        value = max(company[key], value)
-                out[key], sources[key] = value, label
+                        if out[key] >= value:
+                            value, source = out[key], sources[key]
+                out[key], sources[key] = value, source
     if never:
         out["mode"], sources["mode"] = "never", never
     # Replies only and recipient restrictions on an inbox cannot be undone by its bot.
@@ -129,6 +133,12 @@ def effective(c, mailbox="", bot=""):
         out["what"], sources["what"] = "replies_only", "inbox"
     if inbox.get("to") in ("known_addresses", "internal"):
         out["to"], sources["to"] = inbox["to"], "inbox"
+    if "who_can_ok" in inbox:
+        out["who_can_ok"], out["approvers"] = inbox["who_can_ok"], inbox.get("approvers", [])
+        sources["who_can_ok"] = "inbox"
+    if layers[0][1].get("who_can_ok") == "named_people":
+        out["who_can_ok"], out["approvers"] = company["who_can_ok"], company["approvers"]
+        sources["who_can_ok"] = "company"
     out["sources"] = sources
     out["legacy"] = bool(layers[-1][1].get("legacy"))
     out["company_restrictions_set"] = bool(layers[0][1])
@@ -192,9 +202,13 @@ def snapshot(raw, mailbox):
         raise Problem("email", "Invalid email: From must be the inbox, with 1–100 valid recipients and at most 50 files", 422) from exc
     body = "\n".join(texts)
     # Stable across MIME boundaries, Date, Message-ID and recipient ordering; includes HTML and attachment bytes.
-    parts = [{"type": p.get_content_type(), "name": p.get_filename(),
+    parts = [{"type": p.get_content_type(), "name": p.get_filename(), "content_id": p.get("Content-ID"),
+              "disposition": p.get_content_disposition(),
               "sha256": digest(p.get_payload(decode=True) or b"")} for p in msg.walk() if not p.is_multipart()]
-    content_hash = digest(dump({"subject": str(msg.get("subject", "")), "parts": parts}))
+    material_headers = {key: str(msg.get(key) or "") for key in ("from", "sender", "reply-to", "in-reply-to", "references")}
+    groups = {key: sorted(a.lower() for _, a in getaddresses(msg.get_all(key, []))) for key in ("to", "cc", "bcc")}
+    content_hash = digest(dump({"subject": str(msg.get("subject", "")), "headers": material_headers,
+                                "recipient_headers": groups, "parts": parts}))
     return {"recipients": to, "attachments": files, "subject": str(msg.get("subject", ""))[:1000],
             "body_sha256": digest(body), "body": body, "content_sha256": content_hash,
             "in_reply_to": str(msg.get("in-reply-to", "")), "raw": raw}
@@ -213,6 +227,8 @@ def can_ok(c, auth, actor, mailbox, bot, policy):
         row = access._row(c, mailbox)
         if row:
             access._manager(c, who, row, "approve sends")
+            return True
+        if who.email.lower() == mailbox and access.may(c, who, mailbox)["send"]:
             return True
     except Problem:
         pass
@@ -242,9 +258,14 @@ def approved(c, auth, row, policy):
         recipients = addresses(payload.get("to")) | addresses(payload.get("cc")) | addresses(payload.get("bcc"))
         if recipients != set(json.loads(row["recipients"])) or payload.get("mailbox", "").lower() != row["mailbox"]:
             return False
-        if payload.get("subject") != row["subject"] or payload.get("body_sha256") != row["body_sha256"]:
+        if payload.get("subject") != row["subject"]:
             return False
-        if json.loads(row["attachments"]) and payload.get("attachments") != json.loads(row["attachments"]):
+        if payload.get("body_sha256") != row["body_sha256"]:
+            from connectors.mail.policy import body_digests
+            if not row["raw"] or payload.get("body_sha256") not in body_digests(snapshot(row["raw"], row["mailbox"])["body"]):
+                return False
+        approved_files = [{"name": f.get("name"), "sha256": f.get("sha256")} for f in payload.get("attachments") or [] if isinstance(f, dict)]
+        if sorted(approved_files, key=dump) != sorted(json.loads(row["attachments"]), key=dump):
             return False
         # A queue approval binds the full MIME content too; existing text-bound approvals retain their original scope.
         if payload.get("content_sha256") and payload["content_sha256"] != row["content_sha256"]:
@@ -274,9 +295,11 @@ def _original(c, row):
 
 def known(c, mailbox, address):
     return bool(c.execute("SELECT 1 FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL "
-                          "AND (lower(from_addr)=? OR EXISTS (SELECT 1 FROM json_each(to_addresses) WHERE lower(value)=?) "
-                          "OR EXISTS (SELECT 1 FROM json_each(cc) WHERE lower(value)=?)) LIMIT 1",
-                          (mailbox, address, address, address)).fetchone() or c.execute(
+                          "AND (lower(from_addr)=? OR (lower(from_addr)=? "
+                          "AND EXISTS (SELECT 1 FROM json_each(labels) WHERE value='SENT') "
+                          "AND (EXISTS (SELECT 1 FROM json_each(to_addresses) WHERE lower(value)=?) "
+                          "OR EXISTS (SELECT 1 FROM json_each(cc) WHERE lower(value)=?)))) LIMIT 1",
+                          (mailbox, address, mailbox, address, address)).fetchone() or c.execute(
         "SELECT 1 FROM email_sends WHERE mailbox=? AND state='sent' "
         "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1", (mailbox, address)).fetchone())
 
@@ -316,7 +339,8 @@ def decision(c, auth, row, *, dispatch=False):
             blocked.append("onboarding")
     legacy = legacy_authorized(c, row)
     # A changed company policy takes effect immediately, including for grandfathered authorizations.
-    grandfathered = legacy and not policy["company_restrictions_set"]
+    grandfathered = (legacy and not policy["company_restrictions_set"]
+                     and not saved(c, "inbox:" + row["mailbox"]))
     recipients = json.loads(row["recipients"])
     original = _original(c, row)
     is_reply = bool(original and row["thread_id"] == original["thread_id"]
@@ -383,7 +407,7 @@ def decision(c, auth, row, *, dispatch=False):
 
 
 def public(row):
-    keys = ("id", "mailbox", "actor", "bot", "content_sha256", "body_sha256", "subject", "approval_id", "state",
+    keys = ("id", "mailbox", "actor", "bot", "via", "automation_action_id", "content_sha256", "body_sha256", "subject", "approval_id", "state",
             "created_at", "send_after", "claimed_at", "finished_at", "provider_message_id", "detail")
     return {**{key: row[key] for key in keys}, **{key: json.loads(row[key]) for key in
                                                ("recipients", "attachments", "decision", "classification")}}
@@ -399,7 +423,15 @@ def settle_automation(c, row, state, detail="", message=""):
                      {"ok": state == "sent", "message": message, "detail": detail or state})
 
 
-def enqueue(c, auth, actor, body, classification):
+def request_approval(c, auth, row, policy):
+    payload = {"to": json.loads(row["recipients"]), "cc": [], "mailbox": row["mailbox"], "subject": row["subject"],
+               "body_sha256": row["body_sha256"], "content_sha256": row["content_sha256"],
+               "attachments": json.loads(row["attachments"]), "email_send_id": row["id"]}
+    approval = H.approval_request(c, row["actor"], "send", payload, to=approver(c, auth, row, policy))
+    c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (approval["id"], row["id"]))
+
+
+def enqueue(c, auth, actor, body, classification, via=""):
     mailbox = body.mailbox.strip().lower()
     bot = H.actor_id(actor) if actor.startswith("bot:") else ""
     if not access.may(c, actor, mailbox)["send"]:
@@ -418,10 +450,11 @@ def enqueue(c, auth, actor, body, classification):
         raise Problem("queue_full", "The email queue content limit is reached", 429)
     now, ident = H.now(), H.new_id()
     row = {"id": ident, "mailbox": mailbox, "actor": actor, "bot": bot,
+           "via": "automation:" + body.automation_action_id if body.automation_action_id else via,
            "automation_action_id": body.automation_action_id or None, "content_sha256": snap["content_sha256"],
            "idempotency_key": key, "recipients": dump(snap["recipients"]), "attachments": dump(snap["attachments"]),
            "subject": snap["subject"], "body_sha256": snap["body_sha256"], "raw": body.raw,
-           "thread_id": body.thread_id, "reply_to_id": body.reply_to_id, "approval_id": body.approval_id,
+           "draft_id": body.draft_id, "thread_id": body.thread_id, "reply_to_id": body.reply_to_id, "approval_id": body.approval_id,
            "classification": dump(classification), "decision": "{}", "state": "pending", "created_at": now,
            "send_after": H.shift(now, seconds=effective(c, mailbox, bot)["undo_seconds"])}
     found = decision(c, auth, row)
@@ -429,12 +462,11 @@ def enqueue(c, auth, actor, body, classification):
     row["state"] = {"allow": "pending", "ask": "waiting_approval", "blocked": "blocked"}[found["outcome"]]
     c.execute("INSERT INTO email_sends(" + ",".join(row) + ") VALUES(" + ",".join("?" for _ in row) + ")", tuple(row.values()))
     if row["state"] == "waiting_approval" and not row["approval_id"]:
-        payload = {"to": snap["recipients"], "cc": [], "mailbox": mailbox, "subject": snap["subject"],
-                   "body_sha256": snap["body_sha256"], "content_sha256": snap["content_sha256"],
-                   "attachments": snap["attachments"], "email_send_id": ident}
         # Existing approval cards expose only the proof metadata, never the MIME payload.
-        approval = H.approval_request(c, actor, "send", payload, to=approver(c, auth, row, found["policy"]))
-        c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (approval["id"], ident))
+        request_approval(c, auth, row, found["policy"])
+    if classification.get("status") == "classified":
+        H.event(c, actor, "judge.call", "email.sending", {"label": "email.sending", "questions": 1,
+                                                          **classification})
     H.event(c, actor, "email.queued", ident, {"mailbox": mailbox, "state": row["state"]})
     return public(c.execute("SELECT * FROM email_sends WHERE id=?", (ident,)).fetchone())
 
@@ -516,6 +548,8 @@ def install(app, store, auth, mutate):
         return bot
 
     def reader(c, who, mailbox):
+        if store.settings.rehearsal or store.settings.demo:
+            raise Problem("rehearsal", "This install does not dispatch email", 403)
         from . import google_rights
         runner = google_rights.runner_of(app.state.execution, c, who)
         google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
@@ -594,7 +628,7 @@ def install(app, store, auth, mutate):
             policy = effective(c, body.mailbox.strip().lower(), H.actor_id(actor) if actor.startswith("bot:") else "")
         snap = snapshot(body.raw, body.mailbox.strip().lower())
         classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": False, "status": "off"}
-        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification)})
+        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=who.via)})
 
     @app.get("/api/v2/email/sends")
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
@@ -611,6 +645,7 @@ def install(app, store, auth, mutate):
             out, spent = [], 0
             for row in rows[:cap]:
                 item = public(row)
+                item["can_cancel"] = row["state"] in ("pending", "waiting_approval") and can_cancel(c, request.state.identity, row)
                 size = len(dump(item).encode())
                 if out and spent + size > LIST_BYTES:
                     break
@@ -693,6 +728,9 @@ def install(app, store, auth, mutate):
                              "ORDER BY created_at,rowid LIMIT 100", (mailbox,)).fetchall()
             for row in rows:
                 found = decision(c, auth, row)
+                approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
+                if approval and approval.get("decision") in ("declined", "withdrawn"):
+                    found["outcome"], found["reasons"] = "blocked", ["approval_" + approval["decision"]]
                 if found["outcome"] == "blocked":
                     c.execute("UPDATE email_sends SET state='blocked',decision=?,detail=?,finished_at=?,raw='' WHERE id=?",
                               (dump(found), ", ".join(found["reasons"]), now, row["id"]))
@@ -700,6 +738,8 @@ def install(app, store, auth, mutate):
                     continue
                 if found["outcome"] == "ask":
                     c.execute("UPDATE email_sends SET state='waiting_approval',decision=? WHERE id=?", (dump(found), row["id"]))
+                    if not row["approval_id"]:
+                        request_approval(c, auth, row, found["policy"])
                     continue
                 if row["state"] == "waiting_approval":
                     c.execute("UPDATE email_sends SET state='pending',send_after=?,decision=? WHERE id=?",
@@ -735,13 +775,15 @@ def install(app, store, auth, mutate):
                 return {"send": None}
             c.execute("UPDATE email_sends SET provider_attempted_at=? WHERE id=?", (H.now(), sid))
             return {"send": {"id": sid, "raw": row["raw"], "thread_id": row["thread_id"], "actor": row["actor"],
-                             "recipients": json.loads(row["recipients"]), "subject": row["subject"]}}
+                             "recipients": json.loads(row["recipients"]), "subject": row["subject"], "draft_id": row["draft_id"]}}
         return mutate(request, body, work)
 
     @app.post("/api/v2/connectors/email/sends/{sid}/result")
     def receipt(request: Request, sid: str, body: Receipt):
         if body.status not in ("sent", "failed", "unknown"):
             raise Problem("receipt", "Receipt status must be sent, failed or unknown", 422)
+        if body.status == "sent" and not body.message:
+            raise Problem("receipt", "Confirmed delivery needs the provider's message id", 422)
         def work(c):
             from . import google_rights
             runner = google_rights.runner_of(app.state.execution, c, request.state.identity)

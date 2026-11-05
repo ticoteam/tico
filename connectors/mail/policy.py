@@ -489,10 +489,10 @@ def _default_hub_post(path, body, key=None):
 HUB_POST = _default_hub_post
 
 
-def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id=""):
+def queue_send(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id=""):
     """Fail closed: every provider send must have a durable server queue record first."""
     body = {"mailbox": mailbox, "raw": raw, "thread_id": thread_id, "reply_to_id": reply_to_id,
-            "approval_id": str(approval_id or ""), "automation_action_id": automation_action_id}
+            "approval_id": str(approval_id or ""), "automation_action_id": automation_action_id, "draft_id": draft_id}
     try:
         if automation_action_id:
             from . import oauth

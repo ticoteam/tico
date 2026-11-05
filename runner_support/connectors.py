@@ -135,7 +135,7 @@ def mail_umask():
 
 def without_known_sender(body):
     """The mail batch with `known_sender` taken off every message."""
-    return dict(body, messages=[{k: v for k, v in m.items() if k != "known_sender"} for m in body["messages"]])
+    return dict(body, messages=[{k: v for k, v in m.items() if k not in ("known_sender", "send_facts")} for m in body["messages"]])
 
 
 class ConnectorPublisher:
@@ -589,7 +589,7 @@ class ConnectorPublisher:
         try:
             self.client.post("connectors/mail/messages", body)
         except APIError as exc:
-            if exc.status != 422 or not any("known_sender" in m for m in body["messages"]):
+            if exc.status != 422 or not any("known_sender" in m or "send_facts" in m for m in body["messages"]):
                 raise
             self.client.post("connectors/mail/messages", without_known_sender(body))
             if self.refused_known_sender_at is None:

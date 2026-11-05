@@ -149,6 +149,8 @@ CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
 CREATE INDEX IF NOT EXISTS messages_from ON messages(mailbox, from_addr);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
 CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
+CREATE TABLE IF NOT EXISTS queued_drafts(mailbox TEXT NOT NULL, draft_id TEXT NOT NULL, send_id TEXT NOT NULL,
+ PRIMARY KEY(mailbox,draft_id));
 """
 
 

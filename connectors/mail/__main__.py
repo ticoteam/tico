@@ -218,7 +218,7 @@ def cmd_e2e(args):
             c.ok("label the draft", lb.DRAFTED)
         except Failure as e:
             c.fail("label the draft", e.msg, e.hint)
-        queued = pl.queue_send(box, raw)
+        queued = pl.queue_send(box, raw, draft_id=draft_id)
         c.ok("queue test email", f"send {queued['id']}: {queued['state']}")
         c.ok("delivery", "The shared queue dispatches after approval and the undo window")
         try:
@@ -1922,7 +1922,10 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
     original = next((m for m in reversed(msgs or []) if m.get("from", "").lower() != ctx.mailbox.lower()), {})
     queued = pl.queue_send(ctx.mailbox, ctx.gmail.get_draft_raw(draft_id), thread_id,
-                           original.get("id", ""), approval or "")
+                           original.get("id", ""), approval or "", draft_id=draft_id)
+    if queued["state"] in ("pending", "waiting_approval", "sent"):
+        ctx.conn.execute("INSERT OR REPLACE INTO queued_drafts VALUES(?,?,?)", (ctx.mailbox, draft_id, queued["id"]))
+        ctx.conn.commit()
     ctx.audit("send-queued", queued["id"], {"to": to, "cc": cc, "state": queued["state"]})
     return dict(base, sent=queued["state"] == "sent", queued=queued["state"] in ("pending", "waiting_approval"),
                 send_id=queued["id"], state=queued["state"], send_after=queued["send_after"],
@@ -2034,6 +2037,12 @@ def cmd_discard(args):
         raise Refused(f"draft {did} in {ctx.mailbox} was not made by {ctx.slug}; "
                       "only a draft this employee wrote with `mail draft` can be discarded.",
                       "Leave it for the person who wrote it, or ask the owner to delete it in Gmail.")
+    queued = ctx.conn.execute("SELECT send_id FROM queued_drafts WHERE mailbox=? AND draft_id=?", (ctx.mailbox, did)).fetchone()
+    if queued:
+        send = (pl.HUB_GET("email/sends/" + queued["send_id"]) or {}).get("send") or {}
+        if send.get("state") not in ("canceled", "failed", "blocked"):
+            raise Refused("This draft has a frozen email in Tico's send queue.",
+                          "Cancel it first with `hub email cancel " + queued["send_id"] + "`.")
     if db.draft_was_sent(ctx.conn, ctx.mailbox, did):
         ctx.audit("discard-refused", did, {"reason": "already sent"})
         raise Refused(f"draft {did} was already sent; sent mail is never deleted.")

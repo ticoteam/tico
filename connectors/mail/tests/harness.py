@@ -187,6 +187,16 @@ class Stage2(unittest.TestCase):
 
         self.dbfile = self.root / "mail.db"
         self.service = fake.FakeGmailService(self.corpus())
+        self.queue_requests = []
+        def queued(mailbox, raw, thread_id="", reply_to_id="", approval_id="", automation_action_id="", draft_id=""):
+            import hashlib
+            self.queue_requests.append({"mailbox": mailbox, "raw": raw, "thread_id": thread_id,
+                                        "reply_to_id": reply_to_id, "approval_id": approval_id})
+            return {"id": hashlib.sha256(raw.encode()).hexdigest(), "state": "pending", "approval_id": approval_id,
+                    "send_after": "2026-11-04T12:02:00Z"}
+        queue_patch = mock.patch.object(pl, "queue_send", side_effect=queued)
+        queue_patch.start()
+        self.addCleanup(queue_patch.stop)
         self.calendar = fake.FakeCalendarService()
         cli.open_gmail = lambda mailbox: gm.Gmail(self.service, mailbox, sleep=lambda s: None)
         cli.open_calendar = lambda mailbox: self.calendar

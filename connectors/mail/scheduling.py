@@ -279,7 +279,7 @@ def run(ctx, args):
                 raw = compose.build([attendee], subject, body, from_addr=ctx.mailbox,
                                     in_reply_to=reply_id, references=refs)
                 draft = ctx.gmail.create_draft(raw,args.thread)
-                queued = pl.queue_send(ctx.mailbox, raw, args.thread, latest['id'])
+                queued = pl.queue_send(ctx.mailbox, raw, args.thread, latest['id'], draft_id=draft['id'])
                 result = dict(payload, ok=True, sent=False, queued=True, send_id=queued['id'], state=queued['state'])
             status = 'sent' if args.mode == 'book' else 'queued'
         except Exception:

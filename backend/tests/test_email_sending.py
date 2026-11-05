@@ -226,7 +226,7 @@ def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(in
                   "VALUES('auto','Auto','person:ana','manual',1,?,1,?,'person:ana',?)",
                   (json.dumps({"owner": "person:ana", "steps": []}), H.now(), H.now()))
         c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,claimed_by) "
-                  "VALUES('action','auto',NULL,?,'inbound','send','{}','claimed',?,?)", (BOX, H.now(), machine["id"]))
+                  "VALUES('action','auto',NULL,?,'inbound','send','{}','claimed',?,?)", (BOX, H.now(), machine["runner_id"]))
     result = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(), "thread_id": "thread",
                                        "reply_to_id": "inbound", "automation_action_id": "action"}, token=machine["token"])
     queued = result["send"]

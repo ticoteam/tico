@@ -3257,7 +3257,7 @@ STABLE.extend([
 TAGS["Email sending"] = "One sending policy and durable undo queue for bots, automations and people acting through Tico."
 ANSWERS.update({
     "EmailSendingPolicy": obj({"company": "o", "inbox": "o", "bot": "o", "effective": "o"}),
-    "EmailSend": obj({"id": "s", "mailbox": "s", "actor": "s", "bot": "s", "content_sha256": "s",
+    "EmailSend": obj({"id": "s", "mailbox": "s", "actor": "s", "bot": "s", "via": "s", "automation_action_id": "n", "content_sha256": "s",
                       "body_sha256": "s", "subject": "s", "approval_id": "s", "state": "s", "created_at": "s",
                       "send_after": "s", "claimed_at": "n", "finished_at": "n", "provider_message_id": "n",
                       "detail": "s", "recipients": items("s"), "attachments": items("o"),

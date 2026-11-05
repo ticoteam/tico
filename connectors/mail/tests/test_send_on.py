@@ -376,15 +376,16 @@ class Cli(Stage2):
     def test_a_reply_to_the_sender_is_sent(self):
         rc, out, err = self.run_json("reply", "--as", "inbox", "--thread", THREAD, "--body-file", self.body_file(BODY),
                                      "--issue", "1", "--json")
-        self.assertEqual((rc, out.get("sent"), out.get("gate")), (0, True, None), (out, err))
-        self.assertEqual(len(self.service.sent), 1)
+        self.assertEqual((rc, out.get("queued"), out.get("gate")), (0, True, None), (out, err))
+        self.assertEqual(len(self.queue_requests), 1)
+        self.assertEqual(self.service.sent, [])
 
     def test_a_forward_to_the_owner_is_sent_and_may_quote_a_link_on_another_host(self):
         rc, p, err = self.run_json("draft", "--as", "inbox", "--to", ME, "--subject", "\U0001F514 Tico inbound: Press request",
                                    "--body-file", self.body_file(FORWARD), "--issue", "2", "--json")
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "2")
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_a_text_approval_sends_its_draft_and_not_the_draft_edited_after_the_yes(self):
         rc, p, err = self.run_json("draft", "--as", "inbox", "--to", STRANGER, "--subject", "Support question",
@@ -406,7 +407,7 @@ class Cli(Stage2):
         edit(BODY.strip(), crlf=True)                                         # back as approved, with Gmail's CRLF
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_a_reply_with_a_text_approval_sends_only_the_approved_words(self):
         # Sending is off in Tico, so the reply to the thread's sender needs the per-message yes.
@@ -419,7 +420,7 @@ class Cli(Stage2):
         self.assertIn("the draft changed after it was approved", out["reason"])
         self.assertEqual(self.service.sent, [])
         rc, out, _ = self.run_json(*args, "--body-file", self.body_file(BODY))
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_an_attached_reply_to_the_sender_sends_without_an_approval_and_is_reviewed_again(self):
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
@@ -434,7 +435,7 @@ class Cli(Stage2):
             self.assertEqual(rc, 0, err)
             self.assertNotIn("send_needs_approval", p)
             rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1")
-        self.assertEqual((rc, out["sent"], out["review_reused"]), (0, True, False), out)
+        self.assertEqual((rc, out["queued"], out["review_reused"]), (0, True, False), out)
         self.assertEqual(len(seen), 2)
         self.assertTrue(all("answer.pdf" in body for body in seen), seen)
 
@@ -454,7 +455,7 @@ class Cli(Stage2):
                                            "--approval-issue", ORDER)
                 # The owner's message covers the file; the reviewer, which sees that message, still blocks
                 # anything beyond it (#2560).
-                self.assertEqual(out["sent"], ok, out)
+                self.assertEqual(out.get("queued", False), ok, out)
                 if not ok:
                     self.assertEqual(out["gate"], "review")
 
@@ -479,7 +480,7 @@ class Cli(Stage2):
         self.assertEqual(self.service.sent, [])
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)               # the approved draft is intact
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_a_file_changed_in_gmail_after_approval_is_refused_by_its_hash(self):
         original = b"%PDF-1.4 the answer"
@@ -517,7 +518,7 @@ class Cli(Stage2):
         hub(dict(send_approval([AVA], []), payload=approved))
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", task,
                                    "--approval-issue", APPROVAL)
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
         # No credential or a failed upload: the draft and the request still stand, without file ids.
         cli.TASK_ATTACH = lambda *call: (_ for _ in ()).throw(RuntimeError("offline"))
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(data + b" v2")
@@ -591,7 +592,7 @@ class NoRegistry(Stage2):
                                    "--attach", "answer.pdf", "--issue", "1", "--json")
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1")
-        self.assertEqual((rc, out["sent"]), (0, True), out)
+        self.assertEqual((rc, out["queued"]), (0, True), out)
 
     def test_internal_domains_come_from_the_roster_without_public_providers(self):
         pl.HUB_GET = lambda path: {"people": [{"id": "a", "email": "ana@gmail.com"}, {"id": "b", "email": "Bo@Team.example"},

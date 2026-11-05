@@ -566,7 +566,9 @@ def normalize(msg, label_names=None, tz_name=DEFAULT_TZ):
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
-        "send_facts": {key: str(hdrs.get(key) or "")[:100] for key in ("auto-submitted", "precedence", "return-path")},
+        "send_facts": {**{key: str(hdrs.get(key) or "")[:100] for key in ("auto-submitted", "precedence", "return-path")},
+                       "delivery-status": "\n".join(decode(p.get("body") or {}, charset_of(p)) for p in walk(payload)
+                                                     if p.get("mimeType") == "message/delivery-status")[:4096]},
     }
 
 

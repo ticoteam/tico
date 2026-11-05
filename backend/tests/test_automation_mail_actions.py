@@ -20,7 +20,7 @@ from backend.tests.test_automation_turns import finish
 from clients.tico import APIError
 from connectors.mail import access, audit as audit_log, db, gmail as gm, policy as pl
 from connectors.mail import __main__ as cli
-from connectors.mail import actions as mail_actions, unsubscribe as unsub
+from connectors.mail import actions as mail_actions, unsubscribe as unsub, oauth
 from connectors.mail.tests import fake
 from runner_support.connectors import CalendarRefused, ConnectorPublisher
 
@@ -121,6 +121,7 @@ def computer(api, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TICO_RUNNER_CONFIG", str(tmp_path / "elsewhere/runner.json"))
     box.token = machine["token"]
+    monkeypatch.setattr(oauth, "broker", lambda **kw: box.worker.client)
     return box
 
 
@@ -152,6 +153,17 @@ def claim(api, token, expected=200):
 
 def later(minutes):
     return time_machine.travel(datetime.now(timezone.utc) + timedelta(minutes=minutes), tick=False)
+
+
+def approve_and_dispatch(api, computer, send_id=None):
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id,approval_id FROM email_sends WHERE " + ("id=?" if send_id else "state='waiting_approval'") + " ORDER BY rowid DESC LIMIT 1", (send_id,) if send_id else ()).fetchone()
+    assert row
+    post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
+    assert computer.worker.email_send_tick() == 0  # approval starts the undo window
+    with later(3):
+        assert computer.worker.email_send_tick() == 1
+    return row["id"]
 
 
 # ---------------------------------------------------------------------------------------------- the whole loop
@@ -214,6 +226,9 @@ def test_mail_in_runs_the_automation_and_its_computer_drafts_and_replies_in_the_
     assert run["status"] == "waiting" and run["finished_at"] is None
     assert [(s["status"], s["outputs"]["queued"]) for s in run["steps"]] == [("waiting", True), ("waiting", True)]
     assert computer.worker.mail_action_tick() == 2
+    assert computer.sent() == []
+    assert len(computer.drafts()) == 2
+    approve_and_dispatch(api, computer)
     draft, = computer.drafts()
     sent, = computer.sent()
     for msg, text in ((draft, "checking with finance"), (sent, "pay this week")):
@@ -249,6 +264,8 @@ def test_forward_sends_the_message_on_with_the_note_first(api, computer):
                          "args": {"to": "ap@acme.example", "body": "For payment."}})
     computer.sync()
     computer.worker.mail_action_tick()
+    assert computer.sent() == []
+    approve_and_dispatch(api, computer)
     sent, = computer.sent()
     text = fake.base64.urlsafe_b64decode(sent["payload"]["body"]["data"] + "==").decode()
     assert header(sent, "To") == "ap@acme.example" and header(sent, "Subject") == "Fwd: Invoice 4471"
@@ -260,41 +277,47 @@ def test_forward_sends_the_message_on_with_the_note_first(api, computer):
 def test_a_lost_claim_and_a_lost_result_never_send_twice(api, computer):
     aid = automate(api, SEND)
     computer.sync()
-    lost = claim(api, computer.token)["actions"]             # the answer never reached the computer
-    assert len(lost) == 1 and claim(api, computer.token)["actions"] == []    # leased: nobody else gets it
+    lost = claim(api, computer.token)["actions"]
+    assert len(lost) == 1 and claim(api, computer.token)["actions"] == []
     with later(6):
-        again, = claim(api, computer.token)["actions"]       # the lease ran out: back in the queue
+        again, = claim(api, computer.token)["actions"]
         assert again["id"] == lost[0]["id"] and again["attempt"] == 2
-        done = computer.action(again)                        # sent, but the report is lost
-        assert done["detail"] == "sent" and len(computer.gmail.sent) == 1
+        first = computer.action(again)
+        assert first["detail"] == "waiting_approval" and computer.gmail.sent == []
     with later(12):
         third, = claim(api, computer.token)["actions"]
-        assert computer.action(third)["detail"].startswith("already sent")
-        assert len(computer.gmail.sent) == 1
-        ok = {"ok": True, "detail": "sent", "message": done["message"]}
+        repeated = computer.action(third)
+        assert repeated["send_queue_id"] == first["send_queue_id"]
+        assert computer.gmail.sent == []
+        report = {"ok": True, "send_queue_id": first["send_queue_id"]}
         url = f"automations/mail-actions/{third['id']}/result"
-        assert post(api, url, ok, computer.token) == {"id": third["id"], "state": "done"}
-        # A repeated report (its answer lost too) changes nothing.
-        assert post(api, url, {"ok": False, "detail": "late"}, computer.token) == {"id": third["id"], "state": "done"}
-    step = last_run(api, aid)["steps"][0]
-    assert step["status"] == "ok" and step["outputs"]["message"] == done["message"]
+        assert post(api, url, report, computer.token)["state"] == "waiting_send"
+    approve_and_dispatch(api, computer, first["send_queue_id"])
+    assert len(computer.gmail.sent) == 1
+    assert last_run(api, aid)["status"] == "ok"
 
 
 def test_a_send_whose_answer_was_lost_inside_the_cli_is_not_sent_again(api, computer):
-    """The send went out but the CLI died before it recorded so: the row is pending and the draft is gone."""
+    """An uncertain provider delivery stays unknown and a second CLI call cannot send it again."""
     automate(api, SEND)
     computer.sync()
-    action, = claim(api, computer.token)["actions"]
+    computer.worker.mail_action_tick()
+    with api.app.state.store.read() as c:
+        queued = c.execute("SELECT id,approval_id FROM email_sends ORDER BY rowid DESC LIMIT 1").fetchone()
+    post(api, "approvals/" + queued["approval_id"], {"decision": "approved"})
+    assert computer.worker.email_send_tick() == 0
     real = gm.Gmail.send_draft
-
     def sent_then_crash(self, draft_id):
         real(self, draft_id)
         raise gm.Failure("connection reset after the send", status=503)
-    with mock.patch.object(gm.Gmail, "send_draft", sent_then_crash):
-        answer = computer.action(action)
-    assert answer["ok"] is False and answer["retry"] is True and len(computer.gmail.sent) == 1
-    assert computer.action(action)["detail"].startswith("already sent")
+    with later(3), mock.patch.object(gm.Gmail, "send_draft", sent_then_crash):
+        assert computer.worker.email_send_tick() == 1
     assert len(computer.gmail.sent) == 1
+    repeated = computer.action({"id": queued["id"], "mailbox": BOX, "action": "dispatch_send"})
+    assert repeated["status"] == "unknown" and repeated["retry"] is False
+    assert len(computer.gmail.sent) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "unknown"
 
 
 def test_three_failed_tries_fail_the_action_and_the_run_says_where(api, computer):

@@ -123,6 +123,7 @@ def seed(b):
     def mail_clock(c):
         c.execute("UPDATE postal_mail_settings SET created_at=?,updated_at=? WHERE id=1", (H.now(), H.now()))
     b.write(mail_clock)
+    _email_sending(b)
     _letters(b)
     _gateway(b)
     _runners(b)
@@ -135,6 +136,20 @@ def seed(b):
 def mail_access(b):
     """Seed after the company's conversations so the grant's audit ids do not shift their stable ids."""
     b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
+
+
+def _email_sending(b):
+    from .. import email_sending, mailbox_access
+    from connectors.mail import compose
+    b.at(hours=0.02)
+    def work(c):
+        owner = Identity(CONTENT["owner"]["id"], "owner", CONTENT["owner"]["email"])
+        mailbox_access.ensure_mailbox(c, owner.email, person_id="ana", created_by=owner.actor)
+        email_sending.update_policy(c, owner, "company", email_sending.PolicyUpdate(mode="ask_first"))
+        raw = compose.build(["customer@shop.example"], "Your replacement order", "Your replacement is ready to ship.", from_addr=owner.email)
+        email_sending.enqueue(c, b.app.state.auth, owner.actor, email_sending.Enqueue(mailbox=owner.email, raw=raw),
+                              {"legal_or_money": False, "status": "classified"})
+    b.write(work)
 
 
 def _inboxes(b):

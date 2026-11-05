@@ -81,7 +81,9 @@ def perform(ctx, action):
     if kind == "draft" or args.get("draft_only"):     # draft_only: the inbox's send switch was off at claim
         return {"ok": True, "detail": "drafted", "draft": draft_id, "thread": thread}
     from . import policy
-    queued = policy.queue_send(ctx.mailbox, raw, thread, original["id"], automation_action_id=aid)
+    from . import oauth
+    oauth.company_allows(ctx.gmail.company, "send", ctx.mailbox, "send mail")
+    queued = policy.queue_send(ctx.mailbox, raw, thread, original["id"], automation_action_id=aid, draft_id=draft_id)
     return {"ok": queued["state"] in ("pending", "waiting_approval", "sent"), "retry": False,
             "detail": queued["state"], "send_queue_id": queued["id"], "draft": draft_id, "thread": thread}
 
@@ -208,8 +210,12 @@ def _dispatch(ctx, ident):
     if not action:
         return {"ok": False, "retry": False, "status": "failed", "detail": "Sending permission was revoked"}
     raw, thread = action["raw"], action.get("thread_id", "")
-    made = ctx.gmail.create_draft(raw, thread)
-    draft_id = made.get("id", "")
+    draft_id = action.get("draft_id") or ""
+    if draft_id:
+        ctx.gmail.update_draft(draft_id, raw, thread)
+    else:
+        made = ctx.gmail.create_draft(raw, thread)
+        draft_id = made.get("id", "")
     db.claim_send(ctx.conn, key, str(action["actor"]).partition(":")[2], ctx.mailbox, ident,
                   action["recipients"], action["subject"], thread, draft_id,
                   datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"), source="email-queue")
@@ -217,5 +223,7 @@ def _dispatch(ctx, ident):
         sent = ctx.gmail.send_draft(draft_id)
     except Exception:
         return {"ok": False, "retry": False, "status": "unknown", "detail": "The provider result is unknown"}
+    if not sent.get("id"):
+        return {"ok": False, "retry": False, "status": "unknown", "detail": "The provider gave no delivery receipt"}
     db.finish_send(ctx.conn, key, sent.get("id", ""), "sent")
     return {"ok": True, "retry": False, "status": "sent", "message": sent.get("id", ""), "detail": "sent"}

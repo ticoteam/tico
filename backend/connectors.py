@@ -191,7 +191,7 @@ class MailMessage(M.Contract):
     rule_hits: list = Field(default_factory=list, max_length=100)
     # Set by the computer from its copy of the owner's sends (connectors/mail/db.py). None from a computer that predates it.
     known_sender: bool | None = None
-    send_facts: dict[str, str] = Field(default_factory=dict, max_length=3)
+    send_facts: dict[str, str] = Field(default_factory=dict, max_length=4)
 
     # A field over its cap is cut, not refused: the batch is never acknowledged, so one refused
     # message came back first on every retry and stopped its mailbox's copy for hours. Only the
@@ -664,10 +664,10 @@ def install_connectors(app, store, execution, mutate):
                 _mail_fts(c, body.mailbox, message.msg_id, message.subject, message.body,
                           message.from_addr, " ".join(message.to))
                 c.execute("UPDATE mail_messages SET send_facts=? WHERE mailbox=? AND msg_id=?",
-                          (encode({key: str(message.send_facts.get(key) or "")[:100] for key in
-                                   ("auto-submitted", "precedence", "return-path")}), body.mailbox, message.msg_id))
+                          (encode({key: str(message.send_facts.get(key) or "")[:4096 if key == "delivery-status" else 100] for key in
+                                   ("auto-submitted", "precedence", "return-path", "delivery-status")}), body.mailbox, message.msg_id))
                 from .email_sending import record_bounces
-                record_bounces(c, body.mailbox, message.from_addr, message.body)
+                record_bounces(c, body.mailbox, message.from_addr, message.body + "\n" + message.send_facts.get("delivery-status", "")[:4096])
                 if fresh:
                     automations.on_mail(c, body.mailbox, message, watch)
             for msg_id in body.deleted:

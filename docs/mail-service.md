@@ -286,11 +286,19 @@ Bodies stay ≤32 KB; Tico keeps about 180 days (`TICO_MAIL_RETENTION_DAYS`) and
 index. Humans browse that copy on the Message bots page (`GET /api/v2/mail/...`, [Message bots](mail.md)); SQL
 access to `mail_*` is owner-only.
 
+## Shared sending policy and queue
+
+The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, approval authority,
+bot/inbox/company caps and the durable undo queue. `connectors/mail/actions.py` enqueues automation sends through the
+same API as bot sends; it sends provider mail only with a one-use server dispatch permit. Scheduling offer emails
+use that queue too. Pending work survives restarts, and an uncertain delivery never retries automatically. See
+[Turning sending on](mail.md#turning-sending-on) for settings, migration behavior, cancellation and the API.
+
 ## Tests and rollout
 
 - Unit tests for policy and lint with fixture emails, `python3 -m unittest`, and preflight runs
   them for any bot that declares gmail access.
-- `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, send to itself,
+- `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, queue an email to itself,
   create and delete a throwaway event. Run by preflight before any message bot goes active.
 - Week one: all three bots read and draft only (mail switch off). Ana reviews
   drafts in Gmail and on the tasks. Week two, if the drafts are good: the mail switch on for

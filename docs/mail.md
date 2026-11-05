@@ -735,37 +735,54 @@ The server's operator can set Tico's OAuth client in its environment, `TICO_GOOG
 
 ## Turning sending on
 
-A message bot starts with sending off: everything it writes is a draft for the human. Whether it sends without a
-per-message approval, and to which forward addresses, is a switch held on the Tico server that only a person sets: the
-owner, or a human who manages the bot (its owner, a co-owner, an admin, or someone it reports up to). A bot cannot set
-it, and neither can BotOps, in its own runs or acting for a person, nor the Assistant. Set it in **Settings > Bots >
-the bot > Edit > Mail sending**, or with your own token:
+Every email Tico sends goes through one server policy and a persisted queue: bot sends, automation replies and
+forwards, approved sends, scheduling offers, and the Assistant acting for a person. Configure it in **Settings >
+Inboxes > Settings > Email > Sending**. An inbox's own page shows its policy, bot overrides, **Waiting to send** with
+Cancel, and the send audit.
+
+New senders start at **Ask first**, **Replies only**. **On their own** is an explicit opt-in at company, inbox or bot
+level; the effective rule names the level that set it. Replies only keeps new messages behind a per-message approval.
+**Never** at company, inbox or bot level blocks every send, including already-approved sends. A bot override cannot
+relax company always-ask rules, caps, pacing or the undo window. Only a person acting as themselves changes sending
+policy: company admins, an inbox's person/admin, or a bot's manager for that bot. BotOps and the Assistant cannot
+change these settings for them.
+
+The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money
+matters. Decide classifies the last rule; unavailable classification also asks a person. This is triage, not a
+security boundary. Read/write grants, Never, sender identity, content-bound approval and caps remain deterministic.
+The approval rule is configurable: bot managers (the default), inbox admins, or named people. Hash-bound approvals
+must match the content, subject, recipients and files; an in-chat “send it” must come from an authorized person, and
+becomes bound to the frozen queue content. Changing that content requires another send and another approval.
+
+Allowed emails wait in SQLite for the company's undo window (two minutes by default). The connector rechecks access,
+policy, approval authority, aggregate daily caps and pacing before dispatch. Cancel works until dispatch; delivered
+mail cannot be recalled. Pending sends recover across server/runner restarts. An uncertain provider result is
+**Unknown**, counted against caps and never automatically retried. Identical content and recipients deduplicate,
+including across MIME boundary and Message-ID changes. Automatic replies, bounces and repeated replies to the same
+inbound message are blocked. Delivery-status reports suppress previously attempted recipients; an inbox admin can
+inspect and remove a suppression through the API.
 
 ```bash
-hub bot mail <slug>                                  # show it, and what the bot's bot.yaml asks
-hub bot mail <slug> --send --forward-to me@personal.example
-hub bot mail <slug> --no-send                        # off again
-hub bot mail <slug> --from-bot-yaml                  # take exactly what bot.yaml asks, after reading it
+hub email policy                                    # company policy
+hub email policy --settings '{"mode":"on_their_own"}'
+hub email policy --mailbox support@acme.example       # inbox effective rule
+hub email policy --bot support --settings '{"mode":"ask_first"}'
+hub email sends --mailbox support@acme.example --pending
+hub email cancel <send-id>
 ```
 
-The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send": true, "forward_to": [...]}`).
+The v2 API exposes `/email/sending-policy`, `/email/inboxes/{mailbox}/sending-policy`,
+`/bots/{bot}/email-sending-policy`, `/email/sends` (queue and paged audit), `/email/sends/{id}`,
+`/email/sends/{id}/approve` and `/email/sends/{id}/cancel`. The OpenAPI document describes the public endpoints.
+The audit retains content/body hashes, recipients, attachment names/hashes, actor, policy decision, approval id,
+provider message id and delivery status. MIME content is discarded after delivery or cancellation.
 
-`outbound_send` and `forward_to` in the bot's `bot.yaml` are only a request. Anything that can push to the bot's
-repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an
-approval for each message and the refusal names the setting. The bot's computer reports what bot.yaml asks, and
-Settings > Health shows "<bot> asks to send mail without approval; a person must turn this on" (or names the new
-forward addresses) until a person turns it on or the request goes away. The owner and admins see it for every bot;
-a person who manages a bot sees it for that bot only. The Support Agent's `software/hq-tickets reply` reads the same
-switch before it posts a reply to an HQ ticket.
-
-To have the rules written down, ask BotOps in a DM in plain words: "let my Inbox Manager reply to support senders that
-support has it, and forward job, partnership, investor and press mail to me at <address> with the subject `🔔 Tico
-inbound: <subject>`, plus a Needs you task". BotOps writes the rules into the bot's `playbooks/inbox-preferences.md`
-under `## Sending` and tells you which addresses to type in the switch; it never edits `outbound_send` or `forward_to`.
-
-**After upgrading.** Bots that sent with `outbound_send: true` in bot.yaml send drafts until a person confirms mail
-sending per bot: Health lists each one, and `hub bot mail <slug> --from-bot-yaml` (or the Mail sending row) turns on
-exactly what its bot.yaml asks.
+**After upgrading.** Existing explicitly enabled bot recipient scopes and existing automation versions retain their
+previous authorization, marked **kept from before**. Existing legal inbox approvals stay approvals. New automation
+ids and edited automation versions start under the shared default. Saving a company or inbox sending policy applies
+its safeguards to grandfathered paths too. A bot's old registry recipient restrictions remain enforced until a person
+sets its new policy. The older `hub bot mail` / `/bots/{bot}/mail-settings` controls remain compatible; setting their
+switch now sets the bot's new mode. `outbound_send` and `forward_to` in bot.yaml remain requests, never authorization.
 
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox

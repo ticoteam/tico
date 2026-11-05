@@ -7,10 +7,10 @@ def up(conn):
     statements = (
         "CREATE TABLE email_sending_policies(scope TEXT PRIMARY KEY, settings TEXT NOT NULL, "
         "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
-        "CREATE TABLE email_sends(id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL, "
+        "CREATE TABLE email_sends(id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL, via TEXT NOT NULL, "
         "automation_action_id TEXT, content_sha256 TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, "
         "recipients TEXT NOT NULL, attachments TEXT NOT NULL, subject TEXT NOT NULL, body_sha256 TEXT NOT NULL, "
-        "raw TEXT NOT NULL, thread_id TEXT NOT NULL, reply_to_id TEXT NOT NULL, approval_id TEXT NOT NULL, "
+        "raw TEXT NOT NULL, draft_id TEXT NOT NULL, thread_id TEXT NOT NULL, reply_to_id TEXT NOT NULL, approval_id TEXT NOT NULL, "
         "classification TEXT NOT NULL, decision TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, "
         "send_after TEXT NOT NULL, claimed_at TEXT, provider_attempted_at TEXT, runner_id TEXT, finished_at TEXT, provider_message_id TEXT, "
         "detail TEXT NOT NULL DEFAULT '')",

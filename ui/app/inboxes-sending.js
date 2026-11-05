@@ -71,6 +71,22 @@ async function ibSendBots(host, bots, ctx, mailbox = '', editable = false) {
     try { await put(`/v2/bots/${encodeURIComponent(select.dataset.sendBot)}/email-sending-policy`, select.value ? {mode: select.value} : {inherit: true}); if (ctx.live()) ctx.refresh(); }
     catch (e) { toast(e.message); select.disabled = false; }
   }));
+  return rows.filter(Boolean);
+}
+
+function ibSendAccessColumn(host, inbox, rows, effective) {
+  const table = host.closest('.ib-detail')?.querySelector('#mailbox-access table');
+  if (!table) return;
+  if (!table.querySelector('thead')) table.insertAdjacentHTML('afterbegin', '<thead><tr><th>Who</th><th>Access</th><th>Sends</th><th></th></tr></thead>');
+  for (const grant of inbox.accesses || []) {
+    const tr = table.querySelector(`[data-mb-access-row="${CSS.escape(String(grant.id || grant.grantee_type))}"]`);
+    if (!tr) continue;
+    let cell = tr.querySelector('[data-send-access]');
+    if (!cell) { cell = document.createElement('td'); cell.dataset.sendAccess = ''; tr.insertBefore(cell, tr.lastElementChild); }
+    const bot = rows.find(row => row.id === grant.grantee_id);
+    cell.textContent = grant.level !== 'read_write' ? 'Never · Read only' : grant.grantee_type === 'bot' ?
+      (bot ? ibSendEffective(bot.d.effective) : 'Unknown') : ibSendEffective(effective);
+  }
 }
 
 inboxesSetting('email.sending', {section: 'email', order: 40, render: async (host, ctx) => {
@@ -90,12 +106,13 @@ inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (hos
   const editable = !!inbox.can_manage;
   host.innerHTML = inboxesCard('inbox-sending', 'Sending', ibSendForm(document, false, !editable) + '<div data-send-bots></div>') +
     inboxesCard('inbox-waiting-to-send', 'Waiting to send', `<ul class="ib-send-pending">${(pending.sends || []).map(send =>
-      `<li><div><strong>${esc(send.subject || '(No subject)')}</strong><span>${esc(send.recipients.join(', '))}</span><span>${esc(send.state === 'waiting_approval' ? 'Waiting for OK' : 'After ' + new Date(send.send_after).toLocaleTimeString())}</span></div><button type="button" class="ghost danger" data-send-cancel="${esc(send.id)}">Cancel</button></li>`).join('') || '<li class="muted">None</li>'}</ul>`) +
+      `<li><div><strong>${esc(send.subject || '(No subject)')}</strong><span>${esc(send.recipients.join(', '))}</span><span>${esc(send.state === 'waiting_approval' ? 'Waiting for OK' : 'After ' + new Date(send.send_after).toLocaleTimeString())}</span></div>${send.can_cancel ? `<button type="button" class="ghost danger" data-send-cancel="${esc(send.id)}">Cancel</button>` : ''}</li>`).join('') || '<li class="muted">None</li>'}</ul>`) +
     inboxesCard('inbox-send-audit', 'Send audit', '<button type="button" class="ghost" data-send-audit>Show activity</button><div data-send-activity></div>');
   if (editable) ibSendBind(host, ibSendPath(address), ctx);
   const grants = (inbox.accesses || []).filter(a => a.grantee_type === 'bot').map(a => ({id: a.grantee_id, display_name: a.name}));
-  await ibSendBots(host.querySelector('[data-send-bots]'), grants, ctx, address, editable && ctx.admin);
+  const botRows = await ibSendBots(host.querySelector('[data-send-bots]'), grants, ctx, address, editable && ctx.admin);
   if (!ctx.live()) return;
+  ibSendAccessColumn(host, inbox, botRows, document.effective);
   host.querySelectorAll('[data-send-cancel]').forEach(button => button.addEventListener('click', async () => {
     button.disabled = true;
     try { await post(`/v2/email/sends/${encodeURIComponent(button.dataset.sendCancel)}/cancel`, {}); if (ctx.live()) ctx.refresh(); }
