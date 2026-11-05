@@ -204,6 +204,11 @@
     signin: () => { signedOut(); state.desktop_orgs = clone(desktopOrgs).map((org) => ({ ...org, connected: false })); },
     // First run without the desktop app: type a Tico address.
     'signin-address': () => signedOut(),
+    // One org signed in; the desktop app has one more: Connect on its row in Settings and the org menu.
+    'settings-add': () => {
+      state.settings.connections = connections.filter((c) => c.id === 'team');
+      state.desktop_orgs = clone(desktopOrgs).filter((org) => org.name !== 'Acme Lights').map((org) => ({ ...org, connected: org.name === 'Tico Team' }));
+    },
     empty: () => signedOut(),
     signing: () => { signedOut(); Object.assign(state.status, { signing_in: true, busy: true, suggested: 'hub.tico.team' }); },
     meeting: () => {},
@@ -529,6 +534,15 @@
     sign_in_desktop: ({ url } = {}) => {
       if (!state.desktop_orgs.length) throw new Error('No Tico desktop app on this Mac');
       state.desktop_orgs.forEach((org) => { if (!url || org.url === url) org.connected = true; });
+      // Already signed in to some: the new org joins them.
+      if (state.settings.connections.length) {
+        for (const org of state.desktop_orgs.filter((o) => o.connected)) {
+          if (state.settings.connections.some((c) => c.url === org.url)) continue;
+          const id = orgs.find((o) => o.url === org.url)?.id || org.url;
+          state.settings.connections.push({ id, name: org.name, url: org.url, host: org.url.replace('https://', ''), default: false });
+        }
+        return;
+      }
       state.settings = clone(settings);
       state.library = { rows: [], events, calendar_stale: false, connected: true };
       Object.assign(state.status, { first_run: false, speech: { source: 'tico', stream: true, transcribe: true, tico: 'Tico Team' } });
