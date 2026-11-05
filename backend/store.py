@@ -20,6 +20,7 @@ from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
 from . import people as P
+from . import sources as SRC
 
 # A message to a bot queues its job in Python, in the writer's transaction: backend/enqueue.py.
 
@@ -1108,6 +1109,7 @@ class Store:
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
         return c
 
+    @SRC.scoped("system:migration")
     def migrate(self):
         """The preflight and the pending migrations only (hubdb.connect runs them), for create_app before its installs."""
         from . import migrations as Migrations

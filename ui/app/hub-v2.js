@@ -27,12 +27,15 @@ const personDisplay = id => {
   const p = (S.people || []).find(x => x.id === id);
   return (p && p.name) || titleCase(id);
 };
+// What a sender, "added by" or "by" slot says for the keeper: it happened automatically.
+const KEEPER_LABEL = 'Automatic';
 const actorLabel = a => {
   const slug = actorSlug(a);
   if (slug) return botDisplayName(slug);
   const pid = actorPerson(a);
   if (pid) return pid === S.me?.id ? 'You' : personDisplay(pid);
-  return a === 'keeper' ? assistantName() : String(a || '');
+  // The keeper is the server itself, never the Assistant or the app: a row it wrote is labelled by its source (rowSource).
+  return a === 'keeper' ? KEEPER_LABEL : String(a || '');
 };
 // Notices the hub writes for bots to read carry raw ids ("New task from human:sam"); people see names.
 const plainActors = text => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,
@@ -42,7 +45,7 @@ const taskAddedBy = t => {
   const pid = actorPerson(who);
   if (pid && pid === S.me?.id) return {kind: 'you', label: 'You'};
   if (pid) return {kind: 'human', label: personDisplay(pid)};
-  if (actorSlug(who) || who === 'keeper') return {kind: 'bot', label: actorLabel(who)};
+  if (actorSlug(who)) return {kind: 'bot', label: actorLabel(who)};
   return {kind: 'other', label: actorLabel(who) || 'Unknown'};
 };
 const taskSourceLine = t => {
@@ -57,8 +60,89 @@ const taskBody = t => {
   const raw = String(t.body || '');
   const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
   if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
-  return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created by ' + assistantName() + ' from schedule `$1`._');
+  return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created from schedule `$1`._');
 };
+
+// ---- who or what wrote a row: `source` on message, task history and event rows (docs/threads.md, "Who wrote it")
+// The server sends {kind, name, link}; kind is person | bot | assistant_for | task_update | builtin | automation | system.
+// A row from a server without it gets the same answer here (backend/sources.py), from its sender and refs (a history
+// row's `data`, an event's `detail`), so every surface draws alike.
+// Only an `assistant_for` row ever shows the Assistant's name or face; the gray kinds have no avatar or sender row.
+const SOURCE_BUILTINS = {'follow-up-timer': 'Follow-up timer', 'earlier-messages': 'Earlier messages', 'task-roundup': 'Task roundup', 'stuck-check': 'Stuck check',
+  'rule-check': 'Rule check', 'check-health': 'Health check', maintenance: 'Maintenance'};
+const SOURCE_LINES = new Set(['task_update', 'builtin', 'automation', 'system']);
+// "Chris's Assistant": the person's first name and the install's name for the Assistant.
+const assistantForName = person => {
+  const first = String(person || '').trim().split(/\s+/)[0];
+  return first ? `${first}'s ${assistantName()}` : assistantName();
+};
+function rowSource(m, by = m?.sender_id) {
+  if (m?.source && typeof m.source === 'object' && m.source.kind) return m.source;
+  const refs = m?.refs || m?.data || m?.detail || {}, who = String(by || ''), src = typeof refs.source === 'string' ? refs.source : '';
+  if (actorPerson(who)) return {kind: 'person', name: actorLabel(who), link: null};
+  // A bot (the Assistant) acting for a person, or a keeper line the Assistant wrote for one. The server writes the
+  // person's words it passes on as the keeper with refs.carried, and names the person first ("Ana asked … in their words").
+  const forName = () => actorPerson(refs.for) ? personDisplay(actorPerson(refs.for)) : (String(m?.body || '').match(/^(.+?) asked /) || [])[1];
+  if (src === 'assistant-for' || actorSlug(who) && actorPerson(refs.for)) return {kind: 'assistant_for', name: assistantForName(forName()), link: null};
+  if (actorSlug(who)) return {kind: 'bot', name: actorLabel(who), link: null};
+  if (who !== 'keeper') return {kind: who ? 'bot' : 'system', name: who ? actorLabel(who) : '', link: null};
+  if (src.startsWith('automation:')) return {kind: 'automation', name: 'Automation', link: AUTOMATION_HREF(src.slice(11))};
+  if (SOURCE_BUILTINS[src]) return {kind: 'builtin', name: SOURCE_BUILTINS[src], link: null};
+  if (src.startsWith('system:')) return {kind: 'system', name: '', link: null};
+  if (refs.carried) return {kind: 'assistant_for', name: assistantForName(forName()), link: null};
+  if (refs.task && m?.refs) return {kind: 'task_update', name: 'Task update', link: null};     // a message, never a history row
+  return {kind: 'system', name: '', link: null};
+}
+const AUTOMATION_HREF = id => id ? '#/automations/' + encodeURIComponent(id) : '#/automations';
+// Whether a message draws as a gray line. One that asks something of a person, or carries a card, keeps its own row
+// whoever wrote it: its controls are never folded away.
+const sourceCarriesCard = m => { const r = m?.refs || {};
+  return m?.kind === 'ask' || !!(r.action || r.credential_request || r.approval || r.questions || r.chat_goal || r.read_back || r.update || r.card || r.reconnect); };
+const isSourceLine = (m, by) => SOURCE_LINES.has(rowSource(m, by).kind) && !sourceCarriesCard(m);
+// Plain words for a gray line: names for actor ids, markdown marks and link targets dropped.
+const sourcePlain = text => plainActors(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
+// The name a gray line leads with: bold for a built-in, a link for an automation, nothing for a task update or system.
+function sourceLeadHTML(src) {
+  if (!src.name || !['builtin', 'automation'].includes(src.kind)) return '';
+  return src.kind === 'automation' && src.link
+    ? `<a class="src-name" href="${esc(src.link)}">${esc(src.name)}</a> ` : `<b class="src-name">${esc(src.name)}</b> `;
+}
+// One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
+// hover says what made it and when.
+function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = ''} = {}) {
+  const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
+  const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length ? '\n\n' + words.slice(0, 600) : '');
+  const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
+  return `<div class="src-line src-${esc(src.kind)}${cls ? ' ' + cls : ''}"${m.id ? ` data-message="${esc(m.id)}"` : ''}${attrs} title="${esc(tip)}">${
+    sourceLeadHTML(src)}<span class="src-text">${esc(first)}</span>${when}</div>`;
+}
+// Consecutive task updates (two or more) are one gray "N task updates" row, shut by default; open shows a line each.
+// Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
+// the ids of the rows in groups opened (sourceGroupToggle), nothing is stored, and a group stays open when updates join
+// it at either end, live or from an older page.
+function sourceRunsHTML(items, {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update'}) {
+  const out = [];
+  for (let i = 0; i < items.length;) {
+    if (!isUpdate(items[i])) { out.push(draw(items[i], i)); i++; continue; }
+    let end = i;
+    while (end < items.length && isUpdate(items[end])) end++;
+    const run = items.slice(i, end);
+    if (run.length === 1) out.push(line(run[0]));
+    else {
+      const key = String(run[0].id || run[0].message?.id || ''), last = run.at(-1), at = last.created_at || last.ts || last.message?.created_at;
+      out.push(`<details class="src-group" data-src-group="${esc(key)}"${open(run) ? ' open' : ''}><summary class="src-line src-task_update">${
+        run.length} task updates<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
+        run.map(line).join('')}</details>`);
+    }
+    i = end;
+  }
+  return out.join('');
+}
+// A group opened or shut (its `toggle`): the ids of its rows join or leave `set`.
+function sourceGroupToggle(set, el) {
+  if (!set || !el?.matches?.('details.src-group')) return;
+  for (const row of el.querySelectorAll('[data-message]')) set[el.open ? 'add' : 'delete'](row.dataset.message);
+}
 const actorChip = a => {
   const slug = actorSlug(a);
   return slug && botRow(slug)

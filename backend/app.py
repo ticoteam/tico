@@ -32,6 +32,7 @@ from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifec
 from . import outcome_stats
 from . import assistant_changes, why_here
 from . import teammate_access
+from . import sources as SRC
 from . import start_places
 from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
@@ -140,6 +141,7 @@ def reset_bot_sessions(c, bot):
 
 def create_app(settings=None):
     settings = settings or Settings.from_env()
+    SRC.set_assistant_name(settings.assistant_name)     # the labels of keeper lines (backend/sources.py)
     telemetry = Observability(settings)
     from . import flight
     recorder = flight.Recorder() if settings.flight_recorder else None
@@ -4233,7 +4235,9 @@ def create_app(settings=None):
             except Problem:
                 can_comment = False
             history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
+                event["source"] = SRC.source_of(lines, event)     # reads `data`, which the answer leaves out
                 event.pop("data", None)
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
                     "events": history,
@@ -4574,7 +4578,8 @@ def create_app(settings=None):
                     H._write_message(c, H.KEEPER, owner, f"{name} asked {(H.bot(c, H.actor_id(who.actor)) or {}).get('slug') or H.actor_id(who.actor)} for this, in their words:\n\n> "
                                      + "\n> ".join(words[:2000].splitlines() or [""]),
                                      H.conversation(c, row["conversation_id"]), "say",
-                                     {"task": row["id"], "comment": True, "quiet": True, "carried": True}, None, None)
+                                     {"task": row["id"], "comment": True, "quiet": True, "carried": True,
+                                      "source": SRC.ASSISTANT_FOR, "for": carried["person"]}, None, None)
         elif handoff and body.request_id:
             raise Problem("request_id", "Only a task for BotOps carries a person's request", 422)
         if asked_botops:
@@ -4590,7 +4595,8 @@ def create_app(settings=None):
             H._write_message(c, H.KEEPER, owner, f"{name} asked the {settings.assistant_name} for this, in their words:\n\n> "
                              + "\n> ".join(words[:2000].splitlines() or [""]),
                              H.conversation(c, row["conversation_id"]), "say",
-                             {"task": row["id"], "comment": True, "quiet": True, "carried": True}, None, None)
+                             {"task": row["id"], "comment": True, "quiet": True, "carried": True,
+                              "source": SRC.ASSISTANT_FOR, "for": who.actor}, None, None)
         inherited_request = parent.get("request_id") if parent and H.is_human(who.actor) and who.actor == parent["requester_id"] else None
         if request_id in ("turn", "default"):
             # `turn` names the run's own request: store that message, which delegated_identity resolved, so the task's

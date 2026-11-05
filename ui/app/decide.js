@@ -304,12 +304,15 @@ function decideRender(st, enter = false) {
     : (c.it.waiting_on === myActor() || c.it.kind === 'waiting') && String(c.it.owner_id).startsWith('bot:') ? c.it.owner_id
     : c.it.requester_id || c.it.owner_id;
   const decide = c.type !== 'task' || c.yn;
-  // Who really asks: Tico for its own checks, never the assistant's name; a question card says no "You asked".
-  const name = from === 'keeper' ? 'Tico' : actorLabel(from) || 'Tico', chat = decideChatHref(from);
+  // Who really asks: the server's own checks read "Automatic", never the assistant's name; a question card says no "You asked".
+  // A pick's question the server asked is named by what made it (rowSource): a built-in check by its name.
+  const src = from === 'keeper' && c.type === 'pick' ? rowSource(c.it.ask) : null;
+  const keeperName = src && src.kind !== 'task_update' && src.name || KEEPER_LABEL;
+  const name = from === 'keeper' ? keeperName : actorLabel(from) || KEEPER_LABEL, chat = decideChatHref(from);
   const origin = c.type === 'pick' ? '' : decideFromPerson(c.it, from);
   // A bot's face and name open the bot, as the side rail does; the face is a second way in for the pointer, the name the one for keys.
   const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>`
-    : from === 'keeper' ? personCircle('Tico', 32) : actorFace(from, 32);
+    : from === 'keeper' ? src?.kind === 'assistant_for' ? avatar(assistantBot(), 32) : personCircle(keeperName, 32) : actorFace(from, 32);
   const sub = c.type === 'pick' ? qcardSub(c.it) : c.type === 'approve' ? plainActors(approvalTitle(c.it) || c.it.title || '')
     : c.type === 'memory_tidy' ? `Expires ${fmt(c.it.expires_at)}` : c.type === 'ask' || c.type === 'stale' ? ageShort(c.it.created_at) : decideMeta(c.it);
   // The chip names what the card is; a task card outside the questions names what it needs (Pay, Review and send).

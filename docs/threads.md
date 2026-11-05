@@ -121,6 +121,26 @@ the thread list. Catch up shows every thread with new messages for you, ones tha
 messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed. Details:
 [threads contract §10.1](dev/threads-contract.md).
 
+## Who wrote it
+
+Every line says who or what made it, from the same rule on every surface (chat, a bot's Home, a task's history and the
+Log). Nothing says "Assistant" unless the Assistant wrote it. The stored actor `keeper` is what Tico's server writes as
+when no person or bot did; it is not shown as a name.
+
+| Line | How it shows |
+|---|---|
+| A person's message | Their name, as usual. |
+| A bot's message | The bot's name, as usual. |
+| The Assistant, for a person | A normal message from **<first name>'s Assistant**. |
+| A task update (a keeper line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
+| A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
+| One of your automations | A small gray line; the name opens the automation. |
+| System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
+
+Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
+unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task
+history and the Log read the same rule, from the row's actor and what it names.
+
 ## Editing and deleting
 
 People and bots edit and delete their own messages. Asks, answers and notices cannot be edited. An edit is a new

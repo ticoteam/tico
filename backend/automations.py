@@ -58,6 +58,7 @@ from .migrations import renames
 from .models import Contract
 from . import audit_log, cloud_access
 from .store import H, Problem
+from . import sources as SRC
 
 log = logging.getLogger(__name__)
 
@@ -1075,6 +1076,11 @@ def _stored_ref(ref):
 
 
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
+    with SRC.writing_as(SRC.automation_key(row["id"])):     # the keeper lines this run's guard and runs write
+        return _queue(c, row, payload, ref, manual=manual, chain=chain)
+
+
+def _queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
     while its last task is open (`_absorbed`), and on hold (the run guard's, `_guard`) the run is kept as `held`, the
@@ -2031,7 +2037,8 @@ class Hub:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
             flow = {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
             services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")))
-            state = E.advance(flow, state, services)
+            with SRC.writing_as(SRC.automation_key(row["id"])):     # the keeper lines its steps write name it
+                state = E.advance(flow, state, services)
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
         with self.store.transaction() as c:
