@@ -43,7 +43,6 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
-    use std::os::unix::net::UnixStream;
 
     const PY_TRY: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\ntry:\n fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\n print('got')\nexcept BlockingIOError:\n print('held')\n";
     const PY_HOLD: &str = "import fcntl,sys\nf=open(sys.argv[1],'w')\nfcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nprint('holding',flush=True)\nsys.stdin.read()\n";
@@ -54,36 +53,20 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("runner.lock");
         let held = acquire(&path).unwrap();
-        let (reader, writer) = UnixStream::pair().unwrap();
-        let (input, output) = (reader.as_raw_fd(), writer.as_raw_fd());
-        // Keep the fork's inherited descriptor open deterministically. The child uses only async-signal-safe
-        // syscalls before _exit, so other test threads and their runtime locks cannot affect its shutdown.
-        let pid = unsafe {
-            let pid = libc::fork();
-            if pid == 0 {
-                libc::close(output);
-                let mut byte = 0u8;
-                while libc::read(input, (&mut byte as *mut u8).cast(), 1) < 0 {}
-                libc::_exit(0);
-            }
-            pid
-        };
-        assert!(pid > 0);
-        drop(reader);
+        // Stderr inherits this open description explicitly; exec closes unrelated test threads' descriptors.
+        let mut child = Command::new("python3")
+            .args(["-c", "import os,sys; os.fstat(2); print('inherited',flush=True); sys.stdin.read()"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped())
+            .stderr(Stdio::from(held._file.try_clone().unwrap())).spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "inherited");
         assert!(acquire(&path).is_err());
         drop(held);
+        assert!(child.try_wait().unwrap().is_none());
         let next = acquire(&path);
-        // EOF releases only this test's child, after the next acquisition observed its inherited descriptor.
-        drop(writer);
-        let mut status = 0;
-        let waited = loop {
-            let result = unsafe { libc::waitpid(pid, &mut status, 0) };
-            if result != -1 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-                break result;
-            }
-        };
-        assert_eq!(waited, pid);
-        assert_eq!(status, 0);
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
         assert!(next.is_ok(), "the child must not extend the owner's lock lifetime");
         drop(next);
         std::fs::remove_dir_all(dir).unwrap();
