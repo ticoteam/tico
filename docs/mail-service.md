@@ -146,12 +146,16 @@ When `--approval-issue` is a full yes — a closed `owner:ana` `type:decision` G
 matching block, a decided Tico `send` approval whose payload names every external address
 and this exact text (its `body_sha256`), or a Tico message in which Ana told this bot to send — that message may carry more
 than one external recipient and external Cc, the cooldown does not apply to it, lint L056
-does not apply to it, the second reviewer runs but advises instead of blocking (its verdict
-is still recorded and shown), and the switch being off is lifted for that
+does not apply to it, and the switch being off is lifted for that
 message only. The bot still has to declare `send` on the mailbox, the daily cap and
 the blocklist still apply, and `mail draft` accepts the same `--approval-issue` so the
 draft can be written with the external Cc in the first place. Everything else about the
 bot stays draft-only.
+
+The second reviewer sees the verified owner's message or approval Issue as permission for what
+it explicitly covers, and still blocks additions beyond it. The review audit records the
+instruction's source and id. A hash-bound Tico `send` approval keeps the review advisory, with
+its verdict still recorded and shown.
 
 **2. Lint (deterministic, each rule has an id, `mail lint` runs standalone).**
 - Forbidden phrases from the team writing rules and the playbooks, for example "we guarantee"
