@@ -18,6 +18,24 @@ export type AccessAudience = {
   teams?: Array<string>;
 };
 
+export type AlertCompanyCap = {
+  monthly_cap: number;
+  monthly_spend: number;
+  price_usd: number;
+};
+
+export type AlertPhoneCode = {
+  expires_in: number;
+  status: string;
+};
+
+export type AlertTest = {
+  id: string;
+  paid_by?: string;
+  price_usd?: number;
+  status: string;
+};
+
 export type Answer = {
   text: string;
   unknown?: boolean;
@@ -961,6 +979,10 @@ export type CommentResult = {
   woke: boolean;
 };
 
+export type CompanyCap = {
+  monthly_cap: number;
+};
+
 export type CompanyHistory = {
   events: Array<{
   actor: string;
@@ -1026,6 +1048,10 @@ export type Config = {
   visual_files?: string;
   visual_origin?: string;
   visuals?: "full" | "hosted" | "media";
+};
+
+export type Confirmation = {
+  code: string;
 };
 
 export type Connection = {
@@ -3194,6 +3220,7 @@ export type Mailbox = {
   id: string;
   kind: "personal" | "shared";
   level: "none" | "read" | "read_write";
+  newest_epoch: number | null;
   person_id: string | null;
   person_name: string;
   provider: string;
@@ -3203,6 +3230,14 @@ export type Mailbox = {
 }>;
   state: "connected" | "not_connected" | "awaiting_person" | "stopped";
   status: "active" | "stopped";
+  sync: "" | "signin" | "failed";
+  sync_error: string;
+  synced_at: string | null;
+  used_by: {
+  bots: number;
+  names: Array<string>;
+  people: number;
+};
 };
 
 export type MailboxAccessCreate = {
@@ -3702,9 +3737,45 @@ export type PersonUpdate = {
   update_draft?: boolean | null;
 };
 
+export type PersonalAlerts = {
+  call_consent: boolean;
+  company_monthly_cap: number;
+  company_monthly_spend: number;
+  monthly_spend: number;
+  paid_by: string;
+  phone: string | null;
+  preferences: {
+  bot_stuck: boolean;
+  emergency_exception: boolean;
+  legal_mail: boolean;
+  monthly_cap: number;
+  quiet_end: string;
+  quiet_start: string;
+  timezone: string;
+  urgent_calls: boolean;
+  urgent_needs: boolean;
+};
+  price_usd: number;
+  recent: Array<{
+  created_at: string;
+  error: string;
+  id: string;
+  kind: string;
+  state: string;
+}>;
+  status: string;
+  verified_at: string | null;
+};
+
 export type PersonalTokenCreate = {
   expires_in_days?: number;
   label: string;
+};
+
+export type Phone = {
+  call_consent?: boolean;
+  phone: string;
+  sms_consent: boolean;
 };
 
 export type PhoneRequest = {
@@ -3819,6 +3890,18 @@ export type PostalMailSettings = {
 
 export type PostalReadGrant = {
   level?: string;
+};
+
+export type Preferences = {
+  bot_stuck?: boolean | null;
+  emergency_exception?: boolean | null;
+  legal_mail?: boolean | null;
+  monthly_cap?: number | null;
+  quiet_end?: string | null;
+  quiet_start?: string | null;
+  timezone?: string | null;
+  urgent_calls?: boolean | null;
+  urgent_needs?: boolean | null;
 };
 
 export type Preset = {
@@ -5440,6 +5523,10 @@ export type TeammateAccessView = {
 };
 };
 
+export type TestAlert = {
+  accept_charge: boolean;
+};
+
 export type ThreadBotStatus = {
   bots: Array<ThreadBotStatusRow>;
 };
@@ -6549,6 +6636,13 @@ export type ConfirmAssistantActionParams = {
 export type ConfirmAssistantActionBody = never;
 export type ConfirmAssistantActionResponse = AssistantActionResult;
 
+/** POST /api/v2/alerts/me/phone/confirm */
+export type ConfirmMyAlertPhoneParams = {
+  "Idempotency-Key": string;
+};
+export type ConfirmMyAlertPhoneBody = Confirmation;
+export type ConfirmMyAlertPhoneResponse = PersonalAlerts;
+
 /** POST /api/v2/meetings/granola/connect */
 export type ConnectGranolaParams = {
   "Idempotency-Key"?: string;
@@ -7084,6 +7178,11 @@ export type FollowThreadParams = {
 };
 export type FollowThreadBody = Follow;
 export type FollowThreadResponse = ThreadFollow;
+
+/** GET /api/v2/alerts/company */
+export type GetAlertCompanyCapParams = Record<string, never>;
+export type GetAlertCompanyCapBody = never;
+export type GetAlertCompanyCapResponse = AlertCompanyCap;
 
 /** GET /api/v2/approvals/{aid} */
 export type GetApprovalParams = {
@@ -7711,6 +7810,11 @@ export type GetMessageParams = {
 };
 export type GetMessageBody = never;
 export type GetMessageResponse = Message;
+
+/** GET /api/v2/alerts/me */
+export type GetMyAlertsParams = Record<string, never>;
+export type GetMyAlertsBody = never;
+export type GetMyAlertsResponse = PersonalAlerts;
 
 /** GET /api/v2/needs-you */
 export type GetNeedsYouParams = {
@@ -9740,6 +9844,13 @@ export type RemoveModelSubscriptionParams = {
 export type RemoveModelSubscriptionBody = never;
 export type RemoveModelSubscriptionResponse = ModelSubscriptionDeleted;
 
+/** DELETE /api/v2/alerts/me/phone */
+export type RemoveMyAlertPhoneParams = {
+  "Idempotency-Key": string;
+};
+export type RemoveMyAlertPhoneBody = never;
+export type RemoveMyAlertPhoneResponse = PersonalAlerts;
+
 /** DELETE /api/v2/humans/{pid} */
 export type RemovePersonParams = {
   "Idempotency-Key": string;
@@ -10286,6 +10397,11 @@ export type SendWebhookExampleParams = {
 export type SendWebhookExampleBody = WebhookExample;
 export type SendWebhookExampleResponse = WebhookQueued;
 
+/** PUT /api/v2/alerts/company */
+export type SetAlertCompanyCapParams = Record<string, never>;
+export type SetAlertCompanyCapBody = CompanyCap;
+export type SetAlertCompanyCapResponse = AlertCompanyCap;
+
 /** POST /api/v2/assistant/settings */
 export type SetAssistantSettingsParams = {
   "Idempotency-Key": string;
@@ -10477,6 +10593,11 @@ export type SetMeetingReviewSettingsParams = {
 };
 export type SetMeetingReviewSettingsBody = ReviewSettings;
 export type SetMeetingReviewSettingsResponse = MeetingReviewPreferences;
+
+/** PUT /api/v2/alerts/me */
+export type SetMyAlertsParams = Record<string, never>;
+export type SetMyAlertsBody = Preferences;
+export type SetMyAlertsResponse = PersonalAlerts;
 
 /** PUT /api/v2/humans/{pid}/access */
 export type SetPersonAccessParams = {
@@ -10712,6 +10833,13 @@ export type TakeRecommendationParams = {
 };
 export type TakeRecommendationBody = TakeRecommendation;
 export type TakeRecommendationResponse = unknown;
+
+/** POST /api/v2/alerts/me/test */
+export type TestMyAlertsParams = {
+  "Idempotency-Key": string;
+};
+export type TestMyAlertsBody = TestAlert;
+export type TestMyAlertsResponse = AlertTest;
 
 /** POST /api/v2/screening/test */
 export type TestScreeningParams = {
@@ -11095,6 +11223,13 @@ export type UpsertInboundTaskParams = {
 };
 export type UpsertInboundTaskBody = InboundTask;
 export type UpsertInboundTaskResponse = InboundTaskResult;
+
+/** POST /api/v2/alerts/me/phone */
+export type VerifyMyAlertPhoneParams = {
+  "Idempotency-Key": string;
+};
+export type VerifyMyAlertPhoneBody = Phone;
+export type VerifyMyAlertPhoneResponse = AlertPhoneCode;
 
 /** POST /api/v2/inbound/wait */
 export type WaitInboundMessagesParams = {

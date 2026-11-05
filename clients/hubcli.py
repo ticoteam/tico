@@ -176,7 +176,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub email thread <address> <thread-id> [--json]
     hub email message <address> <message-id> [--json]
     hub inbound audience <inbox-id> company|team [--group G]
-                                           who reads an Email & Phone inbox (owner or admin)
+                                           who reads a Tico address or number (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
     hub pin update <pin-id> [--size S] [--position N]
     hub pin remove <pin-id>
@@ -1007,6 +1007,24 @@ def parser():
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("whoami").set_defaults(fn="whoami")
+
+    alerts = sub.add_parser('alerts', help='your own phone and paid alert preferences').add_subparsers(dest='sub')
+    for action in ('show', 'remove', 'confirm', 'verify', 'test', 'set', 'company'):
+        item = alerts.add_parser(action); item.set_defaults(fn='alerts ' + action)
+        if action == 'confirm': item.add_argument('code')
+        if action == 'verify':
+            item.add_argument('phone')
+            item.add_argument('--sms-consent', action='store_true', required=True)
+            item.add_argument('--call-consent', action='store_true', default=False)
+        if action == 'test':
+            item.add_argument('--accept-charge', action='store_true', required=True, help='company pays $1 if accepted')
+            item.add_argument('--operation-id', required=True, help='stable id for this paid test and retries')
+        if action in ('set', 'company'): item.add_argument('--monthly-cap', type=int)
+        if action == 'set':
+            for flag in ('urgent-needs', 'legal-mail', 'bot-stuck', 'urgent-calls', 'emergency-exception'):
+                item.add_argument('--' + flag, action=argparse.BooleanOptionalAction, default=None)
+            for flag in ('timezone', 'quiet-start', 'quiet-end'):
+                item.add_argument('--' + flag)
 
     inbound = sub.add_parser('inbound', help='shared company email and SMS inboxes').add_subparsers(dest='sub')
     item = inbound.add_parser('inboxes'); item.set_defaults(fn='inbound inboxes')

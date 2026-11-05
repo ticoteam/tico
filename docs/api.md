@@ -72,6 +72,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
+| Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
@@ -309,14 +310,13 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 
 ## Company inbound email and SMS
 
-**Settings > More > Email & Phone** opens the shared company message table (`#/settings/company-inbox`; existing
-`#/settings/email-phone` links still work). All current people, native
-bot runs and registered external agents can read it. Runner/service credentials and support
-sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
-
-![Email & Phone tab and card heading, with the shared inbox controls](images/settings-stage1/settings-email-and-phone.png)
-
-*Synthetic Acme example, unconnected. The card heading is Email & Phone; the Connect Inbox label remains unchanged.*
+**Settings > Inboxes** lists the company's Tico addresses and numbers with every other inbox (`#/settings/inboxes`;
+the old `#/settings/inbound`, `#/settings/company-inbox` and `#/settings/email-phone` links open it). Each one's page
+(`#/settings/inboxes/tico/<id>`, `#/settings/inboxes/number/<id>`) shows who reads it, its automations and its recent
+messages; a released address stays listed as Not in use with the messages it received. **Messages**
+(`#/settings/inboxes/messages`) reads every inbox at once, or the ones picked, with channel, sender, search, code and spam
+filters and older pages. All current people, native bot runs and registered external agents can read them. Runner/service credentials
+and support sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
 
 `GET /api/v2/inbound/inboxes` lists inboxes and sync status (pages of `limit` ≤ 100; follow `next` with `after`); `POST` with `{kind:"email",name}`
 creates a free inbound address under the company quota, with an `Idempotency-Key`.
@@ -330,7 +330,7 @@ Each inbox has an audience. `company`, the default, is everyone above. An owner 
 under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
 `messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
 (`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
-MCP: `hub_inbound_audience`. Settings > More > Email & Phone shows who reads each inbox, and an admin changes it there.
+MCP: `hub_inbound_audience`. An inbox's page in Settings > Inboxes shows who reads it, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can

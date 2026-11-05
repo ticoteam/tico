@@ -80,16 +80,14 @@ const SETTINGS_TAB_KEY = 'tico.settings.tab';
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'general'; } catch { return 'general'; } })();
 // The address the shown tab writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
 let SETTINGS_ADDRESS = '';
-// The mailbox Settings > Mailboxes shows on its own page (#/settings/mailboxes/<id>, ui/app/mailbox.js); '' is the list.
-let MAILBOX_OPEN = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'mailboxes',
-  'inbound', 'mail', 'system',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'inboxes', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
 // System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab; providers and
-// subscriptions: what is the Models tab now; limits: its turn levels.
-const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'mailboxes', inbox: 'mailboxes', 'email-phone': 'inbound',
+// subscriptions: what is the Models tab now; limits: its turn levels. Mailboxes, Email & Phone and Mail are Inboxes.
+const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inboxes', inbox: 'inboxes',
+  mailboxes: 'inboxes', inbound: 'inboxes', 'email-phone': 'inboxes', 'company-inbox': 'inboxes', mail: 'inboxes',
   rules: 'system', routines: 'system', recurring: 'system', chat: 'models', providers: 'models', subscriptions: 'models',
   limits: 'models', 'turn-levels': 'models'};
 // Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
@@ -213,10 +211,8 @@ function pageSettings() {
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="mailboxes" role="tab">Mailboxes</button>
+      <button type="button" data-settings-tab="inboxes" role="tab">Inboxes</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
-        <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
-        <button type="button" data-settings-tab="mail" role="tab">Mail</button>
         <button type="button" data-settings-tab="system" role="tab">System</button>
         <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
@@ -289,9 +285,7 @@ function pageSettings() {
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
-    <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
-    <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
-    <div class="settings-pane" id="settings-mailboxes" role="tabpanel" hidden><div id="set-mailboxes"></div></div>
+    <div class="settings-pane" id="settings-inboxes" role="tabpanel" hidden><div id="set-inboxes"></div></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
       <div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
       <div id="set-log"></div>
@@ -311,7 +305,7 @@ function pageSettings() {
   });
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) { MAILBOX_OPEN = ''; settingsShow(button.dataset.settingsTab); }
+    if (button) { INBOXES_VIEW = ''; settingsShow(button.dataset.settingsTab); }
   };
   // Opening More on a phone shows its tabs at the end of the scrolling row, or the current one when it is in More.
   $('#settings-more').addEventListener('toggle', event => {
@@ -368,7 +362,7 @@ function settingsShow(tab) {
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (['health', 'history', 'system', 'webhooks', 'inbound', 'mail', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'system', 'webhooks', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -413,12 +407,8 @@ function settingsShow(tab) {
   if (gatewayPane) { gatewayPane.hidden = SETTINGS_TAB !== 'gateway'; if (SETTINGS_TAB === 'gateway') void renderSettingsGateway(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const inboundPane = $('#settings-inbound');
-  if (inboundPane) { inboundPane.hidden = SETTINGS_TAB !== 'inbound'; if (SETTINGS_TAB === 'inbound') void inboundMount(); }
-  const mailPane = $('#settings-mail');
-  if (mailPane) { mailPane.hidden = SETTINGS_TAB !== 'mail'; if (SETTINGS_TAB === 'mail' && !formBusy(mailPane)) void renderSettingsMail(); }
-  const mailboxesPane = $('#settings-mailboxes');
-  if (mailboxesPane) { mailboxesPane.hidden = SETTINGS_TAB !== 'mailboxes'; if (SETTINGS_TAB === 'mailboxes') void renderSettingsMailboxes(); }
+  const inboxesPane = $('#settings-inboxes');
+  if (inboxesPane) { inboxesPane.hidden = SETTINGS_TAB !== 'inboxes'; if (SETTINGS_TAB === 'inboxes' && (inboxesMoved() || !formBusy(inboxesPane))) void renderSettingsInboxes(); }
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const system = $('#settings-system');
@@ -432,7 +422,7 @@ function settingsShow(tab) {
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
   SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}${
-    SETTINGS_TAB === 'mailboxes' && MAILBOX_OPEN ? '/' + MAILBOX_OPEN : ''}`;
+    SETTINGS_TAB === 'inboxes' ? inboxesAddress() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.

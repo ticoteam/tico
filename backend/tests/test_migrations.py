@@ -143,6 +143,23 @@ def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path)
         assert all(versions.count(m.version) == 1 for m in migrations.files())
 
 
+def test_personal_alert_migration_preserves_consent_caps_and_dispatches_when_adopted(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('alert-person','Alert recipient','alerts@acme.example')")
+        c.execute("INSERT INTO alert_preferences(person_id,phone,phone_version,verified_at,call_consent,monthly_cap,updated_at) "
+                  "VALUES('alert-person','+14155550123','consent-1','now',1,3,'now')")
+        c.execute("UPDATE alert_company_settings SET monthly_cap=7 WHERE id=1")
+        c.execute("INSERT INTO personal_alerts(id,person_id,incident_key,kind,subject_id,phone_version,state,reserved,created_at) "
+                  "VALUES('paid','alert-person','incident-1','test','','consent-1','accepted',1,'now')")
+        before = {table: c.execute('SELECT * FROM ' + table).fetchall()
+                  for table in ('alert_preferences', 'alert_company_settings', 'personal_alerts')}
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105040931_personal_alerts'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert {table: c.execute('SELECT * FROM ' + table).fetchall() for table in before} == before
+
+
 def test_the_migrations_run_before_the_module_schema_code(tmp_path, monkeypatch):
     """A new file: a migration sees none of the tables the module code creates, so it must tolerate their absence."""
     directory = tmp_path / "migrations"

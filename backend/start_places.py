@@ -398,6 +398,8 @@ def summaries(c, runner_ids, settings, default=None, *, classify=True):
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
+    from .batch_work import report, storage_error
+    from .cloud_machines import ASLEEP, STALE, resting
     out: dict[str, dict[str, Any]] = {rid: dict(running=0, starting=0, waiting=0, queued=0,
                                                 start_seconds=START_SECONDS) for rid in runner_ids}
     groups = {rid: {} for rid in runner_ids}
@@ -424,15 +426,17 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             out[rid]['starting'] += 1
         else:
             out[rid]['queued'] += 1
-    from .execution import claim_refusal
+    from .execution import claim_refusal, queued_reasons
     from .store import readiness_document
     runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)}
     statuses = performance.load_statuses(c, runner_ids)
+    asleep = resting(c)
     holds = {}      # a computer's hold, asked once and only for a computer with queued work
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
-               'bot_limit': 'at its turn limit'}
+               'bot_limit': 'at its turn limit', 'task_wait': 'a snooze, prerequisite, person or check',
+               'task_next_run': 'the next run or a stored resume condition'}
     for row in c.execute(f"SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,b.state bot_state "
                          "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
                          f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
@@ -441,6 +445,22 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         runner = runners.get(rid)
         ready = readiness_document(runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
+        if not why and rid in asleep:
+            # A sleeping computer cannot refresh its samples. Explain each job's claim hold instead of its last load.
+            counted = 0
+            if classify:
+                try:
+                    for job, refused in queued_reasons(c, settings, rid, row['bot_id'], default, ignore_refusals=STALE):
+                        reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
+                        add(rid, reason, 1, job['created_at'])
+                        counted += 1
+                except Exception as exc:
+                    if storage_error(exc):
+                        raise
+                    report('computer queue check', row['bot_id'], exc, logger='tico.health')
+            if counted < row['n']:
+                add(rid, ASLEEP, row['n'] - counted, row['oldest'])
+            continue
         if not why and runner and classify:
             refused, _ = claim_refusal(c, settings, runner, row['bot_id'], row['config'], False, ready,
                                        default=default)
@@ -465,7 +485,7 @@ def describe(counts):
         since = H.parse_ts(wait['oldest'])
         minutes = max(0, int((now - since).total_seconds() / 60)) if now is not None and since is not None else 0
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
-        reason = ("waiting: " + wait['reason'] if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at '))
+        reason = ("waiting: " + wait['reason'] if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at ', 'asleep;'))
                   else "waiting for " + wait['reason'])
         parts.append(f"{wait['count']} {reason} (oldest {age})")
     if not counts['waiting']:
