@@ -384,3 +384,16 @@ def test_person_who_makes_a_page_can_unlink_it_from_someone_elses_task(api):
     removed = api.delete("/api/v2/pins/" + pin["id"], headers=headers("cara-test"))
     assert removed.status_code == 200, removed.text
     assert status(api, t["id"], "cara-test")["state"] == "made"
+
+
+def test_make_page_does_not_fall_back_to_bot_rights_after_person_loses_sign_in(api):
+    t = task(api, private=False)
+    machine = runner(api)
+    assign(api, machine, "coo")
+    ready(api, machine, ["coo"], capabilities=["make_page"])
+    request = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the plan"}, "ben-test")["message"]
+    post(api, "access/people/ben", {"sign_in": False})
+    assert post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"] is None
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=?",
+                             (request["id"],)).fetchone()

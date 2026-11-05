@@ -4005,6 +4005,8 @@ class Execution:
         from . import mailbox_access
         attempt_row = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
         acting = self.auth.assistant_principal(c, attempt_row) if attempt_row else None
+        if making_page and acting is None:
+            raise Problem("forbidden", "The person can no longer run this page request", 403)
         mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()

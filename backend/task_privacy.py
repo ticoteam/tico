@@ -599,6 +599,8 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             if not hosted:
                 raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
             principal = "bot:" + hosted["bot_id"]
+        if isinstance(attempt, dict) and attempt.get("bot_id"):
+            principal = "bot:" + attempt["bot_id"]
         if aid:
             origin = read_cache.one(c, "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                                     "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,))
