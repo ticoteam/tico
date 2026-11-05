@@ -97,12 +97,12 @@ def project(c, scoped, payload, *, auth=None):
             names.update(tokens.findall(unquote(value)))
             if parent in {"file", "files", "ref", "page", "path", "url", "href", "src", "item"}:
                 source_ref(value)
-            if parent in {"file_id", "blob_id", "page_id", "meeting_id", "digest", "source_digest"}:
+            if value and parent in {"file_id", "blob_id", "page_id", "meeting_id", "digest", "source_digest"}:
                 explicit.add(value)
             if parent in {"digest", "source_digest"} and value:
                 digest_refs.add(value)
         elif isinstance(value, dict):
-            if parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str):
+            if parent in {"attachments", "files", "pages", "meetings"} and isinstance(value.get("id"), str) and value["id"]:
                 explicit.add(value["id"])
             for key, item in value.items():
                 strings(key)
