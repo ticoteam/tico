@@ -131,7 +131,7 @@ def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
                           "repository": {"full_name": "ticoteam/tico"}})
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
-    assert "Visual replies" in body and "1 private ticket, not named here" in body
+    assert "Visual replies" in body and "1 private ticket. Skip them: their owners handle any docs." in body
     assert "Acme payroll" not in body and "/413" not in body
 
 

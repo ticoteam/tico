@@ -3118,6 +3118,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     _writer(conn, actor)
     if kind not in MESSAGE_KINDS:
         refuse(conn, actor, "kind", f"a message is {'|'.join(MESSAGE_KINDS)}, not {kind}")
+    if kind == "ask":
+        from . import ask_routing
+        to_actor, refs = ask_routing.resolve(conn, actor, to_actor, refs, conversation_id, in_reply_to)
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
     on_task = (refs or {}).get("task")
     path_mentioned(conn, actor, "task note" if on_task else "message", body, on_task)
@@ -3446,6 +3449,9 @@ def unless_queue_full(conn, write):
 
 def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s,
                    expires_at=None, delivered_at=None, read_at=None, *, check_cap=False, decided=None):
+    if kind == "ask":
+        from . import ask_routing
+        target, refs = ask_routing.resolve(conn, actor, target, refs, conv["id"], in_reply_to)
     if actor == "bot:librarian":
         body = librarian_text(body)
     if conv and ("closed_at" not in conv or conv.get("closed_at")):
@@ -3528,6 +3534,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
     written = message(conn, row["id"])
+    if kind == "ask" and (rerouted := ask_routing.notice(conn, written)):
+        written = {**written, "rerouted": rerouted}
     return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 
@@ -5689,11 +5697,14 @@ def bot_reads_task(conn, bot, row):
     return reads(conn, bot, row)
 
 
-def task_ask_recipient(conn, actor, row, ask):
+def task_ask_recipient(conn, actor, row, ask, *, route_system=True):
     directing = actor == row["requester_id"] or (
         actor not in (row["owner_id"], row["requester_id"]) and task_participant(conn, actor, row))
     target = ask.get("who") or (row["owner_id"] if directing else row["requester_id"])
     target = resolve_actor(conn, target)
+    if route_system:
+        from . import ask_routing
+        target, _ = ask_routing.resolve(conn, actor, target, {"task": row["id"]}, row["conversation_id"])
     if task_private(conn, row) and target not in (row["owner_id"], row["requester_id"]):
         refuse(conn, actor, "private", "Only the requester and assignee can receive private task questions")
     return target
@@ -5727,7 +5738,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if not conv:
         refuse(conn, actor, "not-found", f"task {task_id} has no conversation")
     if ask:
-        target = task_ask_recipient(conn, actor, row, ask)
+        target = task_ask_recipient(conn, actor, row, ask, route_system=False)
         refs.update(ask)
         refs["who"] = ask.get("who")
     if answer_to:

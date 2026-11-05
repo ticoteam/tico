@@ -180,7 +180,7 @@ def _listing(c, tickets, more_where):
         lines.append(f"...and {len(open_) - len(shown)} more {more_where}.")
     if len(tickets) > len(open_):
         hidden = len(tickets) - len(open_)
-        lines.append(f"...and {hidden} private ticket{'s' if hidden != 1 else ''}, not named here.")
+        lines.append(f"...and {hidden} private ticket{'s' if hidden != 1 else ''}. Skip them: their owners handle any docs.")
     return "\n".join(lines)
 
 

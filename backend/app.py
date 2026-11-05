@@ -1545,7 +1545,7 @@ def create_app(settings=None):
                 # the asker typed or picked, never another person's data.
                 if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
                     raise Problem("reference", "automations_filter is a small object", 422)
-            elif kind not in ("depth", "turn_id"):
+            elif kind not in ("depth", "turn_id", "rerouted_from"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
     def named_destination(c, who, body, create=True):
@@ -3299,6 +3299,11 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
+        if body.kind == "ask":
+            from . import ask_routing
+            with store.read() as c:
+                body.to, body.refs = ask_routing.resolve(c, who.actor, body.to, body.refs,
+                                                        body.conversation_id, body.in_reply_to)
         if body.conversation_id:
             # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
             # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
@@ -5240,7 +5245,12 @@ def create_app(settings=None):
         ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked and the task does
         not wait on them."""
         who = request.state.identity
-        rc = rule_check(who, "task_ask", body.text, lambda c: [auth.task(c, who, auth.resolve_task(c, who, tid))["requester_id"]])
+        def recipients(c):
+            from . import ask_routing
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            target, _ = ask_routing.resolve(c, who.actor, row["requester_id"], {"task": row["id"]}, row["conversation_id"])
+            return [target]
+        rc = rule_check(who, "task_ask", body.text, recipients)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
         return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: task_ask_write(
             c, who, tid, body, ingest, rc)))
@@ -5260,7 +5270,9 @@ def create_app(settings=None):
         with store.read() as c:
             if dream.exempt(c, row):
                 return None             # the person started the dream to be asked (backend/dream.py)
-        return ask_ingest.preflight(store, app.state.judge, who, row["requester_id"], row["title"], body.text,
+            from . import ask_routing
+            target, _ = ask_routing.resolve(c, who.actor, row["requester_id"], {"task": row["id"]}, row["conversation_id"])
+        return ask_ingest.preflight(store, app.state.judge, who, target, row["title"], body.text,
                                     kind="task_ask")
 
     def rule_prepare_task_ask(store_, bot, replay):
@@ -5281,7 +5293,9 @@ def create_app(settings=None):
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         body = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, row["requester_id"]) else None
+        from . import ask_routing
+        target, _ = ask_routing.resolve(c, who.actor, row["requester_id"], {"task": task_id}, row["conversation_id"])
+        gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, target) else None
         if ingest and not gate:
             ask_ingest.skipped(c, ingest, "target")
         # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
@@ -5408,7 +5422,8 @@ def create_app(settings=None):
     def comment_ingest(who, tid, body):
         if not body.ask or not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
             return None
-        asked = body.ask.who or (row["owner_id"] if who.actor == row["requester_id"] else row["requester_id"])
+        with store.read() as c:
+            asked = H.task_ask_recipient(c, who.actor, row, body.ask.model_dump())
         return ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text, kind="question",
                                     asked=[q.model_dump() for q in body.ask.questions])
 

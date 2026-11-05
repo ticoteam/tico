@@ -1454,6 +1454,21 @@ def _server_settings(c, settings):
 SILENT_WAIT_HOURS = 1       # a task set waiting on a person this long with nothing said to them is stuck unseen
 
 
+def unreadable_waits(c):
+    """A system or missing recipient cannot answer a hold, even when its ask exists."""
+    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
+    return [dict(r) for r in c.execute(
+        f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient FROM tasks t "
+        "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE {H.MESSAGE_TASK_SQL}=t.id AND t.status='waiting' "
+        f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
+        f"UNION SELECT {fields},t.waiting_on AS recipient FROM tasks t "
+        "WHERE t.status='waiting' AND t.waiting_on IS NOT NULL) w "
+        "WHERE NOT EXISTS (SELECT 1 FROM humans h WHERE 'human:'||h.id=w.recipient) "
+        "AND NOT EXISTS (SELECT 1 FROM bots b WHERE 'bot:'||b.id=w.recipient AND b.state<>'archived') "
+        "ORDER BY w.id LIMIT 20")]
+
+
 def silent_waits(c, at=None):
     """Tasks waiting on a person who was never asked: no open question to them in the task's thread and no message
     from the task's owner to them since it started waiting. A bot whose ask failed can still set the task waiting,
@@ -1941,6 +1956,13 @@ def view(c, who, settings, auth, github, config):
                 f"{item['title'] if not item['private'] or H.task_private_readable(c, who.actor, H.task(c, item['task_id'])) else 'A private task'}"
                 f" {task_loops.describe(item)}" for item in loops[:3]) + ". Likely a bug; nothing is blocked.",
                 [_fix("Open tasks", "#/tasks")]))
+    if full and (unreadable := unreadable_waits(c)):
+        named = [(row, H.task_private_readable(c, who.actor, row)) for row in unreadable[:3]]
+        checks.append(_check("unreadable_waits", "Questions nobody can read", "warn", "; ".join(
+            f"{row['title']} waits on {row['recipient']}, who cannot read or answer the question"
+            if readable else "A private task waits on someone who cannot read or answer the question"
+            for row, readable in named) + ("." if len(unreadable) <= 3 else f"; and {len(unreadable) - 3} more."),
+            [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named]))
     if full and (silent := silent_waits(c)):
         named = [(row, H.task_private_readable(c, who.actor, row)) for row in silent[:3]]     # only three are named
         checks.append(_check("silent_waits", "Waiting on people", "warn", "; ".join(

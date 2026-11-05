@@ -597,6 +597,12 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 
 ### When nobody answers a bot's ask
 
+`keeper` is the system and cannot answer. An ask to it, including a system-filed task's requester, goes to the
+asker's first reachable person or active bot up its manager chain, else the company owner. Nearby reach and
+private-task rules still apply. The send says who received it. Existing open system asks are re-sent once with
+their text, sender and task kept; the old ask links to the new one and the hold names the new recipient.
+Health names a task waiting on a recipient who cannot read or answer.
+
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
 --default-kind reversible [--by <date>]`; MCP `if_no_answer: {do, kind, by}`), and the card says it: "If you don't
 answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and internal and the person has said
