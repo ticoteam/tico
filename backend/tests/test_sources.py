@@ -9,7 +9,7 @@ import pytest
 from backend import sources as SRC
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
+from backend.tests.test_api import api, headers  # noqa: F401  (the fixture)
 
 NAMES = {"human:ana": "Ana Lee", "bot:ops": "Ops", "automation:a1": "Nightly sweep"}
 
@@ -124,13 +124,13 @@ def test_a_keeper_line_written_in_a_built_in_scope_names_the_built_in(api):
 
 
 def test_a_home_timeline_says_who_wrote_each_line(api):
-    thread = api.get("/api/v2/threads/home/bot:ops").json()["id"]
+    thread = api.get("/api/v2/threads/home/bot:ops", headers=headers()).json()["id"]
     with api.app.state.store.transaction() as c:
         H.say(c, "human:ana", "bot:ops", "Can you check the build?", conversation_id=thread)
         with SRC.writing_as("follow-up-timer"):
             H.say(c, H.KEEPER, "bot:ops", "Follow up on the build", kind="notice", conversation_id=thread)
         H.say(c, H.KEEPER, "bot:ops", "The build is green", kind="notice", conversation_id=thread)
-    lines = {m["body"]: m for m in api.get(f"/api/v2/threads/{thread}/timeline").json()["messages"]}
+    lines = {m["body"]: m for m in api.get(f"/api/v2/threads/{thread}/timeline", headers=headers()).json()["messages"]}
     assert lines["Can you check the build?"]["source"]["kind"] == "person"
     assert lines["Can you check the build?"]["source"]["name"]
     assert lines["Follow up on the build"]["source"] == {"kind": "builtin", "name": "Follow-up timer", "link": None}
