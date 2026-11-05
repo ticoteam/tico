@@ -273,3 +273,14 @@ def test_stalled_task_alerts_only_a_manager_and_cancels_when_recovered(api, hq):
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
     assert service.dispatch(alert["id"])["status"] == "canceled"
     assert hq.accepted == []
+
+
+def test_future_offset_deadline_is_not_deduped_before_it_is_due(api, hq):
+    connect(api)
+    put(api, "alerts/me", {"urgent_needs": True})
+    task = due_task(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET due_at=? WHERE id=?", ("2026-11-04T14:00:00-08:00", task["id"]))
+    api.app.state.personal_alerts.collect()
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM personal_alerts").fetchone()[0] == 0

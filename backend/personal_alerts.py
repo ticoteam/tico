@@ -121,6 +121,13 @@ def update(c, ident, body):
     return local_view(c, ident)
 
 
+def overdue(task, at):
+    due = H.parse_ts(task.get("due_at"))
+    if due and due.tzinfo is None:
+        due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+    return bool(due and due <= at)
+
+
 def quiet(row, at, emergency):
     if emergency and row["emergency_exception"]:
         return False
@@ -168,7 +175,6 @@ class Alerts:
         self.lock = threading.RLock()
         self.worker_lock = threading.Lock()
         self.cursor = ""
-        self.stall_cursor = ""
 
     def gateway(self, method, path, body=None, key=None):
         if self.settings.demo or self.settings.rehearsal:
@@ -282,12 +288,15 @@ class Alerts:
     def eligible(self, c, alert, row):
         if not row["verified_at"] or row["phone_version"] != alert["phone_version"]:
             return False
+        try:
+            who = self.auth.identity_for_actor(c, "human:" + row["person_id"])
+        except Problem:
+            return False
         if alert["kind"] == "test":
             return True
         if not row[alert["kind"]]:
             return False
         try:
-            who = self.auth.identity_for_actor(c, "human:" + row["person_id"])
             task = self.auth.task(c, who, alert["subject_id"])
         except Problem:
             return False
@@ -296,11 +305,7 @@ class Alerts:
         if alert["kind"] == "legal_mail":
             return True
         if alert["kind"] == "urgent_needs":
-            due = H.parse_ts(task.get("due_at"))
-            at = H.parse_ts(H.now())
-            if due and due.tzinfo is None:
-                due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-            return bool(due and due <= at and who.actor in (task["owner_id"], task.get("waiting_on")))
+            return overdue(task, H.parse_ts(H.now())) and who.actor in (task["owner_id"], task.get("waiting_on"))
         return bool(H.is_bot(task["owner_id"]) and self.auth.bot_manager(c, who, H.actor_id(task["owner_id"]))
                     and H.stalled_tasks(c, task_ids=[task["id"]]))
 
@@ -318,11 +323,13 @@ class Alerts:
                     c.execute("UPDATE personal_alerts SET state='canceled' WHERE id=?", (alert_id,))
                     return {"id": alert_id, "status": "canceled"}
                 if quiet(row, H.parse_ts(H.now()), alert["emergency"]) and alert["kind"] != "test":
+                    c.execute("UPDATE personal_alerts SET attempted_at=? WHERE id=?", (H.now(), alert_id))
                     return {"id": alert_id, "status": "quiet_hours"}
                 month = H.now()[:7]
                 company_cap = c.execute("SELECT monthly_cap FROM alert_company_settings WHERE id=1").fetchone()[0]
                 extra = 0 if alert["reserved"] else 1
                 if spend(c, row["person_id"], month) + extra > row["monthly_cap"] or spend(c, month=month) + extra > company_cap:
+                    c.execute("UPDATE personal_alerts SET attempted_at=? WHERE id=?", (H.now(), alert_id))
                     return {"id": alert_id, "status": "spend_cap"}
                 channel = "call" if alert["emergency"] and row["urgent_calls"] and row["call_consent"] else "sms"
                 if alert["state"] == "sending":
@@ -372,9 +379,10 @@ class Alerts:
                                       "AND due_at IS NOT NULL AND due_at<=? AND NOT EXISTS (SELECT 1 FROM personal_alerts a "
                                       "WHERE a.person_id=? AND a.incident_key='due:'||tasks.id||':'||tasks.due_at) "
                                       "ORDER BY due_at LIMIT 100",
-                                      (who.actor, who.actor, H.now(), ident)).fetchall()
+                                      (who.actor, who.actor, H.shift(H.now(), hours=24), ident)).fetchall()
                     for task in tasks:
-                        enqueue(c, ident, "urgent_needs", task["id"], "due:" + task["id"] + ":" + task["due_at"], True)
+                        if overdue(dict(task), H.parse_ts(H.now())) and not H.TS.snoozed(dict(task)):
+                            enqueue(c, ident, "urgent_needs", task["id"], "due:" + task["id"] + ":" + task["due_at"], True)
                 if row["bot_stuck"]:
                     ids = [r[0] for r in c.execute("SELECT id FROM tasks WHERE id>? AND owner_id LIKE 'bot:%' "
                                                    "AND status IN ('open','doing','waiting') ORDER BY id LIMIT 100",
@@ -390,7 +398,7 @@ class Alerts:
             self.collect()
             with self.store.read() as c:
                 ids = [r[0] for r in c.execute("SELECT id FROM personal_alerts WHERE state IN ('pending','sending') "
-                                              "AND (attempted_at IS NULL OR attempted_at<?) ORDER BY created_at LIMIT 20",
+                                              "AND (attempted_at IS NULL OR attempted_at<?) ORDER BY coalesce(attempted_at,''),created_at LIMIT 20",
                                               (H.shift(H.now(), seconds=-60),))]
             for ident in ids:
                 self.dispatch(ident)
