@@ -138,9 +138,10 @@ and **Mute** take effect at the first of these:
 - leaving the page.
 
 A message that arrives while Undo shows stays unread, as long as the read goes out within 10 minutes of the click.
-Normally it goes out within 5 seconds. If the browser holds the page for longer, for example a background tab it has
-paused, the read covers only what was written up to 10 minutes before it goes out. A message that came after the
-click, and more than 10 minutes before the read, can then be marked read.
+Normally it goes out within 5 seconds. A late read, for example from a background tab the browser has paused, still
+leaves messages that arrived after the click unread if it goes out within those 10 minutes. Only a read that goes out
+more than 10 minutes after the click covers what was written up to 10 minutes before it goes out. A message that came
+after the click, and more than 10 minutes before that read, can then be marked read.
 Details: [threads contract §10.1](dev/threads-contract.md).
 
 ## Editing and deleting
