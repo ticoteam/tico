@@ -1204,8 +1204,6 @@ class Store:
             c.executescript(_browser_exit.TRIGGERS)
             # A stop's reservation against the claim (backend/cloud_machines.py `reserve`); NULL is none.
             H.add_column(c, "cloud_machines", "stop_until", "REAL")
-            # An unanswered start is recovered from HQ's list; a stop still landing must not count as a resume.
-            H.add_column(c, "cloud_machines", "start_asked_at", "REAL")
             from . import screening as _screening
             c.executescript(_screening.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs

@@ -72,6 +72,7 @@ def test_an_existing_cloud_machine_gains_the_pending_start_marker_without_losing
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         c.execute("ALTER TABLE cloud_machines DROP COLUMN start_asked_at")
+        c.execute("DELETE FROM schema_migrations WHERE version LIKE '0098_%'")
         c.execute("INSERT INTO cloud_machines(bot,state,wake_key,woke_at) VALUES('ops','stopped','job:a',1000)")
     boot(path)
     with sqlite3.connect(path) as c:
