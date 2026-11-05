@@ -107,8 +107,7 @@ and the undo window. The queue rechecks access and policy immediately before dis
 [Turning sending on](mail.md#turning-sending-on) for the controls and API.
 
 Existing opted-in bots keep their old recipient scopes: internal recipients, approved forwarding, replies to the
-thread's sender, and registry allowances. The connector continues to enforce its registry blocklist,
-owner-handles-personally list, declared mailbox verbs and old caps. Existing automation versions keep their prior
+thread's sender, and registry allowances. The shared server gate rechecks the registry global switch, paused inboxes, blocklist, owner-handles-personally list and old caps at enqueue and dispatch; calling the API cannot skip them. The connector also retains its declared mailbox verbs. Existing automation versions keep their prior
 send authorization. New senders and edited automation versions use the shared default. Saving the company or inbox
 policy applies its safeguards to the retained authorizations too.
 
@@ -121,7 +120,7 @@ approval instead.
 **Per-message approval.** A Tico `send` approval names the recipients, subject, mailbox and `body_sha256`; new queue
 approvals also bind `content_sha256`, attachment names/hashes and the queue id. The configured Who can OK rule is bot
 managers by default, or inbox admins or named people. A person's in-chat “send it” must come from someone permitted
-under that rule and is bound to the first frozen content it approves. The rule is checked again at dispatch.
+under every applicable layer's rule, follow their authorized frozen preview, clearly approve, and name or reply to that exact pending send. Negation, older instructions and ambiguous prose need the content-bound approval card. The server checks this binding and the current rule again at dispatch; connector-side review is never approval authority.
 Approval does not override Never, mailbox access, company caps, reply-loop prevention or bounce suppression.
 
 The reviewer sees the verified person's instruction and blocks additions beyond it. A hash-bound Tico approval
@@ -140,7 +139,7 @@ uncertain delivery is recorded as Unknown and never automatically retried.
 - Scheduling: when times are offered there are at least two, in the future, chronological,
   weekdays in business hours, time zone spelled out, and each one is actually free on every
   calendar on ana@acme.example with a 30-minute buffer (checked live). `mail schedule` creates the
-  invite before queueing its confirmation email, which follows the sending policy and undo window.
+  event silently, then freezes its invitation with the confirmation in the shared queue. Neither notification leaves before approval, undo and dispatch checks.
 
 **3. Reviewer (a second model, different vendor from the writer).**
 The bots write with Codex (OpenAI). The CLI asks Grok 4.6 to review the draft against the
@@ -156,9 +155,9 @@ tone. Any commitment or unsupported claim fails the draft. The verdict is stored
 If the reviewer is unreachable, `send` fails closed; `draft` proceeds with a warning flag.
 
 **4. Execution.**
-The durable queue records its content-and-recipient idempotency key before dispatch. A provider attempt is never
+The durable queue records content-and-recipient duplicate protection and the operation identity before dispatch. Retries of one operation stay the same; a new intent may follow a definite non-send. Gmail receives frozen raw MIME in the send request, never a mutable draft ID. A provider attempt is never
 automatically repeated if delivery is uncertain. `mail schedule` deletes its newly created event if queueing the
-confirmation fails; a queued confirmation leaves the event in place even while awaiting approval or after cancellation.
+confirmation fails; a queued confirmation leaves a silent event in place while awaiting approval or after cancellation. Frozen body and attachment previews load through the viewer's authorization before approval.
 The sent-log row comes from the provider response, and a nightly reconcile against Gmail's Sent folder makes Ana's
 own sends count toward the connector's cooldowns.
 

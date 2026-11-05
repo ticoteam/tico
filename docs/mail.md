@@ -734,30 +734,27 @@ The server's operator can set Tico's OAuth client in its environment, `TICO_GOOG
 ## Turning sending on
 
 Every email Tico sends goes through one server policy and a persisted queue: bot sends, automation replies and
-forwards, approved sends, scheduling offers, and the Assistant acting for a person. Configure it in **Settings >
+forwards, approved sends, calendar invitations and scheduling offers, and the Assistant acting for a person. Configure it in **Settings >
 Inboxes > Settings > Email > Sending**. An inbox's own page shows its policy, bot overrides, **Waiting to send** with
 Cancel, and the send audit.
 
 New senders start at **Ask first**, **Replies only**. **On their own** is an explicit opt-in at company, inbox or bot
 level; the effective rule names the level that set it. Replies only keeps new messages behind a per-message approval.
 **Never** at company, inbox or bot level blocks every send, including already-approved sends. A bot override cannot
-relax company always-ask rules, caps, pacing or the undo window. Only a person acting as themselves changes sending
+relax company recipient restrictions, message type, approver requirements, always-ask rules, caps, pacing or the undo window. Recipient and approver rules at different levels intersect; the explicit Ask first → On their own opt-in is the exception. Only a person acting as themselves changes sending
 policy: company admins, an inbox's person/admin, or a bot's manager for that bot. BotOps and the Assistant cannot
 change these settings for them.
 
 The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money
-matters. Decide classifies the last rule; unavailable classification also asks a person. This is triage, not a
+matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person. This is triage, not a
 security boundary. Read/write grants, Never, sender identity, content-bound approval and caps remain deterministic.
 The approval rule is configurable: bot managers (the default), inbox admins, or named people. Hash-bound approvals
-must match the content, subject, recipients and files; an in-chat “send it” must come from an authorized person, and
-becomes bound to the frozen queue content. Changing that content requires another send and another approval.
+must match the content, subject, recipients and files. The approval card loads an authorized frozen body preview and links to the exact attachment bytes before enabling Approve. An in-chat “send it” must be an unambiguous affirmative instruction from an authorized person after they viewed the frozen send, and must name that send or reply to its approval message. Otherwise use the content-bound card. Changing content requires another send and approval.
 
 Allowed emails wait in SQLite for the company's undo window (two minutes by default). The connector rechecks access,
 policy, approval authority, aggregate daily caps and pacing before dispatch. Cancel works until dispatch; delivered
 mail cannot be recalled. Pending sends recover across server/runner restarts. An uncertain provider result is
-**Unknown**, counted against caps and never automatically retried. Identical content and recipients deduplicate,
-including across MIME boundary and Message-ID changes. Automatic replies, bounces and repeated replies to the same
-inbound message are blocked. Delivery-status reports suppress previously attempted recipients; an inbox admin can
+**Unknown**, counted against caps and never automatically retried. An expired claim with no issued permit returns to Pending with a new fenced lease. Active, Sent and Unknown content and recipients deduplicate, including across MIME boundary and Message-ID changes. Retrying the same `operation_id` or HTTP idempotency key returns the same operation; a new intent may resend after a definite cancellation, block, failure or decline. Reply identity comes from MIME headers matched to synced history, so omitting caller metadata cannot bypass automatic-reply, bounce or repeated-reply guards. Delivery-status reports suppress previously attempted recipients; an inbox admin can
 inspect and remove a suppression through the API.
 
 ```bash
@@ -773,7 +770,9 @@ The v2 API exposes `/email/sending-policy`, `/email/inboxes/{mailbox}/sending-po
 `/bots/{bot}/email-sending-policy`, `/email/sends` (queue and paged audit), `/email/sends/{id}`,
 `/email/sends/{id}/approve` and `/email/sends/{id}/cancel`. The OpenAPI document describes the public endpoints.
 The audit retains content/body hashes, recipients, attachment names/hashes, actor, policy decision, approval id,
-provider message id and delivery status. MIME content is discarded after delivery or cancellation.
+provider message id and delivery status. `/email/sends/{id}` supplies the authorized preview and `/email/sends/{id}/attachments/{part}` downloads frozen attachment bytes. MIME content is discarded after delivery or cancellation. Gmail sends the frozen raw MIME in a single request, with retries disabled; a source draft may remain in Gmail so a concurrent user edit is never deleted.
+
+Calendar creation is silent and checks inbox-level Never first. Invitations are frozen calendar attachments in the same queued email as their confirmation, so approval, undo and dispatch checks apply before any invitation is sent. Canceling a queued invitation leaves the silent calendar hold in place.
 
 **After upgrading.** Existing explicitly enabled bot recipient scopes and existing automation versions retain their
 previous authorization, marked **kept from before**. Existing legal inbox approvals stay approvals. New automation
