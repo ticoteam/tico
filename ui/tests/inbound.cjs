@@ -84,7 +84,9 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
 
     // The old Email & Phone address opens Inboxes; the Tico address's page shows external text as text.
     await page.goto('https://tico-ui.test/#/settings/company-inbox');
-    const listed = calls.length;   // the list reads the newest message of every inbox; the page reads its own
+    // The list reads the newest message of every inbox; the page reads its own.
+    await page.locator('[data-ib-row="tico:ibx_a"]').waitFor();
+    const listed = calls.length;
     await page.locator('[data-ib-row="tico:ibx_a"] .ib-name a').click();
     await page.locator('[data-inbound-read]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/tico/ibx_a');

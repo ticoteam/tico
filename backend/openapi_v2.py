@@ -3177,7 +3177,7 @@ SCHEMAS.update({
                     "status": {"enum": ["active", "stopped"]},
                     "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
                     "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF),
-                    "used_by": obj({"people": "i", "bots": "i", "names": items("s")}),
+                    "used_by": obj({"people": "i", "bots": "i", "names": items({"type": "string"})}),
                     "synced_at": "n", "newest_epoch": {"type": ["integer", "null"]},
                     "sync": {"enum": ["", "signin", "failed"]}, "sync_error": "s"}),
     "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
