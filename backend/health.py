@@ -1543,35 +1543,134 @@ def storage_view(c, settings):
 
 
 def review_children_sql(visible, parents=1):
-    """The review subtasks of each of `parents` PR tasks that the viewer may see (`visible`, from Auth.task_sql), as
-    (parent, owner) rows, oldest first per parent. It starts from the parents' children (task_relations), not a scan of
-    every task: a parent has a handful, and the scan read every task's row, bodies' pages included, on each waiting
-    PR's check."""
-    return ("SELECT r.to_task AS parent, tasks.owner_id FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
+    """Visible check candidates, starting at the parents' relations so Health never scans task bodies."""
+    return ("SELECT r.to_task AS parent, tasks.id, tasks.title, tasks.owner_id, tasks.status, tasks.verdict, "
+            "tasks.verdict_head, tasks.created_at, tasks.updated_at FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
             f"WHERE r.kind='parent' AND r.to_task IN ({','.join('?' * parents)}) "
-            "AND tasks.status IN ('open','doing','waiting','review','ready') "
-            "AND tasks.title LIKE 'Review %' "
-            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY r.to_task, tasks.created_at")
+            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY r.to_task,tasks.created_at,tasks.id")
 
 
-def _review_actors(c, who, auth, task_ids):
-    """Each task's review subtask owners and task roles for the review role, in set reads, at most three of each per task
-    (the first three the one-task reads gave): ({task: [owner]}, {task: [actor]})."""
-    owners, actors = {}, {}
-    role = auth.settings.github_review_role or "reviewer"
-    visible = auth.task_sql(c, who)
-    for part in H.chunks(sorted(set(task_ids))):
+def _review_actors(c, who, auth, tickets):
+    """Check evidence and review roles for all waiting tickets, in set reads. Hidden children supply no evidence."""
+    from . import check_pools as P, step_flow as F, verdict_moves as V
+    states, actors = {}, {}
+    if not tickets:
+        return states, actors
+    boards, steps = {}, {}
+    for raw in c.execute("SELECT * FROM task_steps ORDER BY position,id"):
+        step = dict(raw)
+        steps[step["id"]] = step
+        boards.setdefault(step["type_id"], []).append(step)
+    for ticket in tickets:
+        states.setdefault(ticket["task_id"], {"ticket": ticket, "children": [], "prs": [], "waits": [], "events": [], "tags": []})
+    role, visible = auth.settings.github_review_role or "reviewer", auth.task_sql(c, who)
+    for part in H.chunks(sorted(states)):
         marks = ",".join("?" * len(part))
-        for row in c.execute(review_children_sql(visible, len(part)), part):
-            found = owners.setdefault(row["parent"], [])
+        for raw in c.execute(review_children_sql(visible, len(part)), part):
+            states[raw["parent"]]["children"].append(dict(raw))
+        for raw in c.execute(f"SELECT * FROM task_links WHERE task_id IN ({marks}) AND kind='pr' ORDER BY created_at", part):
+            states[raw["task_id"]]["prs"].append(dict(raw))
+        for raw in c.execute(f"SELECT * FROM check_waits WHERE ticket_id IN ({marks}) AND state='waiting' ORDER BY created_at,id", part):
+            states[raw["ticket_id"]]["waits"].append(dict(raw))
+        for raw in c.execute(f"SELECT tt.task_id,t.key FROM task_tags tt JOIN tags t ON t.id=tt.tag_id WHERE tt.task_id IN ({marks})", part):
+            states[raw["task_id"]]["tags"].append({"key": raw["key"]})
+        for raw in c.execute(f"SELECT task_id,actor FROM task_roles WHERE task_id IN ({marks}) AND role=? ORDER BY task_id,actor",
+                             (*part, role)):
+            found = actors.setdefault(raw["task_id"], [])
             if len(found) < 3:
-                found.append(row["owner_id"])
-        for row in c.execute(f"SELECT task_id,actor FROM task_roles WHERE task_id IN ({marks}) AND role=? "
-                             "ORDER BY task_id,actor", (*part, role)):
-            found = actors.setdefault(row["task_id"], [])
-            if len(found) < 3:
-                found.append(row["actor"])
-    return owners, actors
+                found.append(raw["actor"])
+    events = {}
+    ids = set(states) | {t["id"] for state in states.values() for t in state["children"]}
+    for part in H.chunks(sorted(ids)):
+        for raw in c.execute("SELECT subject_id,kind,new,created_at FROM history_events WHERE subject_type='task' "
+                             f"AND subject_id IN ({','.join('?' * len(part))}) "
+                             "AND kind IN ('step','check_filed','review_head','round_skipped') ORDER BY created_at,rowid", part):
+            events.setdefault(raw["subject_id"], []).append(dict(raw))
+    for tid, state in states.items():
+        ticket = state["ticket"]
+        board = [s for s in boards.get(ticket["type_id"], []) if F.check_kind(s)]
+        state["step"] = steps.get(ticket["step_id"])
+        state["events"] = events.get(tid, [])
+        filed = {e["new"] for e in state["events"] if e["kind"] == "check_filed"}
+        children = []
+        for child in state["children"]:
+            titled = F.titled(c, ticket["type_id"], child["title"], board=board)
+            if not (titled or child["id"] in filed or child["verdict"] or P.is_security(child["title"])):
+                continue
+            at = next((steps.get(e["new"]) for e in reversed(state["events"])
+                       if e["kind"] == "step" and e["created_at"] <= child["created_at"]), state["step"])
+            # Pool filing and verdict data survive a check being renamed after it was filed.
+            child["check_step"] = at if F.is_check(at) else titled
+            child["judged_head"] = next((e["new"] for e in reversed(events.get(child["id"], []))
+                                         if e["kind"] == "review_head"), "")
+            children.append(child)
+        state["children"] = children
+        fixes = next((s for s in boards.get(ticket["type_id"], [])
+                      if F.of(s).get("on_fail") == ticket["step_id"]), None)
+        judged = next((t for t in reversed(children) if V._verdict(t) and fixes
+                       and (t["check_step"] or {}).get("id") == fixes["id"]), None)
+        state["judged"] = str(judged.get("verdict_head") or judged["judged_head"] or "").split(",")[0].lower() if judged else None
+    # Pool status for a missing request is read for every pool together, never by calling ranked per PR.
+    slugs = sorted({slug for state in states.values() for slug in P.members((state["step"] or {}).get("check_pool")) or []})
+    online, held = set(), {}
+    for part in H.chunks(slugs):
+        marks = ",".join("?" * len(part))
+        for raw in c.execute("SELECT b.id FROM bots b LEFT JOIN bot_status s ON s.bot=b.id "
+                             "JOIN assignments a ON a.bot=b.id JOIN runners_with_state r ON r.id=a.runner_id "
+                             f"WHERE b.id IN ({marks}) AND b.state='active' AND coalesce(s.state,'') NOT IN (?,?,?,?) "
+                             "AND r.revoked_at IS NULL AND r.last_seen_at>=?", (*part, *P.HELD, H.shift(H.now(), minutes=-P.ONLINE_MINUTES))):
+            online.add(raw["id"])
+        for raw in c.execute("SELECT t.owner_id,t.title,p.type_id FROM tasks t JOIN task_relations r ON r.from_task=t.id "
+                             "AND r.kind='parent' JOIN tasks p ON p.id=r.to_task "
+                             f"WHERE t.owner_id IN ({marks}) AND t.status IN ('open','doing','waiting','review','ready')",
+                             ["bot:" + slug for slug in part]):
+            board = [s for s in boards.get(raw["type_id"], []) if F.check_kind(s)]
+            if P.is_security(raw["title"]) or F.titled(c, raw["type_id"], raw["title"], board=board):
+                slug = H.actor_id(raw["owner_id"])
+                held[slug] = held.get(slug, 0) + 1
+    for state in states.values():
+        step = state["step"] or {}
+        pool = P.members(step.get("check_pool")) or []
+        free = [s for s in pool if s in online and held.get(s, 0) < int(step.get("check_limit") or P.DEFAULT_LIMIT)]
+        state["pool_status"] = ("empty pool" if not pool else "no reviewer in the pool is online" if not online.intersection(pool)
+                                else "all reviewers are at their limit" if not free else "a reviewer is free")
+    return states, actors
+
+
+def _review_move(c, link, state, actors):
+    """Whose move the check evidence at this PR head calls for, and the short action to show."""
+    from . import step_flow as F, verdict_moves as V
+    owner, number = link["owner_id"], link["number"]
+    head = V._head(link)
+    children, step = state["children"], state["step"]
+    judged = [t for t in children if V._verdict(t) and head and
+              any(h and head.startswith(h.lower()) for h in str(t["verdict_head"] or t["judged_head"] or "-").split(","))]
+    latest = max(judged, key=lambda t: (t["updated_at"], t["created_at"], t["id"]), default=None)
+    checks = [t for t in children if H.is_bot(t["owner_id"]) and (t["check_step"] or {}).get("id") == (step or {}).get("id")]
+    verdict = V.verdict_at(checks, head)
+    if (latest and V._verdict(latest) not in V.GOOD) or (verdict and verdict not in V.GOOD):
+        return owner, f"{owner}: address review changes on PR #{number}"
+    skipped = bool(step and F.skip_target(c, {**link, "tags": state["tags"]}, step)) or any(
+        e["kind"] == "round_skipped" and e["new"] == f"{(step or {}).get('id')}:{head}" for e in state["events"])
+    ready = V.merge_ready(c, link, evidence={**state, "checks": checks, "skipped": skipped and (not verdict or verdict in V.GOOD)})
+    if ready:
+        return owner, f"{owner}: merge PR #{number}"
+    if verdict in V.GOOD or (not F.is_check(step) and judged):
+        return owner, f"{owner}: move PR #{number} on"
+    opened = [t for t in children if t["status"] in H.ACTIVE_STATUSES and
+              (not t["judged_head"] or not head or any(h and head.startswith(h.lower()) for h in t["judged_head"].split(",")))]
+    if opened:
+        actor = ", ".join(dict.fromkeys(t["owner_id"] for t in opened[:3]))
+        return actor, f"{actor}: review PR #{number}"
+    wait = next((w for w in state["waits"] if w["step_id"] == link["step_id"]), None)
+    pool = f"{step['name']} pool" if step and F.check_kind(step) else "reviewer (not assigned)"
+    old = any(V._verdict(t) for t in children) and not judged
+    if wait:
+        return pool, f"{pool}: {'re-review' if old else 'check'} PR #{number} waiting for a free reviewer; {wait['reason'][:300]}"
+    if step and F.check_kind(step):
+        return pool, f"{pool}: {'re-review needed at the new head; ' if old else ''}no reviewer filed yet for PR #{number}; {state['pool_status']}"
+    actor = ", ".join(actors[:3]) or pool
+    return actor, f"{actor}: {'re-review' if old else 'review'} PR #{number}"
 
 
 def _aged_pr_checks(c, who, auth, full, kind):
@@ -1581,7 +1680,9 @@ def _aged_pr_checks(c, who, auth, full, kind):
     from .github import health_wait_reason
     # task_sql binds visibility predicates to the tasks table name.
     rows = c.execute(
-        "SELECT l.*,tasks.title task_title,tasks.owner_id, tasks.number ticket FROM task_links l "
+        "SELECT l.*,tasks.title task_title,tasks.owner_id,tasks.type_id,tasks.step_id,tasks.number ticket, "
+        "EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=tasks.type_id AND s.flow IS NOT NULL AND s.flow NOT IN ('','{}')) check_flow "
+        "FROM task_links l "
         "JOIN tasks ON tasks.id=l.task_id WHERE l.kind='pr' AND l.state IN ('open','draft') "
         "AND tasks.owner_id LIKE 'bot:%' AND coalesce(tasks.private,1)=0 "
         f"AND ({auth.task_sql(c, who)}) ORDER BY l.created_at,l.id")
@@ -1590,7 +1691,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
         link = dict(row)
         detail = H._json(link["detail"], {}) or {}
         wait = detail.get("health_wait") or {}
-        reason = health_wait_reason(link, detail)
+        reason = health_wait_reason(link, detail, check_flow=bool(link["check_flow"]))
         if not reason or wait.get("reason") != reason or not H.parse_ts(wait.get("since")):
             continue
         minutes = quiet_minutes(wait["since"])
@@ -1600,22 +1701,19 @@ def _aged_pr_checks(c, who, auth, full, kind):
         waits.append((link, reason, wait, minutes))
         if len(waits) >= DIAGNOSTIC_LIMIT:
             break
-    owners, actors = _review_actors(c, who, auth, [link["task_id"] for link, reason, _, _ in waits if reason == "review"])
+    states, actors = _review_actors(c, who, auth, [link for link, reason, _, _ in waits if reason == "review"])
     items = []
     for link, reason, wait, minutes in waits:
-        actor = link["owner_id"] if reason == "conflict" else "reviewer (not assigned)"
-        if reason == "review":
-            # Review subtasks, like task roles, say whose move it is. Never expose a hidden child's owner.
-            named = list(dict.fromkeys(owners.get(link["task_id"], []) + actors.get(link["task_id"], [])))
-            if named:
-                actor = ", ".join(named)
-        action = (f"{actor}: merge main into {str(link['branch'] or 'the PR branch')[:150]} and push"
-                  if reason == "conflict" else f"{actor}: review PR #{link['number']}")
+        if reason == "conflict":
+            actor = link["owner_id"]
+            action = f"{actor}: merge main into {str(link['branch'] or 'the PR branch')[:150]} and push"
+        else:
+            actor, action = _review_move(c, link, states[link["task_id"]], actors.get(link["task_id"], []))
         task_name = f"#{link['ticket']} " if link["ticket"] else ""
         items.append({"bot": H.actor_id(link["owner_id"]), "name": f"PR #{link['number']}", "pr": link["url"],
                       "task": link["task_id"], "reason": reason, "since": wait["since"], "age_minutes": minutes,
                       "whose_move": actor, "text": f"PR #{link['number']} ({task_name}{link['task_title'][:200]}): "
-                      f"{'conflicting' if reason == 'conflict' else 'green and mergeable without review'} for {minutes // 60} h; {action}",
+                      f"{'conflicting' if reason == 'conflict' else 'green and mergeable'} for {minutes // 60} h; {action}",
                       "fix": action + "; hub task show " + link["task_id"],
                       "fixes": [_fix("Open PR", link["url"]), _fix("Open task", "#/tasks/" + link["task_id"])]})
     return [_check("aged_prs", "Pull requests not progressing", "warn",

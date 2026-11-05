@@ -727,7 +727,13 @@ class Scheduler:
                         timed_out = verdict_moves.timeouts(c, stamp(at))
                 except Exception as exc:
                     failures.append({"check_timeouts": type(exc).__name__})
-                acted = {"checks timed out": timed_out, "tickets allocated": allocated}
+                retried = []
+                try:
+                    from . import check_pools
+                    retried = check_pools.retry(self.store)
+                except Exception as exc:
+                    failures.append({"check_pool_retry": type(exc).__name__})
+                acted = {"checks timed out": timed_out, "tickets allocated": allocated, "waiting checks filed": retried}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

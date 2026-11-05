@@ -218,11 +218,11 @@ def _starts(title, prefix):
     return bool(p) and (t == p or t.startswith(p + ":"))
 
 
-def titled(c, type_id, title):
+def titled(c, type_id, title, *, board=None):
     """The check step of a type's board a request with this title is for, or None: the step whose name (or label)
     the title starts with, else the generic Dev board title for the board's step of that kind and order."""
     title = str(title or "").strip()
-    board = checks(c, type_id)
+    board = checks(c, type_id) if board is None else board
     found = [(len(p), s) for s in board for p in {s["name"], label(s)} if _starts(title, p)]
     if found:
         return max(found, key=lambda x: (x[0], -x[1]["position"]))[1]

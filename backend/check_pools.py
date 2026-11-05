@@ -16,7 +16,9 @@ builder's own request gets.
 
 With no pool member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the first
 pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed,
-or the ticket leaves the step or finishes. A pool member only ever takes checks this way, never other work.
+or the ticket leaves the step or finishes. The scheduler also retries waits every minute, so a reviewer coming
+online or gaining room can take one without another check finishing. A pool member only ever takes checks this way,
+never other work.
 """
 import json
 import logging
@@ -682,4 +684,34 @@ def drain(c):
         child = _take(c, wait)
         if child:
             out.append(child)
+    return out
+
+
+RETRY_LIMIT = 20
+
+
+def retry(store, limit=RETRY_LIMIT):
+    """Retry a bounded batch with online pool members, one writer transaction per wait, no network calls."""
+    with store.read_transaction() as c:
+        if not _ready(c):
+            return []
+        waits = [r[0] for r in c.execute(
+            "SELECT w.id FROM check_waits w JOIN task_steps s ON s.id=w.step_id WHERE w.state='waiting' "
+            "AND EXISTS(SELECT 1 FROM json_each(s.check_pool) p JOIN bots b ON b.id=p.value "
+            "JOIN assignments a ON a.bot=b.id JOIN runners_with_state r ON r.id=a.runner_id "
+            "LEFT JOIN bot_status bs ON bs.bot=b.id WHERE b.state='active' "
+            "AND coalesce(bs.state,'') NOT IN (?,?,?,?) AND r.revoked_at IS NULL AND r.last_seen_at>=?) "
+            "ORDER BY w.updated_at,w.created_at,w.id LIMIT ?",
+            (*HELD, H.shift(H.now(), minutes=-ONLINE_MINUTES), min(limit, RETRY_LIMIT)))]
+    out = []
+    for wid in waits:
+        with store.transaction() as c:
+            # A completion, pool edit or another pass may have taken it since the read above.
+            row = c.execute("SELECT * FROM check_waits WHERE id=? AND state='waiting'", (wid,)).fetchone()
+            if row:
+                # Rotate blocked waits too, so a busy pool cannot starve later waits out of the bounded batch.
+                c.execute("UPDATE check_waits SET updated_at=? WHERE id=?", (H.now(), wid))
+                child = safely(c, _take, dict(row))
+                if child:
+                    out.append(child["id"])
     return out

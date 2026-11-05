@@ -310,8 +310,14 @@ def _verdict_at(c, row, step, head):
     changes or comments wins over any pass on the same head, newer or not: a failed head is cleared by a fix at a new
     head, not by a later round at the same one, as a failed CI attempt or test receipt is (docs/tasks.md)."""
     head = _full_head(c, row, head)
-    given = [_verdict(check) for check in _checks(c, row, step) if _verdict(check)
-             and head.startswith(str(check.get("verdict_head") or _judged_head(c, check) or "-").lower())]
+    checks = [{**check, "judged_head": "" if check.get("verdict_head") else _judged_head(c, check)} for check in _checks(c, row, step)]
+    return verdict_at(checks, head)
+
+
+def verdict_at(checks, head):
+    """The same-head verdict from already read checks; a failed head needs a new commit."""
+    given = [_verdict(check) for check in checks if _verdict(check)
+             and head.startswith(str(check.get("verdict_head") or check.get("judged_head") or "-").split(",")[0].lower())]
     return next((v for v in given if v not in GOOD), given[-1] if given else None)
 
 
@@ -328,23 +334,27 @@ def _skipped(c, row, step, head):
     return not verdict or verdict in GOOD
 
 
-def merge_ready(c, row):
+def merge_ready(c, row, *, evidence=None):
     """(pull request, head) when the merge is next from the ticket's step (its `on_pass`, or `after_green` on a new
     head) and CI is green on the head it is at now. On `on_pass`, the step's checks must have approved that head or its
-    round was skipped there, and none may have failed it. None otherwise."""
-    step = F.step(c, row.get("step_id"))
+    round was skipped there, and none may have failed it. None otherwise. Health supplies set-read `evidence`
+    (step, prs, checks, skipped, judged) so it uses this rule without one-task reads."""
+    step = evidence["step"] if evidence is not None else F.step(c, row.get("step_id"))
     flow = F.of(step)
     if not step or F.MERGE not in (flow.get("on_pass"), flow.get("after_green")):
         return None
-    prs = [p for p in _prs(c, row) if p.get("state") in ("open", "draft")]
+    prs = [p for p in (evidence["prs"] if evidence is not None else _prs(c, row))
+           if p.get("state") in ("open", "draft")]
     if len(prs) != 1 or prs[0].get("state") != "open" or prs[0].get("checks") != "passing" \
             or prs[0].get("mergeable") == "conflict" or not _head(prs[0]):
         return None
     pr, head = prs[0], _head(prs[0])
     if flow.get("on_pass") == F.MERGE:
         # The same verdict the timeout and the skipped round read: a pass after a fail at this head clears nothing.
-        return (pr, head) if _skipped(c, row, step, head) or _verdict_at(c, row, step, head) in GOOD else None
-    judged = _judged_by(c, row, step)
+        verdict = verdict_at(evidence["checks"], head) if evidence is not None else _verdict_at(c, row, step, head)
+        skipped = evidence["skipped"] if evidence is not None else _skipped(c, row, step, head)
+        return (pr, head) if skipped or verdict in GOOD else None
+    judged = evidence["judged"] if evidence is not None else _judged_by(c, row, step)
     return (pr, head) if judged and not head.startswith(judged) else None
 
 
