@@ -664,7 +664,7 @@ def commit(c, auth, who, batch_id, send, boards):
     batch = _load(c, who.actor, batch_id)
     if batch["state"] != "open":
         raise Problem("state", f"This batch is {batch['state']}", 409)
-    items = {it["key"]: it for it in _items(batch)}
+    items = {it["key"]: it for it in _shown_items(c, batch)}
     order = [it["key"] for it in _items(batch)]
     responses = _responses(batch)
     applied, errors, outbox, record = [], [], {}, {}
