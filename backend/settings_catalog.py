@@ -303,10 +303,10 @@ def may(c, auth, who, e, target=None):
         return auth.bot_manager(c, who, _bot_target(c, e, target))
     if e.who == "self":
         return who.role == "human" and (e.target != "person" or who.actor == "human:" + str((target or {}).get("person")))
-    # A mailbox routine's switch is person-only: its route still checks the routine's managers, but no assistant can
-    # turn it into an edit card.
+    # Match the automation route's manager check when rewriting its refusal; the `person` class in `plan` still keeps
+    # BotOps and the Assistant from changing this Settings control through a chat card.
     if e.who == "automation" and e.kind == "person" and e.route.startswith("automations/") and (target or {}).get("id"):
-        if who.via in ACTING_FOR or who.role not in ("owner", "human"):
+        if who.role not in ("owner", "human"):
             return False
         from . import automations
         row = automations._row(c, str(target["id"]))

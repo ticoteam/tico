@@ -84,16 +84,17 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       return json(unrouted(p));
     });
     const errors = [];
+    const groupFor = tab => ({general: 'you', devices: 'computers'}[tab] || tab);
     const open = async tab => {
       const page = await context.newPage();
       page.on('pageerror', e => errors.push(e.message));
       await page.goto(`https://tico-ui.test/#/settings/${tab}`);
-      await page.locator(`[data-settings-tab=${tab}][aria-selected=true]`).waitFor();
+      await page.locator(`[data-settings-tab=${groupFor(tab)}][aria-selected=true]`).waitFor();
       return page;
     };
     const enter = async (page, tab) => {
-      await page.locator('[data-settings-tab=general]').click();
-      await page.locator(`[data-settings-tab=${tab}]`).click();
+      await page.locator('[data-settings-tab=you]').click();
+      await page.locator(`[data-settings-tab=${groupFor(tab)}]`).click();
       await page.evaluate(() => CLOUD_SUPPORT.read);
     };
 
@@ -170,11 +171,12 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
     writes.length = 0;
     const afterFailures = reads.length;
-    // Another rule's save redraws the page from what HQ last answered, without reading it again.
+    // Company policies now live on their own page; saving one still leaves the last HQ answer cached for People.
+    await enter(page, 'policies');
     const redrawn = page.waitForResponse(response => response.url().endsWith('/api/v2/access') && response.request().method() === 'GET');
-    await page.locator('[data-rule=admin_sql]').uncheck();
+    await page.locator('[data-policy=admin_sql]').uncheck();
     await redrawn;
-    await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);
+    await page.waitForFunction(() => document.querySelector('[data-policy=admin_sql]')?.checked === false);
     assert.equal(await page.locator('#people-cloud-support').isChecked(), true);
     assert.equal(reads.length, afterFailures, 'a rule redraw shares the current entry');
 
@@ -228,7 +230,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(await page.locator('[data-machine-support]').count(), 0);
     assert.equal(await page.locator('#set-machines > .err').count(), 0);
     await enter(page, 'people');
-    await page.locator('[data-rule=admin_sql]').waitFor();
+    await page.locator('#set-people .people-list-card').waitFor();
     assert.equal(await page.locator('#people-cloud-support').count(), 0);
     failGet = false;
     await enter(page, 'people');
@@ -249,7 +251,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     me = {...me, id: 'ana', name: 'Ana Rivera', role: 'owner', bot_admin: false, email: 'ana@acme.example'};
     support = {available: false, on: null, machines: []};
     page = await open('people');
-    await page.locator('[data-rule=admin_sql]').waitFor();
+    await page.locator('#set-people .people-list-card').waitFor();
     assert.equal(await page.locator('#people-cloud-support').count(), 0);
     await page.close();
     assert.deepEqual(errors, []);
