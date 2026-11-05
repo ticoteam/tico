@@ -1848,8 +1848,8 @@ def create_app(settings=None):
 
     @app.get("/api/v2/gateway")
     def gateway_overview(request: Request):
-        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use and the
-        services."""
+        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use, the
+        models and the services."""
         who = request.state.identity
         auth.domain(who)
         if who.role == "owner":

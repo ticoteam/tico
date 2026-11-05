@@ -1,6 +1,7 @@
 // A Gateway bot's model is a pick (Settings > Bots): Department · Level · Fast · Version under the Tico AI Gateway, one
 // muted line with what runs and the price, the department from the bot's group, old ids as "(old lineup)"; Settings >
-// Gateway lists the picks in use and the services in two flat tables, and links the owner of a connected install to
+// Gateway lists the picks in use, the models (a row per level with its Fast model, then Meeting, Decide and Classify) and
+// the services (live first, each with what it is for and its details), and links the owner of a connected install to
 // API keys on app.tico.dev; Settings > Computers > Models has the Decisions
 // level. The catalog is the one the server sends (backend/gateway_tiers.py). With TICO_SHOTS set, it saves screenshots there.
 const {chromium} = require('playwright');
@@ -13,7 +14,8 @@ const {unrouted} = require('./support/routes.cjs');
 const shotsDir = process.env.TICO_SHOTS || '';
 (async () => {
   const served = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
-    'import json; from backend import providers, gateway_tiers; print(json.dumps({"models": list(providers.MODEL_CATALOG), "gateway": gateway_tiers.view()}))'],
+    'import json; from backend import providers, gateway_tiers, gateway_page; print(json.dumps({"models": list(providers.MODEL_CATALOG), "gateway": gateway_tiers.view(), '
+      + '"lineup": gateway_page.models(gateway_tiers.SNAPSHOT), "services": gateway_tiers.SNAPSHOT["services"]}))'],
     {cwd: path.join(__dirname, '../..')}).toString());
   // Finance Medium has a newer 1.1 than every other tier: a pin to it has nowhere to go but its own tier.
   const medium = served.gateway.tiers['tico-finance-medium'];
@@ -58,16 +60,13 @@ const shotsDir = process.env.TICO_SHOTS || '';
         picks: [{id: 'tico-sales-medium-1.0', name: 'Sales · Medium', model: 'Claude Sonnet 5.5', version: '1.0', bots: 3, price: '$2.50 / $12.50 per 1M', old: false},
           {id: 'tico-marketing-low-fast', name: 'Marketing · Low · Fast', model: 'DeepSeek V4.1 Flash', version: 'auto', bots: 1, price: '$0.45 / $1.80 per 1M', old: false},
           {id: 'tico-mid-1.0', name: 'Mid', model: 'Claude Sonnet 5.5', version: '1.0 (old lineup)', bots: 1, price: '$2.50 / $12.50 per 1M', old: true}],
-        services: served.gateway.services || [
-          {id: 'decide', name: 'Decide · Classify', status: 'live', price: 'From $0.06 per 1M tokens', tools: ['hub_decision_ask', 'hub_classify']},
-          {id: 'search', name: 'Search', status: 'live', price: 'Tokens like Low · $0.00875 per search', tools: ['hub_gateway_search']},
-          {id: 'fetch', name: 'Fetch', status: 'live', price: '$1.25 per 1,000 pages + tokens', tools: ['hub_gateway_fetch']}]});
+        models: served.lineup, services: served.services});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const shot = async name => { if (shotsDir) { fs.mkdirSync(shotsDir, {recursive: true}); await page.screenshot({path: path.join(shotsDir, name)}); } };
+    const shot = async (name, fullPage = false) => { if (shotsDir) { fs.mkdirSync(shotsDir, {recursive: true}); await page.screenshot({path: path.join(shotsDir, name), fullPage}); } };
     await page.goto('https://tico-ui.test/#/settings');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'seller') && SETTINGS_DATA.models?.length);
     const editor = page.locator('#bot-editor');
@@ -178,7 +177,30 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.deepEqual(await page.locator('[data-gateway-pick=tico-marketing-low-fast] td').allInnerTexts(),
       ['Marketing · Low · Fast', 'DeepSeek V4.1 Flash', 'Auto', '1', '$0.45 / $1.80 per 1M']);
     assert.equal(await page.locator('[data-gateway-pick="tico-mid-1.0"] .gw-version').innerText(), '1.0 (old lineup)');
-    assert.ok(await page.locator('[data-gateway-service]').count() >= 3);
+    // The models: a row per level with its Fast model, the same in every department; then Meeting, Decide and Classify.
+    assert.deepEqual(await page.locator('#set-gateway-page h2').allTextContents(), ['Picks in use', 'Models', 'Services']);
+    assert.deepEqual(await page.locator('[data-gateway-models] thead th').allTextContents(), ['Level', 'Model', 'Price', 'Fast', 'Fast price', 'Context']);
+    assert.deepEqual(await page.locator('[data-gateway-level]').evaluateAll(rows => rows.map(r => r.dataset.gatewayLevel)), ['low', 'medium', 'high']);
+    const low = page.locator('[data-gateway-level=low] td');
+    assert.equal(await low.nth(1).innerText(), 'Claude Haiku 5.5\nText, images, PDFs');
+    assert.equal(await low.nth(2).innerText(), '$0.15 / $0.75 per 1M\n$0.75 / $3.75 per 1M past 100K');
+    assert.equal(await low.nth(3).innerText(), 'DeepSeek V4.1 Flash\nText only');
+    assert.equal(await low.nth(4).innerText(), '$0.45 / $1.80 per 1M');
+    assert.equal(await low.nth(5).innerText(), '1M');
+    assert.match(await page.locator('[data-gateway-departments]').innerText(), /^Same in every department: General, Product, Engineering, .*Data$/);
+    assert.deepEqual(await page.locator('[data-gateway-other] tr').evaluateAll(rows => rows.map(r => [...r.cells].map(c => c.textContent))), [
+      ['Meeting', 'Inception Mercury 3', '$0.30 / $1.05 per 1M'], ['Decide · Low', 'Jev 1.13', '$0.06 per 1M input'],
+      ['Decide · Medium', 'Claude Sonnet 5.5', '$2.50 / $12.50 per 1M'], ['Decide · High', 'Claude Opus 5.5', '$5.00 / $25.00 per 1M'],
+      ['Classify · Low', 'Jev 1.13', '$0.06 per 1M input']]);
+    // The services: live first, then On request, then Coming soon; what each is for under its name, its details under its row.
+    const statuses = await page.locator('[data-gateway-service] .gw-status-cell').allInnerTexts();
+    assert.equal(statuses.length, 20);
+    assert.deepEqual(statuses, [...statuses].sort((a, b) => ['Live', 'On request', 'Coming soon'].indexOf(a) - ['Live', 'On request', 'Coming soon'].indexOf(b)));
+    assert.equal(statuses[0], 'Live');
+    assert.equal(await page.locator('[data-gateway-service=search] .gw-for').innerText(), 'Search the web and read what it finds');
+    assert.deepEqual(await page.locator('[data-gateway-details=search] dt').allInnerTexts(), ['Search', 'Tokens', 'Engines']);
+    assert.equal(await page.locator('[data-gateway-details=search] dd').last().innerText(), 'Exa, then Parallel');
+    assert.equal(await page.locator('[data-gateway-details="email.send"]').count(), 0, 'no details, no line');
     assert.equal(await page.locator('[data-gateway-service=search] .gw-tools').innerText(), 'hub_gateway_search');
     assert.equal(await page.locator('[data-gateway-service=fetch] .gw-tools').innerText(), 'hub_gateway_fetch');
     assert.equal(await page.locator('[data-gateway-key-link]').getAttribute('href'), '#/settings/models');
@@ -188,7 +210,16 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await apiKeys.getAttribute('href'), 'https://app.tico.dev/gateway#api-keys');
     assert.equal(await apiKeys.getAttribute('target'), '_blank');
     assert.match(await apiKeys.getAttribute('rel'), /\bnoopener\b/);
-    await shot('desktop-gateway.png');
+    // Both themes, the models and then the services (the settings pane scrolls, not the page).
+    const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+    for (const mode of ['dark', 'light']) {
+      await theme(mode);
+      await page.locator('[data-gateway-models]').scrollIntoViewIfNeeded();
+      await shot(`desktop-gateway-${mode}.png`);
+      await page.locator('[data-gateway-services]').scrollIntoViewIfNeeded();
+      await shot(`desktop-gateway-services-${mode}.png`);
+    }
+    await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
     // An admin who is not the owner, or an install with no Gateway connection: no row.
     await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = true; return renderSettingsGateway(); });
     await page.locator('[data-gateway-picks]').waitFor();
@@ -229,7 +260,14 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll on Settings > Gateway');
     const [name, open] = await Promise.all(['.gw-name', '.gw-open'].map(sel => page.locator(`[data-gateway-api-keys] ${sel}`).boundingBox()));
     assert.ok(Math.abs(name.y - open.y) < 4 && open.x > name.x, 'on a phone, Open sits beside API keys');
-    await shot('phone-gateway.png');
+    // On a phone each level is a card: the model and its price, then Fast and its price.
+    const [lowName, lowCtx, lowFast] = await Promise.all(['.gw-name', '.gw-ctx', '.gw-fast'].map(sel => page.locator(`[data-gateway-level=low] ${sel}`).boundingBox()));
+    assert.ok(Math.abs(lowName.y - lowCtx.y) < 4 && lowCtx.x > lowName.x && lowFast.y > lowName.y, 'the context beside the level, Fast below');
+    assert.equal(await page.locator('[data-gateway-level=low] .gw-fast').innerText(), 'Fast · DeepSeek V4.1 Flash\nText only');
+    for (const mode of ['dark', 'light']) {
+      await page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
+      await shot(`phone-gateway-${mode}.png`, true);
+    }
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }
