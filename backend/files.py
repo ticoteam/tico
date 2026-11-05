@@ -491,8 +491,8 @@ def retain_page_label_sources(c, row):
     def annotate(value):
         changed = False
         if isinstance(value, dict):
-            for option in value.get("options", []):
-                if option.get("label") == row["title"] and not option.get("source"):
+            for option in value.get("options") or []:
+                if isinstance(option, dict) and option.get("label") == row["title"] and not option.get("source"):
                     option["source"] = source
                     changed = True
             if isinstance(value.get("answers"), dict):
@@ -503,7 +503,8 @@ def retain_page_label_sources(c, row):
             for child in list(value.values()):
                 changed = annotate(child) or changed
         elif isinstance(value, list):
-            changed = any([annotate(child) for child in value])
+            for child in value:
+                changed = annotate(child) or changed
         return changed
     for message in c.execute("SELECT id,refs FROM messages WHERE conversation_id=? OR json_extract(refs,'$.task')=?",
                              (task["conversation_id"], task["id"])).fetchall():
