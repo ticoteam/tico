@@ -268,6 +268,11 @@ to the bot's own model, with the task context length and any task effort that mo
 A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
+A bot whose **Task model** is not offered yet keeps that model when you change **Task effort** or **Task context
+length**. Saving the same model again with a new effort or context length keeps it too. Terra 6.1 (`gpt-6.1-terra`)
+is one such model. Choosing it for a bot that does not have it saved is refused, and so is choosing another model
+that is not offered yet.
+
 #### A warning about a cheaper task model
 
 A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
