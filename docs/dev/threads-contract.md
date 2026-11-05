@@ -781,7 +781,7 @@ their own holds, their bots' and the ones they review, through `org_rule_holds_a
 the oldest 500 native posts and edits). Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
 another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
-mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
+holds an open mention or ask for them (`thread_attention._addressed`'s rule); a migrated Home they read only for its history counts only by its attention items. Order: items that
 mention the viewer (an open mention or ask, or a new message delivered to them as a mention, ask or assignment) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
 subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
@@ -799,7 +799,7 @@ less the ones shown). `count` is every item across
 pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
 `POST /api/v2/threads/{id}/catch-up` (`hub thread catchup`) is a different thing: a written summary of one thread.
 
-Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.dm` and a post that starts a thread
+Naming. Only a DM with one teammate and a task's thread may be unnamed (`require_name`). `threads.create`, `threads.dm` and a post that starts a thread
 (`_create_plan`) refuse a group DM (two or more others) or a members, team or company thread with an empty title:
 422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
 `hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
