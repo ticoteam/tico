@@ -21,6 +21,8 @@ use crate::client::Client;
 use crate::util::{epoch_s, log, text_of};
 
 const STATUS_FILE: &str = "update-status.json";
+/// Held by release_update.py from process start through health checks and rollback, before the checkout lock.
+const PROCESS_LOCK: &str = "update-process.lock";
 /// The Docker update this runner saw changing containers, until the updater reports how it ended (Follower::unsettled).
 const HOLD_FILE: &str = "docker-update-hold.json";
 const DRAIN_S: u64 = 20 * 60; // older servers retain their claim window
@@ -250,6 +252,73 @@ fn write_status(directory: &Path, fields: Value) {
     }
 }
 
+fn updater_running(directory: &Path) -> Result<bool, String> {
+    use std::os::unix::io::AsRawFd;
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(directory.join(PROCESS_LOCK)).map_err(|e| e.to_string())?;
+    // SAFETY: flock acts on this open file; closing it releases a successful probe.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock { Ok(true) } else { Err(error.to_string()) }
+}
+
+fn update_unit(pid: u32) -> String {
+    format!("tico-update-{pid}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(180).collect()
+}
+
+fn update_log(path: &Path, message: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "Tico update: {message}");
+    }
+}
+
+/// A lingering user manager need not inherit a login shell's bus variables. Keep explicit settings intact.
+fn user_bus_env(env: &crate::env::Env, uid: u32) -> crate::env::Env {
+    let mut bus = crate::env::Env::new();
+    let runtime = env.get("XDG_RUNTIME_DIR").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("/run/user/{uid}"));
+    let address = env.get("DBUS_SESSION_BUS_ADDRESS").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("unix:path={runtime}/bus"));
+    bus.insert("XDG_RUNTIME_DIR".into(), runtime);
+    bus.insert("DBUS_SESSION_BUS_ADDRESS".into(), address);
+    bus
+}
+
+/// Only failures before contacting the manager can safely use another launch path. An ambiguous start must not
+/// launch a second updater. setsid leaves the cgroup intact, so only KillMode=process/none lets it survive restart.
+fn systemd_start(
+    cmd: &mut Command, unit: &str, bus: &crate::env::Env, log_path: &Path,
+    run: &mut impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
+) -> Result<bool, String> {
+    let (error, can_detach) = match run(cmd) {
+        Ok(done) if done.status.success() => return Ok(true),
+        Ok(done) => {
+            let stderr = one_line(&String::from_utf8_lossy(&done.stderr));
+            let can_detach = stderr.starts_with("Failed to connect to bus:") || stderr.starts_with("Failed to set bus address:");
+            let detail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") };
+            (format!("systemd-run exited {}{detail}", done.status.code().unwrap_or(-1)), can_detach)
+        }
+        Err(e) => (format!("systemd-run: {e}"), e.kind() == std::io::ErrorKind::NotFound),
+    };
+    update_log(log_path, &error);
+    if !can_detach {
+        return Err(error);
+    }
+    let mut show = Command::new("systemctl");
+    show.args(["--user", "show", "--property=KillMode", "--value", unit]).envs(bus).stdin(Stdio::null());
+    let mode = run(&mut show).ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    if matches!(mode.as_str(), "process" | "none") {
+        update_log(log_path, &format!("using a detached updater (KillMode={mode})"));
+        return Ok(false);
+    }
+    let mode = if mode.is_empty() { "unknown" } else { &mode };
+    Err(format!("{error}; detached update unsafe (KillMode={mode})"))
+}
+
 /// What a fast-forward to main meant for this process (Follower::advance).
 enum Moved {
     /// Nothing moved; why, when there is a reason.
@@ -437,15 +506,28 @@ impl Follower {
                 _ => None,
             };
         }
+        match updater_running(&self.directory) {
+            Ok(true) => return Some(("updating".into(), String::new())),
+            Err(e) => return Some(("failed".into(), format!("cannot check the updater: {e}"))),
+            Ok(false) => {}
+        }
         let status = read_status(&self.directory);
         if text_of(&status["target"]) != want {
+            return None;
+        }
+        // A repaired launcher gets one fresh attempt, including failures saved before launchers had build IDs.
+        if status["state"] == "failed" && text_of(&status["error"]).starts_with("could not start the update:") && status["launcher"] != crate::BUILD_ID {
             return None;
         }
         let at = status["at"].as_f64().or_else(|| text_of(&status["at"]).parse().ok()).unwrap_or(0.0);
         let age = epoch_s() - at;
         match status["state"].as_str().unwrap_or_default() {
             "updating" if age < STALE_UPDATING_S => Some(("updating".into(), String::new())),
-            "updating" => Some(("failed".into(), "the update stopped without an outcome".into())),
+            "updating" => {
+                let error = "the update stopped without an outcome";
+                write_status(&self.directory, json!({"state": "failed", "target": want, "error": error, "at": epoch_s()}));
+                Some(("failed".into(), error.into()))
+            }
             s @ ("failed" | "rolled_back" | "blocked") if age < RETRY_AFTER_S => {
                 let error = text_of(&status["error"]);
                 (!self.space_freed(&status, &error)).then(|| (s.into(), disk_error_message(&error)))
@@ -627,7 +709,8 @@ impl Follower {
             Err(why) => {
                 s.state = "failed".into();
                 s.error = format!("could not start the update: {why}");
-                write_status(&self.directory, json!({"state": "failed", "target": want, "error": s.error, "at": epoch_s()}));
+                update_log(&self.directory.join("update.log"), &s.error);
+                write_status(&self.directory, json!({"state": "failed", "target": want, "error": s.error, "at": epoch_s(), "launcher": crate::BUILD_ID}));
             }
         }
     }
@@ -635,42 +718,63 @@ impl Follower {
     /// `python -m runner_support.release_update` as its own process, so it outlives the runner it restarts. Under systemd the
     /// runner's unit kills its whole cgroup on restart, so the update is a transient unit of its own (release_update.py spawn).
     fn spawn(&self, want: &str) -> Result<(), String> {
+        self.spawn_with(want, &std::env::vars().collect(), |cmd| cmd.output(), |cmd| cmd.spawn().map(|_| ()))
+    }
+
+    fn spawn_with(
+        &self, want: &str, env: &crate::env::Env,
+        mut run: impl FnMut(&mut Command) -> std::io::Result<std::process::Output>,
+        mut detach: impl FnMut(&mut Command) -> std::io::Result<()>,
+    ) -> Result<(), String> {
+        if updater_running(&self.directory)? {
+            return Ok(());
+        }
         let python = crate::env::python();
         let pid = std::process::id().to_string();
         let dir = self.directory.to_string_lossy().to_string();
         let root = self.root.to_string_lossy().to_string();
         let args = ["-m", "runner_support.release_update", "--root", &root, "--version", want, "--state-dir", &dir, "--pid", &pid, "--started", &self.started];
         let log_path = self.directory.join("update.log");
-        let unit = std::env::var("TICO_SYSTEMD_UNIT").unwrap_or_default();
+        let unit = env.get("TICO_SYSTEMD_UNIT").cloned().unwrap_or_default();
+        // SAFETY: geteuid reads this process's effective UID.
+        let bus = user_bus_env(env, unsafe { libc::geteuid() });
         if unit.ends_with(".service") && !unit.contains('/') {
             let mut cmd = Command::new("systemd-run");
-            cmd.args(["--user", "--quiet", "--collect", &format!("--unit=tico-update-{pid}"), &format!("--working-directory={root}")]);
+            cmd.args(["--user", "--quiet", "--collect", "--service-type=exec", &format!("--unit={}", update_unit(std::process::id())), &format!("--working-directory={root}")]);
+            cmd.envs(&bus).env("SYSTEMD_COLORS", "0").env("SYSTEMD_URLIFY", "0");
             for name in ["PATH", "HOME", "TICO_SUPERVISED", "TICO_RUNNER_KIND"] {
-                if let Ok(v) = std::env::var(name) {
+                if let Some(v) = env.get(name) {
                     if !v.is_empty() {
                         cmd.arg(format!("--setenv={name}={v}"));
                     }
                 }
             }
+            for (name, value) in &bus {
+                cmd.arg(format!("--setenv={name}={value}"));
+            }
             cmd.arg(format!("--setenv=TICO_SYSTEMD_UNIT={unit}"));
             let log = log_path.to_string_lossy();
             cmd.args(["-p", &format!("StandardOutput=append:{log}"), "-p", &format!("StandardError=append:{log}")]);
-            let done = cmd.arg(&python).args(args).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
-            return if done.status.success() { Ok(()) } else { Err(format!("systemd-run exited {}", done.status.code().unwrap_or(-1))) };
+            cmd.arg(&python).args(args).stdin(Stdio::null());
+            if systemd_start(&mut cmd, &unit, &bus, &log_path, &mut run)? {
+                return Ok(());
+            }
         }
         use std::os::unix::process::CommandExt;
         let out = std::fs::OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&python);
         cmd.args(args).current_dir(&self.root).stdin(Stdio::null()).stdout(out).stderr(err);
+        if unit.ends_with(".service") && !unit.contains('/') {
+            cmd.envs(&bus);
+        }
         // SAFETY: setsid is async-signal-safe; the child gets its own session, as Popen(start_new_session=True).
         unsafe {
             cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
+                if libc::setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
             });
         }
-        cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+        detach(&mut cmd).map_err(|e| e.to_string())
     }
 
     /// What a heartbeat adds; nothing for a server that does not name a release.
@@ -802,6 +906,116 @@ impl Follower {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn checkout_follower() -> Follower {
+        let dir = std::env::temp_dir().join(format!("tico-update-start-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = docker_follower(&dir, "", "0.3.44");
+        f.kind = "linux";
+        f
+    }
+
+    fn command_output(code: i32, stdout: &str, stderr: &str) -> std::io::Result<std::process::Output> {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec() })
+    }
+
+    fn systemd_env() -> crate::env::Env {
+        [("TICO_SYSTEMD_UNIT".into(), "tico-bot.service".into())].into()
+    }
+
+    #[test]
+    fn update_attempts_from_one_pid_use_distinct_units_and_restore_missing_bus_settings() {
+        let f = checkout_follower();
+        let mut units = vec![];
+        for _ in 0..2 {
+            f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+                assert_eq!(cmd.get_program(), "systemd-run");
+                let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+                units.push(args.iter().find(|a| a.starts_with("--unit=")).unwrap().clone());
+                assert!(args.contains(&"--service-type=exec".into()));
+                assert!(args.iter().any(|a| a.starts_with("--setenv=XDG_RUNTIME_DIR=/run/user/")));
+                assert!(args.iter().any(|a| a.starts_with("--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/")));
+                command_output(0, "", "")
+            }, |_| panic!("systemd started the updater")).unwrap();
+        }
+        assert_ne!(units[0], units[1]);
+        assert!(units.iter().all(|u| u.starts_with(&format!("--unit=tico-update-{}-", std::process::id()))));
+        let env = [("XDG_RUNTIME_DIR".into(), "/custom/runtime".into()), ("DBUS_SESSION_BUS_ADDRESS".into(), "unix:path=/custom/bus".into())].into();
+        assert_eq!(user_bus_env(&env, 123), env);
+        assert_eq!(user_bus_env(&crate::env::Env::new(), 123)["XDG_RUNTIME_DIR"], "/run/user/123");
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn systemd_stderr_reaches_the_error_and_log_without_retrying_an_ambiguous_start() {
+        let f = checkout_follower();
+        let error = f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+            assert_eq!(cmd.get_program(), "systemd-run");
+            command_output(1, "", "  Failed to start transient service unit:\n Unit tico-update-42.service already exists.  \n")
+        }, |_| panic!("a unit collision must not use a second launch path")).unwrap_err();
+        assert_eq!(error, "systemd-run exited 1: Failed to start transient service unit: Unit tico-update-42.service already exists.");
+        assert!(std::fs::read_to_string(f.directory.join("update.log")).unwrap().contains(&error));
+        assert_eq!(one_line(&"é".repeat(400)).chars().count(), 180);
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[test]
+    fn a_bus_failure_detaches_only_when_the_runner_cgroup_will_survive_restart() {
+        let f = checkout_follower();
+        for mode in ["control-group", "mixed", "", "process", "none"] {
+            let mut detached = false;
+            let result = f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+                if cmd.get_program() == "systemd-run" {
+                    return command_output(1, "", "Failed to connect to bus: No such file or directory\n");
+                }
+                assert_eq!(cmd.get_program(), "systemctl");
+                assert_eq!(cmd.get_args().last().unwrap(), "tico-bot.service");
+                command_output(if mode.is_empty() { 1 } else { 0 }, mode, "")
+            }, |_| { detached = true; Ok(()) });
+            let safe = matches!(mode, "process" | "none");
+            assert_eq!(detached, safe, "{mode}");
+            assert_eq!(result.is_ok(), safe, "{mode}: {result:?}");
+            if let Err(error) = result {
+                assert!(error.contains("Failed to connect to bus: No such file or directory"));
+                assert!(error.contains(&format!("KillMode={}", if mode.is_empty() { "unknown" } else { mode })));
+            }
+        }
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_live_updater_holds_even_with_stale_status_or_a_new_target_and_a_dead_one_can_retry() {
+        let f = checkout_follower();
+        write_status(&f.directory, json!({"state": "updating", "target": "0.3.45", "at": 1}));
+        let lock = crate::lock::acquire(&f.directory.join(PROCESS_LOCK)).unwrap();
+        assert_eq!(f.outcome("0.3.46").await, Some(("updating".into(), String::new())));
+        f.spawn_with("0.3.46", &systemd_env(), |_| panic!("an updater holds the lock"), |_| panic!("an updater holds the lock")).unwrap();
+        drop(lock);
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "failed");
+        assert_eq!(read_status(&f.directory)["state"], "failed");
+        let mut status = read_status(&f.directory);
+        status["at"] = json!(epoch_s() - RETRY_AFTER_S - 1.0);
+        write_status(&f.directory, status);
+        assert!(f.outcome("0.3.45").await.is_none());
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_repaired_launcher_retries_a_start_failure_once_then_obeys_the_retry_delay() {
+        let f = checkout_follower();
+        let mut status = json!({"state": "failed", "target": "0.3.45", "error": "could not start the update: systemd-run exited 1", "at": epoch_s()});
+        write_status(&f.directory, status.clone());
+        assert!(f.outcome("0.3.45").await.is_none());
+        status["launcher"] = json!(crate::BUILD_ID);
+        write_status(&f.directory, status.clone());
+        assert_eq!(f.outcome("0.3.45").await.unwrap().0, "failed");
+        assert!(f.outcome("0.3.46").await.is_none());
+        status["at"] = json!(epoch_s() - RETRY_AFTER_S - 1.0);
+        write_status(&f.directory, status);
+        assert!(f.outcome("0.3.45").await.is_none());
+        std::fs::remove_dir_all(f.directory).unwrap();
+    }
 
     #[test]
     fn versions_sort_as_release_update_does() {
