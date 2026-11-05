@@ -136,6 +136,44 @@ def test_cloud_machine_codes_upgrade_without_losing_existing_enrollment(tmp_path
     assert snapshot(path) == first
 
 
+def test_failed_machine_ids_upgrade_without_losing_or_double_counting_attempts(tmp_path):
+    version = "20261105131220_cloud_machine_enrollment_failures"
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DROP TABLE cloud_machine_enrollment_failures")
+        c.execute("ALTER TABLE cloud_machines DROP COLUMN create_asked_at")
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (version,))
+        c.executemany("INSERT INTO cloud_machines(bot,machine_id,state,enroll_fails) VALUES(?,?,?,?)",
+                      [("counted", "m1", "deleted", 2), ("failed", "m2", "failed", 1),
+                       ("pending", "m3", "starting", 0), ("adopted", "m5", "starting", 0)])
+        c.executemany("INSERT INTO cloud_machine_deletions(machine_id,bot,reason) VALUES(?,?,?)",
+                      [("m1", "counted", "never_enrolled"), ("m3", "pending", "never_enrolled"),
+                       ("m4", "adopted", "never_enrolled"), ("manual", "adopted", "manual")])
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT bot,enroll_fails,create_asked_at FROM cloud_machines ORDER BY bot").fetchall() == [
+            ("adopted", 1, None), ("counted", 2, None), ("failed", 1, None), ("pending", 1, None)]
+        assert c.execute("SELECT machine_id FROM cloud_machine_enrollment_failures ORDER BY machine_id").fetchall() == [
+            ("m1",), ("m2",), ("m3",), ("m4",)]
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT enroll_fails FROM cloud_machines WHERE bot='adopted'").fetchone()[0] == 1
+
+
+def test_enrollment_failure_migration_stands_alone_without_other_machine_migrations():
+    up = _migration("20261105131220_cloud_machine_enrollment_failures").up
+    with sqlite3.connect(":memory:") as c:
+        up(c)
+        assert "cloud_machine_enrollment_failures" in _tables(c)
+        c.execute("CREATE TABLE cloud_machines(bot TEXT PRIMARY KEY,machine_id TEXT,state TEXT,enroll_fails INTEGER)")
+        c.execute("INSERT INTO cloud_machines VALUES('ops','m1','failed',1)")
+        up(c)
+        assert c.execute("SELECT * FROM cloud_machine_enrollment_failures").fetchall() == [("m1", "ops")]
+        assert c.execute("SELECT enroll_fails,create_asked_at FROM cloud_machines").fetchone() == (1, None)
+
+
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
     known = migrations.files()
     # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.

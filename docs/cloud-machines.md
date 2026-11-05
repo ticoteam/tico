@@ -107,6 +107,13 @@ Each new id gets its own state and enrollment deadline, whether a create reply o
 The deadline comes from that attempt's saved code expiry; settling the old id cannot clear it. A late list does not
 extend an expired code: that machine is deleted and the next work makes a fresh one with a new code.
 
+When a code expires unused or HQ reports a failed machine, the server counts that exact machine id once in
+`cloud_machine_enrollment_failures`. The count commits before DELETE or adoption of another id. Lost replies,
+old deletion retries, unreadable lists and server restarts cannot skip or repeat it. Cleanup and adoption keep
+the count, and every create checks the three-failure limit. An unanswered create is saved in `create_asked_at`;
+another create waits for a readable list, unless its fresh runner has already enrolled. This also holds after
+a restart, so a failed machine hidden by a lost create reply cannot cause repeated billed creates.
+
 ## How a machine becomes the bot's runner
 
 1. The server mints a one-time enrollment code for the machine (15 minutes, single use; only its digest is kept, in
@@ -126,8 +133,11 @@ A retried enroll with the same code returns the same runner, so a boot that lost
 again (systemd reruns a failed boot step every 30 seconds). A machine has until its code expires (plus a minute) to
 enroll, and is not idle-stopped meanwhile. One that has not by then never can (a resume brings no new code), so the
 server deletes it and the next work makes a new one with a fresh code; after three such machines in a row it makes no
-more ("Made, but it never connected to this server", in Health) until one enrolls or a person changes the machine's
-settings. Without the marker `/etc/tico/cloud-machine.json` the
+more ("Made, but it never connected to this server", in Health). A successful enrollment clears the count. Otherwise,
+a person must choose **Replace machine** to try again, or delete the shared machine to replace it. That explicit
+request resets the count once, even if its reply is lost; retrying the same request does not reset it again.
+Changing size, Always on, Pause after or placement keeps the count. The replacement button stays available after
+the failed disk is gone. Without the marker `/etc/tico/cloud-machine.json` the
 boot step does nothing, and without a code it does nothing either: that is the base sandbox itself.
 
 If an older server saved an unenrolled machine without a deadline, the next look restores it from its code.

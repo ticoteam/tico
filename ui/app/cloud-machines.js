@@ -79,7 +79,7 @@ function cloudMachineRowHTML(e) {
       <span class="muted">min</span>
     </div><span></span></div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
-    ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state)) ? `<div class="sb-row"><span></span><div>
+    ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state) || (m.state === 'deleted' && m.problem)) ? `<div class="sb-row"><span></span><div>
       <button type="button" class="ghost" data-bot-cloud-replace="${esc(e.id)}">Replace machine</button>
     </div><span></span></div>` : ''}`;
 }

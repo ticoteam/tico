@@ -143,6 +143,11 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(calls, [{bot: 'helper', what: 'replace', body: {}}]);
     assert.equal(await editor.locator('[data-bot-cloud-size]').inputValue(), 'xlarge', 'replacement preserves unsaved edits');
     assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 0);
+    helper.cloud_machine.problem = 'Made, but it never connected to this server';
+    await page.evaluate(() => loadSettings());
+    await open('helper');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 1, 'an enrollment failure can be replaced after its disk is gone');
+    helper.cloud_machine.problem = '';
     await page.setViewportSize({width: 1440, height: 900});
 
     helper.cloud_machine.state = 'running'; helper.cloud_machine.runner_id = 'r10';

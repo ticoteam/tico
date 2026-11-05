@@ -540,8 +540,12 @@ def test_a_machine_that_never_enrolls_is_made_again_with_a_fresh_code_three_time
     with cloud.store.read() as c:
         assert CM.waiting(c, "ops") == "its cloud machine never connected to this server"
         assert "ops" in CM.health(c, cloud.store.settings)["summary"]
-    # A person's change tries again; this one enrolls, and the count starts over.
+    # Settings cannot reopen the retry loop. Only an explicit replacement tries again.
     post(cloud.api, "bots/ops/cloud-machine", {"size": "large"})
+    assert cloud.row()["enroll_fails"] == CM.ENROLL_TRIES and cloud.tick(10) == []
+    assert cloud.row()["problem"] == "no_enroll"
+    response = cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers())
+    assert response.status_code == 200, response.text
     assert cloud.row()["problem"] == "" and cloud.tick(10) == ["create"]
     post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
     assert cloud.row()["enroll_by"] == 0 and cloud.row()["enroll_fails"] == 0 and cloud.row()["runner_id"]
@@ -1289,6 +1293,138 @@ def test_a_lost_replacement_code_expires_into_a_fresh_machine_instead_of_staying
     fresh = post(cloud.api, "runners/enroll", {"code": new_code, "label": "boat-vm", "platform": "linux"})
     ready(cloud.api, fresh, ["ops"])
     assert claim_on(cloud, fresh, "ops")["attempt"]
+
+
+@pytest.mark.parametrize("kind", ["auto", "replace", "shared"])
+@pytest.mark.parametrize("recovery", ["adopt_first", "settle_first", "lost_create", "failed_create"])
+def test_enrollment_has_a_hard_machine_cap_despite_lost_replies_and_unreadable_lists(cloud, monkeypatch, kind, recovery):
+    target = deletion_target(cloud, "replace" if kind == "auto" else kind, enroll=kind != "auto")
+    if kind != "auto":
+        assert delete_target(cloud, target).status_code == 200
+    old_id = cloud.row(target.key)["machine_id"]
+    create, delete, listed, get_machine = cloud.hq.create, cloud.hq.delete, cloud.hq.list, cloud.hq.get
+    reads = [0]
+
+    def lost_delete(mid):
+        # The accounting transaction must have committed before HQ sees the expired attempt's DELETE.
+        if mid != old_id or kind == "auto":
+            with cloud.store.read() as c:
+                assert c.execute("SELECT bot FROM cloud_machine_enrollment_failures WHERE machine_id=?", (mid,)).fetchone()[0] == target.key
+        delete(mid)
+        raise CM.Refused("unreachable")
+
+    def made(*args):
+        machine = create(*args)
+        assert cloud.hq.n <= CM.ENROLL_TRIES + 1
+        if recovery == "failed_create":
+            cloud.hq.machines[machine["id"]]["state"] = "failed"
+        if recovery in ("lost_create", "failed_create"):
+            raise CM.Refused("unreachable")
+        return machine
+
+    def unreliable_list():
+        reads[0] += 1
+        if reads[0] % 4:
+            raise CM.Refused("oversized" if reads[0] % 2 else "unreachable")
+        answer = listed()
+        if recovery != "settle_first":
+            answer["machines"] = [m for m in answer["machines"] if ":superseded:" not in m["key"]]
+        return answer
+
+    def delayed_get(mid):
+        if recovery != "settle_first":
+            raise CM.Refused("unreachable")
+        return get_machine(mid)
+
+    monkeypatch.setattr(cloud.hq, "delete", lost_delete)
+    monkeypatch.setattr(cloud.hq, "create", made)
+    monkeypatch.setattr(cloud.hq, "list", unreliable_list)
+    monkeypatch.setattr(cloud.hq, "get", delayed_get)
+    # Restarts erase all in-memory retry guards. Every look also crosses an enrollment deadline.
+    for _ in range(24):
+        manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
+        cloud.at[0] += CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE + CM.BACKOFF_MAX
+        manager.tick()
+        assert cloud.hq.n <= CM.ENROLL_TRIES + 1
+    current = cloud.row(target.key)
+    assert cloud.hq.n == CM.ENROLL_TRIES + (kind != "auto")
+    assert current["enroll_fails"] == CM.ENROLL_TRIES and current["problem"] == "no_enroll"
+    with cloud.store.read() as c:
+        failed_ids = {r[0] for r in c.execute("SELECT machine_id FROM cloud_machine_enrollment_failures WHERE bot=?", (target.key,))}
+        assert failed_ids == set(cloud.hq.machines) - ({old_id} if kind != "auto" else set())
+        assert CM.waiting(c, "ops") == "its cloud machine never connected to this server"
+        assert "ops" in CM.health(c, cloud.store.settings)["summary"]
+
+
+def test_expiry_is_counted_before_delete_and_old_settlement_cannot_spend_it_again(cloud, monkeypatch):
+    adopt(cloud)
+    work(cloud)
+    cloud.tick()
+    first = cloud.row()["machine_id"]
+    delete = cloud.hq.delete
+
+    def lost(mid):
+        assert cloud.row()["enroll_fails"] == 1
+        with cloud.store.read() as c:
+            assert c.execute("SELECT machine_id FROM cloud_machine_enrollment_failures").fetchone()[0] == first
+        delete(mid)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "delete", lost)
+    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    monkeypatch.setattr(cloud.hq, "get", Mock(side_effect=CM.Refused("unreachable")))
+    cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
+    assert cloud.row()["enroll_fails"] == 1 and cloud.row()["deleting"]
+    cloud.tick(CM.TICK)
+    assert cloud.row()["machine_id"] != first and cloud.row()["enroll_fails"] == 1
+    fresh = cloud.row()
+    monkeypatch.setattr(cloud.hq, "get", lambda mid: dict(cloud.hq.machines[mid]))
+    cloud.tick(CM.SYNC)
+    assert cloud.row()["machine_id"] == fresh["machine_id"] and cloud.row()["enroll_fails"] == 1
+    with cloud.store.read() as c:
+        assert not CM.deleting(c, first)
+        assert c.execute("SELECT count(*) FROM cloud_machine_enrollment_failures").fetchone()[0] == 1
+
+
+def test_an_unreadable_list_cannot_repeat_an_unknown_failed_create_after_restart(cloud, monkeypatch):
+    target = deletion_target(cloud, "replace")
+    assert delete_target(cloud, target).status_code == 200
+    create = cloud.hq.create
+
+    def lost(*args):
+        machine = create(*args)
+        cloud.hq.machines[machine["id"]]["state"] = "failed"
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "create", lost)
+    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.tick(CM.TICK)
+    for _ in range(CM.ENROLL_TRIES + 2):
+        manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
+        cloud.at[0] += CM.BACKOFF_MAX
+        manager.tick()
+    assert cloud.hq.n == 2 and cloud.row()["create_asked_at"] is not None
+    assert cloud.row()["problem"] == "hq:oversized"
+
+
+def test_shared_settings_and_member_moves_keep_the_failure_limit_until_explicit_replacement(cloud):
+    adopt(cloud, place="shared")
+    work(cloud)
+    for _ in range(CM.ENROLL_TRIES):
+        cloud.tick(CM.TICK)
+        cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
+    cloud.tick(CM.SYNC)
+    assert cloud.row(CM.SHARED)["enroll_fails"] == CM.ENROLL_TRIES
+    post(cloud.api, "cloud-machines/shared", {"size": "large"})
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
+    cloud.tick(CM.TICK)
+    assert cloud.hq.n == CM.ENROLL_TRIES and cloud.row(CM.SHARED)["problem"] == "no_enroll"
+    response = cloud.api.delete("/api/v2/cloud-machines/shared", headers=headers())
+    assert response.status_code == 200, response.text
+    assert cloud.row(CM.SHARED)["enroll_fails"] == 0
+    cloud.tick(CM.TICK)
+    assert cloud.hq.n == CM.ENROLL_TRIES + 1
 
 
 def test_an_unenrolled_machine_already_stuck_without_a_deadline_can_recover(cloud):
