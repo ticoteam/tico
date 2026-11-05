@@ -108,6 +108,10 @@ def _day(conn, value, actor, label):
     text = str(value).strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(T.*)?", text):
         H.refuse(conn, actor, "date", f"{label} must be a date (YYYY-MM-DD)")
+    try:
+        date.fromisoformat(text[:10])
+    except ValueError:
+        H.refuse(conn, actor, "date", f"{label} must be a real calendar date (YYYY-MM-DD), not {text[:10]}")
     return text[:10]
 
 
@@ -624,6 +628,7 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     ids = []
     if actor != SEED_ACTOR:
         ids = _need_evidence(conn, actor, evidence_ids)
+    last_verified_at = _day(conn, last_verified_at, actor, "last_verified_at")
     now = H.now()
     row = {"id": eid, "type": type, "name": name, "aliases": dumps(aliases), "external_ids": dumps(external_ids),
            "tier": tier or None, "summary": str(summary or ""), "properties": dumps(properties or {}),

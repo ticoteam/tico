@@ -16,6 +16,7 @@ from backend.tests.test_triggers import hook, sig
 from backend.tests.test_triggers_incoming import as_bot, stored_rows
 from backend.tests.test_wake_rules import setup
 from backend.tests.test_webhooks import due, make, net, publish, run, sends, verify  # noqa: F401
+from backend import bot_settings as BS
 
 # Slack's published request-signing example (api.slack.com/authentication/verifying-requests-from-slack): its
 # secret, timestamp, form body and signature.
@@ -160,7 +161,8 @@ def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
 def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_company_events_alone(api, net):
     department(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='engineering',config=json_set(config,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'engineering'})
     everyone = make(api, events=["task.created", "custom.*"])
     eng = make(api, events=["task.created", "custom.*"], filter={"departments": ["engineering"]})
     cpo = make(api, events=["task.created"], filter={"bots": ["cpo"]})

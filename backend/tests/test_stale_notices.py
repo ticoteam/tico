@@ -1,6 +1,7 @@
-"""A notice that news has overtaken is dropped at claim, not run (backend/execution.obsolete_notices_sql): a status
-check of a quiet task its owner has acted on since, and a pull request's checks result for a head the pull request
-has moved past, and a step's late warning for a ticket that has left the step. A notice that is still news runs."""
+"""A notice that news has overtaken is dropped at claim, not run (backend/execution.obsolete_notices_sql): a legacy per-task
+check (check_back, step_status) still queued unstarted, which the task roundup lists instead, and a pull request's checks
+result for a head the pull request has moved past, and a step's late warning for a ticket that has left the step. A
+legacy check whose turn already started is the rest of that turn, so it runs. A notice that is still news runs."""
 import json
 
 from backend.store import H
@@ -27,7 +28,7 @@ def queued(c, message):
     return c.execute("SELECT state FROM jobs WHERE message_id=?", (message["id"],)).fetchone()[0]
 
 
-def test_a_status_check_the_owner_has_acted_on_since_is_dropped(api):
+def test_a_legacy_status_check_is_dropped_at_claim_whether_or_not_its_task_was_touched(api):
     r = fleet(api)
     with api.app.state.store.transaction() as c:
         row, other = task(c), task(c, "Fix the login")
@@ -40,7 +41,11 @@ def test_a_status_check_the_owner_has_acted_on_since_is_dropped(api):
     handed = [claim(api, r), claim(api, r)]
     with api.app.state.store.read() as c:
         assert queued(c, quiet) == "canceled"
-    assert [a["job_id"] for a in handed if a] == [job(api, kept)], "a task nobody touched still gets its check"
+        assert queued(c, kept) == "canceled", "a legacy check is obsolete whatever its task says: the task roundup lists it"
+        start = [r[0] for r in c.execute(
+            "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state<>'canceled' "
+            "AND json_extract(m.refs,'$.rule')='auto_start'").fetchall()]
+    assert [a["job_id"] for a in handed if a] == start, "the only claim is the start notice of the task the owner touched"
 
 
 def test_checks_news_for_a_head_the_pull_request_moved_past_is_dropped(api):
@@ -124,3 +129,62 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
     with api.app.state.store.read() as c:
         assert queued(c, old) == "canceled"
         assert queued(c, kept) != "canceled", "a ticket still held keeps the refusal"
+
+
+def test_a_legacy_check_whose_turn_already_started_is_kept_to_finish_it(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        under_way, unstarted = task(c), task(c, "Fix the login")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")         # the new-task notices are not this test
+        started = H._wake(c, under_way, "bot:ops", "Status check: no activity for 2 h.", {"wake": "step_status"},
+                          trigger="stall_check")
+        late = H._wake(c, unstarted, "bot:ops", "Status check: no activity for 2 h.", {"wake": "step_status"},
+                       trigger="stall_check")
+        # The first run of the started job's turn ended and yielded: its attempt started, and the job waits to continue it.
+        job_id = c.execute("SELECT id FROM jobs WHERE message_id=?", (started["id"],)).fetchone()[0]
+        runner_id = c.execute("SELECT id FROM runners LIMIT 1").fetchone()[0]
+        now = H.now()
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
+                  "VALUES('attempt-under-way',?,'ops',?,1,'hash-under-way','running',?,?,?)",
+                  (job_id, runner_id, H.shift(now, minutes=30), now, now))
+        c.execute("UPDATE jobs SET attempt_id='attempt-under-way', state='queued' WHERE id=?", (job_id,))
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, late) == "canceled"
+        assert queued(c, started) != "canceled", "a turn that started and yielded is the rest of its turn, not a stale check"
+
+
+def check_back_refusal(api, machine, job_id):
+    """job_refusal's verdict on one queued job, as the claim asks it, with nothing busy."""
+    from backend import execution
+    with api.app.state.store.read() as c:
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine["runner_id"],)).fetchone()
+        ready = execution.readiness_document(runner["readiness"])
+        job = H._rows(c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)))[0]
+        return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner), execution.roots_on(runner))
+
+
+def test_a_check_back_whose_turn_started_or_a_person_resumed_is_not_refused_as_obsolete(api):
+    # Every check-back is stale (task_check_backs.stale) and the claim refuses it, but the rest of a turn that started,
+    # or that a person resumed, runs: obsolete_notices_sql keeps those, and so must the refusal.
+    r = fleet(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = task(c)
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")         # the new-task notices are not this test
+        back = H._wake(c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back")
+        job_id = c.execute("SELECT id FROM jobs WHERE message_id=?", (back["id"],)).fetchone()[0]
+    assert check_back_refusal(api, r, job_id) == "obsolete_check_back", "unstarted, it is stale"
+    now = H.now()
+    with store.transaction() as c:
+        runner_id = c.execute("SELECT id FROM runners LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at) "
+                  "VALUES('attempt-check-back',?,'ops',?,1,'hash-check-back','running',?,?,?)",
+                  (job_id, runner_id, H.shift(now, minutes=30), now, now))
+        c.execute("UPDATE jobs SET attempt_id='attempt-check-back' WHERE id=?", (job_id,))
+    assert check_back_refusal(api, r, job_id) != "obsolete_check_back", "a turn that started is the rest of it: it runs"
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET started_at=NULL WHERE id='attempt-check-back'")
+        c.execute("INSERT INTO job_recovery(job_id,attempt_id,decision,note,actor,created_at) "
+                  "VALUES(?,'attempt-check-back','resume','Carry on.',?,?)", (job_id, H.human_actor("ana"), now))
+    assert check_back_refusal(api, r, job_id) != "obsolete_check_back", "a person resumed it: it runs"

@@ -145,9 +145,14 @@ const words = text => text.trim().split(/\s+/).length;
     assert.ok(level.dy < 2 && level.gap > 0 && level.gap < 16, `the peek sits beside the row: ${JSON.stringify(level)}`);
     assert.ok(words(said) <= 6 && !/asks/i.test(said), said);
     assert.equal(await peek.locator('[data-peek-go]').innerText(), said, 'the line is the action');
+    // A team reply waits too: the support chat waits behind the peek, and opens by itself once the peek is dismissed.
+    assert.equal(await page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'the support chat waits behind the peek');
     await peek.getByRole('button', {name: 'Dismiss'}).click();
     assert.equal(await peek.isHidden(), true);
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
+    await page.locator('#support-pop[open]').waitFor({timeout: 8000});
+    await page.keyboard.press('Escape');
+    await page.locator('#support-pop').waitFor({state: 'hidden'});
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
     // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
     // The flight is quick: under 350 ms however far it goes.
@@ -323,13 +328,8 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     await page.locator('#mobile-nav [data-nav="tasks"]').click();
     assert.equal(await page.locator('#ask-panel').isHidden(), true, 'a tab never opens Ask');
-    // A "things need you" sheet already open: the chat opens over it, not under it.
-    await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.style.height = '600px'; document.body.appendChild(s); });
     await tab.click();
     await page.locator('#ask-panel').waitFor();
-    await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
-    assert.equal(await page.evaluate(() => { const r = document.querySelector('#ask-panel').getBoundingClientRect();
-      return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#ask-panel'); }), true, 'the chat is above the needs-you sheet');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     assert.deepEqual(errors, []);

@@ -86,7 +86,7 @@ def test_a_run_records_the_rule_that_woke_it_and_fail_open_wakes(api, monkeypatc
     attempt = claim(api, r, "cpo")
     finish(api, r, attempt)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT rule_id FROM turns WHERE id=?", (attempt["id"],)).fetchone()[0] == "assignment"
+        assert c.execute("SELECT rule_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "assignment"
     monkeypatch.setattr(R, "_judge", lambda *a, **k: 1 / 0)
     with api.app.state.store.transaction() as c:
         other = plain_task(c, "Other work", clear=False)

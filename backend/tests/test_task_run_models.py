@@ -13,6 +13,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_check_models import finish, heartbeat
 from backend.tests.test_task_models import ops_on_sonnet, set_task_model, task_turn
+from backend import bot_settings as BS
 
 HAIKU = {"model": "claude-haiku-5-5", "effort": "low", "harness": "claude"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
@@ -280,8 +281,8 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
     mine = filed(api, "Tidy the changelog")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES('ops-a1','ops-a1','Ops A1','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('ops-a1',?,'ana')",
-                  (json.dumps({"assignment_branch": True, "shared_from": "ops"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
+        BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
         c.execute("UPDATE tasks SET owner_id='bot:ops-a1',status='doing' WHERE id=?", (mine["id"],))
         haiku = task_run_models.stamped("claude-haiku-5-5", "low", "claude")
         task_run_models.set_choice(c, "human:ana", mine["id"], haiku)

@@ -41,7 +41,7 @@ def configured(c, check_id, owner):
 
 
 def _executed(c, task_id):
-    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at,id", (task_id,))]
+    turns = [r[0] for r in c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at,id", (task_id,))]
     if not turns:
         return set(), False
     families, known = set(), True

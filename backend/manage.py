@@ -17,13 +17,16 @@ from .blobs import Blobs
 from .config import ROOT, Settings
 from .execution import Execution
 from .store import H, P, Problem, Store, encode, repo_url
+from . import bot_settings as BS
 
 
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
                 "meeting_versions", "meeting_deliveries")
 # A legacy source's task_events rows are the new database's task rows in history_events
-# (backend/migrations/0064_history_events.py); the report keeps the source's name for them.
-HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'"}
+# (backend/migrations/0064_history_events.py); the report keeps the source's name for them. A legacy turn is an attempts
+# row with a run record (migration 0072), so a turns count reads those.
+HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'",
+                  "turns": "SELECT count(*) FROM attempts WHERE job_id IS NULL OR trigger IS NOT NULL"}
 
 
 def registry_dir():
@@ -249,12 +252,12 @@ def main(argv=None):
         repo = repo_reference(args.repo)
         with store.transaction() as c:
             bot = (H.resolve_bot(c, args.bot) or {}).get("id", args.bot)
-            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
             config = {**json.loads(row["config"] or "{}"), "repo": repo}
-            c.execute("UPDATE bot_config SET repo=?,config=?,revision=revision+1 WHERE bot=?",
-                      (repo, encode(config), bot))
+            BS.write(c, bot, config)
+            c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
             H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
         report = {"bot": bot, "repo": repo,
                   "repo_url": repo_url(repo, store.settings.github_owner)}

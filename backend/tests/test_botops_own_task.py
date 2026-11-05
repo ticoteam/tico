@@ -188,7 +188,7 @@ def test_botops_own_ask_is_a_plain_ask(api, botops):
     assert (tried.json()["actor"], tried.json()["role"]) == ("bot:botops", "bot")
 
 
-def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(api, botops):
+def test_private_subtask_from_bot_requested_run_is_judged_on_by_default(api, botops):
     from backend.tests.test_ask_ingest import FakeModel, items, calls
     model = FakeModel(kind="own_work")
     api.app.state.judge = model
@@ -204,9 +204,9 @@ def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(a
         "relations": [{"task": task["id"], "kind": "parent"}]})
     assert filed.status_code == 200, filed.text
     made = filed.json()["task"]
-    assert (made["owner_id"], made["requester_id"]) == ("human:ana", "bot:ops")
+    assert (made["owner_id"], made["requester_id"]) == ("bot:ops", "bot:ops"), "sent back: it stays with the bot"
     [item], [call] = items(api), calls(api)
-    assert (item["mode"], item["outcome"], item["would"]) == ("rehearsal", "through", "sent_back")
+    assert (item["mode"], item["outcome"], item["would"]) == ("on", "sent_back", "sent_back")
     assert item["asker"] == "bot:ops" and item["ref"] == made["id"] and item["call_id"] == call["id"]
     assert len(model.calls) == 1
     with api.app.state.store.read() as c:

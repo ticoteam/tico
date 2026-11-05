@@ -317,7 +317,7 @@ def settle(conn, aid, bot, started):
     keeps its condition. Anything else: back to eligible, said in its history. Returns {task id: outcome}."""
     H = _H()
     out = {}
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE carried_by=? AND next_run=1 AND status='open'", (aid,))):
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE carried_by=? AND next_run=1 AND status='open'", (aid,))):
         if condition(row):
             outcome = DEFERRED
         elif _last_since(conn, row["id"], HANDLED, started) or worked(conn, row, bot, started):
@@ -347,7 +347,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     The owner bot or a person. Returns the task."""
     H = _H()
     from . import task_snooze
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
     row = H.task(conn, task_id)
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -393,12 +393,6 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
         if stamp > H.shift(H.now(), days=MAX_DAYS):
             H.refuse(conn, actor, "date", f"defer for at most {MAX_DAYS} days; close it if nobody will")
         cond.update(kind="time", until=stamp)
-        from . import task_check_backs
-        if task_check_backs.involved(row):
-            planned = min(stamp, row["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(row) else stamp
-            if H.is_bot(actor):
-                planned = min(planned, H.shift(H.now(), days=14))
-            task_check_backs.set_time(conn, row, planned, "Inspect the scheduled work and its resume condition.", system=True)
     conn.execute("UPDATE tasks SET resume=?, updated_at=? WHERE id=?", (json.dumps(cond), H.now(), task_id))
     H._task_event(conn, task_id, actor, FIELD, aid, DEFERRED, describe(conn, cond))
     H.event(conn, actor, "task.next-run.deferred", task_id,
@@ -423,7 +417,7 @@ def finished(conn, done_task):
     """`done_task` is done or closed: each open quiet task deferred until it resumes. Returns their ids."""
     H = _H()
     out = []
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE resume IS NOT NULL AND next_run=1 "
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE resume IS NOT NULL AND next_run=1 "
                                     "AND status='open' AND json_extract(resume,'$.task')=?", (done_task["id"],))):
         name = _task_name(done_task) if H.task_private(conn, done_task) and not H.task_private(conn, row) \
             else done_task["title"]
@@ -459,7 +453,7 @@ def stale(conn, at=None, hours=STALE_HOURS):
     out = []
     try:
         rows = H._rows(conn.execute(
-            "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
+            f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
             "AND t.status='open' AND t.resume IS NULL AND t.snoozed_until IS NULL "
             "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM history_events e "
             "WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind=? AND e.new=?))", (FIELD, RETURNED)))

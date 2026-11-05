@@ -3,11 +3,14 @@ ones included unless asked, closed ones never; and a queued job that can never b
 
 import uuid
 
+import pytest
+
 from backend import health
 from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
 from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
+from backend.tests.hold_rows import set_holds
 
 
 def board(api):
@@ -43,7 +46,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
                                 "relations": [{"task": reviewed["id"], "kind": "parent"}]})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='step'", (H.shift(H.now(), hours=-30), old["id"]))
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=3), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), days=3))
         c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
         c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
                   (str(uuid.uuid4()), reviewed["id"], "pr", "https://github.com/acme/app/pull/7", "PR #7", "open",
@@ -135,6 +138,44 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
         _, slow, stuck = health._waiting(c, {r["runner_id"]})
     rows = [row for row in slow + stuck if row["bot"] == "ops"]
     assert rows and all((row["queued"], row["dead"]) == (pipe["queued"], pipe["dead"]) for row in rows)
+
+
+@pytest.mark.parametrize("scope", ["task", "chat"])
+def test_quarantine_held_work_has_its_own_pipeline_and_health_classification(api, scope):
+    from backend.tests.test_task_lanes import new_task, task_bot
+    from backend.tests.test_task_quarantine import refusals, started
+    board(api)
+    machine = task_bot(api, lanes=True)
+    if scope == "chat":
+        post(api, "chat/ops", {"text": "Check the export."})
+        attempt = started(api, machine)
+        target = new_task(api, "Check the export", owner="cpo")
+    else:
+        target = new_task(api, "Check the export")
+        attempt = started(api, machine)
+    refusals(api, attempt, target)
+    post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-2), attempt["job_id"]))
+    ops = stats(api)["queues"]["ops"]
+    assert (ops["quarantine_held"], ops["queued"], ops["dead"], ops["held"], ops["uncertain"]) == (1, 0, 0, 0, 0)
+    assert ops["dead_ids"] == [] and ops["oldest_queued_hours"] is None
+    with api.app.state.store.transaction() as c:
+        _, slow, stuck = health._waiting(c, {machine["runner_id"]})
+        rows = [row for row in slow + stuck if row["bot"] == "ops"]
+        assert rows and all((row["quarantine_held"], row["queued"], row["dead"], row["reason"]) ==
+                            (1, 0, 0, "task_quarantine") for row in rows)
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                  (H.shift(H.now(), minutes=-31), machine["runner_id"]))
+        [computer] = health.silent_computers(c)
+        assert (computer["quarantine_held"], computer["queued"], computer["dead"]) == (1, 0, 0)
+    new_task(api, "Check the archive")
+    ops = stats(api)["queues"]["ops"]
+    assert (ops["quarantine_held"], ops["queued"], ops["dead"]) == (1, 1, 0)
+    post(api, "bots/ops/quarantine/clear", {})
+    ops = stats(api)["queues"]["ops"]
+    assert (ops["quarantine_held"], ops["queued"], ops["dead"]) == (0, 2, 0)
 
 
 def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypatch):

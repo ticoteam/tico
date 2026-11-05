@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H, move_retry
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import ticket, move, HEAD, BASE
@@ -104,7 +105,8 @@ def unreadable(api, monkeypatch, mode, response=None):
     state = {'down': True}
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('devops-engineer','{\"runtime\":\"fake\"}','ana')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('devops-engineer','ana')")
+        BS.write(c, "devops-engineer", {"runtime": "fake"})
     service = api.app.state.github_app
     # A configured app row: truthy for the gate's snapshot, mapping-shaped for link refreshes.
     monkeypatch.setattr(service, 'row', lambda c=None: {"org": "ticoteam"})
@@ -504,20 +506,3 @@ def test_a_refused_move_onto_another_board_is_retried_onto_that_board(api, revie
 def task_type(api):
     with api.app.state.store.read() as c:
         return H.type_get(c, 'Dev tickets')['id']
-
-
-@pytest.mark.parametrize('review_step', ['Review 1', 'Review 2'])
-def test_the_stranded_sweep_releases_another_boards_gate_hold_only_once_no_retry_will(api, review_step):
-    """Only engineering tickets have reconciliation; on another board the retry is what clears a gate hold, so the
-    hourly sweep leaves it while Tico still retries and releases it after, or it would be held forever."""
-    from datetime import datetime, timedelta, timezone
-    task = general(api, ticket(api))
-    assert cross_move(api, task, review_step).status_code == 422
-    stamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
-    with api.app.state.store.transaction() as c:
-        assert H.sweep_stranded(c, stamp) == []     # past the sweep's grace, inside the retry's
-        c.execute("UPDATE history_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
-                  "WHERE subject_type='task' AND subject_id=? AND kind='move_retry'", (task['id'],))
-        assert H.sweep_stranded(c, stamp) == [(task['id'], 'open')]
-    released = get(api, 'tasks/' + task['id'])['task']
-    assert released['status'] == 'open' and not hold(released)

@@ -224,6 +224,15 @@ function lastStopHTML(slug) {
     + (stopReviewable(slug, stop) ? '<button class="primary bot-alert-resume" type="button" data-stop-review>Retry or dismiss</button>' : '');
 }
 const stopReview = slug => void executionReview(slug, async () => { await v2Refresh(); botAlertDraw(); });
+// A bot's uncertain run that holds queued work waits for a review (backend/views.py uncertain_work). The bot's page offers
+// it under More, with the same Stopped runs card as Retry or dismiss; the account menu never lists it.
+const botReviewIssue = slug => (S.status?.health_issues || []).find(issue => issue.kind === 'uncertain_work' && issue.bot === slug && issue.can_review !== false) || null;
+function botReviewHTML(slug) {
+  const issue = botReviewIssue(slug), e = botRow(slug);
+  if (!issue || !e || botLimited(e) || !settingsCanManageBot(e)) return '';
+  return `<section class="card" id="bot-review"><header><h2>Stopped runs</h2><button class="ghost" type="button" data-bot-review>Review</button></header>
+      <p>${esc(issue.title)}</p></section>`;
+}
 function lastStopOpen(slug) {
   const stop = lastStopOf(slug); if (!stop) return;
   const review = stopReviewable(slug, stop);
@@ -299,6 +308,8 @@ function botAlertDraw() {
   if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
   if (paused) patchLiveHTML(paused, botPausedBadge(BOT.slug));
   if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
+  const review = $('#bot-review-host');
+  if (review) patchLiveHTML(review, botReviewHTML(BOT.slug));
   if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
 }
 // Files dragged over any part of a bot's chat attach to its composer, which lights up to say so
@@ -368,8 +379,9 @@ async function pageBot(slug, tab) {
       ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
         return `<button type="button" data-bt="${t}" role="tab">${label}</button>`; }).join('')}
     </div>
+    ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
-    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><span class="nav-icon" aria-hidden="true">more_vert</span></a>
+    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r=".4" fill="currentColor"/></svg></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
   <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div></div>
@@ -377,9 +389,8 @@ async function pageBot(slug, tab) {
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
-    ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
-      `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
-      <span class="bot-talk-acts"></span></div>`}
+    ${limited || talkTabs.length < 2 ? '' : `<div class="bot-talk-bar"><div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
+      `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div></div>`}
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>
@@ -412,6 +423,7 @@ async function pageBot(slug, tab) {
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
+    <div id="bot-review-host">${botReviewHTML(slug)}</div>
     ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
       <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
@@ -518,7 +530,7 @@ async function pageBot(slug, tab) {
   // One click, from the warning beside the name or the card under More. Stopped runs settle on their own;
   // nothing to write or review.
   const resumeClick = async ev => {
-    if (ev.target.closest('[data-stop-review]')) { stopReview(slug); return; }
+    if (ev.target.closest('[data-stop-review], [data-bot-review]')) { stopReview(slug); return; }
     if (ev.target.closest('[data-last-stop]')) { lastStopOpen(slug); return; }
     const retry = ev.target.closest('[data-limit-retry]');
     if (retry && !retry.disabled) {
@@ -543,7 +555,7 @@ async function pageBot(slug, tab) {
       button.disabled = false;
     }
   };
-  for (const host of [$('#bot-alert'), $('#bot-quarantine-host')]) if (host) host.onclick = resumeClick;
+  for (const host of [$('#bot-alert'), $('#bot-quarantine-host'), $('#bot-review-host')]) if (host) host.onclick = resumeClick;
   // An external agent's credential is issued here, on the bot it runs (the Settings bots
   // table that held these buttons is gone).
   $('#pane-more')?.querySelectorAll('[data-agent-credential],[data-agent-revoke],[data-agent-pair]').forEach(button => {
@@ -697,9 +709,9 @@ function botThreadShow(kind) {
   if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
   botThreadStop();
   const actor = 'bot:' + BOT.slug;
-  // The thread's actions (call, Members, menu) sit in the Home/DM bar instead of a title line. Both keep the bot
-  // chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
-  const acts = {header: 'compact', actsHost: $('#pane-chat .bot-talk-acts'), goals: BOT.slug};
+  // The thread's actions (call, Members, menu) sit in the page's top line beside the tabs, never a row of their own.
+  // Both keep the bot chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
+  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
 }

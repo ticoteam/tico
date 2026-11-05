@@ -34,7 +34,7 @@ that is a link. The old files are left in place, unread (`runner-rs/src/harness_
 
 A stateless bot keeps no memory at all: Counsel, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
 says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/`, `knowledge/`
-or `state.md`, its memory folders are not committed for it, and the nightly learnings skip it. Each task is judged from
+or `state.md`, its memory folders are not committed for it, and Learn skips it. Each task is judged from
 its own text (see [sessions](sessions.md)).
 
 ## Where it comes from
@@ -104,14 +104,13 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 (on a shared bot, the caller's own branch, where POST files it), or else the newest one finished in the last day, or `{dream: null}`. `state` is `starting`, `dreaming`, `asking`
 (an open question to the requester: `questions` is `{message_id, text, mine}`), `done` or `stopped`.
 
-**Auto dream** is the same dream started by the night, without a click. At 02:00 company time (Settings > Routines,
-"Auto dream", on by default) it starts one for each bot whose memory changed a lot since its last dream, and only then.
+**Auto dream** is the same dream started without a click: the **Dream** step of the [Maintenance](maintenance.md) run, once a day, on by default. It starts one for each bot whose memory changed a lot since its last dream, and only then.
 A bot is due when it is active, keeps memory, has no open dream, its last dream of either kind started at least 48
 hours ago (a bot that never dreamed must be 48 hours old), and its memory since that dream's start, or 14 days back if
 that is later, changed at least 200 lines over at least 10 memory turns. Counted: `memory/` except `memory/state.md`,
 and AGENT.md, AGENTS.md and CLAUDE.md (the runner reports only `memory/` and `knowledge/` today, so instruction-file
-changes do not count yet). A dream's own commits and memory tidy passes' commits do not count. At most three start a
-night, most changed lines first; the scheduled run claims its night once, so a restart does not start them twice.
+changes do not count yet). A dream's own commits and memory tidy passes' commits do not count. At most "Most bots per run" start a
+run (three by default), most changed lines first; a restart does not start them twice.
 `backend/dream_auto.py` holds the rule.
 
 The requester is the bot's nearest human manager (the first person above it in its reporting chain, if still on the
@@ -122,12 +121,17 @@ it asks at most three business questions in one message, then makes a second com
 requester did not start the dream, so the question is what they answer, and it goes through the same exemption from
 ask ingest. Settings > Routines switches it off; Run now starts the same selection at once and ignores only the clock.
 
-## Nightly learning run
+## Learn (beta)
 
-Once a night, at or after 3:00 (Pacific, the same clock as daily updates; an owner or admin moves the time or
-switches it off in Settings > System), Tico reads the day's
-activity once and hands each recipient what is relevant to it (`backend/learnings.py`). No bot reads
-Slack or mail for this itself.
+Learn is a Maintenance step, off by default and due at most once a day. It reads activity once, scores it with
+Tico Decide, and keeps each bot's top items for that bot's next Update turn (`backend/maintenance_steps/learn.py`,
+`backend/learnings.py`). No bot reads Slack or mail for this itself. Learn has its own source cursors; Run now
+uses Maintenance's step rules.
+
+The nightly timer and its System routines control are retired. Learn uses Maintenance's schedule and its own
+"How often" setting (once a day by default). A saved learnings on/off choice carries over at cutover unless someone
+has already edited Learn in Maintenance; an inherited default becomes off. The old read-only Automations mirror
+is soft-deleted and its unfinished runs are skipped.
 
 **What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
 
@@ -143,32 +147,82 @@ Slack or mail for this itself.
   never the transcript.
 
 **Routing.** The decision model (the Tico AI Gateway when the server has a gateway key, then your own TypeSafe key if
-you set one, then the team's own AI provider; with none of them the night shows "needs a decision model"; when the team's monthly decision spend cap is
+you set one, then the team's own AI provider; with none of them the run shows "needs a decision model"; when the team's monthly decision spend cap is
 reached, even partway through, the night sends nothing, shows "Skipped", and the same activity is read again on a later
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
-to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
-highest first. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
+to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 15 items each,
+highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 
-**Packets are tasks.** Each recipient gets one private task, "Nightly learnings: <date>", with the
-instructions and its packet: each item's source, link, the quoted text, its score and who else got it.
-A new night closes the bot's earlier packet if no run has picked it up yet, so unread nights never pile up.
-A bot changes only its own repository and commits with `Tico-Run:`; a change to its instructions or
-settings goes to BotOps as a task. The Librarian edits docs directly (every edit is a version) and
-reports market facts with `hub market report`.
+**Delivery.** Items wait in `learning_deliveries` with no task and no Update batch id. The next Update request
+carries a short "Learnings for you" block, with at most 15 one-line items and their sources. Sources are checked
+again before sending: private tasks and restricted conversations stay out of a company session. Bot Home messages
+require company-wide Read access and still pass each message's privacy checks. A bot with no
+work gets a delivery-only turn and posts no update. No packet task is created.
+Slack items require a stored public-channel event; private channels and unknown audiences stay out. Mailbox
+access is restricted, so sent mail is excluded from Update delivery.
 
-**The page.** **Learnings** in the account menu lists the nights. A night shows Bots (memory commits
-made by the runs that worked its packet task), Docs (the Librarian's doc versions while its task was
-open) and Market (its market changes then), each change with its source and diff. A bot's changes show
-only to readers who may read that bot. A packet's text shows only when the reader may read the source
-today (the thread, the task, the mailbox, the meeting); anything else is counted as private.
+The request and its receipts share the `update_queue` id (`update_batch_id`). Retries reuse those items; a redo of
+an old update consumes none. Each delivery keeps its original request message id for history and the latest delivery
+request id for final-reply feedback. A redo changes neither. Pending deliveries
+expire after seven days and count as expired. Selection checks
+at most 100 candidate items; when several runs are pending, the highest scores go first and excess items count
+as not sent. Original items stay readable on the Learnings page. The bot follows its memory working rules,
+commits its changes and reports `learnings_saved: n`, including zero, in its final reply or the update's structured
+fields. Saved counts are attributed to the oldest contributing run first. Drops count only reported items;
+an absent or invalid count stays unreported. Learn's run details, its Maintenance settings and `learnings.beta_stats(c, days=7)` show reads,
+items sent per bot, saved, dropped, unreported, not sent, expired and cost. Decide meters calls under the monthly cap,
+including paid failures; a capped run sends nothing and keeps its cursors.
 
-- `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > System): tonight's run now; 409 when it is running or already ran.
+**The page.** Learnings lists runs by day, including old packet tasks and new Update deliveries. It shows memory
+commits from the delivery turn, the Librarian's doc and market changes during that turn, and delivery status.
+The original request and turn define that history even after an Update redo or queue cleanup.
+A bot's changes show only to readers who may read that bot. An item's text shows only when the reader may read
+its source today (the thread, task, mailbox or meeting); anything else is counted as private. Old packet tasks
+stay readable.
+
+- `POST /api/v2/learnings/run` (owner or admin): Maintenance Run now with `step=learn`; an off step stays off.
+- `POST /api/v2/system-routines/learnings/run` is the same Maintenance Run now. Both routes return `{run, started}`, join a live run and accept an Idempotency-Key.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.
+
+## Suggest
+
+Suggest is a free Maintenance step: no billing or model calls. The owner opts in with **Share stats for suggestions**
+under Settings > General > Privacy. It starts off and cannot be enabled on a plain open-source install; a hosted
+install or Tico Gateway connection is required, and fetching also needs the install's Gateway key. Demo and rehearsal
+installs send nothing. This consent is separate from the anonymous usage count.
+
+At most once every 24 hours, Suggest posts `snapshot_version: 1`, active bot counts (total and by BotOps, Goal Manager,
+Engineering Lead and Finance template), the open task count and enabled custom automation count to the Gateway's
+`/v1/suggestions`. Spend is never sent: when a company monthly usage pool cap is set, its spend and cap are read only by the
+local condition check at delivery.
+The saved model Gateway's `/v1/gateway` suffix is removed to reach this service route. Unknown facts are omitted.
+Names, messages, task text and credentials are never in the JSON; the install key authenticates
+the request. A timeout or invalid response fails the step without storing suggestions.
+
+Suggestions wait in a hidden install-owned table. Update resolves each role to an active bot by its template and checks
+the condition against fresh counts immediately before sending. A missing operand makes a comparison false, including
+`ne`; a stale suggestion becomes `condition_false`. A missing role stays pending. Finance uses the existing Finance bot
+template priority. `person_money_cap` uses spend alerts' company-owner lookup and keeper notice path; it waits if that
+person cannot be resolved or fresh local monthly spend is unknown or does not exceed the company pool's monthly cap.
+A zero-work bot gets a delivery-only turn, and redos consume nothing. Retries re-check conditions and role ownership.
+
+Each bot delivery carries at most ten suggestions and binds to the `update_queue` request id and original delivery
+message id. A bot posts acted-on ids as `suggestions_seen`, with
+`delivery_batch_id`; another bot or batch cannot acknowledge them. A completed turn without acted-on ids counts as
+`delivered` only for the original delivery message; a redo's turn cannot settle it. An unsettled receipt past its
+cooldown becomes `expired`. Fingerprints cannot repeat during cooldown;
+unreported outcomes are retained before renewing a fingerprint while reporting is on.
+
+**Report suggestion outcomes** starts on. Both privacy switches must remain on for either Gateway call. The step reports
+at most 100 receipts to `/v1/suggestions/outcomes`, containing only `suggestion_id` and `outcome` (`delivered`, `acted`, `dismissed`,
+`expired` or `condition_false`). Failed reporting keeps receipts unacknowledged for a later run. Both Gateway calls run
+outside write transactions. Privacy settings are owner-only at `GET/PUT /api/v2/system/suggestions` and discoverable
+through the existing `hub settings` and MCP settings catalogue.
 
 ## Nightly memory tidy contract (developer integration)
 

@@ -13,7 +13,9 @@ const TR_SVG = {
 };
 // `#` before a thread's name, a lock for a private one.
 const threadHashHTML = t => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
-const trPhone = () => matchMedia('(max-width:760px)').matches;
+const TR_PHONE = matchMedia('(max-width:760px)'), trPhone = () => TR_PHONE.matches;
+// #/threads first drawn at phone width has an empty pane: grown past the phone's width it opens what the computer does.
+TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route === THREADS_ROUTE) void pageThreads(); });
 
 // The thread last opened here, which #/threads opens again.
 const THREADS_LAST_KEY = 'tico.threads.last';
@@ -77,9 +79,9 @@ async function pageThreads() {
   threadUnmount(THREAD_PAGE?.view); THREAD_PAGE = null;
   pane.innerHTML = '<div class="tr-empty"><button type="button" class="primary" data-tr-new>New thread</button></div>';
 }
-// #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit) opens it at that message.
+// #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
 function pageThread(id) {
-  const focus = new URLSearchParams(S.route.split('?')[1] || '').get('m') || '';
+  const q = new URLSearchParams(S.route.split('?')[1] || ''), focus = q.get('m') || q.get('focus') || '';
   const shell = threadsShell(), pane = shell.querySelector('.tr-pane');
   shell.dataset.mode = 'thread';
   railRender();

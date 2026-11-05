@@ -8,17 +8,22 @@ reviewer. Each is safe to run again after a lost answer or a lost lease:
   send, forward               a draft first, then a row in `sends` before the API call. Gmail deletes a draft
                               when it sends it, so a retry whose draft is gone never sends again; it reports the
                               earlier send (or the person's discard) instead.
+  unsubscribe                 one RFC 8058 request to the message's own link, claimed before its POST
+                              (unsubscribe.submit): a retry answers already_attempted and sends nothing
 
 Reply drafts keep the thread (In-Reply-To, References, the threadId) and go to the message's sender unless the
 automation named `to`.
 """
 
+import base64
 from datetime import datetime
 
-from . import DEFAULT_TZ, Failure, Refused, compose, db, labels as lb, zone
+from . import DEFAULT_TZ, Failure, Refused, access, compose, db, gmail as gm, labels as lb, zone
+from . import unsubscribe as unsub
+from .rules import in_domain
 
 KINDS = {"archive": "archive", "label": "label", "leave": "label", "draft": "draft", "send": "draft",
-         "forward": "draft"}       # action -> the CLI verb it needs on the mailbox
+         "forward": "draft", "unsubscribe": "unsubscribe"}       # action -> the CLI verb it needs on the mailbox
 FORWARDED = "\n\n---------- Forwarded message ---------\nFrom: {from_header}\nDate: {date}\nSubject: {subject}\n" \
             "To: {to}\n\n{body}"
 
@@ -47,6 +52,8 @@ def perform(ctx, action):
     if kind == "leave":
         _modify(ctx, mid, add=[lb.NEEDS_OWNER])
         return {"ok": True, "detail": "left for you"}
+    if kind == "unsubscribe":
+        return _unsubscribe(ctx, mid)
     original = _original(ctx, mid)
     text = str(args.get("body") or args.get("text") or "")
     if kind == "forward":
@@ -98,6 +105,75 @@ def _original(ctx, mid):
         if e.status == 404:
             raise Refused(f"there is no message {mid} in {ctx.mailbox} any more.") from e
         raise
+
+
+def _unsubscribe(ctx, mid):
+    """One RFC 8058 request to the message's own unsubscribe link, for mail the owner may unsubscribe from. Refused, with
+    a reason and nothing sent, for starred mail, internal mail, mail from someone on the people roster and mail from
+    someone the mailbox already writes to. Only an accepted request is ok, so an archive chained after it never runs
+    for a sender who did not confirm. Nothing here is retried: a repeat would only answer already_attempted."""
+    original = _original(ctx, mid)
+    why = _keep_reason(ctx, original)
+    if why:
+        return {"ok": False, "retry": False, "detail": f"not unsubscribing: {why}"}
+    try:
+        url = _one_click_url(ctx, mid)
+    except unsub.Unsupported as e:
+        return {"ok": False, "retry": False, "detail": str(e)}
+    result = unsub.submit(ctx.conn, ctx.mailbox, url)
+    ctx.audit("unsubscribe", mid, result)
+    if result["accepted"]:
+        return {"ok": True, "detail": "already unsubscribed" if result.get("already_attempted") else "unsubscribed"}
+    return {"ok": False, "retry": False, "detail": f"not confirmed by the sender: {result['status']}"}
+
+
+def _keep_reason(ctx, original):
+    """Why the owner keeps this mail (no unsubscribe), or '' when it may be unsubscribed from. With no internal domains
+    known on this computer (a Docker install with no registry), nothing can be told apart from a coworker: refused."""
+    sender = original["from"]
+    if not ctx.policy.get("internal_domains"):
+        return "internal domains unknown on this computer"
+    if "STARRED" in original["labels"]:
+        return "the message is starred"
+    if in_domain(sender, ctx.policy["internal_domains"]) or sender == ctx.mailbox:
+        return "the mail is internal"
+    if sender in {a.lower() for a in access.roster_mailboxes()}:
+        return "the sender is on the people roster"
+    if _known_sender(ctx, original):
+        return "the mailbox already writes to the sender"
+    return ""
+
+
+def _known_sender(ctx, original):
+    """Whether the mailbox already writes to this sender: its sends or its synced sent mail have them as a recipient,
+    in any thread (db.has_sent_to), or the message's thread holds a message the mailbox sent to them (_answered_in_thread)."""
+    if db.has_sent_to(ctx.conn, ctx.mailbox, original["from"]):
+        return True
+    if not original["thread_id"]:
+        return False
+    return _answered_in_thread(ctx, original)
+
+
+def _answered_in_thread(ctx, original):
+    """Whether the thread holds a message the mailbox sent to this sender: SENT, from the owner's address, with the sender
+    among its To or Cc. A draft, or inbound mail that spoofs the owner's From, does not count."""
+    sender = original["from"].lower()
+    for m in ctx.gmail.thread(original["thread_id"]):
+        sent = gm.normalize(m)
+        if ("SENT" in sent["labels"] and sent["from"].lower() == ctx.mailbox.lower()
+                and sender in {a.lower() for a in sent["to"] + sent["cc"]}):
+            return True
+    return False
+
+
+def _one_click_url(ctx, mid):
+    """The message's List-Unsubscribe URL, found as the unsubscribe command finds it (__main__.py `unsubscribe_message`):
+    the raw message, whose DKIM signature is checked before any link is used."""
+    raw = ctx.gmail.get(mid, fmt="raw")
+    encoded = raw.get("raw", "")
+    if not encoded:
+        raise unsub.Unsupported("Raw message unavailable; manual unsubscribe needed.")
+    return unsub.endpoint(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
 
 
 def _draft(ctx, aid, raw, thread, to, subject):

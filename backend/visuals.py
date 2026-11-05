@@ -476,6 +476,7 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     Each is a version of a file on that task (task_review.comment_file's rule) or in that conversation. A page or SVG
     whose bytes would still load something from elsewhere gets a cleaned new version, and that version is the one
     posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
+    from .bot_home_merge import file_in_room
     from .counsel import no_attachments
     from .store import H, Problem
     from .task_review import comment_file
@@ -487,7 +488,7 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
             fid, version = comment_file(c, files.auth, files, who, task_id, fid, number)
         else:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row or row["scope"] != "conversation:" + conversation_id or row["archived"] \
+            if not row or not file_in_room(c, row["scope"], conversation_id) or row["archived"] \
                     or not files.visible(c, who, row, {}):
                 raise Problem("not_found", "File version not found in this conversation", 404)
             version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",

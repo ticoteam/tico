@@ -9,8 +9,8 @@ hubdb._set_status and hubdb.approval_request); this sweep catches the rest:
    (backend/task_holds.py). A question on an open task carries on when a task above it ends: it lives and dies with
    its own task (Dev 627). A done task keeps only the question asking its requester to accept what it delivered
    (hubdb.ACCEPTANCE_ASK_SQL).
-4. The keeper's old "no progress" questions to people are superseded: a stuck task goes to BotOps now, never to a person
-   (hubdb._report_stuck). None are asked any more, so this closes the ones open when that shipped, once.
+4. The keeper's old "no progress" questions to people are superseded: no stuck-task question goes to a person any more.
+   None are asked, so this closes the ones open when that shipped, once.
 5. A Confirm card asked of someone for another person (backend/settings_asks.py) that nobody tapped within a day
    expires: its request is declined and the asker told.
 6. A release's undecided publish approval at or below the newest release the hub knows shipped is withdrawn

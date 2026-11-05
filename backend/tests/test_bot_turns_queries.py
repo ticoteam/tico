@@ -37,8 +37,8 @@ def runs(api, count, room=False, failed=False):
         post(api, f"attempts/{aid}/events", {"events": rows}, machine["token"])
         if failed:
             with api.app.state.store.transaction() as c:
-                c.execute("UPDATE attempts SET state='failed',finished_at=? WHERE id=?", (H.now(), aid))
-                c.execute("DELETE FROM turns WHERE id=?", (aid,))
+                # The run record goes (no trigger, so the attempt is no run); the failed attempt stays.
+                c.execute("UPDATE attempts SET state='failed',finished_at=?,trigger=NULL WHERE id=?", (H.now(), aid))
         else:
             post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": f"Answer {k}.", "last_seq": len(rows)},
                  machine["token"])

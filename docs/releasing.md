@@ -3,8 +3,8 @@
 A release is a version tag. Everything it ships is built once, by the Release validation run for that commit and
 version, and that same build is what the gate tests. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which
 builds nothing: it takes that run's runner binaries and image digests, builds the installer bundle and publishes the
-GitHub release. Running installations look for that release to show
-"New version" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
+GitHub release. Running installations look for that release and offer it as
+"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
 and once the release is published it files one task for the Technical Writer to write that version's section of
 [CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
 so a release's notes reach users with the next build that contains them. No separate product announcement is required.
@@ -37,6 +37,7 @@ nothing is sent.
 pull request merged in the release repository; prereleases excepted). It wakes each ticket's QA owner (tickets
 tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
 Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
+Private tickets are counted but not named. The writer skips them; their owners handle any docs for changes people see.
 It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
 the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
 manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
@@ -76,9 +77,14 @@ migration file changed after it ran are all refused before anything is written.
 
 ## Migrations
 
-Every persistent schema change is a file in `backend/migrations`: `NNNN_name.sql` (its statements) or `NNNN_name.py`
-(an `up(conn)` that does not commit). The number is the next after the highest file. A file runs once, in its own
-transaction with its `schema_migrations` row, so a failure leaves neither. Never edit a file that has run: its checksum is
+Every persistent schema change is a file in `backend/migrations`: `YYYYMMDDHHMMSS_name.sql` (its statements) or `.py`
+(an `up(conn)` that does not commit), using a UTC timestamp. Create it with `python3 scripts/new_migration.py name`
+(add `--py` for Python). Existing `NNNN_` files keep their names and contents. Versions sort as full strings; legacy
+files precede timestamp files. Every unrecorded file runs, even if it sorts before one already applied. Each migration
+stands alone and must not depend on another unmerged migration's schema, so parallel PRs can merge in either order.
+CI rejects PR-added legacy names or duplicate timestamps against the current base tip and PR, with exact `git mv`
+suggestions. A file runs once, in its own transaction with its `schema_migrations` row, so a failure leaves neither.
+Never edit a file that has run: its checksum is
 recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
 (`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code. hubdb's `MIGRATIONS` list (user_version 71; a file from a
 release that ran growth segments as step 72 opens too, `NEWEST_USER_VERSION`) and the cloud steps in `Store.initialize`
@@ -439,7 +445,7 @@ The workflow then:
 - attaches the Mac runner and relay, `tico-runner-{macos-arm64,macos-x86_64}.gz`. No gate part runs on a Mac, so they
   are not built by validation: when `runner-rs` (its harness manifests included) and `relay-rs` did not change since the previous
   release, its Mac binaries are published with this one (a checkout checks a binary's `--build-id`, the source
-  fingerprint). When they did change, the `macos` job builds them beside the publication and `macos-assets` adds them
+  fingerprint). When they did change, the `macos` job builds them after the publication and `macos-assets` adds them
   to the published release, then rewrites both checksum files. Until then a Mac checkout's update says `waiting`
   (runner_support/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
@@ -457,7 +463,10 @@ rebuilds and pushes one small layer per image.
 
 ## Desktop apps follow the release
 
-The desktop app never holds up the server release. The Release workflow compares the tag with the previous release
+The desktop app never holds up the server release. Only `validated`, `runner-changes` and `release` run before core
+publication; the Mac binaries, desktop, recorder and company build branches start afterwards so their fan-out cannot
+compete with publication for job slots. A manual rebuild of an already published tag still runs those branches when
+`release` is skipped. The Release workflow compares the tag with the previous release
 tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
 two desktop workflows), it builds nothing and copies the previous release's desktop files and `latest.json` onto the new
 release, with the manifest's URLs moved to the new tag. The app keeps its earlier version, so installed apps are not
@@ -583,7 +592,7 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
+A version tag whose shell changed builds, after core publication and beside the generic desktop app, `.github/workflows/company-app.yml` for
 each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
 installer with signature, and Linux AppImage with signature plus Debian package. The app version
 is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
@@ -616,6 +625,12 @@ files, public GitHub release assets or job summaries. Each list entry has these 
 
 `runner_url` and `prefix` are optional. `prefix` must match the server's storage prefix.
 `icon_url` is an HTTPS PNG URL or a path on `url`. URLs require HTTPS except loopback HTTP.
+The URL must be reachable without authentication from GitHub's build runners and return a PNG
+of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
+(Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
+Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
+attempts, so a server restarting for the update can recover. Permanent HTTP errors and invalid or oversized PNGs fail
+immediately; retry logs contain no company URL or remote error text.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
@@ -668,6 +683,18 @@ The public release depends on no desktop build. Entries are validated within
 their own company job; a malformed company does not prevent valid companies from publishing.
 Entries without a slug produce a generic warning and cannot be dispatched. Unparseable JSON
 fails the matrix with a generic error and does not prevent the public release.
+
+Company build diagnostics name the failed operation without printing private values. Configuration
+and icon fetching run before installing build dependencies. An icon download error reports the HTTP
+status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
+signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
+icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
+Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong.
+Missing configuration fields and required environment variables are named explicitly. Icon generation,
+bundling, Apple certificate import, artifact encryption/decryption and publication have separate
+failure labels; private tool output and raw exception text remain suppressed. An old catch-all
+failure log cannot establish which HTTP status or network error occurred; collect the new diagnostic
+before changing credentials or assuming the icon is missing.
 
 Validate a private list locally without printing it or fetching icons:
 `python scripts/company_apps.py matrix --dry-run` with `TICO_COMPANY_APPS` supplied through

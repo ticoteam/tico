@@ -20,6 +20,7 @@ import uuid
 from . import hubdb as H
 from . import statuses
 from .store import Problem
+from . import bot_settings as BS
 
 RECRUITING, ONBOARDING, ACTIVE = "recruiting", "onboarding", "active"
 SEAT_PREFIX = "seat:"
@@ -90,6 +91,25 @@ def is_onboarding(c, slug):
     return stage(onboarding_state(c, slug)) == ONBOARDING
 
 
+def claim_message_sql(bot="j.bot_id", message="m"):
+    """The bot states from which claim takes this message, including onboarding's sender exceptions."""
+    return (f"EXISTS(SELECT 1 FROM bots claim_bot LEFT JOIN bot_config claim_config ON claim_config.bot=claim_bot.id "
+            f"WHERE claim_bot.id={bot} AND claim_bot.state='active' AND (" + H.person_sent_sql(message) +
+            f" OR coalesce(claim_config.onboarding_state,'') NOT IN {statuses.PARKED_SQL} "
+            f"OR {message}.sender_id='bot:'||coalesce(claim_config.reports_to,'')))")
+
+
+def claims_message(c, slug, message):
+    """Use claim's state gate before a question has a queue row, and when Health reads an old one."""
+    from .read_cache import one
+    message = dict(message or {})
+    refs = message.get("refs") or {}
+    refs = refs if isinstance(refs, str) else H._dump(refs)
+    return bool(one(c, "SELECT " + claim_message_sql("candidate.bot") +
+                    " FROM (SELECT ? bot) candidate CROSS JOIN (SELECT ? sender_id,? refs) m",
+                    (slug, message.get("sender_id") or "", refs))[0])
+
+
 def _bot_slug(actor):
     actor = str(actor or "")
     return actor[4:] if actor.startswith("bot:") else ""
@@ -128,7 +148,7 @@ def refuse_send(c, who, to, conversation=None, what="a message"):
 
 
 def _manager_actor(c, slug):
-    row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
     if not row:
         return ""
     reports = str(row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or "")
@@ -156,10 +176,10 @@ def ready(c, who, slug, summary):
     if not is_onboarding(c, slug):
         raise Problem("onboarding", "This bot is not onboarding", 409)
     summary = str(summary or "").strip()[:SUMMARY_MAX]
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
     declared = json.loads(row["config"] or "{}") if row else {}
     declared["onboarding_ready"] = {"at": H.now(), "summary": summary}
-    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(declared), slug))
+    BS.write(c, slug, declared)
     H.event(c, who.actor, "bot.onboarding_ready", slug, {"summary": summary})
     return {"bot": slug, "stage": ONBOARDING, "ready": declared["onboarding_ready"]}
 

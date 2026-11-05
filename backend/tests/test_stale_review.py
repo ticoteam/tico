@@ -8,7 +8,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import stale_review as SR
-from backend import still_wanted, team_rules
+from backend import team_rules
 from backend.tests.test_tasks_board import api, get, headers, post   # noqa: F401
 from clients import judge as J
 
@@ -82,7 +82,7 @@ def shown(card):
 
 
 def start_turn(c, task_id):
-    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt and its turn, while the task
+    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt on the task, while the task
     row itself stays as it was."""
     other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
     H.task_comment(c, "human:ana", other["id"], "Please look at this")
@@ -91,7 +91,7 @@ def start_turn(c, task_id):
     aid = H.new_id()
     c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
               "VALUES(?,?,'ops','r1',1,?,'running',?,?)", (aid, job, aid, H.shift(H.now(), seconds=600), H.now()))
-    c.execute("INSERT INTO turns(id,bot,started_at,task_id) VALUES(?,'ops',?,?)", (aid, H.now(), task_id))
+    c.execute("UPDATE attempts SET trigger='task',task_id=? WHERE id=?", (task_id, aid))
 
 
 def an_hour_on(store):
@@ -559,12 +559,3 @@ def test_admins_turn_the_switch_members_cannot_and_the_environment_sets_only_the
     monkeypatch.setenv("TICO_STALE_REVIEW", "1")
     with store.read() as c:
         assert team_rules.load(c)["stale_review"] is False, "a saved choice wins over the environment"
-
-
-def test_still_wanted_stops_while_the_switch_is_on(stale):
-    api, store, task = stale
-    tid = task("Old chore", owner="human:ana", requester="human:ana", status="open", days_ago=9)
-    with store.transaction() as c:
-        assert still_wanted.ask_idle(c) == []
-        team_rules.save(c, "human:ana", {"stale_review": False})
-        assert still_wanted.ask_idle(c) == [tid]

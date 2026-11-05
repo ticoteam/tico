@@ -34,7 +34,7 @@ def readable(c, who, rid):
     row = meetings.get(rid, c)
     deleted = c.execute("SELECT deleted_at FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
     if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0]) or row["metadata"].get("kind") != "meeting"
-            or row["metadata"].get("private") is not False):
+            or media.effective_audience(row["metadata"]) != "team" or row["metadata"].get("private") is not False):
         raise Problem("not_found", "Meeting not found or unavailable", 404)
     return row
 

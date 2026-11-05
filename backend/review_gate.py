@@ -249,8 +249,11 @@ def snapshot(service, prs):
                              "retryable": cause["retryable"], "auth": cause["auth"]}
     if any(r.get("head_sha") and not r.get("error") for r in out.values()):
         from . import source_outages
-        with service.store.transaction() as c:
-            source_outages.github_read(c, prs, out)
+        with service.store.read() as c:
+            recovered = source_outages.github_recoveries(c, prs, out)
+        if recovered:
+            with service.store.transaction() as c:
+                source_outages.github_read(c, prs, out)
     return out
 
 
@@ -408,8 +411,9 @@ def notify(c, actor, notice):
     if row and not source_wait:
         from .task_blocked import hold
         hold(c, row["id"], notice["text"], "gate")
-        c.execute("UPDATE tasks SET blocked_gate=? WHERE id=?", (
-            json.dumps({**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}), row["id"]))
+        from . import task_holds
+        task_holds.change(c, row["id"], "blocked", gate=json.dumps(
+            {**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}))
     if not row or actor == row["owner_id"]:
         return
     conv = H.conversation(c, row["conversation_id"])

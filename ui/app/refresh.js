@@ -14,8 +14,11 @@ async function refresh(force) {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
     // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
-    const [st, emps, people, seats] = await Promise.allSettled([get('/status'), get('/employees'), get('/humans'),
-      seatsDue ? get('/v2/seats') : null]);
+    // A forced refresh follows a change: an in-flight read (including startup's notification preference read of
+    // /humans) may already hold the old roster. Ask again instead of joining that read.
+    const options = {fresh: !!force};
+    const [st, emps, people, seats] = await Promise.allSettled([get('/status', options), get('/employees', options), get('/humans', options),
+      seatsDue ? get('/v2/seats', options) : null]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
     cloudAccessFromStatus();
@@ -65,6 +68,12 @@ function sameData(a, b) {
 // changes only that, once a minute per tree.
 const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
 function liveTasksApply(events) {
+  events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
+  if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
+    if (TASK_CHAT.dialog.taskLive) taskLiveGone(TASK_CHAT.dialog, TASK_CHAT.dialog.taskLive);
+    else TASK_CHAT.dialog.querySelector('[data-modal-close]')?.click();
+    taskChatStop();
+  }
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
   // cursor resets), and the other lists below reload as for any change.

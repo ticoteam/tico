@@ -26,6 +26,7 @@ from . import models as M
 from .auth import Identity
 from .blobs import register
 from .store import H, Problem, encode, repo_url
+from . import bot_home_merge
 from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
@@ -190,7 +191,7 @@ def file_visible(c, auth, who, row, cache):
             if kind == "task":
                 auth.task(c, who, ident)
             elif kind == "conversation":
-                auth.conversation(c, who, ident)
+                auth.conversation(c, who, bot_home_merge.scope_home(c, ident))
             elif not auth.bot_access(c, who, row["bot_id"])["read"]:
                 raise Problem("forbidden", "private", 403)
             cache[key] = True
@@ -242,6 +243,7 @@ class Files:
         a task must be one this bot may see, and bot-wide is refused from inside a chat."""
         attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
+        H._writer(c, self.actor_of(who, bot), task_id=turn_task, attempt_id=attempt)
         task = str(fields.get("task") or "").strip()
         wanted = str(fields.get("scope") or "").strip()
         if wanted not in ("", "task", "bot"):
@@ -256,6 +258,7 @@ class Files:
         if task:
             acting = who if who.role == "bot" else Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=attempt)
             self.auth.task(c, acting, task)
+            H._writer(c, self.actor_of(who, bot), task_id=task, attempt_id=attempt)
         if wanted == "bot":
             if ((task or turn_task) and H.task_private(c, H.task(c, task or turn_task))
                     or attempt and any(H.task_private(c, H.task(c, tid)) for tid in privacy.attempt_tasks(c, attempt))):
@@ -482,6 +485,13 @@ class Files:
 
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
+            existing = self.find(c, bot, scope, identity)
+            stored_task = existing["task_id"] if existing else None
+            H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
+            with H.refusal_task(task or stored_task):
+                return write_file(c, scope, task, conversation, attempt)
+
+        def write_file(c, scope, task, conversation, attempt):
             actor = self.actor_of(who, bot)
             if failed:
                 row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
@@ -597,9 +607,11 @@ class Files:
                     url, identity, kind, provider, _ = BF.normalize_link(body.url)
                 except BF.Refused as exc:
                     raise refused(exc) from exc
+            H._writer(c, actor, task_id=task, attempt_id=attempt)
             row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                          title=body.title or url, kind=kind, mime="", locator="remote_link", url=url,
                                          provider=provider, task=task, conversation=conversation, now=now)
+            H._writer(c, actor, task_id=row["task_id"], attempt_id=attempt)
             fields = {"last_activity_at": now, "url": url, "state": "ready"}
             if body.title:
                 fields["title"] = body.title[:300]
@@ -627,6 +639,7 @@ class Files:
             stored = c.execute("SELECT * FROM bot_files WHERE id=? AND identity LIKE 'task-file:%'", (fid,)).fetchone()
             if stored and body.model_dump(exclude_none=True) == {"archived": True}:
                 task = self.auth.task(c, who, stored["task_id"])
+                H._writer(c, who.actor, task_id=task["id"])
                 if (who.actor not in (task["owner_id"], task["requester_id"])
                         and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                     raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
@@ -646,6 +659,7 @@ class Files:
                     raise Problem("not_found", "File not found", 404)
                 for task in linked:
                     row = self.auth.task(c, who, task["task_id"])
+                    H._writer(c, who.actor, task_id=row["id"])
                     if (who.actor not in (row["owner_id"], row["requester_id"])
                             and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                         raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
@@ -668,6 +682,7 @@ class Files:
             if not row or row["state"] == "deleted" or not self.visible(c, who, row, {}):
                 raise Problem("not_found", "File not found", 404)
             actor, now = who.actor, H.now()
+            H._writer(c, actor, task_id=row["task_id"])
             if who.role == "bot":
                 if H.actor_id(who.actor) != row["bot_id"]:
                     raise Problem("not_found", "File not found", 404)
@@ -681,6 +696,7 @@ class Files:
             if body.task is not None:
                 if body.task:
                     self.auth.task(c, who, body.task)
+                    H._writer(c, actor, task_id=body.task)
                 fields["task_id"] = body.task or None
             if body.promote:
                 if row["task_id"] and H.task_private(c, H.task(c, row["task_id"])):
@@ -835,13 +851,22 @@ class Files:
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
         """The bytes of one version through Tico, never a storage address."""
         with self.store.read() as c:
-            row = self.visible_file(c, who, fid)
+            row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "File not found", 404)
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
-            if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             v = c.execute("SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
                           "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?", (fid, number)).fetchone()
+            from . import postal_mail
+            scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
+            if scan is not None:
+                if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
+                    raise Problem("not_found", "File not found", 404)
+            else:
+                self.visible_file(c, who, fid)
+                if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
+                    raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             if not v or row["locator"] != "tico_blob":
                 raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
             if meta:

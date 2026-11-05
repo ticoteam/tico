@@ -13,7 +13,7 @@ from .live_privacy import sources as meeting_sources
 
 def _task(c, tid):
     # Authorization uses task identity and parties; display tags are unrelated to access.
-    return H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
+    return H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,))
 
 
 def snapshot(c):
@@ -696,7 +696,7 @@ def question_party(c, who, person, parent=None, guest=None):
     Being a party gives them nothing they could not read before, beyond the parent `guest` names (guest_for)."""
     if parent and not _reads(c, person, parent, guest):
         return False
-    return not who.attempt_id or all(_reads(c, person, H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,)), guest)
+    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), guest)
                                      for tid in attempt_tasks(c, who.attempt_id))
 
 
@@ -1406,6 +1406,11 @@ def _prime_blob_links(c, bids):
         read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
         read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
+        from . import postal_mail
+        scans = {bid: [] for bid in part}
+        for row in c.execute(f"SELECT * FROM mail_items WHERE blob_id IN ({marks})", part):
+            scans[row["blob_id"]].append(row)
+        read_cache.prime_rows(c, postal_mail.SCANS_SQL, {(bid,): scans[bid] for bid in part})
     return parent_ids, task_ids, attempt_ids, message_rows
 
 
@@ -1414,6 +1419,14 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     `memo` is attempt_tasks' cache for one read transaction. Only linkage rows are cached
     for blobs: a cycle or depth refusal depends on this walk, not just the blob."""
     snapshot(c)
+    # A scan's explicit Read grant exempts only that principal from its private task's attachment fence.
+    # Every other principal still passes the normal provenance checks below.
+    from . import postal_mail
+    principals = actor if isinstance(actor, tuple) else (actor,)
+    principals = tuple(person for person in principals if not postal_mail.scan_granted(c, person, bid))
+    if not principals:
+        return True
+    actor = principals[0] if len(principals) == 1 else principals
     seen = set() if seen is None else seen
     if bid in seen:
         return True
@@ -1446,6 +1459,15 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    detail = H._json(event.get("detail"), {}) or {}
+    if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
+        recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)
+        if recipient != event.get("actor"):
+            return False
+        # Old accepted events without task provenance fail closed; their alert target alone carries no permission.
+        if event["action"] == "alerts.accepted" and detail.get("kind") != "test":
+            if not detail.get("task_id") or not _task(c, detail["task_id"]):
+                return False
     meetings = meeting_sources(c)
     if not meetings.readable(actor, meetings.references(H._json(event.get("detail"), {}) or {})):
         return False

@@ -10,6 +10,8 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
+from backend import bot_settings as BS
+from backend.tests.hold_rows import set_holds
 
 BOTS = ("cpo", "cmo", "qa", "devops-engineer")
 REFUSAL = {"repo": "acme/app", "status": 403, "endpoint": "workflow_dispatch"}
@@ -28,8 +30,8 @@ def api(tmp_path):
             H.sync_registry(c, bots, {"people": people})
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product", "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
             for slug in BOTS:
                 # Each bot connects as an external agent: its own standing credential, no runner lease.
@@ -116,8 +118,8 @@ def test_sweep_finds_a_check_blocked_before_this_change(api):
     from backend import task_blocked
     with api.app.state.store.transaction() as c:
         ticket, check = in_qa_ticket(c)
-        c.execute("UPDATE tasks SET status='waiting',waiting_on='human:ana',blocked_reason='GitHub refused the run' "
-                  "WHERE id=?", (check["id"],))
+        c.execute("UPDATE tasks SET status='waiting',waiting_on='human:ana' WHERE id=?", (check["id"],))
+        set_holds(c, check["id"], blocked_reason='GitHub refused the run')
         assert H.task(c, ticket["id"])["status"] == "review"
         task_blocked.sweep(c, H.now())
         row = H.task(c, ticket["id"])

@@ -217,6 +217,23 @@ const card = () => ({
     assert.deepEqual(await swap().evaluate(el => [...el.querySelectorAll('.qc-pick .qc-l')].map(x => x.textContent.trim())),
       ['1. Calls (recommended)', '2. Visitor notes (recommended)', '3. Pages', '4. Spend cap (recommended)']);
 
+    // A full live task redraw must not let generic form recovery transfer the old note or modified checkboxes.
+    await swap().locator('[data-qc-tick="1"]').uncheck();
+    await swap().locator('.qc-note').fill('Full redraw old answer');
+    await page.evaluate(() => sessionKeep());
+    await reword('Docs pages');
+    await page.evaluate(async () => {
+      const d = taskModal();
+      await taskModalShow(d.liveTask, d, {detail: {task: d.liveTask, comments: [], children: [], events: []}});
+      sessionReturn();
+    });
+    assert.deepEqual(await swap().evaluate(el => ({note: el.querySelector('.qc-note').value,
+      ticked: [...el.querySelectorAll('[data-qc-tick]:checked')].map(x => x.closest('.qc-pick').querySelector('.qc-l').textContent.trim())})),
+      {note: '', ticked: NEW_TICKS});
+    assert.equal(answers.length, 0, 'changed question drafts never send during redraw or sign-in recovery');
+    await reword('Pages');
+    await page.evaluate(() => { const el = document.querySelector('.qcard[data-qcard="t-swap"]'); el.outerHTML = qcardBoxHTML({id: 't-swap'}); });
+
     // Typed into, then redrawn: the old draft is dropped, not carried into the newer wording.
     await swap().locator('[data-qc-tick="1"]').uncheck();
     await swap().locator('.qc-note').fill('Second try');

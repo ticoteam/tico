@@ -10,7 +10,7 @@ is sent and kept.
 The **?** beside Search (on a computer, at the end of the sidebar's Ask row; on a phone, beside Search in the More
 drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
 over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
-has written something you haven't seen.
+has replied to one of your requests and you haven't seen it.
 
 - It is one ongoing conversation, oldest at the top, opening at the newest message; when messages arrive while you are
   reading further up, it doesn't move you. Your messages are dark bubbles on the right, the team's are on the left, with
@@ -58,13 +58,15 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-The team's messages appear in the chat, put a dot on the **?** and, while the chat is closed, raise a notice ("The Tico
-team replied.") with **Open**. Having the chat open marks everything read; there is no Mark read or Refresh button.
+A reply to a request you wrote opens the chat by itself, once, with the reply in it; if you are typing in a field or a
+dialog is open, or Ask's panel or its peek is up, it waits until you are not. A bot's report is not in your chat at all: it is not listed there, and its
+replies neither open the chat nor put a dot on the **?**. Having the chat open marks everything read; there is no Mark
+read or Refresh button.
 Messages are checked when you open the chat, when the app regains focus or comes back into view, and on the timer below.
 Background refresh preserves your draft, focus and scroll position.
 
 - Any signed-in human may message the Tico team. A personal API token, the Assistant acting for a human, and a bot
-  may not file one directly; they report through a person's yes (below).
+  may not file one directly; a bot reports through a person's yes, or at once when the team lets bots send (below).
 - Demo mode has no Tico team chat: nothing leaves a demo. Neither does a rehearsal (`TICO_REHEARSAL=1`), which reports "rehearsal" as the reason it is off.
 - `TICO_SUPPORT=off` in the server's `.env` removes it from an install that must not phone out. `TICO_HQ_URL` points it at your
   own HQ (see [telemetry.md](telemetry.md)).
@@ -118,22 +120,31 @@ the team and getting started; never ask for a key or password (tools connect on 
 the usual way (step 4 below), shows on the visitor's request page, and, since every setup-website ticket has an email,
 is marked email pending for the email copy.
 
-### A bot's report, after a person's yes
+### A bot's report
 
 A bot that hits a Tico bug (or a person's token, through MCP) reports it to the Tico team without handing the person a
-copy-and-paste task, and nothing leaves the install until a person says yes:
+copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
+asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
+
+**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
+are kept for the team and the bot, not shown to the person. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
+
+**Off.** The report waits for a person's yes:
 
 1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
    `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
    (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
    Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
 2. The person the approval goes to sees **Send this to Tico support?** in Needs you and Decide, with the whole message,
-   what goes with it and the host it goes to, and approves or declines it in their own browser (not with a token or
-   through the Assistant). A bot's report goes where any approval goes: the owner of its task, else the default person. A
-   person's own report (drafted with their token) goes to them.
+   what goes with it and the host it goes to, and approves or declines it in their own browser. Their Assistant may
+   approve it too, after its read-back and their plain yes, as with any approval ([The Assistant](assistant.md#letting-it-decide-your-approvals)).
+   A token may not approve it. Declining sends nothing, so anyone who may decide it may decline it. A bot's report goes
+   where any approval goes: the owner of its task, else the default person. A person's own report (drafted with their
+   token) goes to them.
 3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
-   files it **as the person who approved it**: the ticket is theirs, its replies show on their Support page, and it counts
-   toward their 10 a day. Only whoever asked for the approval may send it, and only once it is approved and its message
+   files it **as the person who approved it**: the ticket is kept under their name and counts
+   toward their 10 a day, but it is not in their Support chat (a bot's report is not shown there, and its replies are
+   not either). Only whoever asked for the approval may send it, and only once it is approved and its message
    still matches its hash. The approval is spent in the same step that keeps the ticket, so if HQ refuses or cannot be
    reached nothing is spent and the send can be tried again; sending again after it worked answers with the same ticket.
 

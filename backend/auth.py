@@ -21,6 +21,7 @@ from . import team_rules
 from . import read_cache
 from . import report_managers
 from .store import H, Problem, digest
+from . import bot_settings as BS
 
 # Loopback sign-in for an environment with no identity proxy in front of it.
 # Cookies are shared across ports on one host, so each install names its own; the bare name is
@@ -620,7 +621,7 @@ class Auth:
                 or not str(who.actor).startswith("bot:") or self.system_bot(slug)):
             return False
         me = H.actor_id(who.actor)
-        row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         if not row or me == slug:
             return False
         declared = json.loads(row["config"]) if row["config"] else {}
@@ -641,7 +642,7 @@ class Auth:
             if H.actor_id(parent) != me:
                 return False
         else:
-            row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
             if not row:
                 return False
             declared = json.loads(row["config"]) if row["config"] else {}
@@ -746,7 +747,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks respect bot activity controls; private tasks admit parties, their managers and a guest.
+        """Company tasks respect bot activity controls; private tasks also admit checked meeting participants.
 
         Type-wide work, task ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -760,14 +761,17 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
+        from .meeting_audience import participant_access_sql
+        participant = participant_access_sql(c, me)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
         audience = (f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-                    f"OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)<>0 AND (guest={me} OR ({participant}))) "
                     f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            audience += f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} OR guest={actor})"
+            audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
+                         f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
         return audience
 
     def operator(self, c, who, bot):
@@ -804,7 +808,8 @@ class Auth:
         if who.role == "runner":
             raise Problem("identity", "Runner credentials cannot act as a human or bot", 403)
 
-    def bot_contact(self, c, who, slug, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def bot_contact(c, who, slug, conversation_id=None, task_id=None, kind="message"):
         """Whether this sender may open something with `slug`.
 
         `tasks` is the strict one and the simplest to reason about: work arrives as a task and
@@ -834,7 +839,7 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute("SELECT config,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
@@ -872,15 +877,16 @@ class Auth:
             return True
         return False
 
-    def require_bot_contact(self, c, who, actor, conversation_id=None, task_id=None, kind="message"):
+    @staticmethod
+    def require_bot_contact(c, who, actor, conversation_id=None, task_id=None, kind="message"):
         """`bot_contact` as a gate. The refusal names the way back in, because the sending bot
         reads it and has to decide what to do next."""
         if not str(actor).startswith("bot:"):
             return
         slug = H.actor_id(actor)
-        if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
+        if Auth.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         declared = json.loads(row["config"]) if row and row["config"] else {}
         if declared.get("bot_contact") == "tasks":
             raise Problem("bot_contact", f"{slug} takes work as a task and nothing else (notes only from its manager "
@@ -1069,22 +1075,32 @@ class Auth:
         return row
 
 
-def bot_reads_task(c, bot, row):
-    """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+def actor_reads_task(c, actor, row):
+    """Whether an actor may read this task under every rule in Auth.task_row, without server sign-in settings.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
+    from . import access, teammate_access
     policy = Auth.__new__(Auth)
     opened = not c.in_transaction
     if opened:
-        c.execute("SAVEPOINT bot_reads_task")
+        c.execute("SAVEPOINT actor_reads_task")
     try:
+        if H.is_human(actor):
+            policy.bot_admins = read_cache.value(c, ("task_read_admins",),
+                                                lambda: set(access.owner_and_admin_emails(c)))
         if opened and row:
             row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
-        policy.task_row(c, Identity(bot, "bot"), row)
+        who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
+        if who is None:
+            return False
+        policy.task_row(c, who, row)
     except Problem:
         return False
     finally:
         if opened:
-            c.execute("RELEASE bot_reads_task")
+            c.execute("RELEASE actor_reads_task")
     return True
+
+
+def bot_reads_task(c, bot, row):
+    return actor_reads_task(c, bot, row)

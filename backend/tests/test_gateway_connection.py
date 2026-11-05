@@ -17,6 +17,7 @@ from backend.tests.test_credentials import FakeKMS
 from backend.tests.test_decide_gateway import answer_all
 from backend.tests.test_judge import QUESTIONS
 from clients import gateway as G
+from backend import bot_settings as BS
 
 KEY = "tgw-synthetic-fixture-key-0042"
 OTHER = "tgw-synthetic-fixture-key-0099"
@@ -276,7 +277,7 @@ def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(a
         assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-cheap-1.0"}
         new_bot(api, "scout")
         with api.app.state.store.read() as c:
-            assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (H.resolve_bot(c, "scout")["id"],)).fetchone()[0])[
+            assert BS.read(c, H.resolve_bot(c, "scout")["id"])[
                 "model"] == "tico-cheap-1.0"
         # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
         new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
@@ -490,9 +491,8 @@ def test_a_plain_http_check_to_this_computer_never_goes_through_a_proxy(monkeypa
 
 def put_bot_on(api, bot, model):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                  (json.dumps({**config, "runtime": "pi", "harness": "pi", "model": model}), bot))
+        config = BS.read(c, bot)
+        BS.write(c, bot, {**config, 'runtime': 'pi', 'harness': 'pi', 'model': model})
 
 
 def handed_to(api, machine, attempt, expected=200):
@@ -540,10 +540,8 @@ def test_the_key_goes_to_the_runner_alone_never_to_the_run(api, monkeypatch, on)
         put_bot_on(api, "ops", "tico-mid-1.0")
         if on == "claude_with_a_tico_fallback":
             with api.app.state.store.transaction() as c:
-                config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-                c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({
-                    **config, "runtime": "claude", "harness": "claude", "model": "opus-5-5",
-                    "fallback": {"harness": "pi", "model": "tico-mid-1.0"}}),))
+                config = BS.read(c, 'ops')
+                BS.write(c, 'ops', {**config, 'runtime': 'claude', 'harness': 'claude', 'model': 'opus-5-5', 'fallback': {'harness': 'pi', 'model': 'tico-mid-1.0'}})
         machine, stranger = runner(api), runner(api, label="Other Mac")
         assign(api, machine, "ops")
         ready(api, machine, ["ops"])
@@ -576,9 +574,8 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
     put_bot_on(api, "ops", "tico-mid-1.0" if started_on_tico else "kimi-k3")
     if change == "default_to_tico":
         with api.app.state.store.transaction() as c:
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                      (json.dumps({k: v for k, v in config.items() if k not in ("runtime", "harness", "model")}),))
+            config = BS.read(c, 'ops')
+            BS.write(c, 'ops', {k: v for k, v in config.items() if k not in ('runtime', 'harness', 'model')})
         record = get(api, "providers")
         put(api, "providers", {"enabled": ["openrouter"], "runtime": "pi", "model": "kimi-k3",
                                "expected_revision": record["revision"]})
@@ -961,10 +958,8 @@ def test_a_tico_fallback_the_gateway_refused_reads_as_the_gateway(api, monkeypat
     Gateway refused that, the run is the Gateway's, as on a Tico primary (and slow to fail is no reason to hold it)."""
     setup(api, monkeypatch)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({
-            **config, "runtime": "claude", "harness": "claude", "model": "opus-5-5",
-            "fallback": {"harness": "pi", "model": "tico-mid-1.0"}}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'runtime': 'claude', 'harness': 'claude', 'model': 'opus-5-5', 'fallback': {'harness': 'pi', 'model': 'tico-mid-1.0'}})
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -1075,8 +1070,9 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
         plain = new_bot(api, "plain")
         own = new_bot(api, "chosen", template="inbox", model="tico-general-high-1.0", harness="pi", effort="high")
         with api.app.state.store.read() as c:
-            models = dict(c.execute("SELECT b.slug, json_extract(bc.config, '$.model') FROM bots b "
-                                    "JOIN bot_config bc ON bc.bot=b.id WHERE b.slug IN ('mailwatch','plain','chosen')").fetchall())
-            stored = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (H.resolve_bot(c, "mailwatch")["id"],)).fetchone()[0])
+            models = dict(c.execute("SELECT b.slug, s.model FROM bots b "
+                                    "JOIN bot_config bc ON bc.bot=b.id LEFT JOIN bot_settings s ON s.bot_id=b.id "
+                                    "WHERE b.slug IN ('mailwatch','plain','chosen')").fetchall())
+            stored = BS.read(c, H.resolve_bot(c, "mailwatch")["id"])
         assert models == {"mailwatch": "tico-general-low-1.0", "plain": "tico-general-medium-1.0", "chosen": "tico-general-high-1.0"}, (made, plain, own)
         assert stored["model"] == "tico-general-low-1.0" and stored["gateway"] == {"level": "low"}

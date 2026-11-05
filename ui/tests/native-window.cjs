@@ -8,7 +8,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
 const VISUAL = 'https://visuals.acme-files.example', NEXT_VISUAL = 'https://next.acme-files.example';
 const TOKEN = 'YQ.' + 'a'.repeat(43);
-const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/main.rs'), 'utf8')
+const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/bridge.rs'), 'utf8')
   .match(/const BRIDGE_SCRIPT: &str = r#"([\s\S]*?)"#;/)[1];
 
 // Browser fixture of the actual bridge wrapper and app, not proof of native WebView navigation/IPC.
@@ -23,8 +23,9 @@ async function visualHandshake(browser) {
     (() => {
     if (window.top !== window) return;
     window.EventSource = undefined;
-    window.__calls = []; window.__pending = []; window.__nativeOrigin = '';
+    window.__calls = []; window.__pending = []; window.__nativeOrigin = ''; window.__boot = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
+      if (command === 'bridge' && args.name === 'bootTiming') window.__boot.push(args.body);
       if (command !== 'bridge' || args.name !== 'visualOrigin') return Promise.resolve(null);
       window.__calls.push(args.body);
       return new Promise((resolve, reject) => window.__pending.push({resolve, reject, origin:args.body.origin}));
@@ -90,10 +91,34 @@ async function visualHandshake(browser) {
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
   assert.deepEqual(reads, [], 'boot has not rendered a visual before the bridge ACK');
   const firstRead = page.waitForResponse(response => new URL(response.url()).origin === VISUAL);
+  // A pinned page drawn before the ACK is an Open card, and becomes its frame once the shell trusts the address.
+  assert.equal(await page.evaluate(src => {
+    const slot = document.createElement('div'); slot.id = 'pin-test';
+    slot.append(window.pageCard({file_id:'p1', title:'Plan', version:1, updated_at:'2026-01-01T00:00:00Z', src}, {size:'small'}));
+    document.body.append(slot);
+    return slot.querySelectorAll('.pg-card:not(.pg-framed) .pg-open').length;
+  }, VISUAL+'/visuals/'+TOKEN), 1, 'an untrusted page is an Open card');
   await ack(1, true);
   await page.locator('iframe.vcard-frame[src]').waitFor();
+  await page.locator('#pin-test .pg-card.pg-framed iframe.page-frame').waitFor();
+  assert.equal(await page.locator('#pin-test .pg-card').count(), 1, 'the pinned page is drawn again in place');
+  await page.evaluate(() => document.getElementById('pin-test').remove());
   await firstRead;
   assert.ok(reads.includes(VISUAL));
+  // The open's timing goes to the shell once, as the page and kinds of read, never the bot, task or person.
+  await page.waitForFunction(() => window.__boot.length > 0, null, {timeout:25000});
+  const [boot, ...again] = await page.evaluate(() => window.__boot);
+  assert.deepEqual(again, [], 'one report per load');
+  assert.equal(boot.route, '#/bot');
+  for (const name of ['boot', 'roster', 'route']) assert.ok(Number.isInteger(boot.marks[name]), name);
+  assert.ok(boot.marks.boot <= boot.marks.roster && boot.marks.roster <= boot.marks.route);
+  assert.ok(boot.server.some(read => read.path === '/api/employees'));
+  for (const read of boot.server) {
+    assert.match(read.path, /^\/api(\/v2)?\/([a-z][a-z-]*|:id)(\/:id)*$/, "the resource, then only :id");
+    assert.doesNotMatch(read.path, /ops|ana|t1/, read.path);
+    assert.ok(Number.isInteger(read.ms));
+  }
+  assert.ok(JSON.stringify(boot).length < 4096, "within the shell's cap");
   await page.evaluate(task => taskModalShow(task), task);
   await page.locator('#task-modal iframe.vcard-frame[src]').waitFor();
   await page.locator('#task-modal textarea[aria-label="Message"]').fill('Keep this draft');
@@ -389,6 +414,12 @@ let browser;
   posted.push(...await page.evaluate(() => window.__posted));
   assert.deepEqual(posted.filter(([name]) => name === 'windowMode'), [], 'the page no longer asks the shell for a window mode');
   assert.deepEqual(posted.filter(([name]) => name === 'visualOrigin'), [], 'older shells never receive the new command');
+  assert.deepEqual(posted.filter(([name]) => name === 'bootTiming'), [], "nor the open's timing");
+  // The report is made once the page settles, which can come after the checks above.
+  await page.waitForFunction(() => window.ticoBootTiming, null, {timeout: 25000});
+  const timing = await page.evaluate(() => window.ticoBootTiming);
+  assert.equal(timing.route, '#/tasks', 'it stays in the page');
+  assert.ok(timing.settled && timing.marks['paint-fresh'] >= timing.marks.route, 'the tasks page settles');
   assert.deepEqual(errors, []);
   await visualHandshake(browser);
   await hostedHandshake(browser, true);
