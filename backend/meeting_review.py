@@ -118,7 +118,7 @@ def install_meeting_review(app, store, auth, mutate):
                 media.save(c, meta, readable=record['transcript_readable'])
                 c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
                 H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action, 'audience': audience})
-            return media.view(c, who, rid)
+            return media.view(c, who, rid, auth=auth)
         meta['review_state'] = target
         if action == 'approve':
             meta['reviewed_at'] = H.now()
@@ -135,7 +135,7 @@ def install_meeting_review(app, store, auth, mutate):
                 media.save(c, meta, readable=record['transcript_readable'])
                 media.deliver(c, auth, who, rid, media.Send(bot_id=destination), [])
         H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action})
-        return media.view(c, who, rid)
+        return media.view(c, who, rid, auth=auth)
 
     @app.get('/api/v2/meetings/settings')
     def settings(request: Request):
@@ -175,7 +175,7 @@ def install_meeting_review(app, store, auth, mutate):
                                  'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
                                  (review, review, who.email)):
                 try:
-                    item = media.view(c, who, row[0])
+                    item = media.view(c, who, row[0], auth=auth)
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
@@ -209,4 +209,4 @@ def install_meeting_review(app, store, auth, mutate):
     @app.get('/api/v2/meetings/{id}')
     def detail(request: Request, id: str):
         with store.read() as c:
-            return media.view(c, request.state.identity, id, include_transcripts=True)
+            return media.view(c, request.state.identity, id, include_transcripts=True, auth=auth)

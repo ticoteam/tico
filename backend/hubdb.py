@@ -9377,7 +9377,7 @@ STEP_POSITION = "(SELECT position FROM task_steps WHERE task_steps.id=tasks.step
 
 def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, label=None,
           offset=0, order="queue", visible=None, type_id=None, step_ids=None, number=None,
-          updated_since=None, tickets=True, member=None, role=None, ids=None, snoozed=None):
+          updated_since=None, tickets=True, member=None, role=None, ids=None, snoozed=None, q=None):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `order="step"` is
     a board's: by step, then each task's place in it. `updated_since` is a stored timestamp.
@@ -9386,6 +9386,15 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
     `limit=None` reads every match."""
     sql, args, where = "SELECT * FROM tasks", [], []
+    if q and q.strip():
+        query = q.strip()[:1000]
+        if re.fullmatch(r"#\d+", query):
+            where.append("number=?")
+            args.append(int(query[1:]) if len(query) <= 10 else -1)
+        else:
+            for word in query.split():
+                where.append("instr(lower(title),lower(?))>0")
+                args.append(word)
     if member:
         where.append(TRo.member_sql(role))
         args += [member] + ([role] if role else [])

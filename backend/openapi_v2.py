@@ -254,7 +254,7 @@ STABLE = [
     ("/api/v2/task-types/{type_id}", "delete", "Tasks", "deleteTaskType", "Delete an unused task type (movers only)", "TaskTypeResult"),
     ("/api/v2/task-types/{type_id}/delete", "post", "Tasks", "deleteTaskTypePost", "Delete an unused type for clients using POST", "TaskTypeResult"),
     ("/api/v2/tasks", "get", "Tasks", "listTasks",
-     "Tasks the caller can see; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
+     "Tasks the caller can see; q matches title words or #N; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
      "person or bot is on in some role (role=<name> narrows it to one), sort=step orders a board's columns, "
      "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
      "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
@@ -2837,6 +2837,27 @@ SCHEMAS.update({
     "FeedbackRemoved": obj({"ok": "b", "id": "s"}),
     "FeedbackRuleDraft": obj({"text": "s", "drafted": "b"}),
     "FeedbackRuleMade": obj({"feedback": ref("Feedback"), "rule": "o"}),
+})
+
+
+STABLE.extend([
+    ('/api/v2/meetings/{rid}/tasks', 'get', 'Meetings', 'listMeetingTasks',
+     'Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap', 'MeetingTaskLinks'),
+    ('/api/v2/meetings/{rid}/tasks', 'post', 'Meetings', 'linkMeetingTasks',
+     'Link up to 20 readable tasks; sent is only for their requester; links never widen access', 'MeetingTaskLinks'),
+    ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
+     'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
+    ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
+     'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
+])
+SCHEMAS.update({
+    'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
+                            'status': 's', 'kind': {'enum': ['linked', 'sent', 'proposal']}, 'created_by': 's'}),
+    'MeetingTaskLinks': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n'}),
+    'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
+                        'kind': {'enum': ['linked', 'sent', 'proposal']}}),
+    'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 
 
