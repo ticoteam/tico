@@ -14,7 +14,7 @@ from backend.auth import Identity
 from backend.blobs import register
 from backend.files import series
 from backend.store import H, task_message_page
-from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture; post is a helper)
+from backend.tests.test_api import api, headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
 from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
     private_run, private_tasks_have_an_unrelated_manager)
 
@@ -284,6 +284,28 @@ def test_a_persons_chat_with_a_moved_bot_is_its_home_on_every_route(api, ops_roo
     assert sent.json()["conversation"]["id"] == home
     with store(api).read() as c:
         assert seqs(c, home)[-1] == sent.json()["message"]["id"]
+
+
+def test_chat_with_lists_a_moved_bots_readable_home_and_keeps_unmoved_dms(api, ops_rooms):
+    merge(api)
+    home = ops_rooms["home"]
+    listed = api.get("/api/v2/conversations", params={"chat_with": "ops"}, headers=headers("ana-test"))
+    assert listed.status_code == 200, listed.text
+    assert [row["id"] for row in listed.json()["conversations"]] == [home]
+
+    # Cara may not read Ops's Home, so the lookup must not reveal it.
+    with store(api).transaction() as c:
+        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]},
+                 write={"people": ["ana"]})
+    hidden = api.get("/api/v2/conversations", params={"chat_with": "ops"}, headers=headers("cara-test"))
+    assert hidden.status_code == 200 and hidden.json()["conversations"] == []
+
+    # A new chat with a bot the migration never covered remains the original pair DM.
+    with store(api).transaction() as c:
+        finance = room(c, "human:ana", "finance")
+    unchanged = api.get("/api/v2/conversations", params={"chat_with": "finance"}, headers=headers("ana-test"))
+    assert unchanged.status_code == 200, unchanged.text
+    assert [row["id"] for row in unchanged.json()["conversations"]] == [finance]
 
 
 def test_a_moved_rooms_read_marks_are_discarded_for_root_and_sub_threads(api):
