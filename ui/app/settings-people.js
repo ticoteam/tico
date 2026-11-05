@@ -216,7 +216,7 @@ async function renderSettingsPeople() {
       void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
     });
     el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved', box));
-    // HQ keeps this switch: a refusal leaves it as it was, with the reason under it.
+    // A lost answer may still have reached HQ: read its state again before showing the result.
     const supportSwitch = $('#people-cloud-support');
     if (supportSwitch && owner) supportSwitch.onchange = async () => {
       const on = supportSwitch.checked;
@@ -228,9 +228,11 @@ async function renderSettingsPeople() {
         supportSwitch.checked = answer?.on === true;
         toast('Saved');
       } catch (error) {
-        supportSwitch.checked = !on;
-        settingsFieldError(supportSwitch, error.message);
-      } finally { supportSwitch.disabled = false; }
+        const current = await cloudSupportRead({fresh: true});
+        supportSwitch.checked = current?.on === true;
+        supportSwitch.indeterminate = !current;
+        settingsFieldError(supportSwitch, current ? error.message : `${error.message} Could not read the switch. Open Settings again to retry.`);
+      } finally { supportSwitch.disabled = !CLOUD_SUPPORT.view; }
     };
     el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
       const days = Math.round(Number(box.value));

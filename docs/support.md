@@ -207,9 +207,11 @@ for letting support into the app. Turning it off stops support work on the compa
 it back on allows it again; a missing helper is installed on the machine's next start. The change is recorded under
 the owner's name in Tico's audit log. **Settings > Computers** shows each cloud machine's helper state.
 
-HQ holds the switch. Tico reads it from HQ and saves a change there; if the call fails, the page says it didn't
-reach Tico HQ and keeps the last state it showed. It does not save a local choice to send later. Read again to check
-HQ's state after a failed call.
+HQ holds the switch. Tico reads it on each Settings entry and saves a change there. After a failed or uncertain
+change, the page reads HQ again and shows its answer. If that read also fails, the switch stays unavailable until
+you open Settings again. It does not save a local choice to send later. The owner can read and turn it off even
+while the company's plan is locked; turning it on requires an unlocked plan. An Assistant turn needs the person's
+confirmation, just like the rule for letting support into the app.
 
 This helper is separate from the time-limited app sessions above. Stopping an app session or turning off
 **Owners and admins may let Tico support in** does not turn off the cloud-machine helper. It is never installed on

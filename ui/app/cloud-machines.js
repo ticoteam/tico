@@ -95,12 +95,20 @@ function cloudMachineRun(slug, body, control) {
   return async rev => { await post(path, body); return rev; };
 }
 // Tico support on cloud machines (GET /v2/cloud-machines/support): HQ's switch for the company and each machine's
-// support helper, read once per page load. Off Tico Cloud, or when the read fails, `view` stays null and nothing shows.
+// support helper, shared by the Settings panes until the next entry. A failed read shows no cached state.
 const CLOUD_SUPPORT = {view: null, read: null};
-function cloudSupportRead() {
-  CLOUD_SUPPORT.read ??= get('/v2/cloud-machines/support')
-    .then(view => { CLOUD_SUPPORT.view = view?.available ? view : null; }, () => {})
-    .then(() => CLOUD_SUPPORT.view);
+function cloudSupportRead({fresh = false} = {}) {
+  if (fresh) CLOUD_SUPPORT.read = null;
+  if (!CLOUD_SUPPORT.read) {
+    const read = get('/v2/cloud-machines/support', {fresh: true}).then(view => view?.available ? view : null, () => null)
+      .then(view => {
+        // An older read may finish after a new entry or a write. Only the newest answer can replace the switch.
+        if (CLOUD_SUPPORT.read !== read) return CLOUD_SUPPORT.read;
+        CLOUD_SUPPORT.view = view;
+        return view;
+      });
+    CLOUD_SUPPORT.read = read;
+  }
   return CLOUD_SUPPORT.read;
 }
 // The answer to a change is the whole state again; it replaces what was read.

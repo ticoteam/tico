@@ -458,7 +458,7 @@ function renderSettingsMachines() {
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const {pickers, others} = machineToolColumns(machines);
-  // Each cloud machine's support helper, read once; the rows are drawn again when it comes.
+  // Share the entry's support read; the rows are drawn again when it comes.
   if (!CLOUD_SUPPORT.read && machines.some(machine => machine.cloud_machine))
     void cloudSupportRead().then(view => { if (view) renderSettingsMachines(); });
   const cards = machines.map(machine => {

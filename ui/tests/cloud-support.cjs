@@ -1,10 +1,10 @@
 // Tico support on cloud machines (ui/app/cloud-machines.js, GET/PUT /api/v2/cloud-machines/support), fixtures only:
 //  - Settings > People: on Tico Cloud the owner's team rules carry the switch, as HQ reads it; a change PUTs it, and a
-//    failed change (HQ not reached) leaves the switch as it was with the reason under it;
+//    failed or uncertain change re-reads HQ with the reason under the switch;
 //  - an admin sees the switch read-only; off Tico Cloud (`available` false) there is no switch;
 //  - Settings > Computers: each cloud machine's row names its helper's state, matched by HQ's key (`_shared` or the
-//    bot), a helper that is not there shows nothing, and the state is read once per page load;
-//  - a failed read shows nothing and breaks neither page.
+//    bot), a helper that is not there shows nothing, and each Settings entry reads current state;
+//  - a failed read shows nothing and is retried on the next entry, in the same browser page.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -39,8 +39,10 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       }
       if (p === '/api/v2/cloud-machines/support' && method === 'PUT') {
         const body = request.postDataJSON(); writes.push(body);
-        if (failPut) return json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502);
+        if (failPut === true) return json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502);
         support = {...support, on: body.on, machines: machines.map(m => ({...m, helper: m.helper === 'none' ? 'none' : body.on ? 'on' : 'off'}))};
+        // HQ saved it, but core never received its answer.
+        if (failPut === 'applied') return json({error: {code: 'hq_unreachable', detail: "Didn't reach Tico HQ. Try again."}}, 502);
         return json(support);
       }
       if (p === '/api/me') return json(me);
@@ -71,9 +73,14 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     const open = async tab => {
       const page = await context.newPage();
       page.on('pageerror', e => errors.push(e.message));
-      await page.goto('https://tico-ui.test/#/settings');
-      await page.locator(`[data-settings-tab=${tab}]`).click();
+      await page.goto(`https://tico-ui.test/#/settings/${tab}`);
+      await page.locator(`[data-settings-tab=${tab}][aria-selected=true]`).waitFor();
       return page;
+    };
+    const enter = async (page, tab) => {
+      await page.locator('[data-settings-tab=general]').click();
+      await page.locator(`[data-settings-tab=${tab}]`).click();
+      await page.evaluate(() => CLOUD_SUPPORT.read);
     };
 
     // The owner: the switch sits with the team rules, on as HQ reads it; turning it off saves at HQ.
@@ -87,6 +94,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
     assert.deepEqual(writes.shift(), {on: false});
     assert.equal(await toggle.isChecked(), false);
+    const afterOpen = reads.length;
     // HQ not reached: nothing changes, and the reason sits under the switch.
     failPut = true;
     await toggle.click();
@@ -97,14 +105,46 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(await toggle.isChecked(), false, 'a failed change keeps the old state');
     assert.equal(await toggle.isDisabled(), false);
     assert.ok((await page.locator('#set-people [data-field-err]').innerText()).trim());
+    assert.equal(reads.length, afterOpen + 1, 'a failed write re-reads HQ');
     failPut = false;
+
+    // A lost write answer must show HQ's new value, rather than undoing the checkbox locally.
+    failPut = 'applied';
+    await toggle.click();
+    await page.locator('#set-people [data-field-err]').waitFor();
+    assert.equal(await toggle.isChecked(), true, 'HQ accepted the enable despite the lost answer');
+    assert.equal(await toggle.isDisabled(), false);
+    writes.length = 0;
+    failPut = false;
+    const afterFailures = reads.length;
     // Another rule's save redraws the page from what HQ last answered, without reading it again.
     const redrawn = page.waitForResponse(response => response.url().endsWith('/api/v2/access') && response.request().method() === 'GET');
     await page.locator('[data-rule=admin_sql]').uncheck();
     await redrawn;
     await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);
-    assert.equal(await page.locator('#people-cloud-support').isChecked(), false);
-    assert.equal(reads.length, 1, 'one read per page load');
+    assert.equal(await page.locator('#people-cloud-support').isChecked(), true);
+    assert.equal(reads.length, afterFailures, 'a rule redraw shares the current entry');
+
+    // Both a fresh pane entry and a return to Settings read HQ again in this same document.
+    support = {...support, on: false};
+    await enter(page, 'people');
+    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.checked === false);
+    assert.ok(reads.length > afterFailures);
+    support = {...support, on: true};
+    await page.evaluate(() => { route('#/updates'); route('#/settings'); });
+    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.checked === true);
+
+    // If neither the write nor the read can be confirmed, the switch stays unknown until re-entry succeeds.
+    failPut = true; failGet = true;
+    await toggle.click();
+    await page.locator('#set-people [data-field-err]').waitFor();
+    assert.equal(await toggle.isDisabled(), true);
+    assert.equal(await toggle.evaluate(box => box.indeterminate), true);
+    failPut = false; failGet = false;
+    await enter(page, 'people');
+    await page.waitForFunction(() => document.querySelector('#people-cloud-support')?.disabled === false);
+    assert.equal(await toggle.isChecked(), true);
+    support = {...support, on: false, machines: machines.map(m => ({...m, helper: m.helper === 'none' ? 'none' : 'off'}))};
     await page.close();
 
     // Settings > Computers: each cloud machine's helper, by key; a helper that is not there and a computer say nothing.
@@ -116,31 +156,34 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(await row('r9').innerText(), 'Tico support: off');
     assert.equal(await row('r7').count(), 0, 'no helper there: nothing');
     assert.equal(await row('r1').count(), 0, 'not a cloud machine: nothing');
+    const deviceReads = reads.length;
     support = {...support, machines: machines.map(m => m.key === 'helper' ? {...m, helper: 'offline'} : m)};
     await page.evaluate(() => loadSettings());
     await page.waitForFunction(() => document.querySelector('#set-machines tr[data-computer-row="r9"] [data-machine-support]'));
     assert.equal(await row('r9').innerText(), 'Tico support: off', 'the state is not read again on a redraw');
-    assert.equal(reads.length, 1, 'one read per page load');
-    await page.close();
-    page = await open('devices');
-    await row('r9').waitFor();
+    assert.equal(reads.length, deviceReads, 'one read per Settings entry');
+    await enter(page, 'devices');
+    await page.waitForFunction(() => document.querySelector('#set-machines tr[data-computer-row="r9"] [data-machine-support]')?.textContent === 'Tico support: offline');
     assert.equal(await row('r9').innerText(), 'Tico support: offline');
     assert.equal(await row('r8').innerText(), 'Tico support: on');
-    await page.close();
 
-    // A failed read shows nothing on either page and breaks neither.
+    // Failed reads clear stale state, then retry on the next entry without reloading the document.
     failGet = true;
-    page = await open('devices');
+    await enter(page, 'devices');
     await page.locator('#set-machines tr[data-computer-row="r8"]').waitFor();
     await page.evaluate(() => CLOUD_SUPPORT.read);   // the failed read has settled
     assert.equal(await page.locator('[data-machine-support]').count(), 0);
     assert.equal(await page.locator('#set-machines > .err').count(), 0);
-    await page.close();
-    page = await open('people');
+    await enter(page, 'people');
     await page.locator('[data-rule=admin_sql]').waitFor();
     assert.equal(await page.locator('#people-cloud-support').count(), 0);
-    await page.close();
     failGet = false;
+    await enter(page, 'people');
+    await page.locator('#people-cloud-support').waitFor();
+    await enter(page, 'devices');
+    await row('r9').waitFor();
+    assert.equal(await row('r9').innerText(), 'Tico support: offline');
+    await page.close();
 
     // An admin sees it read-only.
     me = {...me, id: 'ben', name: 'Ben Cole', role: 'human', bot_admin: true, email: 'ben@acme.example'};
@@ -157,7 +200,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
     assert.equal(await page.locator('#people-cloud-support').count(), 0);
     await page.close();
     assert.deepEqual(errors, []);
-    console.log('PASS: Tico support switch on People (owner changes, admin reads, a refusal keeps it) and helper states on Computers, read once.');
+    console.log('PASS: Tico support owner policy, HQ state after uncertain writes, entry refresh, read recovery and helper states.');
   } finally {
     await browser.close();
   }
