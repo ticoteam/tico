@@ -63,6 +63,8 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
     assert attempt["make_page"]["task"]["body"] == t["body"]
     assert [m["id"] for m in attempt["task_context"]["meetings"]] == [mid]
     assert get(api, "me", token)["actor"] == "human:ben"
+    assert "credentials" in get(api, "credential-runtime", token)
+    assert set(get(api, "config", token)) == {"features", "upload_max_bytes"}
     get(api, "meetings/transcript?id=" + mid, token)
     assert status(api, t["id"])["state"] == "making"
     made = page(api, attempt, task=t["id"], attempt="forged-attempt", title="Alert flow")
@@ -158,7 +160,7 @@ def test_logged_page_audience_must_still_cover_the_task_at_publication(api):
     assert source.status_code == 200, source.text
     fid = source.json()["page"]["file_id"]
     _, attempt, _ = start(api, t["id"])
-    get(api, "files/" + fid, attempt["token"])
+    assert api.get("/api/v2/files/" + fid, headers=headers(attempt["token"])).status_code == 200
     edit(api, fid, {"people": ["ben"]}, token="ana-test")
     # The requester can still read it; the shared task's other readers cannot.
     get(api, "pages/" + fid, "ben-test")
@@ -184,7 +186,7 @@ def test_make_page_output_uses_page_audience_and_restores_after_clearing_it(api)
     assert status(api, t["id"])["state"] == "made"
     edit(api, fid, None, token="ana-test")
     get(api, "pages/" + fid, "cara-test")
-    get(api, "files/" + fid, "cara-test")
+    assert api.get("/api/v2/files/" + fid, headers=headers("cara-test")).status_code == 200
 
 
 def test_forged_make_page_refs_are_forbidden_on_generic_message_and_chat_routes(api):
