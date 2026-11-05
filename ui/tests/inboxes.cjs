@@ -329,7 +329,7 @@ const scenarios = {
     });
     assert.ok(await fits(page));
     if (SHOTS) {
-      await page.evaluate(() => scrollTo(0, 0));
+      await page.evaluate(() => document.querySelector('#set-inboxes').scrollIntoView({block: 'start'}));
       await shot(page, `inboxes-settings-desktop-light.png`, 'light');
     }
     assert.deepEqual(seen.errors, []);
