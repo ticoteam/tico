@@ -21,7 +21,7 @@ def listing(c, auth, who, tid, *, carried=None):
                          "AND f.archived=0 AND f.state<>'deleted' AND (f.scope=? OR EXISTS "
                          "(SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id)) "
                          "ORDER BY f.last_activity_at DESC,f.id DESC", ("task:" + task["id"], "task:" + task["id"])):
-        if (all(turn_scope.file_contained(c, auth, row, t) for t in carried)
+        if (all(turn_scope.file_contained(c, auth, row, t, who) for t in carried)
                 and file_visible(c, auth, who, row, cache)):
             pages.append({"id": row["id"], "title": row["title"][:200], "version": row["current_version"],
                           "updated_at": row["last_activity_at"]})

@@ -750,7 +750,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
         source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
-                                       "live_meeting_turns"}
+                                       "live_meeting_turns", "pins", "pages", "meeting_task_links", "bot_settings",
+                                       "sqlite_master", "row_clock", "roster_clock", "provenance_clock"}
         class Source:
             def __init__(self):
                 self.statements = {}

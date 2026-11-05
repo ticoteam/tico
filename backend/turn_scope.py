@@ -108,15 +108,18 @@ def meeting_contained(c, row):
                                        (row["id"],)))
 
 
-def file_contained(c, auth, row, task):
-    from .files import VERSIONS_SQL, file_visible
+def file_contained(c, auth, row, task, who=None):
+    from .files import VERSIONS_SQL, _file_visible
     if row["state"] == "deleted":
         return False
     audience = readers(c, auth, task)
     if not audience:
         return False
     if H.task_private(c, task):
-        return all(file_visible(c, auth, reader, row, {}) for reader in audience)
+        # A grant to this specific run (Counsel's document read) is one of the acting bot's own rights.
+        # Other task readers still need their independent grants; no source check recurses into this scope.
+        return all(_file_visible(c, auth, who if who and reader.actor == who.actor else reader, row, {})
+                   for reader in audience)
     # A file filed on this task follows that task's own full access check, including its bot parties.
     if row["scope"] != "task:" + task["id"]:
         if row["scope"].startswith("conversation:"):
@@ -163,7 +166,7 @@ def allowed(c, auth, who, kind, row):
             return False
     if kind == "meeting":
         return meeting_contained(c, row)
-    return all(file_contained(c, auth, row, task) for task in carried)
+    return all(file_contained(c, auth, row, task, who) for task in carried)
 
 
 def record(c, who, kind, ref):

@@ -173,6 +173,8 @@ def test_make_scope_guards_legacy_routes_logs_reads_and_rechecks_revocation(api,
                  "/api/v2/meetings/transcript?id=" + linked):
         response = api.get(path, headers=headers(attempt["token"]))
         assert response.status_code == 200, response.text
+    sql = post(api, "sql", {"sql": "SELECT id FROM meetings ORDER BY id"}, attempt["token"])
+    assert sql["rows"] == [[linked]]
     store = api.app.state.store
     with store.read() as c:
         assert [tuple(r) for r in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))] == [
