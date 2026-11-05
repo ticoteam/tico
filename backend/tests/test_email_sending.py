@@ -199,6 +199,20 @@ def test_permission_revocation_between_claim_and_dispatch(inbox):
                 token=machine["token"])["send"] is None
 
 
+def test_external_agent_revocation_blocks_its_pending_send(inbox):
+    autonomous(inbox)
+    with inbox.app.state.store.transaction() as c:
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('ops','external','fixture',?,'human:ana')", (H.now(),))
+        queued = S.enqueue(c, inbox.app.state.auth, "bot:ops", S.Enqueue(mailbox=BOX, raw=mime()),
+                           {"legal_or_money": False}, via="agent:external")
+        c.execute("UPDATE agents SET revoked_at=? WHERE bot='ops'", (H.now(),))
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.read() as c:
+        result = json.loads(c.execute("SELECT decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0])
+    assert "agent_revoked" in result["reasons"]
+
+
 @pytest.mark.parametrize("cap", ["daily_cap", "mailbox_daily_cap", "company_daily_cap"])
 def test_caps_reserve_concurrent_dispatches_including_unknown_results(inbox, cap):
     autonomous(inbox, **{cap: 1})

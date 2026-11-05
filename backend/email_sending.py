@@ -354,6 +354,10 @@ def decision(c, auth, row, *, dispatch=False):
             blocked.append("onboarding")
         if (H.bot(c, row["bot"]) or {}).get("state") != "active":
             blocked.append("bot_inactive")
+        if row["via"].startswith("agent:"):
+            credential = c.execute("SELECT revoked_at FROM agents WHERE bot=?", (row["bot"],)).fetchone()
+            if not credential or credential["revoked_at"]:
+                blocked.append("agent_revoked")
     legacy = legacy_authorized(c, row)
     # A changed company policy takes effect immediately, including for grandfathered authorizations.
     grandfathered = (legacy and not policy["company_restrictions_set"]
@@ -653,7 +657,8 @@ def install(app, store, auth, mutate):
             policy = effective(c, body.mailbox.strip().lower(), H.actor_id(actor) if actor.startswith("bot:") else "")
         snap = snapshot(body.raw, body.mailbox.strip().lower())
         classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": None, "status": "off"}
-        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=who.via)}, durable=True)
+        via = who.via or ("agent:" + who.agent if who.agent else "")
+        return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=via)}, durable=True)
 
     @app.get("/api/v2/email/sends")
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
