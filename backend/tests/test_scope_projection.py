@@ -1267,7 +1267,7 @@ def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeyp
                              headers=headers('source-publisher'))
         assert response.status_code == 200, response.text
         post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
-                                     'status': 'waiting', 'on': 'ana'}, attempt['token'])
+                                     'status': 'waiting'}, attempt['token'])
     with api.app.state.store.read() as c:
         row = H.task(c, t['id'])
         assert filename in row['blocked_reason']
