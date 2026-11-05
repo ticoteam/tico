@@ -374,9 +374,10 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # like test_local_imports), not the suite; the scheduler's guard follows
     # task_loops; the shared helper reaches the Caddy container test through caddy_assets.
     # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
-    # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first.
+    # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first;
+    # test_system_jobs_list scans all of backend/ for recorded job keys, so it is one more.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 25
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 26
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]

@@ -374,6 +374,7 @@ KEY_PATTERNS = (
     r"(?:SR|system_routines)\.recording\(\s*[\w.]+\s*,\s*['\"]([a-z_]+)['\"]",
     r"(?:SR|system_routines)\.pass_of\s*[,(]\s*[\w.]+\s*,\s*['\"]([a-z_]+)['\"]",
     r"\brecorded\(\s*['\"]([a-z_]+)['\"]",                 # app.py's loop helper: recorded("key", work)
+    r"\bto_thread\(\s*recorded\s*,\s*['\"]([a-z_]+)['\"]",  # ...or to_thread(recorded, "key", work)
 )
 
 
