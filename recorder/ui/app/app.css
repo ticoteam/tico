@@ -317,13 +317,15 @@ html.hidden *, html.hidden *::before, html.hidden *::after { animation-play-stat
 .item .sub .at { font-variant-numeric: tabular-nums; }
 .owner { border: 0; background: transparent; padding: 0 3px; margin: 0 -3px; border-radius: 4px; color: var(--text-3); font-size: 12px; }
 .owner:hover { color: var(--text); background: var(--fill); }
-.owner.empty { color: var(--text-4); }
+.owner.empty { color: var(--text-2); }
 .item .error { color: var(--amber); font-size: 12px; }
 .section > .label.head { margin-bottom: 6px; }
 .section > .label.head .btn { text-transform: none; letter-spacing: 0; color: var(--text-2); font-weight: 500; }
 .items.tasks { margin-bottom: 10px; }
 .item.task .check.done { background: transparent; border-color: var(--text-3); color: var(--text-2); }
 .item.task .title { display: block; }
+.item.task.open { cursor: pointer; }
+.item.task.open:focus-visible { outline: none; background: var(--side); box-shadow: 0 0 0 2px var(--accent-soft); }
 .item .num { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .item.proposal { background: var(--accent-soft); padding: 9px 10px; margin: 0 -10px; border-radius: 10px; align-items: flex-start; }
 .item.proposal:hover, .item.proposal.picking { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--line); }
