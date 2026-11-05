@@ -201,7 +201,7 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
@@ -210,6 +210,8 @@ APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "task_cap": ("sender", "receiver"),
                    # The redesign's other proposal (backend/proposals.py checks its whole shape): a spend limit.
                    "spend_limit": (),
+                   # A bot's mail sending a person has not approved (backend/proposals.py `MailAlert`, raised by Check health).
+                   "mail_alert": ("bot",),
                    # A report to the Tico team (backend/support.py `file_approved`): the message, its hash, and whether
                    # the version and install ID go with it. Nothing else may: no email, no diagnostics bundle.
                    "support": ("message", "content_sha256")}
@@ -2926,7 +2928,7 @@ def _learner(conn, actor):
                "your manager in chat; a person above you marks onboarding complete when you are ready.")
 
 
-# The built-in Health Monitor's slug (backend/health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+# The retired Health Monitor's slug (archived by backend/migrations/0096_retire_health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
 HEALTH_MONITOR = "health-monitor"
 
 

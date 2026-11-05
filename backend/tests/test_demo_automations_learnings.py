@@ -116,7 +116,7 @@ def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
         assert len({run["started_at"][:10] for run in calibration}) == 7
         recent = []
         for name in ("Calibration failures to technical support", "Calibration failed twice to Ben",
-                     "Firmware rings to health monitor"):
+                     "Firmware rings to BotOps"):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]
         assert len(recent) >= 4

@@ -615,9 +615,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            version and install ID go with it unless --no-ids). Prints its id or ticket
     hub support send --approval <id>       send the report once a person approved it, filed as them; again is the
                                            same ticket, never a second one
-    hub health-monitor findings            the Health Monitor: what the last hourly scan found
-    hub health-monitor report <key> | --process process:<name> --cpu N --mb N
-                                           report a finding as a Tico bug, one ticket per signature
+    hub health findings                    what Check health found on this install, each problem with its report
+    hub health report <key>                report a finding as a Tico bug, one ticket per problem
     hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
     hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
@@ -3284,6 +3283,10 @@ def parser():
     s.add_argument("--minutes", type=int)
     s.add_argument("--section", help="requests, slow, process, sql, db or events; comma-separated")
     s.set_defaults(fn="health metrics")
+    health.add_parser("findings", help="what Check health found on this install, each problem with its report").set_defaults(fn="health findings")
+    s = health.add_parser("report", help="report a finding as a Tico bug: one ticket per problem, with the redacted diagnostics")
+    s.add_argument("key", nargs="?", help="the finding's key or signature, from its task")
+    s.set_defaults(fn="health report")
     changelog = sub.add_parser("changelog", help="shipped product changes and your own read state").add_subparsers(dest="sub")
     s = changelog.add_parser("list", help="what changed; --unread catches up since your last look")
     s.add_argument("--kind", choices=["product", "activity", "all"], default="product")
@@ -3826,14 +3829,6 @@ def parser():
     s = support.add_parser("send", help="send a report a person approved; filed as the person who approved it")
     s.add_argument("--approval", required=True, help="the approval id `support report` printed")
     s.set_defaults(fn="support send")
-    monitor = sub.add_parser("health-monitor", help="the Health Monitor's findings and reports (docs/health-monitor.md)").add_subparsers(dest="sub")
-    monitor.add_parser("findings", help="what the last hourly scan found, and each signature's report").set_defaults(fn="health-monitor findings")
-    s = monitor.add_parser("report", help="report a finding as a Tico bug: one ticket per signature, with the redacted diagnostics")
-    s.add_argument("key", nargs="?", help="the finding's key or signature, from its task")
-    s.add_argument("--process", help="instead of a key: what the watcher saw busy, process:<name> or container:<name>")
-    s.add_argument("--cpu", type=float, default=0, help="with --process: its CPU percent")
-    s.add_argument("--mb", type=float, default=0, help="with --process: its memory in MB")
-    s.set_defaults(fn="health-monitor report")
     fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
                          "(docs/finance-tools.md)").add_subparsers(dest="sub")
     s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")

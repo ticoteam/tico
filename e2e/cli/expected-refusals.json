@@ -58,7 +58,7 @@
  "group update": "ValueError: Name the new group, or say which group to change: hub group update <",
  "growth channel update": "not_found",
  "growth cohort set": "validation",
- "health-monitor report": "ValueError: name a finding's key, or --process",
+ "health report": "ValueError: name a finding's key",
  "inbound audience": "unknown_inbox",
  "kpi link": "not_found",
  "kpi log": "not_found",

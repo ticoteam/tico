@@ -109,7 +109,8 @@ If Tico retries the upload, the line adds **trying again**.
 The thread goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
-on the bot’s **History** tab.
+on the bot’s **History** tab. The end reason distinguishes a planned pause for a computer update or shared login,
+a run handed back before starting, a reported runner restart, and a lost heartbeat.
 
 **What did every bot do, ask, and get blocked on?**
 **Settings → History → Log** is the audit log, newest first. It lists runs, task status changes, approvals asked,
@@ -195,7 +196,8 @@ back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
-Every bot reports in once a day, and on Friday with a week in review (five slides). People report in the same shape.
+Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). Counsel
+speaks only on its own private tasks and is not asked for updates. People report in the same shape.
 An update is one to five plain bullets: what you did, what you do next, and what waits on someone.
 
 **Updates roll up the org chart.** From 05:00 Pacific, Tico asks the bots one at a time, starting with those
@@ -344,7 +346,7 @@ hub task later <task-id> --handled              # this run is done with it for n
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
 working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
 condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
-own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). The Health Monitor names a deferred task handed
+own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). Check health names a deferred task handed
 to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
 
 The equivalent API calls are internal routes (subject to change); use your own rights and an

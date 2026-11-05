@@ -636,17 +636,12 @@ STABLE = [
      "act, stay queued. A run that has already started finishes (owner and bot administrators)", "QueuePurgeResult"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
-    ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
-     "Owners, admins and the Health Monitor: whether it is on, whether it files reports without asking, and what the "
-     "last hourly scan found", None),
-    ("/api/v2/health-monitor/turn-on", "post", "Health", "turnOnHealthMonitor",
-     "Owner only: add the Health Monitor from the catalog (or wake a paused one) and activate it", None),
-    ("/api/v2/health-monitor/turn-off", "post", "Health", "turnOffHealthMonitor", "Owner only: pause the Health Monitor", None),
-    ("/api/v2/health-monitor/findings/{key}/report", "post", "Health", "reportHealthFinding",
-     "The Health Monitor or the owner: report a finding (key or signature) as a Tico bug: one ticket per signature with "
-     "the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off", None),
-    ("/api/v2/health-monitor/local-findings", "post", "Health", "recordLocalHealthFinding",
-     "The Health Monitor: record a process or container its watcher saw busy, as a finding it can report", None),
+    ("/api/v2/health/findings", "get", "Health", "getHealthFindings",
+     "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, "
+     "plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)", None),
+    ("/api/v2/health/findings/{key}/report", "post", "Health", "reportHealthFinding",
+     "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, "
+     "a message on it when it comes back, or a support approval when the team rule is off", None),
     ("/api/v2/task-manager", "get", "Health", "getTaskManager",
      "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each "
      "department's last check and open check task", None),

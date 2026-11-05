@@ -2,7 +2,7 @@
 
 `publisher()` (backend/connectors.py) is unchanged. It still decides every mailbox that no Google Workspace and no
 personal grant covers, exactly as before. A mailbox one of them covers has a single owner:
-- `workspace`: the computer hosting the mailbox's message bot (`google_workspace.owned_mailboxes`);
+- `workspace`: its message bot's host, else its one online sync computer (`google_workspace.owned_mailboxes`);
 - `personal`: the computer that takes the person's live Connect Google grant (`takes`): the live computer hosting their
   message bot, or the holder while no computer hosts it.
 Any other computer is refused with 403 `workspace_owned` or `personal_grant`, a publisher included. Work already leased
@@ -22,18 +22,21 @@ FRESH_SECONDS = 1800
 
 FORBIDDEN = "This machine is not assigned the private app-connector capability"
 MESSAGES = {
-    "workspace_owned": "{box} is read by the computer that runs its message bot, not by this one",
+    "workspace_owned": "{box} is read by its assigned sync computer, not by this one",
     "personal_grant": "{box} is connected through its person's Google grant, which the computer holding that grant reads",
 }
 
 
 def boxes(c):
-    """The message-bot mailboxes, as routines.message_bot_mailboxes lists them with the roster the routes use, less the
-    ones stopped in Tico (backend/mailbox_access.py `stop`)."""
+    """Message-bot targets plus known active Workspace mailboxes, less stopped ones. Listing a sync target grants no
+    person or bot access to its contents."""
     from . import mailbox_access, routines
     from .views import roster
     off = mailbox_access.stopped(c)
-    return [box for box in routines.message_bot_mailboxes(c, roster(c)) if box["address"] not in off]
+    found = {box["address"]: box for box in routines.message_bot_mailboxes(c, roster(c))}
+    for box in workspace.workspace_mailboxes(c):
+        found.setdefault(box["address"], {**box, "bot": None, "declared": False})
+    return [box for box in found.values() if box["address"] not in off]
 
 
 def runner_of(execution, c, who):
@@ -94,6 +97,8 @@ def inbox_hosts(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
     out = {}
     for box in boxes(c):
+        if not box["bot"] or not box["person_id"]:
+            continue
         row = placed.get(box["bot"])
         live = row is not None and not row["revoked_at"]
         out[box["person_id"]] = {"bot": box["bot"], "runner": row["runner_id"] if live else None,
