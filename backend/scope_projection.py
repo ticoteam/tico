@@ -334,9 +334,10 @@ def project(c, scoped, payload, *, auth=None):
                             out[key][qid] = [label for label in picks if not (
                                 has_denied(labels.get(label)) or label not in labels and label in legacy_titles)]
             H.clear_sourced_text(value, out, has_denied, hidden=bool(direct_denied))
+            record_id = value.get('id') if isinstance(value.get('id'), str) else None
             dependency = value.get('blocked_kind') == 'dependency' or any(
                 hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency' for hold in value.get('holds') or [])
-            if dependency and value.get('id') in tasks:
+            if dependency and record_id in tasks:
                 from . import task_holds
                 row = H.task(c, value['id'])
                 reason = task_holds.words(c, task_holds.holds(c, row, who=scoped.who, auth=auth))
@@ -345,7 +346,7 @@ def project(c, scoped, payload, *, auth=None):
                 for hold in out.get('holds') or []:
                     if hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency':
                         hold['reason'] = reason
-            for field, provenance in stored_text.get(value.get('id'), {}).items():
+            for field, provenance in stored_text.get(record_id, {}).items():
                 if field in out:
                     copied = {field: out[field], **provenance}
                     out[field] = H.clear_sourced_text(copied, dict(copied), has_denied)[field]

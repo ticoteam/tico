@@ -205,7 +205,8 @@ def edit_version(c, auth, who, task_id, fid, number, body):
         existing = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
                              (fid, number)).fetchone()[0]
         if existing:
-            if value is None or value == {k: v for k, v in (current["ask"] or {}).items() if k != "by"}:
+            if value is None or H.routing_refs(value) == H.routing_refs(
+                    {k: v for k, v in (current["ask"] or {}).items() if k != "by"}):
                 return version_review(c, fid, number, actor=privacy.actor(who))
             if H.answers_to(c, [existing]):
                 raise Problem("validation", "This version's question was answered; attach a new version for another review", 422)

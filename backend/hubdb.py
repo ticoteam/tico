@@ -234,9 +234,6 @@ NOTICE_DAYS = 14                # how long a notice stays in the inbox
 
 # ----------------------------------------------------------------------------- schema
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS sourced_text_records (
- kind TEXT NOT NULL, record_id TEXT NOT NULL, field TEXT NOT NULL, refs TEXT NOT NULL,
- PRIMARY KEY(kind,record_id,field));
 CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
@@ -1118,6 +1115,21 @@ SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "ot
 SOURCED_TEXT_SOURCES = ("body_sources", "sources")
 
 
+def routing_refs(value):
+    """Provenance describes copied text, never an instruction or the identity of an action."""
+    if isinstance(value, dict):
+        return {key: routing_refs(item) for key, item in value.items() if key not in SOURCED_TEXT_SOURCES}
+    if isinstance(value, list):
+        return [routing_refs(item) for item in value]
+    return value
+
+
+def routing_refs_sql(column):
+    """The same control-only refs for SQLite's message deduplication trigger."""
+    paths = ','.join("'$." + key + "'" for key in SOURCED_TEXT_SOURCES)
+    return f"json_remove({column},{paths})"
+
+
 def clear_sourced_text(value, shown, rejected, *, hidden=False, replacement=""):
     """Clear copied prose while its provenance is still available to either source guard.
 
@@ -1185,10 +1197,11 @@ def remember_sourced_text(conn, kind, record_id, field, text, sources):
     return text
 
 
-def sourced_record_sources(conn, kind, record_id):
+def sourced_record_sources(conn, kind, record_id, *, fields=None):
     """Snapshot transitive sources when copying a record, so later edits cannot erase their identities."""
-    return [source for row in conn.execute("SELECT refs FROM sourced_text_records WHERE kind=? AND record_id=?",
+    return [source for row in conn.execute("SELECT field,refs FROM sourced_text_records WHERE kind=? AND record_id=?",
                                            (kind, record_id))
+            if fields is None or row['field'] in fields
             for source in _json(row['refs'], {}).get('body_sources', [])]
 
 
@@ -6326,7 +6339,7 @@ def is_comment(msg):
     refs = msg.get("refs") or {}
     # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved).
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
-            and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate",
+            and not (set(routing_refs(refs)) - {"task", "comment", "quiet", "via", "rule", "wake_immediate",
                                          "delivery", "moved_home"}))
 
 
@@ -8947,7 +8960,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     from .scope_projection import body_sources
     body, message_refs = sourced_text(body, [body_sources(message_refs),
-                                            *sourced_record_sources(conn, 'task', task_row['id'])], message_refs)
+                                            *sourced_record_sources(conn, 'task', task_row['id'], fields=('title',))], message_refs)
     return _write_message(conn, KEEPER, target, body,
                           conversation(conn, task_row["conversation_id"]), "notice",
                           message_refs, None, None)

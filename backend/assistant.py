@@ -1125,6 +1125,9 @@ def refuse_unrunnable(routes, method, path, body):
 def action_sources(c, path, body):
     """Keep request identities and the stored sources behind copied target text, before any projection."""
     from .scope_projection import body_sources
+    if path == '/api/v2/providers/gateway' or re.fullmatch(r'/api/v2/webhooks/[^/]+/update', path):
+        # A service address is a destination, not a content source; its private path stays out of card prose.
+        body = {key: value for key, value in body.items() if key != 'url'}
     sources = [body_sources(body)]
     if path == BATCH_PATH:
         for step in body.get("actions") or []:

@@ -114,6 +114,19 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
     assert sum(j["wake_class"] == "duplicate" for j in rows) == 4
 
 
+def test_notice_provenance_never_changes_duplicate_identity(api):
+    task = new_task(api, "assigned")
+    body = "Unblocked: assigned\nThe migration is finished."
+    first = notice(api, task, body, blocker_done=task['id'])
+    second = notice(api, task, body, blocker_done=task['id'],
+                    body_sources=[{'file': 'older-source'}], sources=[{'file': 'newer-source'}])
+    rows = {j['id']: j for j in jobs(api)}
+    assert rows[first['id']]['state'] == 'queued'
+    assert (rows[second['id']]['state'], rows[second['id']]['wake_class']) == ('canceled', 'duplicate')
+    assert second['refs']['sources'] == [{'file': 'newer-source'}]
+    assert {'file': 'older-source'} in second['refs']['body_sources']
+
+
 def test_a_repeated_send_while_its_turn_runs_shows_that_turn_not_a_dismissal(api):
     # The duplicate trigger dismisses a send repeated while its turn runs; the chat keeps showing the turn still going.
     # A send dismissed for any other reason still reads "Delivery dismissed".

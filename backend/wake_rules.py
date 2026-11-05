@@ -203,7 +203,8 @@ def _news(conn, actor, target, kind, refs, body, cause, in_reply_to=None):
     alone are no permission (it calls any bot's message a message), so the refs are checked here first. Reads a
     table only for a reply's parent."""
     from . import run_triggers, wake_presets
-    if set(refs) - NEWS_REFS or awaited(refs):
+    from . import hubdb as H
+    if set(H.routing_refs(refs)) - NEWS_REFS or awaited(refs):
         return False
     if always_wakes(conn, actor, target, kind, refs, body, cause, in_reply_to):
         return False
@@ -329,8 +330,9 @@ def at_checkpoint(conn, task_row, target):
 def same_state(conn, actor, target, kind, refs, body, task_row, cause=None, in_reply_to=None):
     """Whether this wake is a plain stall or status check about a task `target` owns that stands exactly as at its
     last checkpoint. Nothing on ALWAYS_WAKE or AWAITED is ever held."""
+    from . import hubdb as H
     if not task_row or task_row.get("owner_id") != target or refs.get("trigger") != "stall_check" \
-            or refs.get("wake") not in SAME_STATE_WAKES or set(refs) - NEWS_REFS - {"wake"} or awaited(refs):
+            or refs.get("wake") not in SAME_STATE_WAKES or set(H.routing_refs(refs)) - NEWS_REFS - {"wake"} or awaited(refs):
         return None
     if task_row.get("checkpoint_blocked") or not task_row.get("checkpoint_state") \
             or task_row.get("checkpoint_by_id") != target:

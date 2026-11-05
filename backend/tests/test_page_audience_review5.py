@@ -114,7 +114,8 @@ def test_a_generated_pick_answer_forwarded_to_a_merged_ask_keeps_its_sources(api
                                       "answers": {"verdict": ["Confidential draft"]}}, token="cara-test")
     with api.app.state.store.read() as c:
         forwarded = [m for m in H.task_comments(c, second["id"]) if "Confidential draft" in m["body"]]
-        assert len(forwarded) == 1 and forwarded[0]["refs"]["body_sources"] == [{"file": fid, "version": 1}]
+        assert len(forwarded) == 1 and forwarded[0]["refs"]["body_sources"] == [
+            {"file": fid, "version": 1}, {"task": tid}]
     edit(api, fid, {"people": ["ben"]})
     for deleted in (False, True):
         if deleted:

@@ -39,11 +39,11 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
             return False
         if not isinstance(refs, dict) or refs.get("quiet"):
             return False
-        from . import wake_rules
+        from . import hubdb as H, wake_rules
         # The flag, the reply the recipient waits on and the verdict lines are on the always-wake list.
         if wake_rules.always_wakes(conn, actor, target, kind, refs, body, in_reply_to=in_reply_to):
             return False
-        return not set(refs) - PLAIN_REFS - {FLAG}
+        return not set(H.routing_refs(refs)) - PLAIN_REFS - {FLAG}
     except Exception:  # noqa: BLE001 - fail open: a message this cannot read wakes its bot
         return False
 

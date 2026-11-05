@@ -1253,16 +1253,19 @@ def test_stored_task_copies_and_deferred_notes_keep_the_message_sources(api, mon
 
 
 def test_legacy_dependency_reasons_rebuild_from_the_scoped_question(api, monkeypatch):
-    from backend import task_holds
+    from backend import models, task_review
     from backend.tests.test_task_review import ask as version_ask
     t, attempt = task_turn(api)
     filename = 'confidential-hold.html'
     fid = published(api, attempt, task=t['id'], name=filename)
     with monkeypatch.context() as patch:
         patch.setattr(H, 'remember_sourced_text', lambda c, kind, rid, field, text, sources: text)
-        response = api.patch(f'/api/v2/files/{fid}/versions/1', json={'ask': version_ask('ana')},
-                             headers=headers(attempt['token']))
-        assert response.status_code == 200, response.text
+        # Seed a legacy version question through its writer: scoped HTTP deliberately excludes version edits.
+        with api.app.state.store.transaction() as c:
+            auth = api.app.state.auth
+            who = auth.authenticate({'authorization': 'Bearer ' + attempt['token']})
+            task_review.edit_version(c, auth, who, t['id'], fid, 1,
+                                     models.FileVersionEdit(ask=version_ask('ana')))
         post(api, 'tasks/' + t['id'], {'version': get(api, 'tasks/' + t['id'])['task']['version'],
                                      'status': 'waiting', 'on': 'ana'}, attempt['token'])
     with api.app.state.store.read() as c:

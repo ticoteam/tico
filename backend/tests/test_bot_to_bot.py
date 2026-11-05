@@ -66,6 +66,22 @@ def test_the_same_message_flagged_needs_action_wakes_the_bot_at_once(api):
     assert attempt["message"]["id"] == sent["id"] and not [n for n in attempt["notes"] if n.get("message")]
 
 
+def test_provenance_keeps_a_bots_fyi_held_and_its_comment_editable(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    refs = {'body_sources': [{'file': 'source-file', 'command': True}],
+            'sources': [{'file': 'another-source'}]}
+    sent = post(api, 'messages', {'to': 'cpo', 'text': 'QA results are available.', 'refs': refs}, token=token)
+    assert jobs(api, 'cpo') == 0 and sent['refs'].get(B.MARK) == B.RULE
+    assert all(sent['refs'][key] == value for key, value in refs.items())
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'bot:ops', 'Review QA results', 'Read the report.', 'bot:cpo', lint=False)
+        comment = H.task_comment(c, 'bot:ops', task['id'], 'QA results are available.', extra_refs=refs)
+        assert H.is_comment(comment)
+        H.task_comment_edit(c, 'bot:ops', task['id'], comment['id'], 'Updated QA results are available.')
+        assert H.message(c, comment['id'])['body'] == 'Updated QA results are available.'
+
+
 def test_a_persons_message_always_wakes_the_bot(api):
     setup(api)
     post(api, "messages", {"to": "cpo", "text": "Can you look at the roadmap today?"})

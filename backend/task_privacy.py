@@ -209,7 +209,8 @@ def carried_tasks(c, aid):
                      "WHERE i.attempt_id=?", (aid, aid)).fetchall()
     for row in rows:
         row = dict(row)
-        refs = H._json(row.get("refs"), {}) or {}
+        refs = H.routing_refs(H._json(row.get("refs"), {}) or {})
+        row["refs"] = refs
         if isinstance(refs, dict) and "reconcile" in refs:
             refs = {key: value for key, value in refs.items() if key != "reconcile"}
             row = {**row, "refs": refs}
@@ -531,7 +532,7 @@ def deleted_comment_ack(c, principal, payload):
     """Only the canonical, empty deletion receipt may survive message withdrawal."""
     current = H.message(c, payload.get("id"), include_deleted=True)
     if (not current or not current.get("deleted_at") or current.get("body") != ""
-            or not H.is_comment(current) or set(current.get("refs", {})) != {"task", "comment"}
+            or not H.is_comment(current) or set(H.routing_refs(current.get("refs", {}))) != {"task", "comment"}
             or payload != current):
         return False
     return (meeting_sources(c).message_readable(principal, current)

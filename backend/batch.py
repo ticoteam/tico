@@ -56,7 +56,7 @@ def _children(c, task_id, owner):
                              "ORDER BY created_at", (task_id, owner)))
 
 
-def _row(it, actor, c):
+def _row(it, actor, c=None):
     """One item as a front end presents it: the whole question, never a clipped title."""
     key = ("approval:" if it["kind"] == "approval" else "task:") + str(it["id"])
     row = {"key": key, "kind": it["kind"], "title": _clip(it.get("title") or it.get("first_line"), 160)}
@@ -104,7 +104,8 @@ def _row(it, actor, c):
     if it.get("folded"):
         row['folded'] = [H.sourced_text(None, [body_sources(source)], copy)[1]
                          for source, copy in zip(it['folded'], row['folded'])]
-    _, row = H.sourced_text(None, [body_sources(it), *H.sourced_record_sources(c, 'task', it['id'])], row)
+    sources = H.sourced_record_sources(c, 'task', it['id']) if c is not None else []
+    _, row = H.sourced_text(None, [body_sources(it), *sources], row)
     return row
 
 

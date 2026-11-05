@@ -76,7 +76,8 @@ _PRESET_SQL = "(SELECT wake_preset FROM jobs WHERE id=NEW.id) IN ('" + TOKEN_SAV
 # The same event as an earlier job's message: same room, sender, kind, text, refs and reply. Only the message's own
 # fields: a job's hold flag changes when its batch is let go.
 _SAME_EVENT = ("om.sender_id IS m.sender_id AND om.kind IS m.kind AND om.body=m.body "
-               "AND om.refs IS m.refs AND om.in_reply_to IS m.in_reply_to")
+               f"AND {H.routing_refs_sql('om.refs')} IS {H.routing_refs_sql('m.refs')} "
+               "AND om.in_reply_to IS m.in_reply_to")
 # A keeper notice repeats any earlier one in its room; a person's or a bot's message repeats only the room's message
 # just before it (nothing said in between). Two lookups rather than one OR, so each seeks: the keeper's walks only its
 # room's earlier messages, and the other reads that one previous message by rowid, found once per insert.
