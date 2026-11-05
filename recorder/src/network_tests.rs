@@ -3957,7 +3957,7 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
         if phase == "edit" {
             store.delivery(&record.id, &Delivery {
                 destination_id:"synthetic".into(),meeting_id:"filed".into(),status:"failed".into(),error:String::new(),
-                receipt:json!({"audience":"team","uploads":{"a":{"key":"original-upload","body":{"section":"task","text":"Original","detail":{"owner":"human:test"},"quote":"","at_ms":null}}}}),
+                receipt:json!({"audience":"","uploads":{"a":{"key":"original-upload","body":{"section":"task","text":"Original","detail":{"owner":"human:test"},"quote":"","at_ms":null}}}}),
             }).unwrap();
         }
         let mut steps = if phase == "add" {
@@ -4025,6 +4025,12 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
             });
             let deadline = std::time::Instant::now() + Duration::from_secs(4);
             while seen.lock().unwrap().len() <= gate {
+                if saving.is_finished() {
+                    panic!(
+                        "Save finished before the held request in {phase}: {:?}",
+                        saving.join().unwrap()
+                    );
+                }
                 assert!(
                     std::time::Instant::now() < deadline,
                     "Request never started: {phase}"
