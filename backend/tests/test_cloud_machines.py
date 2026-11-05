@@ -55,6 +55,13 @@ class FakeHQ:
         self.calls.append(("list",))
         return {"machines": [dict(m) for m in self.machines.values()], "sizes": SIZES, "caps": {"machines": 10}}
 
+    def get(self, machine_id):
+        self.calls.append(("get", machine_id))
+        self._check("get")
+        if machine_id not in self.machines:
+            raise CM.Refused("not_found", 404)
+        return dict(self.machines[machine_id])
+
     def create(self, key, size, enroll_token, hub_url):
         self.calls.append(("create", key, size, enroll_token, hub_url))
         self._check("create")
@@ -96,7 +103,7 @@ class FakeHQ:
         self.machines[machine_id]["state"] = "deleted"
 
     def actions(self):
-        return [call[0] for call in self.calls if call[0] != "list"]
+        return [call[0] for call in self.calls if call[0] not in ("list", "get")]
 
 
 @pytest.fixture
@@ -192,6 +199,13 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
     assert CM.decide(machine_row(), facts(active=False, want="job:a"), 1000, 300) == (None, None)
     # A drain lets the turn out finish on it first.
     assert CM.decide(machine_row(state="running"), facts(active=False, turns=True), 1000, 300) == ("heartbeat", None)
+
+
+def test_deletion_fences_only_the_old_id_and_never_sends_it_start_stop_or_heartbeat():
+    old = machine_row(state="running", deleting=True, wake_key="job:a", woke_at=900)
+    assert CM.decide(old, facts(want="job:a"), 1000, 300) == ("create", None)
+    assert CM.decide(old, facts(active=False), 1000, 300) == (None, None)
+    assert CM.decide(old, facts(frozen=True, want="job:a"), 1000, 300) == (None, "out_of_credit")
 
 
 def test_decide_idle_stop_after_the_pause_heartbeat_and_always_on():
@@ -542,15 +556,15 @@ def test_the_new_machine_waits_for_hq_to_finish_deleting_the_one_that_never_enro
     cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
     assert cloud.hq.actions()[-1] == "delete" and pending == ["m1"]
     cloud.hq.machines["m1"]["pending"] = "delete"
-    # HQ keeps m1 live until boat confirms; no create or list can bring it back.
+    # HQ keeps m1 live until boat confirms. A create can ask for a fresh id but cannot take m1 back.
     cloud.hq.calls.clear()
     cloud.manager.synced = None
-    assert cloud.tick(10) == []
+    assert cloud.tick(10) == ["create"]
     assert cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "deleted" and not cloud.row()["enroll_by"]
-    assert cloud.tick(5) == []
+    assert cloud.tick(5) == ["create"]
     cloud.hq.machines["m1"]["state"] = "deleted"                # boat confirmed
     cloud.manager.synced = None
-    assert cloud.tick(10) == ["create"]
+    assert cloud.tick(10) == ["create", "create"]
     assert cloud.row()["machine_id"] == "m2" and cloud.row()["enroll_by"] == cloud.at[0] + (
         CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
 
@@ -956,10 +970,10 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     # Choosing its own machine again makes a new one at its next work: not the doomed m1 HQ still answers with.
     post(cloud.api, "bots/ops/cloud-machine", {"mode": "cloud"})
     cloud.hq.calls.clear()
-    assert cloud.tick(10) == [] and cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "deleted"
+    assert cloud.tick(10) == ["create"] and cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "deleted"
     cloud.hq.machines["m1"]["state"] = "deleted"                # boat confirmed
     cloud.manager.synced = None
-    assert cloud.tick(CM.BACKOFF) == ["create"] and cloud.row()["machine_id"] == "m2"
+    assert cloud.tick(CM.BACKOFF) == ["create", "create"] and cloud.row()["machine_id"] == "m2"
 
 
 def test_replace_own_machine_keeps_choices_revokes_and_enrolls_a_fresh_machine_with_the_plan(cloud):
@@ -1087,6 +1101,121 @@ def delete_target(cloud, target, retry=None):
     return cloud.api.request(target.method, target.url, headers=retry or headers("ben-test"))
 
 
+@pytest.mark.parametrize("kind", ["replace", "shared", "unused", "never_enrolled"])
+def test_an_oversized_list_cannot_block_a_fresh_machine_or_cleanup_of_its_old_id(cloud, monkeypatch, kind):
+    target = deletion_target(cloud, "replace" if kind == "never_enrolled" else kind, enroll=kind != "never_enrolled")
+    old_id = cloud.row(target.key)["machine_id"]
+    old_machine = dict(cloud.hq.machines[old_id], pending="delete")
+    if kind == "never_enrolled":
+        cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
+    else:
+        assert delete_target(cloud, target).status_code == 200
+    if kind == "unused":
+        post(cloud.api, "bots/ops/cloud-machine", {"mode": "cloud"})
+    assert cloud.row(target.key)["deleting"]
+
+    # Exercise the real list byte cap. A per-id report may still lag behind the accepted DELETE and fresh create.
+    monkeypatch.setattr(CM, "TRANSPORT", httpx.MockTransport(
+        lambda request: httpx.Response(200, content=b" " * (CM.ANSWER_CAP + 1))))
+    unreadable = CM.HQ("test-key", "https://gateway.acme.example/v1/gateway")
+    monkeypatch.setattr(cloud.hq, "list", unreadable.list)
+    get_machine = cloud.hq.get
+    monkeypatch.setattr(cloud.hq, "get", lambda mid: dict(old_machine) if mid == old_id else get_machine(mid))
+    # A restart must neither lose the old fence nor require another successful full list.
+    manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
+    cloud.at[0] += CM.TICK
+    manager.tick()
+    assert manager.list_refused == "oversized"
+    assert cloud.row(target.key)["machine_id"] not in (None, old_id)
+    code = next(call[3] for call in reversed(cloud.hq.calls) if call[0] == "create")
+    new = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    ready(cloud.api, new, ["ops"])
+    assert claim_on(cloud, new, "ops")["attempt"]
+    with cloud.store.read() as c:
+        assert CM.deleting(c, old_id)
+        assert not CM.held(c, new["runner_id"])
+        if target.computer:
+            assert CM.held(c, target.computer["runner_id"])
+
+    # Cleanup must find an intent after its bot row has moved to a new id. Its codes and runner survive settlement.
+    monkeypatch.setattr(cloud.hq, "get", get_machine)
+    cloud.at[0] += CM.SYNC
+    manager.tick()
+    assert manager.list_refused == "oversized"
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM cloud_machine_deletions").fetchone()
+        assert not c.execute("SELECT revoked_at FROM runners WHERE id=?", (new["runner_id"],)).fetchone()[0]
+    assert post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm"})["runner_id"] == new["runner_id"]
+
+
+def test_deletion_cleanup_is_bounded_and_continues_without_sizes_or_a_readable_list(cloud, monkeypatch):
+    monkeypatch.setattr(CM, "DELETION_BATCH", 2)
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (CM.SIZES_KEY,))
+        for n in range(5):
+            mid = f"old-{n}"
+            CM.intend_delete(c, {"bot": "ops", "machine_id": mid, "runner_id": None})
+            cloud.hq.machines[mid] = {"id": mid, "key": f"ops:superseded:{n}", "state": "deleted"}
+    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("unreachable")))
+    cloud.manager.synced = None
+    for left in (3, 1, 0):
+        cloud.tick(CM.TICK)
+        with cloud.store.read() as c:
+            assert c.execute("SELECT count(*) FROM cloud_machine_deletions").fetchone()[0] == left
+
+
+def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old_id_stays_fenced(cloud, monkeypatch):
+    target = deletion_target(cloud, "replace")
+    old_id = cloud.row()["machine_id"]
+    with cloud.store.transaction() as c:
+        old_code = CM.mint(c, "ops")
+    cloud.hq.fail["delete"] = CM.Refused("unreachable")
+    assert delete_target(cloud, target).status_code == 502
+    cloud.hq.machines[old_id].update(key="ops:superseded:old", pending="delete")
+    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    create = cloud.hq.create
+
+    def lost(*args):
+        create(*args)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "create", lost)
+    cloud.tick(CM.TICK)
+    code = next(call[3] for call in reversed(cloud.hq.calls) if call[0] == "create")
+    assert cloud.api.post("/api/v2/runners/enroll", json={"code": old_code, "label": "boat-vm"}).status_code == 401
+    fresh = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    with cloud.store.read() as c:
+        assert CM.held(c, fresh["runner_id"])                 # create's new id has not been received yet
+    monkeypatch.setattr(cloud.hq, "create", create)
+    cloud.tick(CM.BACKOFF)
+    assert cloud.row()["machine_id"] != old_id
+    assert cloud.row()["runner_id"] == fresh["runner_id"] and cloud.row()["enroll_by"] == 0
+    cloud.tick(CM.TICK)                                       # bind the enrollment that beat the create reply
+    ready(cloud.api, fresh, ["ops"])
+    assert claim_on(cloud, fresh, "ops")["attempt"]
+    assert post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm"})["runner_id"] == fresh["runner_id"]
+    with cloud.store.read() as c:
+        assert CM.held(c, target.computer["runner_id"])
+        assert not CM.held(c, fresh["runner_id"])
+
+
+@pytest.mark.parametrize("settled", [False, "404", "deleted"])
+def test_an_unsupported_per_id_read_falls_back_to_delete_and_only_its_settlement_clears_intent(cloud, monkeypatch, settled):
+    target = deletion_target(cloud, "replace")
+    old_id = cloud.row()["machine_id"]
+    assert delete_target(cloud, target).status_code == 200
+    cloud.hq.fail["get"] = CM.Refused("http_404", 404)          # older HQ has no GET /machines/{id}
+    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    if settled == "404":
+        cloud.hq.fail["delete"] = CM.Refused("not_found", 404)
+    elif settled == "deleted":
+        monkeypatch.setattr(cloud.hq, "delete", lambda mid: {"id": mid, "state": "deleted"})
+    cloud.at[0] += CM.SYNC
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    with cloud.store.read() as c:
+        assert CM.deleting(c, old_id) == (not settled)
+
+
 @pytest.mark.parametrize("kind", ["replace", "shared", "unused"])
 @pytest.mark.parametrize("action,refused", [
     ("start", None), ("start", CM.Refused("forbidden", 403)), ("start", CM.Refused("unreachable")),
@@ -1196,10 +1325,11 @@ def test_an_ambiguous_delete_holds_claims_until_hq_can_be_read_even_after_restar
         raise CM.Refused("unreachable")
 
     monkeypatch.setattr(cloud.hq, "list", unreadable)
+    cloud.hq.fail["get"] = CM.Refused("unreachable")
     cloud.at[0] += CM.STOP_HOLD + 1
     cloud.hq.calls.clear()
     manager.tick()
-    assert cloud.hq.actions() == []
+    assert cloud.hq.actions() == ([] if kind == "unused" else ["create"])
     with cloud.store.read() as c:
         assert CM.held(c, target.computer["runner_id"])
     if kind != "unused":
@@ -1245,11 +1375,13 @@ def test_an_ambiguous_delete_keeps_its_intent_until_hq_settles(cloud, monkeypatc
     monkeypatch.setattr(cloud.hq, "delete", pending)
     cloud.hq.fail["delete"] = retry
     cloud.hq.calls.clear()
-    cloud.tick(CM.BACKOFF)
+    cloud.at[0] += CM.BACKOFF
+    cloud.manager.sync(cloud.hq, cloud.at[0])
     assert cloud.hq.calls[0] == ("list",)
     assert cloud.hq.actions() == ["delete"]
-    cloud.tick(CM.FROZEN_RETRY + 1 if retry and retry.status == 402 else CM.STOP_HOLD + 1)
-    assert cloud.hq.actions() == ["delete", "delete"]          # no start, stop or new machine while deletion is pending
+    cloud.at[0] += CM.FROZEN_RETRY + 1 if retry and retry.status == 402 else CM.STOP_HOLD + 1
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.hq.actions() == ["delete", "delete"]          # reconciliation acts on the exact old id
     assert cloud.row(target.key)["problem"] == "delete_unknown"
     with cloud.store.read() as c:
         assert CM.held(c, target.computer["runner_id"])
@@ -1329,25 +1461,28 @@ def test_an_unanswered_replacement_survives_moving_away_and_back_until_a_new_mac
     cloud.hq.calls.clear()
     cloud.at[0] += CM.STOP_HOLD + 1
     manager.tick()
-    assert cloud.hq.actions() == ["delete"] and cloud.hq.calls[-1] == ("delete", old_id)
-    with cloud.store.read() as c:
-        assert CM.held(c, target.computer["runner_id"])
-    assert claim_on(cloud, target.computer, "ops")["attempt"] is None
-    # A manager restart or forced list cannot bypass the retry clock.
-    manager.sync(cloud.hq, cloud.at[0])
-    assert cloud.hq.actions() == ["delete"]
-    cloud.at[0] += CM.BACKOFF * 2
-    manager.sync(cloud.hq, cloud.at[0])
-    assert cloud.hq.actions() == ["delete", "delete"]
-    cloud.hq.machines[old_id]["state"] = "deleted"
-    manager.sync(cloud.hq, cloud.at[0])
-    manager.tick()
-    assert cloud.hq.actions() == ["delete", "delete", "create"]
+    assert cloud.hq.actions() == ["delete", "create"]
+    assert ("delete", old_id) in cloud.hq.calls
     assert cloud.row()["machine_id"] != old_id
     new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
     assert placed(cloud)["ops"] == new["runner_id"] != target.computer["runner_id"]
     ready(cloud.api, new, ["ops"])
     assert claim_on(cloud, new, "ops")["attempt"]
+    with cloud.store.read() as c:
+        assert CM.held(c, target.computer["runner_id"])
+        assert not CM.held(c, new["runner_id"])
+    # A manager restart or forced list cannot bypass the retry clock.
+    manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.hq.actions() == ["delete", "create"]
+    cloud.at[0] += CM.BACKOFF * 2
+    manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.hq.actions() == ["delete", "create", "delete"]
+    cloud.hq.machines[old_id]["state"] = "deleted"
+    manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.row()["runner_id"] == new["runner_id"]
+    with cloud.store.read() as c:
+        assert not CM.deleting(c, old_id)
+        assert not c.execute("SELECT revoked_at FROM runners WHERE id=?", (new["runner_id"],)).fetchone()[0]
 
 
 def test_delete_retries_back_off_across_lists_and_restarts_until_hq_cancels(cloud):
@@ -2157,6 +2292,12 @@ def test_the_client_speaks_the_contract(monkeypatch):
             return httpx.Response(200, json={"ttl_s": 300})
         if path.endswith("/m3/stop"):
             return httpx.Response(401, json={"error": "key_revoked"})
+        if request.method == "GET" and path.endswith("/m1"):
+            return httpx.Response(200, json={"id": "m1", "key": "ops", "state": "deleted"})
+        if request.method == "GET" and path.endswith("/m2"):
+            return httpx.Response(200, json={"id": "m1", "key": "ops", "state": "deleted"})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"state": "deleted"})
         if request.method == "GET":
             return httpx.Response(200, json={"machines": [{"id": "m1", "key": "ops", "size": "default",
                                                            "state": "running", "cost_month_usd": 0.42,
@@ -2169,6 +2310,11 @@ def test_the_client_speaks_the_contract(monkeypatch):
     assert [m["id"] for m in listed["machines"]] == ["m1"] and listed["machines"][0]["cost_month_usd"] == 0.42
     assert listed["machines"][0]["pending"] == "delete"
     assert len(listed["sizes"]) == 4 and listed["caps"] == {"n": 3}
+    assert hq.get("m1")["state"] == "deleted"
+    assert seen[-1][:2] == ("GET", "https://gateway.acme.example/v1/gateway/machines/m1")
+    with pytest.raises(CM.Refused, match="bad_answer"):
+        hq.get("m2")                                         # another id can never settle this one's intent
+    assert hq.delete("m1") == {"state": "deleted"}
     assert hq.create("ops", "small", "code", "https://hub.acme.example")["id"] == "m9"
     assert seen[-1][:3] == ("POST", "https://gateway.acme.example/v1/gateway/machines",
                             {"key": "ops", "size": "small", "enroll_token": "code", "hub_url": "https://hub.acme.example"})
@@ -2622,10 +2768,10 @@ def test_owners_and_admins_delete_a_broken_shared_machine_and_the_next_work_make
     assert cloud.api.delete(url, headers=retry).json() == delete.json()
     assert cloud.api.delete(url, headers=headers("ben-test")).status_code == 404   # nothing left: HQ not asked
     assert pending == [machine]
-    # A member's next work waits for boat, then makes a fresh machine at the company's size.
+    # A member's next work asks for a fresh machine; the doomed id HQ still returns is refused.
     cloud.hq.calls.clear()
     work(cloud, "finance")
-    assert cloud.tick(10) == [] and cloud.row(CM.SHARED)["machine_id"] == machine
+    assert cloud.tick(10) == ["create"] and cloud.row(CM.SHARED)["machine_id"] == machine
     assert cloud.row(CM.SHARED)["state"] == "deleted" and not cloud.row(CM.SHARED)["enroll_by"]
     cloud.hq.machines[machine]["state"] = "deleted"                     # boat confirmed
     cloud.hq.calls.clear()

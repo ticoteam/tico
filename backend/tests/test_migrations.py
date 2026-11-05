@@ -121,6 +121,21 @@ def test_pending_machine_deletions_upgrade_without_losing_their_claim_fence(tmp_
     assert snapshot(path) == first
 
 
+def test_cloud_machine_codes_upgrade_without_losing_existing_enrollment(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machine_codes DROP COLUMN replacement_for")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105122651_cloud_machine_replacement_codes'")
+        c.execute("INSERT INTO cloud_machine_codes VALUES('existing-code','ops','now')")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT code_hash,bot,replacement_for FROM cloud_machine_codes").fetchall() == [
+            ('existing-code', 'ops', None)]
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
     known = migrations.files()
     # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.

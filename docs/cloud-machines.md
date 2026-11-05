@@ -81,10 +81,16 @@ the disk is deleted.
 
 Before sending any DELETE, the server stores intent for that exact machine id in `cloud_machine_deletions`.
 Only HQ's own state releases this hold: the machine is deleted or 404, or HQ reports it with `pending` other than
-`delete`. A DELETE reply alone never releases it, including a first or retry 4xx such as 429 `starts_full`.
+`delete`. A plain `{ok: true}` DELETE reply never releases it, nor does a first or retry 4xx such as 429 `starts_full`.
 The hold survives restarts, unreadable lists, and lists that omit the machine or its `pending` field. A deleted
 machine's current runner and codes are revoked under the write lock. A report that clears `pending` ends retries
 without revoking a machine kept after an unanswered deletion.
+
+Each manager look checks up to four due intents, including old ids no bot row names anymore, even if the full list
+is unreadable or sizes are no longer offered. It reads `GET machines/{id}` when HQ supports it. A failed read falls
+back to a DELETE retry for that id; a DELETE 404 or a reply with `state: deleted` settles it. A GET 404 alone cannot
+settle it, since older HQs have no such route. Settled intent rows are removed. A failed or oversized list only waits
+for the next list attempt; it cannot block these checks or a fresh machine.
 
 Retries use the stored machine id and back off on errors, including 429 and 5xx, up to 15 minutes. Accepted retries
 wait at least a minute; out of credit waits ten minutes. Extra lists, restarts, and repeated requests cannot rush
@@ -92,7 +98,11 @@ that clock. This rule also covers the manager's deletion of a machine that never
 
 Changing mode or placement never clears deletion intent. A bot can move to a shared machine or another computer
 while its old own machine is being deleted. If it returns to own, the old computer gets no turn and is not bound
-again. Once HQ confirms deletion, its next work makes a fresh machine with a new id.
+again. The fence is only on the old id: work can create a fresh machine and run on its new id before the old intent
+settles. A create that returns a fenced id is refused as a replacement and tried again later. New enrollment codes
+belong to the fresh request; unused old codes cannot enroll its runner. Settling the old id leaves the new runner
+and its codes intact. The codes' `replacement_for` marker keeps fresh attempts together across a lost create reply,
+so a machine that enrolls before the reply is recovered keeps its runner and code.
 
 ## How a machine becomes the bot's runner
 

@@ -7,11 +7,12 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
 `<Gateway URL>/billing`, JSON both ways, the Gateway error shape, `402 {"error": "frozen"|"locked"}` when credit is out):
 
     GET    machines                  {machines: [Machine], sizes: [Size], caps}
+    GET    machines/<id>             -> Machine             when supported; otherwise retry DELETE by id
     POST   machines                  {key, size, enroll_token, hub_url} -> Machine   (idempotent on key)
     POST   machines/<id>/start       {size?} -> Machine      resume; a size resizes on the same disk
     POST   machines/<id>/stop        -> Machine
     POST   machines/<id>/heartbeat   -> {ttl_s}              every minute while this server wants it on
-    DELETE machines/<id>             -> {ok}                 deletes the disk
+    DELETE machines/<id>             -> {ok} or {state: deleted}  deletes the disk
 
     Machine {id, key, size, state: starting|running|stopping|stopped|deleted|failed, started_at, stopped_at,
              cost_month_usd, starts_month, last_error, pending: delete|stop|start|null}
@@ -117,7 +118,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
  start_asked_at REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
- code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL);
+ code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
 """
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
@@ -132,6 +133,7 @@ SIZES_KEY = "cloud-machine-sizes"
 NAME_KEY = "cloud-machine-name:"  # + machine key: the name a person gave its computer, kept when the machine is made again
 TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
+DELETION_BATCH = 4              # old ids reconciled per look, even when HQ's list cannot be read
 HEARTBEAT = 60
 PAUSE_MINUTES = 30              # a machine with no Pause after of its own pauses after this many idle minutes
 PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
@@ -265,6 +267,12 @@ class HQ:
         return self.machine(self.call("POST", "", {"key": key, "size": size, "enroll_token": enroll_token,
                                                    "hub_url": hub_url}))
 
+    def get(self, machine_id):
+        machine = self.machine(self.call("GET", f"/{machine_id}"))
+        if machine["id"] != machine_id:
+            raise Refused("bad_answer")
+        return machine
+
     def start(self, machine_id, size=None):
         return self.machine(self.call("POST", f"/{machine_id}/start", {"size": size} if size else {}))
 
@@ -276,7 +284,7 @@ class HQ:
         return ttl if type(ttl) is int else None
 
     def delete(self, machine_id):
-        self.call("DELETE", f"/{machine_id}")
+        return self.call("DELETE", f"/{machine_id}")
 
 
 def client_of(c, vault, settings):
@@ -311,9 +319,9 @@ def row(c, bot):
 
 
 def rows(c):
-    intents = {r[0] for r in c.execute("SELECT machine_id FROM cloud_machine_deletions")}
-    return {r["bot"]: {**dict(r), "deleting": r["machine_id"] in intents}
-            for r in c.execute("SELECT * FROM cloud_machines")}
+    return {r["bot"]: {**dict(r), "deleting": bool(r["deleting"])} for r in c.execute(
+        "SELECT m.*,d.machine_id IS NOT NULL AS deleting FROM cloud_machines m "
+        "LEFT JOIN cloud_machine_deletions d ON d.machine_id=m.machine_id")}
 
 
 def deleting(c, machine_id):
@@ -521,7 +529,10 @@ def mint(c, key, owner=None):
     code = secrets.token_urlsafe(32)
     c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES(?,?,?)",
               (digest(code), operator, H.shift(H.now(), minutes=ENROLL_MINUTES)))
-    c.execute("INSERT INTO cloud_machine_codes VALUES(?,?,?)", (digest(code), key, H.now()))
+    current = row(c, key)
+    replacement_for = current["machine_id"] if current and current["deleting"] else None
+    c.execute("INSERT INTO cloud_machine_codes(code_hash,bot,created_at,replacement_for) VALUES(?,?,?,?)",
+              (digest(code), key, H.now(), replacement_for))
     return code
 
 
@@ -680,7 +691,8 @@ def facts(c, settings, current, at):
     waiting to move here, else a watcher due, and `want_at`, the latest moment any of its bots' wants arose (epoch
     seconds; 0 for none, or a move). `update`: a stopped machine's want to update to this server's release
     (`runner_behind`), or None; `updating`: its runner is part-way through an update (`runner_updating`)."""
-    key, runner_id = current["bot"], current["runner_id"]
+    key = current["bot"]
+    runner_id = None if current.get("deleting") else current["runner_id"]
     bots = hosted(c, key)
     # Turns and activity on its computer: its bots', and a bot's that just left with a turn still out there.
     seen = set(bots) | ({r["bot"] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (runner_id,))}
@@ -813,11 +825,10 @@ def decide(current, found, at, idle_s):
     machine that never enrolled, made again at the next want); problem is what its bots' queued work waits on when
     nothing is done ("stuck", "no_enroll"), or None to leave the row's as it is. Pure: the clock is `at`. `found` is
     `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
-    if current.get("deleting"):
-        return None, None                                   # deletion must settle before any more work reaches it
     if current["problem"] == "replacing" and (current.get("stop_until") or 0) > at:
         return None, None                                   # a person's replacement is already at HQ
-    on = current["state"] in ON and current["machine_id"]
+    deleting = current.get("deleting")
+    on = current["state"] in ON and current["machine_id"] and not deleting
     # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
     booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
     if current["next_try_at"] and at < current["next_try_at"] and not found["retry_now"]:
@@ -834,6 +845,12 @@ def decide(current, found, at, idle_s):
         return ("stop" if on else None), None
     if found["frozen"]:
         return ("stop" if on else None), "out_of_credit"
+    if deleting:
+        # The fence belongs to the old id. A create may return a fresh one while HQ still settles the old deletion.
+        key, _ = wake_for({**current, "state": "deleted"}, found)
+        if key and current["enroll_fails"] >= ENROLL_TRIES:
+            return None, "no_enroll"
+        return ("create" if key else None), None
     if booting and at >= current["enroll_by"]:
         return "delete", None                               # its code expired unused: it can never enroll
     if on:
@@ -950,6 +967,9 @@ class Manager:
             except Exception as exc:  # noqa: BLE001 - the looks still run; a create waiting on the list says why
                 log.exception("Reading HQ's cloud machine list failed")
                 self.list_refused = type(exc).__name__[:60]
+                self.cleanup_deletions(hq, at)
+        else:
+            self.cleanup_deletions(hq, at)
         with self.store.read() as c:
             if not offered(c, self.settings):
                 return
@@ -992,10 +1012,10 @@ class Manager:
             if refused.status == 503 and refused.code == "not_configured":   # off, or turned off for this company
                 with self.store.transaction() as c:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
+            self.cleanup_deletions(hq, at)
             return None
         self.relist = False
         self.list_refused = None
-        retry_deletes = []
         with self.store.transaction() as c:
             # What a create waiting on the list said: an hq: problem with no refusal of its own (a refused create or
             # start counts a failure), whatever the code and across restarts.
@@ -1013,21 +1033,10 @@ class Manager:
                         and current["problem"] == "replacing" and (current["stop_until"] or 0) > now():
                     continue                                # a list read during the first DELETE cannot settle it
                 machine = by_id.get(intent["machine_id"])
-                if machine and machine["state"] == "deleted":
-                    self.deletion_done(c, intent)
-                elif machine and "pending" in machine and machine["pending"] != "delete":
-                    c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
-                    current = mine.get(intent["bot"])
-                    if current and current["machine_id"] == intent["machine_id"] and current["state"] != "deleted":
-                        save(c, intent["bot"], **self.described(machine), problem="", problem_at=None,
-                             stop_until=None, start_asked_at=None, next_try_at=None, failures=0)
-                else:
-                    current = mine.get(intent["bot"])
+                if not self.settle_delete(c, intent, machine):
                     if machine and current and current["machine_id"] == intent["machine_id"] \
                             and current["state"] != "deleted":
                         save(c, intent["bot"], **self.described(machine), start_asked_at=None)
-                    if (intent["next_try_at"] or 0) <= at:
-                        retry_deletes.append(intent["machine_id"])
             mine = rows(c)
             # Per key, a machine that is not dead wins, then the one this row already has. HQ renames a machine a new
             # one replaces (key ":superseded:"), so it lists one per key; a dead one already counted is never re-read.
@@ -1039,6 +1048,8 @@ class Manager:
                     latest[machine["key"]] = machine
             for key, machine in latest.items():
                 current = mine.get(key)
+                if deleting(c, machine["id"]):
+                    continue                                # a superseded id cannot become another row's machine
                 if current and current["problem"] == "replacing" and (current["stop_until"] or 0) > now():
                     continue                                # an HQ list cannot release a replacement's claim fence
                 if current and current["deleting"]:
@@ -1074,9 +1085,40 @@ class Manager:
                     c.execute("ROLLBACK TO cloud_offered")
                     log.exception("Placing bots on cloud machines failed")
                 c.execute("RELEASE cloud_offered")
-        for machine_id in retry_deletes:
-            self.reconcile_delete(hq, machine_id)
+        self.cleanup_deletions(hq, at)
         return listed
+
+    def settle_delete(self, c, intent, machine):
+        """Only a report about this exact id can end its intent; a newer machine and its codes stay intact."""
+        if not machine:
+            return False
+        if machine["state"] == "deleted":
+            self.deletion_done(c, intent)
+        elif "pending" in machine and machine["pending"] != "delete":
+            c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
+            current = row(c, intent["bot"])
+            if current and current["machine_id"] == intent["machine_id"] and current["state"] != "deleted":
+                save(c, intent["bot"], **self.described(machine), problem="", problem_at=None,
+                     stop_until=None, start_asked_at=None, next_try_at=None, failures=0)
+        else:
+            return False
+        return True
+
+    def cleanup_deletions(self, hq, at):
+        """A bounded sweep includes superseded ids and runs without a readable list or offered sizes."""
+        with self.store.read() as c:
+            pending = c.execute(
+                "SELECT d.machine_id FROM cloud_machine_deletions d WHERE coalesce(d.next_try_at,0)<=? "
+                "AND NOT EXISTS (SELECT 1 FROM cloud_machines m WHERE m.machine_id=d.machine_id "
+                "AND m.problem='replacing' AND m.stop_until>?) "
+                "ORDER BY coalesce(d.next_try_at,0),d.machine_id LIMIT ?", (at, now(), DELETION_BATCH)).fetchall()
+        for intent in pending:
+            try:
+                self.reconcile_delete(hq, intent["machine_id"])
+            except Exception:  # noqa: BLE001 - one old id cannot prevent recovery or cleanup of the others
+                log.exception("Reconciling cloud machine deletion failed for %s", intent["machine_id"])
+                with self.store.transaction() as c:
+                    deletion_retry(c, intent["machine_id"], Refused("unreachable"))
 
     def deletion_done(self, c, intent):
         """HQ confirms this exact id is gone; never revoke a newer machine's runner or codes."""
@@ -1092,14 +1134,26 @@ class Manager:
 
     def reconcile_delete(self, hq, machine_id):
         """Retry a deletion outside the write lock, with a durable backoff independent of placement."""
-        refusal = None
         try:
-            hq.delete(machine_id)
+            machine = hq.get(machine_id)
+        except Refused:
+            # Older HQs have no per-id GET. Its 404 is not proof of deletion: only DELETE's 404 can settle it.
+            machine = None
+        with self.store.transaction() as c:
+            intent = c.execute("SELECT * FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone()
+            if not intent or self.settle_delete(c, intent, machine):
+                return
+        refusal = None
+        answer = None
+        try:
+            answer = hq.delete(machine_id)
         except Refused as refused:
             refusal = refused
         with self.store.transaction() as c:
             intent = c.execute("SELECT * FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone()
-            if intent and refusal and refusal.status == 404:
+            gone = isinstance(answer, dict) and answer.get("state") == "deleted" \
+                and answer.get("id", machine_id) == machine_id
+            if intent and (gone or refusal and refusal.status == 404):
                 self.deletion_done(c, intent)
             else:
                 deletion_retry(c, machine_id, refusal)
@@ -1147,7 +1201,7 @@ class Manager:
                 current = reserve(c, self.settings, key, action, current["machine_id"])
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
-        if action == "create" and self.relist:
+        if action == "create" and self.relist and not current.get("deleting"):
             # The last create was refused, and HQ's list not read since. A refused list is said on this row, so the
             # bot's work says why; a list not yet asked for is waited on silently.
             if self.list_refused and current["problem"] != "hq:" + self.list_refused:
@@ -1156,6 +1210,14 @@ class Manager:
             return
         if action == "create":
             with self.store.transaction() as c:
+                if current.get("deleting"):
+                    # Keep codes from fresh attempts whose replies may be lost, while retiring unused old codes.
+                    # Consumed old codes let the old runner retry enrollment if HQ cancels an ambiguous delete.
+                    c.execute("DELETE FROM enrollments WHERE consumed_at IS NULL AND code_hash IN "
+                              "(SELECT code_hash FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?)",
+                              (key, current["machine_id"]))
+                    c.execute("DELETE FROM cloud_machine_codes WHERE bot=? AND code_hash NOT IN "
+                              "(SELECT code_hash FROM enrollments)", (key,))
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
                 awaiting(c, key, at)
                 save(c, key, start_asked_at=None)
@@ -1196,7 +1258,9 @@ class Manager:
         except Refused as refused:
             self.refused(current, action, refused, at)
             return
-        if action == "create" and current["state"] in DEAD and machine["id"] == current["machine_id"]:
+        with self.store.read() as c:
+            fenced = action == "create" and deleting(c, machine["id"])
+        if action == "create" and (fenced or current["state"] in DEAD and machine["id"] == current["machine_id"]):
             # HQ still has the machine deleted (until boat confirms) or failed here: the new one is made once it is
             # gone, and HQ answering with that same machine is not a new one.
             with self.store.transaction() as c:
@@ -1209,6 +1273,28 @@ class Manager:
             woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
+            if action == "create" and current.get("deleting"):
+                # Enrollment can beat the create response, including a retry of a lost reply. Fresh attempts' codes
+                # belong to the new id;
+                # settling the old intent later must neither revoke this runner nor remove its code.
+                enrollment = c.execute(
+                    "SELECT e.runner_id FROM enrollments e JOIN cloud_machine_codes m USING(code_hash) "
+                    "WHERE m.bot=? AND m.replacement_for=? AND e.runner_id IS NOT NULL "
+                    "ORDER BY e.consumed_at DESC,e.code_hash LIMIT 1", (key, current["machine_id"])).fetchone()
+                fresh_runner = enrollment["runner_id"] if enrollment else None
+                live = row(c, key)
+                if live["runner_id"] and live["runner_id"] != fresh_runner:
+                    c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
+                              (H.now(), live["runner_id"]))
+                    c.execute("UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?",
+                              (live["runner_id"], current["machine_id"]))
+                c.execute("DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
+                          "WHERE bot=? AND replacement_for IS NOT ?)", (key, current["machine_id"]))
+                c.execute("DELETE FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?",
+                          (key, current["machine_id"]))
+                fields.update(runner_id=fresh_runner,
+                              enroll_by=None if machine["state"] == "failed" else
+                              (0 if fresh_runner else at + ENROLL_MINUTES * 60 + ENROLL_GRACE))
             save(c, key, **fields, failures=0, next_try_at=None, problem="", problem_at=None, stop_until=None,
                  start_asked_at=None)
             H.event(c, H.KEEPER, "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
@@ -1503,7 +1589,7 @@ def deleted(c, current, actor, changed_by=None, details=None):
     c.execute("DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes WHERE bot=?)", (key,))
     c.execute("DELETE FROM cloud_machine_codes WHERE bot=?", (key,))
     # Keep the choices and old id: a create before boat confirms gets this same doomed machine from HQ, which act
-    # takes for no new one. The next work gets a fresh machine once HQ has finished deleting this disk.
+    # takes for no new one. A fresh id can run while HQ still settles this old disk's deletion.
     save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
          stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
          ttl_s=None, next_try_at=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
