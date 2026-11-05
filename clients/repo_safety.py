@@ -5,8 +5,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def outside_installation(path):
-    resolved = Path(path).expanduser().resolve()
-    if resolved.is_relative_to(ROOT.resolve()):
+    try:
+        resolved = Path(path).expanduser().resolve()
+        installation = ROOT.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Cannot check repository path: {path}") from exc
+    inside = resolved.is_relative_to(installation)
+    # Path.resolve on a case-insensitive Mac volume can keep the caller's spelling.
+    if not inside:
+        for parent in (resolved, *resolved.parents):
+            try:
+                if parent.samefile(installation):
+                    inside = True
+                    break
+            except OSError:
+                continue
+    if inside:
         raise ValueError(f"Repository path is inside the Tico install: {path}")
     return resolved
 

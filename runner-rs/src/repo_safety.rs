@@ -1,5 +1,6 @@
 //! A bot's checkout must stay outside the Tico installation, including through linked ancestors.
 use std::path::{Component, Path, PathBuf};
+use std::os::unix::fs::MetadataExt;
 
 /// Resolve existing ancestors too, so a not-yet-created checkout has the same boundary as an existing one.
 fn resolve(path: &Path) -> Result<PathBuf, std::io::Error> {
@@ -33,7 +34,10 @@ fn outside(path: &Path, installation: &Path) -> Result<PathBuf, String> {
     let unchecked = |_| format!("Cannot check repository path: {}", path.display());
     let real = resolve(path).map_err(unchecked)?;
     let installation = resolve(installation).map_err(unchecked)?;
-    if real.starts_with(installation) {
+    let identity = std::fs::metadata(&installation).map_err(unchecked)?;
+    let alias = real.ancestors().filter_map(|p| std::fs::metadata(p).ok())
+        .any(|m| m.dev() == identity.dev() && m.ino() == identity.ino());
+    if real.starts_with(installation) || alias {
         return Err(format!("Repository path is inside the Tico install: {}", path.display()));
     }
     Ok(real)
@@ -58,6 +62,10 @@ mod tests {
             assert!(outside(&path, &install).unwrap_err().contains(&path.display().to_string()));
         }
         assert_eq!(outside(&dir.join("install-other/new"), &install).unwrap(), dir.join("install-other/new"));
+        let other_case = dir.join("INSTALL");
+        if other_case.exists() {
+            assert!(outside(&other_case.join("new"), &install).is_err());
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -124,6 +124,10 @@ class Materialize(unittest.TestCase):
         with patch.object(repo_safety, "ROOT", install):
             with self.assertRaisesRegex(ValueError, "inside the Tico install"):
                 self.make()
+            other_case = install.with_name("INSTALL")
+            if other_case.exists():
+                with self.assertRaisesRegex(ValueError, "inside the Tico install"):
+                    repo_safety.outside_installation(other_case / "new")
         self.assertEqual(list(install.iterdir()), [])
 
     def test_a_bot_given_another_bots_old_slug_is_built_in_the_folder_the_server_recorded(self):
