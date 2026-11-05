@@ -135,7 +135,17 @@ def project(c, scoped, payload, *, auth=None):
             if exc.status not in (403, 404):
                 raise
             denied.add(mid)
-    denied.update(rid for rid, mid in live.items() if not mid or mid in denied)
+    from .live_meetings import _require_read
+    for rid, mid in live.items():
+        if not mid or mid in denied:
+            denied.add(rid)
+            continue
+        try:
+            _require_read(c, auth, scoped.who, rid)
+        except Problem as exc:
+            if exc.status not in (403, 404):
+                raise
+            denied.add(rid)
     # Missing structured file ids must not leave stale attachment metadata behind either.
     denied.update(s for s in names if re.fullmatch(r"file-[0-9a-f]{24}", s) and s not in visible)
     gone = object()

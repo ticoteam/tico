@@ -24,7 +24,8 @@ def all_shapes(fid, bid, digest, title, mid):
             "review": {"files": [review]},
             "questions": [{"id": "choose", "options": [{"label": title, "file": review},
                                                           {"label": title, "file": fid}]}],
-            "answer": {"review": [review], "files": [review]},
+            "answer": {"target": {"file": fid, "version": 1}, "reviewed": [{**review, "verdict": "approve"}],
+                       "review": [review], "files": [review]},
             "message": {"refs": {"attachments": [attachment]}},
             "pages": [{"id": fid, "title": title}, {"file_id": fid, "title": title},
                       {"page": fid, "title": title}, {"page_id": fid, "title": title},
@@ -78,7 +79,8 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
         answer = H.task_comment(c, "human:ana", t["id"], "Reviewed", wake=False, extra_refs=refs)
         # Keep the ask open too: task.ask and task listings must exercise the same nested references.
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({**answer["refs"], "answer": {
-            "question": question["id"], "review": refs["review"]["files"]}}), answer["id"]))
+            "target": {"comment": question["id"]}, "reviewed": refs["review"]["files"],
+            "answers": {"verdict": ["Approve"]}}}), answer["id"]))
         comment = H.task_comment(c, "human:ana", t["id"], "Sources are attached", wake=False, extra_refs=refs)
     machine = runner(api)
     bot = "coo" if assistant else "ops"
@@ -143,7 +145,8 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
     if not assistant:
         for sql in ("SELECT refs FROM messages", "SELECT json_extract(refs,'$.review') FROM messages",
                     "SELECT json_extract(refs,'$.questions') FROM messages",
-                    "SELECT json_extract(refs,'$.answer') FROM messages"):
+                    "SELECT json_extract(refs,'$.answer') FROM messages",
+                    "SELECT json_extract(refs,'$.answer.reviewed') FROM messages"):
             result = post(api, "sql", {"sql": sql}, token)
             no_sources(result, secrets)
     for name, arguments in (("hub_task_show", {"id": t["id"]}), ("hub_task_list", {}),
@@ -213,15 +216,21 @@ def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkey
     t = task(api, private=False)
     _, publisher = turn(api, "cpo")
     fid = published(api, publisher, task=t["id"])
+    live = post(api, "live-meetings", {"title": "Forbidden live title", "visibility": "private"})["id"]
     _, attempt = assistant_turn(api, "ana-test")
     make_scope(api, attempt, t["id"])
 
     @api.app.get("/api/v2/projection-fixture")
     def fixture(request: Request):
-        return JSONResponse({"attachments": [{"file_id": fid, "title": "Allowed source"}]}, status_code=409)
+        return JSONResponse({"attachments": [{"file_id": fid, "title": "Allowed source"}],
+                             "meetings": [{"id": live, "title": "Forbidden live title"}]}, status_code=409)
+
+    # The production static mount is last; put this test route before that catch-all.
+    api.app.router.routes.insert(0, api.app.router.routes.pop())
 
     response = api.get("/api/v2/projection-fixture", headers={**headers(attempt["token"]), "Accept-Encoding": "gzip"})
     assert response.status_code == 409 and fid in response.text
+    assert live not in response.text and "Forbidden live title" not in response.text
     store = api.app.state.store
     with store.read() as c:
         assert c.execute("SELECT 1 FROM attempt_reads WHERE attempt_id=? AND ref=?", (attempt["id"], fid)).fetchone()
