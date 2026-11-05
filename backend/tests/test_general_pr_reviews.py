@@ -397,7 +397,7 @@ def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, rev
     [first] = children(api, task)
     if case == "hold":
         with api.app.state.store.transaction() as c:
-            H.task_update(c, "human:ana", task["id"], status="waiting", waiting_on="human:ana", note="Wait for the owner.")
+            H.task_update(c, task["owner_id"], task["id"], status="waiting", waiting_on="human:ana", note="Wait for the owner.")
         finish(api, first, head=head)
     else:
         # A historical check has a settled attempt, but this route did not record its delivery.
