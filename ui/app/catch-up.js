@@ -7,7 +7,7 @@
 
 // `queue`: the cards still to see, in the server's order; `later`: the ones put off, after them. `done`: read or muted.
 // `undo`: the last Later, Mute or Mark read, while it can still be taken back. `drafts`: unsent replies, by thread;
-// `sending`: the threads whose reply is on its way.
+// `sending`: the threads whose reply is on its way, kept across visits so a reopened card cannot send it twice.
 const CU = {open: false, dlg: null, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'idle', error: '', seen: new Set(), undo: null, drafts: new Map(), sending: new Set()};
 const CU_UNDO_MS = 5000;
 const cuCurrent = () => CU.queue[0] || CU.later[0] || null;
@@ -41,7 +41,7 @@ function cuDialog() {
 async function catchUpOpen() {
   if (THREADS.rail === false || CU.open) return;
   const dlg = cuDialog();
-  Object.assign(CU, {open: true, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'loading', error: '', seen: new Set(), undo: null, drafts: new Map(), sending: new Set()});
+  Object.assign(CU, {open: true, queue: [], later: [], done: 0, total: 0, next: null, paging: null, state: 'loading', error: '', seen: new Set(), undo: null, drafts: new Map()});
   cuDraw();
   dlg.showModal();
   railRender();
@@ -51,13 +51,15 @@ async function catchUpOpen() {
 }
 // One page of cards; a thread already shown this visit is not shown again.
 async function cuPage(cursor) {
+  // A read or mute held for Undo when the page was asked for is done here but was still unread on the server, so
+  // `count` has it too.
+  const held = CU.undo && CU.undo.kind !== 'later' ? 1 : 0;
   const r = await get('/v2/threads/catch-up?limit=20' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
   const items = (r?.items || []).filter(it => it?.thread?.id && !CU.seen.has(it.thread.id));
   for (const it of items) CU.seen.add(it.thread.id);
   CU.queue.push(...items);
   CU.next = r?.next_cursor || null;
-  // A read or mute still held for Undo is done here but still unread on the server, so it is in `count` too.
-  const count = Number(r?.count) || 0, held = CU.undo && CU.undo.kind !== 'later' ? 1 : 0;
+  const count = Number(r?.count) || 0;
   CU.total = Math.max(CU.total, CU.done - held + count, CU.done + cuLeft());
   if (!cursor && !THREADS.cu) { THREADS.catchUp = count; threadsSideRender(); }
 }
@@ -82,7 +84,7 @@ function cuCardHTML(it) {
       <div class="cu-card-head"><h3 id="cu-t">${hash ? threadHashHTML(t) : threadMarkHTML(t, 18)}<span>${esc(title)}</span></h3>
         ${n ? `<span class="cu-n">${n} new</span>` : ''}${it.mention ? '<span class="cu-you">@you</span>' : ''}<span class="spacer"></span>
         <a class="cu-open" href="${esc(threadHref(t))}" data-cu-open>Open</a></div>
-      <div class="cu-msgs">${(it.messages || []).map(cuMsgHTML).join('')}${more ? `<a class="cu-more" href="${esc(threadHref(t))}" data-cu-open>${more} more</a>` : ''}${cuUndoHTML()}</div>
+      <div class="cu-msgs">${(it.messages || []).map(cuMsgHTML).join('')}${more ? `<a class="cu-more" href="${esc(threadHref(t))}" data-cu-open>${more} more</a>` : ''}</div>
       ${t.me?.can_post === false ? '' : `<form class="cu-reply${draft.trim() ? ' has-text' : ''}"><input type="text" name="text" value="${esc(draft)}" placeholder="Message ${esc(name)}" aria-label="Reply in ${esc(name)}" autocomplete="off" maxlength="20000"${busy}><button type="submit" class="primary cu-send" aria-label="Send"${busy}>${CU_SEND}</button></form>`}
       <div class="cu-foot"><button type="button" class="cu-later" data-cu-later>Later</button><button type="button" class="cu-mute" data-cu-mute>Mute</button>
         <span class="spacer"></span><button type="button" class="primary cu-read" data-cu-read>Mark read${CU_ARROW}</button></div>
@@ -100,10 +102,10 @@ function cuDraw({focus = false} = {}) {
   let body;
   if (CU.state === 'loading') body = '<div class="cu-card cu-state muted">Loading…</div>';
   else if (CU.state === 'error') body = `<div class="cu-card cu-state err">${esc(CU.error || 'Could not load')}</div>`;
-  else if (!it) body = `<div class="cu-card cu-state cu-empty"><p>All caught up</p><button type="button" class="ghost" data-cu-close>Close</button>${cuUndoHTML()}</div>`;
+  else if (!it) body = `<div class="cu-card cu-state cu-empty"><p>All caught up</p><button type="button" class="ghost" data-cu-close>Close</button></div>`;
   else body = cuCardHTML(it);
   dlg.innerHTML = `<div class="cu">
-    <div class="cu-head"><h2 id="cu-h">Catch up</h2>${it ? `<span class="cu-pos">${at} of ${total}</span>` : ''}
+    <div class="cu-head"><h2 id="cu-h">Catch up</h2>${it ? `<span class="cu-pos">${at} of ${total}</span>` : ''}${cuUndoHTML()}
       <span class="cu-bar" aria-hidden="true"><i style="width:${total ? Math.round(Math.min(at, total) / total * 100) : 100}%"></i></span>
       <button type="button" class="cu-x" data-cu-close aria-label="Close">${CU_X}</button></div>
     ${body}</div>`;
@@ -134,32 +136,26 @@ function cuLater() {
   cuDraw();
   cuMore();
 }
-// Undo shows for CU_UNDO_MS; when the time is up it goes without a redraw, so a reply being typed stays.
+// Undo shows for CU_UNDO_MS in the head, in the progress bar's place; when the time is up it goes without a redraw, so a
+// reply being typed stays.
 function cuHold(kind, it, from) {
   CU.undo = {kind, it, from, at: performance.now(), timer: setTimeout(cuSettle, CU_UNDO_MS)};
 }
 // The held action can no longer be taken back: a read or mute goes to the server now. The read covers what was there
-// at the click (`ago_ms`), so a message that came while Undo showed stays unread. Leaving the page sends it with
-// keepalive.
+// at the click (`ago_ms`, measured as it is sent), so a message that came while Undo showed stays unread. Both go at
+// once with keepalive, so leaving or reloading the page right after does not lose them.
 function cuSettle({leaving = false} = {}) {
   const u = CU.undo; if (!u) return;
   CU.undo = null; clearTimeout(u.timer);
   CU.dlg?.querySelector('.cu-undo')?.remove();
   if (u.kind === 'later') return;
-  const id = u.it.thread.id, read = {ago_ms: Math.min(600000, Math.max(0, Math.round(performance.now() - u.at)))};
-  if (leaving) {
-    if (u.kind === 'mute') void writeRequest('PUT', thvPath(id) + '/follow', {notify: 'muted'}, undefined, {keepalive: true}).catch(() => {});
-    void writeRequest('POST', thvPath(id) + '/read-all', read, undefined, {keepalive: true}).catch(() => {});
-    return;
-  }
+  const id = u.it.thread.id, opts = {keepalive: true};
+  const writes = [writeRequest('POST', thvPath(id) + '/read-all', {ago_ms: Math.min(600000, Math.max(0, Math.round(performance.now() - u.at)))}, undefined, opts)];
+  if (u.kind === 'mute') writes.push(writeRequest('PUT', thvPath(id) + '/follow', {notify: 'muted'}, undefined, opts));
+  if (leaving) { for (const w of writes) w.catch(() => {}); return; }
   if (!THREADS.cu) THREADS.catchUp = Math.max(0, THREADS.catchUp - 1);
   threadsAllRead(id);
-  void (async () => {
-    try {
-      if (u.kind === 'mute') await put(thvPath(id) + '/follow', {notify: 'muted'});
-      await post(thvPath(id) + '/read-all', read);
-    } catch (e) { toast(e.message, true); }
-  })();
+  Promise.all(writes).catch(e => toast(e.message, true));
 }
 window.addEventListener('pagehide', () => cuSettle({leaving: true}));
 // The card comes back where it was, and nothing was sent.

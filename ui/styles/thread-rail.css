@@ -117,12 +117,12 @@
 .cu-reply input{flex:1;min-width:0;height:40px;border-color:var(--g4);border-radius:10px;background:var(--bg);padding:0 12px}
 .cu-reply .cu-send{display:none;flex:none;place-items:center;width:40px;height:40px;padding:0;border-radius:10px}
 .cu-reply.has-text .cu-send{display:inline-grid}
-/* Undo floats over the foot of the messages (a zero-height sticky row), so the card keeps its size when it goes. */
-.cu-undo{position:sticky;bottom:8px;display:flex;justify-content:center;height:0;margin-top:auto;pointer-events:none}
-.cu-undo-pill{display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:8px 14px;box-sizing:border-box;border-radius:10px;background:var(--ink);color:var(--bg);font-size:var(--t-sm);box-shadow:0 6px 24px rgba(0,0,0,.25);transform:translateY(-100%);pointer-events:auto}
+/* Undo takes the progress bar's place in the head while it shows, so it covers nothing and nothing moves. */
+.cu-undo{flex:1;display:flex;justify-content:center;min-width:0}
+.cu-undo+.cu-bar{display:none}
+.cu-undo-pill{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 12px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:var(--t-sm)}
+.cu-undo-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cu-undo-pill button{flex:none;padding:0;border:0;background:none;color:inherit;font:600 var(--t-sm) var(--sans);text-decoration:underline;cursor:pointer}
-.cu-empty .cu-undo{position:static;height:auto;margin-top:var(--s2)}
-.cu-empty .cu-undo-pill{transform:none}
 .cu-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
 .cu-foot .spacer{flex:1}
 .cu-later{height:32px;padding:0 12px;border:1px solid var(--g4);border-radius:8px;background:none;color:var(--ink);font-weight:500;cursor:pointer}
@@ -203,7 +203,7 @@ legend.nt-lbl{margin-bottom:6px}
   .cu-head h2{flex:1 1 calc(100% - 60px);order:1;font-size:var(--t-xl)}
   .cu-x{order:2;width:44px;height:44px;background:none}
   .cu-pos{order:3}
-  .cu-bar{order:4}
+  .cu-bar,.cu-undo{order:4}
   .cu-stack{flex:1}
   .cu-card{flex:1;box-shadow:none;border-radius:14px;overflow:hidden}
   .cu-msgs{flex:1}
