@@ -9,6 +9,7 @@ from backend.tests.test_api import claim, get, post
 from backend.tests.test_api import api  # noqa: F401
 from backend.tests.test_execution_review import job_state, sweep
 from backend.tests.test_login_holds import at, signed_in, two_bots
+from backend import bot_settings as BS
 
 WEEKLY = "You've hit your weekly limit · resets Oct 26, 8pm (UTC)"
 LOCK = ("--session-id requires session logging: failed to create session lock directory for session x: "
@@ -55,8 +56,7 @@ def test_a_limit_whose_fallback_fails_at_start_waits_for_the_reset_not_for_a_per
     assert claim(api, machine, bot="ops") is None
     # A fallback the bot names now is another one: the next turn goes there.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                  (json.dumps({"harness": "codex", "model": "gpt-5.5"}),))
+        BS.update(c, 'ops', {'fallback': {'harness': 'codex', 'model': 'gpt-5.5'}})
     moved = claim(api, machine, bot="ops")
     assert moved["job_id"] == first["job_id"] and moved["config"]["primary_held"]
 
@@ -136,7 +136,7 @@ def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_fin
     post(api, f"attempts/{later['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Here it is."},
          machine["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET task_id=? WHERE id=?", (task["id"], later["id"]))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (task["id"], later["id"]))
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
     assert [d["job_id"] for d in sweep(api)] == [first["job_id"]]
     assert job_state(api, first["job_id"]) == "canceled" and job_state(api, chat) == "uncertain"
@@ -145,7 +145,7 @@ def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_fin
         assert H.status(c, "ops")["focus"] == "Tico dismissed 1 held run a later run already covered"
 
 
-def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
+def test_a_hop_that_used_an_approval_resumes_with_a_named_check_after_four_hours(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
     post(api, "tasks", {"owner": "ops", "title": "Pay the invoice", "body": "Please pay it."})
@@ -156,8 +156,15 @@ def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
                   (H.new_id(), "spend", message, "bot:ops", H.now(), H.now()))
     hop_fails(api, machine, first)
     assert job_state(api, first["job_id"]) == "uncertain"
-    at(monkeypatch, "2026-10-26T20:01:00.000000Z", api)
+    # Held for review until HELD_REVIEW_HOURS (4) after the run stopped at 19:54Z, then resumed once, its consumed
+    # approval named for the check-first note.
+    at(monkeypatch, "2026-10-21T23:50:00.000000Z", api)
     assert sweep(api) == [] and job_state(api, first["job_id"]) == "uncertain"
+    at(monkeypatch, "2026-10-22T00:00:00.000000Z", api)
+    assert [d["state"] for d in sweep(api)] == ["queued"]
+    with api.app.state.store.read() as c:
+        note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (first["job_id"],)).fetchone()[0]
+    assert "consumed approval (spend)" in note
 
 
 def test_a_run_held_after_a_limit_resumes_when_the_bot_moves_to_another_model(api, monkeypatch):

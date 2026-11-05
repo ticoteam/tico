@@ -8,6 +8,7 @@ from backend import hubdb as H
 from backend.store import Store
 from backend.tests.test_api import api, get, post, restrict, runner, assign, ready, claim, setup_attempt  # noqa: F401
 from backend.tests.test_member_bots import finish
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -47,7 +48,7 @@ def retained(rows):
 
 def domain(api):
     with api.app.state.store.read() as c:
-        tables = ('messages', 'jobs', 'notes', 'conversations', 'tasks', 'task_events', 'task_delegations')
+        tables = ('messages', 'jobs', 'notes', 'conversations', 'tasks', 'history_events', 'task_delegations')
         return {t: [tuple(r) for r in c.execute('SELECT * FROM ' + t + ' ORDER BY rowid')] for t in tables} | {
             'events': [tuple(r) for r in c.execute("SELECT * FROM events WHERE action<>'refused' ORDER BY rowid")]}
 
@@ -204,7 +205,7 @@ def test_permission_denial_precedes_capacity(queue, monkeypatch, state, denial):
             restrict(c, 'finance', see={'bots': ['doc-updater'], 'people': ['ana']},
                      read={'bots': ['doc-updater'], 'people': ['ana']}, write={'people': ['ana']})
         else:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.bot_contact','replies') WHERE bot='finance'")
+            BS.update(c, 'finance', {'bot_contact': 'replies'})
     result = send(queue, 'doc-updater', expected=403)
     assert result['error']['code'] == ('forbidden' if denial == 'write' else 'bot_contact')
     assert 'queue' not in result['error']['detail'].lower()
@@ -375,7 +376,7 @@ def test_external_harness_inbox_without_jobs_or_notes_fills_the_cap(queue, monke
     # what it reads on return, so every waking message (a needs_action notice too) is charged.
     api, _, _ = queue
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','hermes') WHERE bot='finance'")
+        BS.update(c, 'finance', {'harness': 'hermes'})
     hold(api, state)
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 3)
     send(queue)

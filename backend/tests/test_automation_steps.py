@@ -1,6 +1,9 @@
 """Each step type in the executor (backend/automation_engine.py) with fake services: filter, decide, llm, find,
 bot_turn and action; on/off per step, the spend cap, batch times, and how a run's status comes out."""
+import pytest
+
 from backend import automation_engine as E
+from backend import automation_flow as F
 from backend.tests.automation_fakes import Services
 
 MESSAGE = {"message": {"from": "news@acme.example", "subject": "Weekly digest"}}
@@ -46,7 +49,7 @@ def test_filter_with_no_match_goes_on():
     gate = {"id": "gate", "type": "filter", "rules": [
         {"when": [{"field": "message.from", "op": "is", "value": "x"}], "then": [{"do": "archive"}]}]}
     run = E.execute(flow(gate, note("after")), MESSAGE, Services())
-    assert run["steps"][0]["outputs"] == {"rule": None, "actions": []} and statuses(run)[-1] == ("after", "ok")
+    assert run["steps"][0]["outputs"] == {"rule": None, "rules": [], "actions": []} and statuses(run)[-1] == ("after", "ok")
 
 
 def test_filter_any_matches_on_one_condition():
@@ -78,7 +81,123 @@ def test_each_effect_has_a_key_from_its_record_and_every_step_is_checkpointed():
     assert services.saved[:3] == [1, 2, 3]            # each step saved before the next starts
 
 
+LEGAL = [{"id": "legal", "name": "Legal", "color": "red", "then": [{"do": "create_task", "args": {"title": "Review"}}]}]
+
+
+def test_next_rule_moves_on_and_the_later_rules_fire_too():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "label", "args": {"name": "News"}}], "next": "rule"},
+        {"when": [{"field": "message.subject", "op": "contains", "value": "Weekly"}], "then": [{"do": "archive"}]},
+        {"when": [], "then": [{"do": "forward"}]}]}
+    run = E.execute(flow(gate, note("after")), MESSAGE, services)
+    assert services.acted == [("label", {"name": "News"}), ("archive", {}), ("note", {"text": "hi"})]
+    assert run["steps"][0]["outputs"]["rules"] == [0, 1] and statuses(run)[-1] == ("after", "ok")
+
+
+def test_a_refused_action_in_a_move_on_rule_fails_the_thread():
+    services = Services(fail={"label"})
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": [], "then": [{"do": "label"}], "next": "rule"}, {"when": [], "then": [{"do": "archive"}]}]}
+    run = E.execute(flow(gate, note("after")), MESSAGE, services)
+    assert services.acted == [("label", {})] and statuses(run) == [("gate", "failed")]
+
+
+def test_next_step_goes_on_and_skips_the_later_rules():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "label"}], "next": "step"}, {"when": [], "then": [{"do": "archive"}]}]}
+    run = E.execute(flow(gate, note("after")), MESSAGE, services)
+    assert services.acted == [("label", {}), ("note", {"text": "hi"})] and statuses(run)[-1] == ("after", "ok")
+
+
+@pytest.mark.parametrize("move", [{"next": "end"}, {"stop": True}, {"to": "legal"}])
+def test_a_rule_that_ends_the_thread_skips_the_steps_after_it(move):
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "archive"}], **move}, {"when": [], "then": [{"do": "forward"}]}]}
+    run = E.execute(flow(gate, note("after"), destinations=LEGAL), MESSAGE, services)
+    assert statuses(run) == [("gate", "ok")]
+    assert ("forward", {}) not in services.acted and ("note", {"text": "hi"}) not in services.acted
+
+
+def test_to_runs_the_destinations_chain_after_the_rules_own_and_ends_the_thread():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "label", "args": {"name": "STARRED"}}], "to": "legal"}]}
+    run = E.execute(flow(gate, note("after"), destinations=LEGAL), MESSAGE, services)
+    assert services.acted == [("label", {"name": "STARRED"}), ("create_task", {"title": "Review"})]
+    assert statuses(run) == [("gate", "ok")]
+
+
+def test_a_refused_action_in_a_destination_stops_the_rest_of_its_chain():
+    services = Services(fail={"create_task"})
+    dests = [{"id": "legal", "name": "Legal", "then": [{"do": "create_task", "args": {"title": "Review"}},
+                                                       {"do": "note", "args": {"text": "after"}}]}]
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}], "to": "legal"}]}
+    run = E.execute(flow(gate, note("later"), destinations=dests), MESSAGE, services)
+    assert services.acted == [("label", {}), ("create_task", {"title": "Review"})]
+    assert statuses(run) == [("gate", "failed")] and run["status"] == "failed"
+    assert [(a["do"], a["from"]) for a in run["steps"][0]["outputs"]["actions"]] == [
+        ("label", "rule"), ("create_task", "destination")]
+
+
+def test_a_refused_rule_action_keeps_the_destination_from_running():
+    services = Services(fail={"label"})
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}], "to": "legal"}]}
+    run = E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
+    assert services.acted == [("label", {})] and statuses(run) == [("gate", "failed")]
+
+
+def test_the_record_lists_the_rules_that_fired_and_says_where_each_action_came_from():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "label"}], "next": "rule"},
+        {"when": [], "then": [{"do": "archive"}], "to": "legal"}]}
+    run = E.execute(flow(gate, note("after"), destinations=LEGAL), MESSAGE, services)
+    out = run["steps"][0]["outputs"]
+    assert out["rule"] == 0 and out["rules"] == [0, 1]
+    assert [(a["do"], a["from"]) for a in out["actions"]] == [
+        ("label", "rule"), ("archive", "rule"), ("create_task", "destination")]
+    assert out["actions"][0]["rule"] == 0 and out["actions"][1]["rule"] == 1
+    assert out["actions"][2]["destination"] == "legal"
+    assert services.keys == ["0.r0.0", "0.r1.0", "0.r1.d0"]    # by rule and place: a step with destinations
+
+
 # ---------------------------------------------------------------------------------------------- decide
+def test_each_rule_that_fires_produces_under_its_own_identity():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": FROM_NEWS, "then": [{"do": "create_task", "args": {"title": "A"}}], "next": "rule"},
+        {"when": [], "then": [{"do": "create_task", "args": {"title": "B"}}], "to": "legal"}]}
+    E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
+    assert services.producers == ["gate@r0.0", "gate@r1.0", "gate@r1.d0"]    # each action has its place, none the step's id
+
+
+def test_a_legacy_single_rule_keeps_the_step_as_the_identity_of_its_first_task():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
+        {"do": "create_task", "args": {"title": "A"}}, {"do": "label"}]}]}
+    E.execute(flow(gate), MESSAGE, services)
+    assert services.producers == ["gate", "gate"]    # as before: the step's id, for its task and its label
+    assert services.keys == ["0.0", "0.1"]           # and the keys the step always had
+
+
+def test_two_tasks_in_one_chain_get_two_identities():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [
+        {"do": "create_task", "args": {"title": "Legal"}}, {"do": "create_task", "args": {"title": "Finance"}}]}]}
+    E.execute(flow(gate), MESSAGE, services)
+    assert services.producers == ["gate", "gate@r0.1"]    # a later task is its place in the rule, not the record index
+
+
+def test_a_destination_task_has_its_own_identity_not_the_steps():
+    services = Services()
+    gate = {"id": "gate", "type": "filter", "rules": [{"when": [], "then": [{"do": "label"}], "to": "legal"}]}
+    E.execute(flow(gate, destinations=LEGAL), MESSAGE, services)
+    assert services.producers == ["gate@r0.0", "gate@r0.d0"]
+
+
 def test_decide_asks_once_and_keeps_answers_under_out():
     services = Services()
     questions = {"bucket": {"type": "choice", "instructions": "x", "criteria": {"reply": "", "archive": ""}}}
@@ -107,14 +226,22 @@ def test_decide_sends_the_sets_state_fields_of_the_mail_and_never_its_body():
     fields = J.load_set("mail-triage")["state"]
     services.fields["mail-triage@1"] = fields
     mail = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "from": "billing@acme.example",
-                        "from_name": "Billing", "to": ["ana@acme.example"], "subject": "Invoice", "snippet": "Pay " * 200,
-                        "body": "SECRET body text", "labels": ["INBOX"], "list_id": "<news.acme.example>",
-                        "internal": True, "date": "2026-10-28"}}
+                        "from_name": "Billing", "from_domain": "acme.example", "to": ["ana@acme.example"],
+                        "subject": "Invoice", "snippet": "Pay " * 200, "body": "SECRET body text",
+                        "labels": ["INBOX", "CATEGORY_UPDATES"], "category": "updates", "list_id": "<news.acme.example>",
+                        "internal": True, "known_sender": False, "date": "2026-10-28"}}
     E.execute(flow({"id": "d", "type": "decide", "set": "mail-triage@1", "out": "d1"}), mail, services)
     sent = services.judged[0]["values"]
-    assert list(sent) == fields and len(sent) == 13
+    assert list(sent) == fields and len(sent) == 16
     assert "SECRET" not in str(sent) and sent["list_id"] is True and sent["is_internal"] is True
     assert sent["from_name"] == "Billing" and len(sent["snippet"]) == 400 and sent["mailbox"] == "ana@acme.example"
+    assert sent["from_domain"] == "acme.example" and sent["category"] == "updates" and sent["known_sender"] is False
+
+
+def test_mail_state_says_unknown_for_a_sender_an_older_computer_did_not_judge():
+    """A computer that predates known_sender sends none: the judge gets null, never a false that reads as a new sender."""
+    assert F.mail_state({"from": "x@acme.example"})["known_sender"] is None
+    assert F.mail_state({"from": "x@acme.example"})["category"] == ""
 
 
 def test_a_judge_failure_fails_the_step_and_the_run():
@@ -172,6 +299,26 @@ def test_a_bot_turn_a_later_step_reads_waits_for_what_the_bot_wrote():
     services = Services()
     E.execute(flow(brief, note("after", "{{briefing.text}} briefs")), MESSAGE, services)
     assert services.turns[0]["wait"] is False
+
+
+@pytest.mark.parametrize("post, text", [
+    ({"do": "post_update", "args": {"to": ["market"]}}, None),                                 # posts the briefing
+    ({"do": "post_update", "args": {"to": ["market"], "text": "{{brief.text}}"}}, "Northwind cut its price."),
+])
+def test_a_bot_turn_a_destination_reached_by_a_later_filter_waits_for_it_and_resumes_with_the_answer(post, text):
+    """The destination's actions are the later filter's own reads: its post waits for the turn and gets the answer."""
+    brief = {"id": "brief", "type": "bot_turn", "bot": "librarian", "prompt": "Write the briefing."}
+    route = {"id": "route", "type": "filter", "rules": [{"when": [], "then": [], "to": "market"}]}
+    market = [{"id": "market", "name": "Market", "color": "red", "then": [post]}]
+    services = Services()
+    f = flow(brief, route, destinations=market)
+    run = E.execute(f, MESSAGE, services)
+    assert services.turns[0]["wait"] is True and statuses(run) == [("brief", "waiting")]
+    assert not [do for do, _ in services.acted if do == "post_update"]    # nothing posted before the answer
+    assert E.answer(run, "msg_1", "Northwind cut its price.")
+    run = E.advance(f, run, services)
+    assert run["status"] == "ok" and services.acted[-1][0] == "post_update"
+    assert services.acted[-1][1].get("text") == text
 
 
 def test_a_turns_prompt_carries_what_arrived_as_quoted_data_not_as_instructions():

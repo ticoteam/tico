@@ -9,6 +9,7 @@ from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 
 
@@ -178,8 +179,8 @@ def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):
 @pytest.mark.parametrize("requester", ["bot:ops"])
 def test_verified_legal_requester_is_kept_without_forged_human_grants(api, requester):
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode({**config, "template": "general-counsel"}),))
+        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0], {})
+        BS.write(c, 'ops', {**config, 'template': 'general-counsel'})
     source = task(api, requester=requester, owner="bot:ops")
     machine = runner(api)
     with api.app.state.store.read() as c:
@@ -248,9 +249,8 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
     api.app.state.store.settings.test_identities["acted-test"] = acted
     with api.app.state.store.transaction() as c:
         if sensitive:
-            config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (sensitive,)).fetchone()[0], {})
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
-                      (encode({**config, "private_tasks_default": True}), sensitive))
+            config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (sensitive,)).fetchone()[0], {})
+            BS.write(c, sensitive, {**config, 'private_tasks_default': True})
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
         rooms_before = c.execute("SELECT count(*) FROM conversations").fetchone()[0]
     created = post(api, "tasks", {"owner": owner, "title": "Review delegated work", "body": "Review it.",
@@ -416,7 +416,7 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                           ("job-" + aid, asked["id"], H.now(), aid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                           "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
-                c.execute("INSERT INTO turns(id,bot,started_at,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
+                c.execute("UPDATE attempts SET trigger='task',task_id=?,exit='ok' WHERE id=?", (parent["id"], aid))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
                 H.task_comment(c, "human:ana", parent["id"], f"See {n}", wake=False,
                                extra_refs={"see": "task:" + hidden["id"]} if n == 2 else None)
@@ -559,12 +559,14 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
     with store.transaction() as c:
         source = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         config = dict(c.execute("SELECT * FROM bot_config WHERE bot='ops'").fetchone())
+        declared = BS.read(c, "ops")
         for n in range(40):
             for table, row in (("bots", {**source, "id": f"crew{n}", "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+            BS.write(c, f"crew{n}", declared)
             H.task_create(c, "human:ana", f"Step {n}", "Do it.", f"bot:crew{n}", lint=False)
             for turn, finished in (("a", "2026-01-02"), ("b", "2026-01-03"), ("c", "2026-01-03"), ("d", None)):
-                c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES(?,?,?,?)",
                           (f"t{n}{turn}", f"crew{n}", "2026-01-01", finished))
     before = {}
     for token in ("ana-test", "ben-test"):
@@ -573,6 +575,7 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         for n in range(40, 80):
             for table, row in (("bots", {**source, "id": f"crew{n}", "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+            BS.write(c, f"crew{n}", declared)
     for token in ("ana-test", "ben-test"):
         response, statements = traced(api, lambda: api.get("/api/employees", headers=headers(token)))
         assert response.status_code == 200
@@ -581,17 +584,17 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         assert {flows.get(f"crew{n}")["waiting"] for n in range(40) if flows.get(f"crew{n}")} == {1}
         assert {flows.get(f"crew{n}")["waiting"] for n in range(40, 80) if flows.get(f"crew{n}")} == {0}
     with store.read() as c:
-        latest = dict(c.execute("SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY "
-                                "finished_at DESC,id DESC) AS n FROM turns WHERE finished_at IS NOT NULL) WHERE n=1"))
+        latest = dict(c.execute("SELECT bot_id,id FROM (SELECT bot_id,id,row_number() OVER(PARTITION BY bot_id ORDER BY "
+                                "settled_at DESC,id DESC) AS n FROM attempts WHERE settled_at IS NOT NULL) WHERE n=1"))
         assert latest["crew3"] == "t3c"
         sought = dict(row for row in c.execute(
-            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
+            "SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
         assert sought == {bot: tid for bot, tid in latest.items() if bot in sought} and "crew3" in sought
         plan = " ".join(r[3] for r in c.execute(
-            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b"))
-        assert "turns_bot_finished" in plan and "TEMP B-TREE" not in plan, plan
+            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b"))
+        assert "attempts_bot_settled" in plan and "TEMP B-TREE" not in plan, plan
 
 
 def busy(api):

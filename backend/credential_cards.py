@@ -301,7 +301,8 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         if not msg:
             return None
         conversation = H.conversation(c, msg["conversation_id"]) or {}
-        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["recipient_id"] == owner else None)
+        task_id = conversation.get("task_id") or (H._task_ref((msg.get("refs") or {}).get("task"))
+                                                   if msg["recipient_id"] == owner else None)
         task = H.task(c, task_id) if task_id else None
         if task and task["owner_id"] == owner and task["status"] in H.ACTIVE_STATUSES:
             return task

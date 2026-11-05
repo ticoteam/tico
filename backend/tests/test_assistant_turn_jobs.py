@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.tests.test_api import api, assign, get, headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn, say
@@ -50,9 +51,8 @@ def repo_bot(api, bot="ops"):
     """A bot with its repository built, as backend/tests/test_bot_tools.py makes one: its config names the repo and its
     computer reports the repository present, so a pause or a resume can place it."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=?, repo=? WHERE bot=?",
-                  (json.dumps({"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"}),
-                   "acme-co/emp-" + bot, bot))
+        c.execute("UPDATE bot_config SET repo=? WHERE bot=?", ("acme-co/emp-" + bot, bot))
+        BS.write(c, bot, {"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"})
     machine = runner(api)
     assign(api, machine, bot)
     row = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,

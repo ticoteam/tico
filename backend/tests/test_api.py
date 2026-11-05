@@ -15,6 +15,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import AWAKE_SETTLE
 from backend.store import H, encode
+from backend import bot_settings as BS
 
 
 def api_settings(tmp_path):
@@ -51,8 +52,8 @@ def api(tmp_path, api_database):
                 {"id": "cara", "email": "cara@acme.example"}]}),))
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product" if product else None, "ben" if product else "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if product else None, 'ben' if product else 'ana'))
+                BS.write(c, slug, config)
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
             # A company with a fleet this size is long past first run; the wizard belongs to
@@ -174,9 +175,12 @@ def put(api, path, body, token="ana-test", expected=200):
     return r.json()
 
 
-def runner(api, operator="ana", label="Test Mac"):
+def runner(api, operator="ana", label="Test Mac", device_id=None):
     code = post(api, "enrollments", {"operator": operator})["code"]
-    return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
+    body = {"code": code, "label": label, "platform": "test"}
+    if device_id is not None:
+        body["device_id"] = device_id
+    return post(api, "runners/enroll", body)
 
 
 def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
@@ -368,11 +372,13 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     get(api, "files/nope-nope-nope/meta", expected=404)
 
 
-def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
+def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
-        c.execute("DELETE FROM turns WHERE id=?", (attempt["id"],))
+        # No run record: the lease ended before one was written.
+        c.execute("UPDATE attempts SET trigger=NULL,trigger_kind=NULL,trigger_source=NULL,purpose=NULL,settled_at=NULL,"
+                  "exit=NULL,summary=NULL WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")

@@ -11,7 +11,7 @@ function setAccountMenu(open, returnFocus = false) {
   }
   if (returnFocus) $('#account').focus();
 }
-$('#account').onclick = () => setAccountMenu($('#account-menu').hidden);
+$('#account').onclick = () => { if ($('#account-menu').hidden) nativeOrgMenu(); setAccountMenu($('#account-menu').hidden); };
 document.addEventListener('click', ev => {
   if (!ev.target.closest('.account-wrap') || ev.target.closest('#account-menu :is(a, button)')) setAccountMenu(false);
 });

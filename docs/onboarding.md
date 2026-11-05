@@ -50,7 +50,7 @@ it drafted, for the owner to confirm; nothing is published. The preview lists it
 **Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
 has none); and each goal on the bet it came from. With a market not defined yet it adds the
 [market by spend](librarian.md#market-spend): the definition and its segments, each sized segment's size `proposed`
-on its own evidence (a segment with none stays unsized), the company in its `ours` segment, and each player as a company
+on its own evidence (a segment with none stays unsized), the company in each of its `ours` segments, and each player as a company
 on the market graph with its site a watched page. The posts the page found are filed as new market insights, so the
 Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
 named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.

@@ -503,10 +503,9 @@ def test_initializing_checkout_stays_pending_until_checkout_and_setup_complete(p
         assert json.loads(saved['detail'])['checkout_state'] == 'ready'
 
 
-def test_a_ready_setup_clears_a_failed_restore_and_the_health_monitor_follows(prepared, monkeypatch):
-    from backend import health_monitor, watchers
+def test_a_ready_setup_clears_a_failed_restore_and_check_health_follows(prepared, monkeypatch):
+    from backend import maintenance_health, watchers
     api, tid, _ = prepared
-    monkeypatch.setattr(health_monitor, 'active', lambda c: True)
     monkeypatch.setattr(watchers, 'deliver', lambda *args: True)
     with api.app_state.store.transaction() as c:
         second = H.task_create(c, 'human:ana', 'More product', 'Implement more', 'bot:cmo')['id']
@@ -518,9 +517,9 @@ def test_a_ready_setup_clears_a_failed_restore_and_the_health_monitor_follows(pr
                           for link in links]}
 
     def scanned():
-        with api.app_state.store.transaction() as c:
-            health_monitor.scan(c, api.app_state.auth, api.app_state.store.settings)
-            found = [f for f in health_monitor.findings(c, api.app_state.store.settings) if f['check_id'] == 'worktree_error']
+        maintenance_health.check(api.app_state.store, api.app_state.auth, api.app_state.store.settings)
+        with api.app_state.store.read() as c:
+            found = [f for f in maintenance_health.findings(c, api.app_state.store.settings) if f['check_id'] == 'worktree_error']
             present = c.execute("SELECT count(*) FROM health_findings WHERE check_id='worktree_error' AND present=1")
             return found, present.fetchone()[0]
 

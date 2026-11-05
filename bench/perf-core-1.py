@@ -15,7 +15,7 @@ import statistics
 import time
 import uuid
 
-from backend import assigned_start as A, auto_tasks, provenance_clock, queue_refusals as Q
+from backend import assigned_start as A, auto_tasks, bot_settings as BS, provenance_clock, queue_refusals as Q
 from backend.store import H, encode
 from backend.tests import test_api
 
@@ -35,8 +35,8 @@ def seed_overdue(store, monkeypatch):
         H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug in BOTS:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,?)", (slug, "ana"))
+            BS.write(c, slug, {"name": slug, "runtime": "fake"})
         for n in range(TASKS):
             H.task_create(c, "human:ana", f"Overdue {n:03d}", "Please do it.", "bot:" + BOTS[n % len(BOTS)], lint=False)
     with store.transaction() as c:
@@ -44,7 +44,7 @@ def seed_overdue(store, monkeypatch):
         rows = c.execute("SELECT id,owner_id,created_at FROM tasks WHERE owner_id LIKE 'bot:bot%' AND status='open' "
                          "ORDER BY id").fetchall()
         for tid, _owner, created in rows:
-            key = c.execute("SELECT coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' "
+            key = c.execute("SELECT coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' "
                             "ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at) "
                             "FROM tasks t WHERE t.id=?", (tid,)).fetchone()[0]
             H.event(c, H.KEEPER, A.EVENT, tid, {"assignment": key, "assigned_at": created,

@@ -25,6 +25,7 @@ def _harness_name(runtime):
     return HARNESS_NAMES.get(runtime) or str(runtime).title()
 from .store import H, Problem, readiness_document
 from .views import roster
+from . import bot_settings as BS
 
 QUEUE_MINUTES = 15          # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting there waiting for the reply
@@ -113,8 +114,8 @@ def _login_dependencies(c, settings):
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
     record, found = providers.load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id,a.bot,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
         for choice in (config, fallback):
@@ -276,7 +277,8 @@ def harness_denies(c, settings):
     configs = {}
     for part in H.chunks(bots):
         configs.update((r["bot"], r) for r in c.execute(
-            f"SELECT bot,repo,config FROM bot_config WHERE bot IN ({','.join('?' * len(part))})", part))
+            f"SELECT bot,repo,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot IN ({','.join('?' * len(part))})",
+            part))
     out = []
     for bot, rest in reported:
         prefixes = [p.strip() for p in rest.split(",") if p.strip()]
@@ -835,6 +837,8 @@ HELD = {
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    # The computer read a plan's sign-in as ready, and no plan signs it in now (execution.signed_in_by_lapsed_plan).
+    "sign_in_missing": ("Its model is not signed in on {computer}", COMPUTERS),
     "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
                       COMPUTERS),
     # A bot with Browse through runs only on a runner that takes it there (backend/browser_exit.py CAPABILITY).
@@ -888,7 +892,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     for part in H.chunks(sorted({row["bot"] for row in rows})):
         marks = ",".join("?" * len(part))
         found = {r["bot"]: r for r in c.execute(
-            f"SELECT bot,config,owner_id FROM bot_config WHERE bot IN ({marks})", part)}
+            f"SELECT bot,{BS.CONFIG} AS config,owner_id FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})", part)}
         prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
         prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
         configured.update({bot: (H._json(r["config"], {}) or {}).get("runtime") or "" for bot, r in found.items()})
@@ -1457,7 +1461,8 @@ def silent_waits(c, at=None):
     cutoff = H.shift(at or H.now(), hours=-SILENT_WAIT_HOURS)
     return [dict(r) for r in c.execute(
         "SELECT * FROM (SELECT t.id, t.title, t.owner_id, t.waiting_on, t.conversation_id, t.private, "
-        "coalesce((SELECT max(e.created_at) FROM task_events e WHERE e.task_id=t.id AND e.field='waiting_on' "
+        "coalesce((SELECT max(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND e.kind='waiting_on' "
         "AND e.new=t.waiting_on), t.updated_at) AS since FROM tasks t "
         "WHERE t.waiting_on IS NOT NULL AND t.status='waiting') w WHERE w.since<? "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.recipient_id=w.waiting_on AND m.sender_id=w.owner_id "
@@ -1711,14 +1716,6 @@ def view(c, who, settings, auth, github, config):
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
-    from . import task_check_backs
-    coverage = task_check_backs.coverage(c, auth.task_sql(c, who), H.shift(H.now(), minutes=-30))
-    late = coverage["missing"] + coverage["overdue"]
-    checks.append(_check("task_check_backs", "Task follow-ups",
-                         "warn" if late and task_check_backs.enabled(c) else "ok",
-                         f"{coverage['missing']} missing appointments; {coverage['overdue']} overdue by more than 30 minutes; "
-                         f"{coverage['results']} returned results awaiting disposition. "
-                         + ("Follow-ups enabled." if task_check_backs.enabled(c) else "Shadow reporting; follow-ups disabled.")))
     from . import assigned_start
     assigned = []
     # Each bot's checks and each task's waits are read once for all the overdue tasks, not once per task.
@@ -2136,8 +2133,10 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
     held = {w["bot"] for w in waiting}
-    # A bot stuck in onboarding has its own check below ("Onboarding not finished").
-    blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
+    # A bot stuck in onboarding has its own check below ("Onboarding not finished"). A quarantined bot is BotOps's to
+    # review, so it has its own check (after this one): Settings > Health lists it, the person's status dot does not.
+    quarantined = [s for s in blocked if s["bot"] not in held and s["reason"] == "quarantined"]
+    blocking = [s for s in blocked if s["bot"] not in held and s["reason"] not in ("setup", "quarantined")]
     busy = [row for row in slow if row["reason"] == "busy"]
     readable = auth.bot_accesses(c, who, [row["bot"] for row in busy]) if busy and not full else {}
     busy_rows = _stuck(c, [{**row, "reason": row["wait_reason"], "runtime": ""} for row in busy
@@ -2161,6 +2160,12 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Runs", "#/settings", "runs")] if full else []))
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
+    if quarantined:
+        items = _queue_items(quarantined, full, kind == "bot") if full or kind == "bot" else []
+        checks.append(_check("quarantine", "Quarantined bots", "bad",
+                             _diagnostic_summary(f"{_plural(len(quarantined), 'bot')} quarantined; queued work waits "
+                                                 "until the quarantine clears.", items),
+                             [_fix("Open Runs", "#/settings", "runs")] if full else [], items=items))
     for slug, name, count, what, oldest in unfinished_setup(c) if full else ():
         checks.append(_check("setup:" + slug, "Onboarding not finished", "warn",
                              f"{name} is still onboarding; {_plural(count, what)} waiting since {oldest[:10]}.",
@@ -2172,41 +2177,33 @@ def view(c, who, settings, auth, github, config):
                              + ("." if len(heavy) <= 5 else f"; and {len(heavy) - 5} more."),
                              [_fix("Open Usage", "#/usage")]))
 
-    # Successful model turns can still make no task progress. Infrastructure and failed-run
-    # checks alone miss that loop. Use the same task visibility as the rest of Tico.
-    # Waiting tasks can also escalate when held only by their own quiet subtasks.
-    candidates = c.execute(
-        "SELECT id,title,number,owner_id,updated_at,status,waiting_on FROM tasks "
+    # Successful model turns can still make no task progress; infrastructure and failed-run checks miss that loop.
+    # What is stalled is hubdb.stalled_tasks, as Task Manager lists it. Only bot tasks this reader can see, not private
+    # ones; a waiting parent is named only when its blockers are readable too, so its diagnosis reveals no activity the
+    # reader cannot see.
+    candidates = [row["id"] for row in c.execute(
+        "SELECT id FROM tasks "
         "WHERE owner_id LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
-        # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
         "AND (status<>'waiting' OR NOT EXISTS (SELECT 1 FROM task_relations r "
         "WHERE r.to_task=tasks.id AND r.kind='blocks' AND r.from_task IN "
         f"(SELECT tasks.id FROM tasks WHERE status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
-        f"AND NOT coalesce(({auth.task_sql(c, who)}),0)))) "
-        # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
-        "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
-        "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.created_at>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES).fetchall()
-    # own_stuck_blockers is [] for a task with no live blocker: one read gives every waiting candidate's live blockers,
-    # so the rest cost no read each, and the reads those blockers need are set reads too (H.prime_own_stuck).
-    from .task_relations import live_blockers_many
-    blockers = live_blockers_many(c, [row["id"] for row in candidates if row["status"] == "waiting"], H.ACTIVE_STATUSES)
-    H.prime_own_stuck(c, blockers)
-    stalled = [row for row in candidates
-               if row["status"] != "waiting" or (blockers.get(row["id"])
-                                                 and H.own_stuck_blockers(c, dict(row), blockers=blockers[row["id"]]))]
+        f"AND NOT coalesce(({auth.task_sql(c, who)}),0))))", H.ACTIVE_STATUSES).fetchall()]
+    # A bot still in setup is held (its own check says so): a run for it would only queue, so there is no recovery to name.
+    stalled = []
+    for part in H.chunks(candidates) if candidates else []:
+        stalled += [row for row in H.stalled_tasks(c, H.now(), task_ids=part) if not row.get("held")]
+    stalled.sort(key=lambda row: row["updated_at"])
     if stalled:
         items = [{"bot": H.actor_id(row["owner_id"]), "name": row["title"][:200], "task": row["id"],
-                  "quiet_minutes": quiet_minutes(row["updated_at"]),
+                  "quiet_minutes": row["quiet_minutes"],
                   "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner_id']}): "
-                          f"no progress for {quiet_minutes(row['updated_at'])} min; check the recovery diagnosis or record the missing dependency",
+                          f"no progress for {row['quiet_minutes']} min; move it or record what it waits on",
                   "fix": "hub task show " + row["id"],
                   "fixes": [_fix("Open task", "#/tasks/" + row["id"])]}
                  for row in stalled[:DIAGNOSTIC_LIMIT]] if full or kind == "bot" else []
         checks.append(_check("stalled_tasks", "Tasks not progressing", "warn",
-                             _diagnostic_summary(f"{_plural(len(stalled), 'task')} did not progress after repeated automatic runs. "
-                                                 "Recovery was requested.", items),
+                             _diagnostic_summary(f"{_plural(len(stalled), 'task')} quiet with nothing set to move them.", items),
                              [_fix("Open tasks", "#/tasks")] if full else [], items=items))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))

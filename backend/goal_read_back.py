@@ -271,7 +271,8 @@ def changed_since(c, back, change, done):
             said.append(f"{editor_words(p['decided_by'])} {did} the suggestion" if did
                         else f"the suggestion was {p['status']}")
     for gid in dict.fromkeys(goals):
-        for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND created_at>? "
+        for r in c.execute("SELECT id, actor_id AS actor, kind AS field, old, new, json_extract(data, '$.status_source') AS "
+                           "status_source FROM history_events WHERE subject_type='goal' AND subject_id=? AND created_at>? "
                            "ORDER BY created_at", (gid, back["created_at"])):
             if r["id"] in mine or r["field"] in ("rank", "checkin", "status_source") or (
                     r["field"] == "status" and r["status_source"] == "auto") or r["field"] == "proposal":
@@ -388,7 +389,7 @@ def record(c, actor, claim, mark, out):
     """Record the save in the write's own transaction: which step of which change, the goal it made or changed and
     the goal history rows it wrote (so they are not read as someone else's change), and add the link to the reply."""
     gid = ((out or {}).get("goal") or {}).get("id") if isinstance(out, dict) else None
-    marks = [r[0] for r in c.execute("SELECT id FROM goal_events WHERE rowid>?", (mark,))]
+    marks = [r[0] for r in c.execute("SELECT id FROM history_events WHERE subject_type='goal' AND rowid>?", (mark,))]
     H.event(c, actor, SAVED, claim["goal_read_back"], {"change": claim["change"], "step": claim["step"],
                                                        "goal_id": gid, "marks": marks})
     return gid

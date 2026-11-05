@@ -11,6 +11,7 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
@@ -44,7 +45,7 @@ def migrate(c):
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
     # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
     if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
-            and ran_before and H._has_table(c, 'task_events'):
+            and ran_before and H._has_table(c, 'history_events'):
         clear_copies(c)
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
               'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
@@ -59,7 +60,8 @@ def migrate(c):
 # Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's copies
 # left none.
 def written(field):
-    return f"EXISTS(SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='{field}')"
+    return (f"EXISTS(SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+            f"AND e.kind='{field}')")
 
 
 def clear_copies(c):
@@ -109,8 +111,8 @@ def suggestions_receiver(c):
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
-        row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                        "WHERE json_extract(bc.config,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+        row = c.execute(f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                        f"WHERE s.template=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
                         "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
         if row:
             return row[0], source
