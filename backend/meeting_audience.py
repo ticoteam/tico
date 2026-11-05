@@ -93,10 +93,11 @@ def participant_sql(c, actor_sql, table='tasks'):
         sent += ("WHEN EXISTS (SELECT 1 FROM meeting_task_links l JOIN meeting_participant_readers mr "
                  "ON mr.meeting_id=l.meeting_id "
                  f"WHERE l.task_id={table}.id AND l.kind='sent' AND mr.human_id=substr(r.actor,7)) THEN 1 ")
-    sent += ("WHEN EXISTS (SELECT 1 FROM live_meetings lm LEFT JOIN meeting_participant_readers mr "
-             "ON mr.meeting_id=lm.imported_meeting_id AND mr.human_id=substr(r.actor,7) "
+    sent += ("WHEN EXISTS (SELECT 1 FROM live_meetings lm "
              f"WHERE lm.id={table}.live_meeting_id AND {live_read_sql('r.actor', 'lm')} "
-             "AND (lm.imported_meeting_id IS NULL OR mr.human_id IS NOT NULL)) THEN 1 ELSE 0 END")
+             "AND CASE WHEN lm.imported_meeting_id IS NULL THEN 1 ELSE EXISTS "
+             "(SELECT 1 FROM meeting_participant_readers mr WHERE mr.meeting_id=lm.imported_meeting_id "
+             "AND mr.human_id=substr(r.actor,7)) END) THEN 1 ELSE 0 END")
     return (f"EXISTS (SELECT 1 FROM task_roles r WHERE r.task_id={table}.id AND r.role='participant' "
             f"AND r.actor={actor_sql} AND r.actor LIKE 'human:%' AND CASE {sent})")
 
