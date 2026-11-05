@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from connectors.mail import scheduling as s, calendar as cal, Refused, Failure
 from connectors.mail import __main__ as cli
 
@@ -52,6 +54,90 @@ class Workflow(unittest.TestCase):
         proof = snapshot(queued.call_args.args[1], self.ctx.mailbox)
         assert proof['attachments'][0]['type'] == 'text/calendar'
         self.ctx.gmail.send_raw.assert_not_called()
+
+    def test_a_pending_conference_is_retryable_and_does_not_freeze_a_linkless_invitation(self):
+        self.ctx.calendar.create_scheduling_event.side_effect = cal.ConferencePending('Meeting link pending', status=503)
+        with patch.object(s.pl, 'queue_send') as queued:
+            result = s.run(self.ctx, self.args)
+        assert result['retry'] and not result['queued'] and not result['sent']
+        queued.assert_not_called()
+        assert self.conn.execute('SELECT status FROM scheduling_actions').fetchone()[0] == 'canceled'
+
+    def test_uncertain_or_active_sends_keep_the_booking_fence(self):
+        with patch.object(s.pl, 'queue_send', return_value={'id': 'send-1', 'state': 'pending'}) as queued:
+            first = s.run(self.ctx, self.args)
+            for state in ('pending', 'waiting_approval', 'dispatching', 'sent', 'unknown'):
+                self.conn.execute("UPDATE scheduling_actions SET status='queued'")
+                self.conn.commit()
+                with patch.object(s.pl, 'HUB_GET', return_value={'send': {'id': 'send-1', 'state': state}}):
+                    answer = s.run(self.ctx, self.args)
+                assert answer['already_attempted'] and answer['send_id'] == first['send_id']
+            assert queued.call_count == 1
+
+
+def test_invitation_freezes_join_location_description_and_conference_entry_points():
+    from connectors.mail import compose
+    from backend.email_content import parsed, snapshot, attachment
+    start = datetime(2030, 1, 8, 10, tzinfo=s.TZ)
+    join = 'https://meet.google.com/abc-defg-hij'
+    event = {'id': 'event', 'hangoutLink': join, 'location': 'Room A; upstairs', 'description': 'Agenda: budget, review\nSecond line',
+             'conferenceData': {'entryPoints': [{'entryPointType': 'video', 'uri': join}, {'entryPointType': 'phone', 'uri': 'tel:+15555550123'}]}}
+    raw = compose.with_invitation(compose.build(['guest@vendor.example'], 'Meeting', 'Meeting tomorrow', from_addr='ana@acme.example'),
+                                  event, 'ana@acme.example', ['guest@vendor.example'], start, start + s.DURATION, 'Meeting')
+    message = parsed(raw)
+    assert join in message.get_body(preferencelist=('plain',)).get_content()
+    assert 'Room A; upstairs' in message.get_body(preferencelist=('plain',)).get_content()
+    ics = next(part.get_content() for part in message.walk() if part.get_content_type() == 'text/calendar')
+    unfolded = ics.replace('\r\n ', '').replace('\n ', '')
+    assert 'URL:' + join in unfolded and 'CONFERENCE;VALUE=URI:' + join in unfolded
+    assert 'CONFERENCE;VALUE=URI:tel:+15555550123' in unfolded
+    assert 'LOCATION:Room A\\; upstairs' in unfolded and 'DESCRIPTION:Agenda: budget\\, review\\nSecond line' in unfolded
+    frozen = snapshot(raw, 'ana@acme.example')
+    assert join.encode() in attachment(raw, frozen['attachments'][0]['part'])
+
+
+@pytest.mark.parametrize('mode', ['standing', 'hub'])
+def test_calendar_waits_for_the_conference_before_returning_an_invitable_event(mode):
+    from connectors.mail.tests.fake import FakeCalendarService
+    service = FakeCalendarService()
+    calendar = cal.Calendar(service, 'ana@acme.example')
+    pending = {'id': 'event', 'conferenceData': {'createRequest': {'status': {'statusCode': 'pending'}}}}
+    ready = {'id': 'event', 'hangoutLink': 'https://meet.google.com/abc-defg-hij',
+             'conferenceData': {'createRequest': {'status': {'statusCode': 'success'}}}}
+    start = datetime(2030, 1, 8, 10, tzinfo=s.TZ)
+    with patch.object(calendar, '_exec', side_effect=[pending, pending, ready]) as execute, patch.object(cal.time, 'sleep') as sleep:
+        if mode == 'standing':
+            event = calendar.create_scheduling_event(start, start+s.DURATION, 'guest@vendor.example', 'event', 'Agenda')
+        else:
+            event = calendar.create_hub_event(start, start+s.DURATION, 'Meeting', ['guest@vendor.example'], 'event')
+    assert event['hangoutLink'] == ready['hangoutLink'] and execute.call_count == 3 and sleep.call_count == 2
+
+
+def test_conference_polling_stops_with_a_retryable_error_and_no_linkless_event():
+    from connectors.mail.tests.fake import FakeCalendarService
+    calendar = cal.Calendar(FakeCalendarService(), 'ana@acme.example')
+    pending = {'id': 'event', 'conferenceData': {'createRequest': {'status': {'statusCode': 'pending'}}}}
+    with patch.object(calendar, '_exec', return_value=pending) as execute, patch.object(cal.time, 'sleep') as sleep:
+        with pytest.raises(cal.ConferencePending) as refused:
+            calendar.ready_conference(pending)
+    assert refused.value.status == 503 and execute.call_count == 15 and sleep.call_count == 15
+
+
+def test_rebooking_excludes_only_the_unchanged_canceled_hold_and_keeps_other_busy_events():
+    from connectors.mail.tests.fake import FakeCalendarService
+    service = FakeCalendarService(calendars=['primary'])
+    calendar = cal.Calendar(service, 'ana@acme.example')
+    start = datetime(2030, 1, 8, 10, tzinfo=s.TZ)
+    def event(ident, begin):
+        return {'id': ident, 'start': {'dateTime': begin.isoformat()}, 'end': {'dateTime': (begin+s.DURATION).isoformat()}}
+    service.events_by_calendar['primary'] = [event('canceled-hold', start), event('unrelated', start)]
+    hold = {'id': 'canceled-hold', 'bounds': (start, start+s.DURATION)}
+    assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == [(start, start+s.DURATION)]
+    service.events_by_calendar['primary'].pop()
+    assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == []
+    changed = start + timedelta(minutes=15)
+    service.events_by_calendar['primary'] = [event('canceled-hold', changed)]
+    assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == [(changed, changed+s.DURATION)]
 
 
 class PermissionGrant(unittest.TestCase):

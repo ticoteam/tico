@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -57,10 +58,11 @@ def validate_slot(start, now=None):
     return start, end
 
 
-def check_free(calendar, starts, now=None):
+def check_free(calendar, starts, now=None, exclude_hold=None):
     pairs = [validate_slot(s, now) for s in starts]
     busy = calendar.busy(min(s for s, e in pairs) - BUFFER,
-                         max(e for s, e in pairs) + BUFFER)
+                         max(e for s, e in pairs) + BUFFER,
+                         **({"exclude_hold": exclude_hold} if exclude_hold else {}))
     for start, end in pairs:
         if any(b0 < end + BUFFER and start - BUFFER < b1 for b0, b1 in busy):
             raise Refused('A calendar blocks this meeting or its 30-minute buffer.')
@@ -194,6 +196,33 @@ def permission(ctx, category, attendee, thread_id, confirmation):
         raise Refused('A matching confirmation message from the business-development bot is required.')
 
 
+def reconcile(ctx, thread):
+    """Only a verified definite non-send releases a scheduling action's retry fence."""
+    if not ctx.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduling_actions'").fetchone():
+        return
+    rows = ctx.conn.execute("SELECT key,result FROM scheduling_actions WHERE mailbox=? AND thread=? AND status='queued'",
+                            (ctx.mailbox, thread)).fetchall()
+    for key, value in rows:
+        result = json.loads(value or '{}')
+        if not result.get('send_id'):
+            continue
+        try:
+            answer = pl.HUB_GET('email/sends/' + result['send_id'])
+        except Exception as exc:
+            raise Refused('Could not verify the previous scheduling send; retry when Tico answers.') from exc
+        send = (answer or {}).get('send') or {}
+        state = send.get('state')
+        if send.get('id') != result['send_id'] or state not in (
+                'pending', 'waiting_approval', 'dispatching', 'sent', 'unknown', 'canceled', 'blocked', 'failed', 'declined'):
+            raise Refused('Could not verify the previous scheduling send; retry when Tico answers.')
+        status = 'canceled' if state in ('canceled', 'blocked', 'failed', 'declined') else (
+                 'sent' if state == 'sent' else 'unknown' if state == 'unknown' else 'queued')
+        result.update(state=state, queued=status == 'queued', sent=status == 'sent')
+        with ctx.conn:
+            ctx.conn.execute('UPDATE scheduling_actions SET status=?,result=? WHERE key=?',
+                             (status, json.dumps(result), key))
+
+
 def run(ctx, args):
     # Import lazily to keep the CLI dependency one-way during module import.
     from . import __main__ as cli
@@ -211,11 +240,20 @@ def run(ctx, args):
     permission(ctx, args.category, attendee, args.thread, args.bd_confirmation)
     settings = ctx.policy.get('scheduling') or {}
     key = hashlib.sha256(f'{ctx.mailbox}:{args.thread}:{latest["id"]}:{args.mode}'.encode()).hexdigest()
+    reconcile(ctx, args.thread)
+    previous = None
     if ctx.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduling_actions'").fetchone():
         old = ctx.conn.execute('SELECT status, result FROM scheduling_actions WHERE key=?', (key,)).fetchone()
-        if old:
+        if old and old[0] != 'canceled':
             return dict(json.loads(old[1] or '{}'), ok=old[0] in ('sent','queued'), status=old[0], already_attempted=True,
                         dry_run=ctx.dry)
+        if old:
+            previous = json.loads(old[1] or '{}')
+        if previous is None:
+            canceled = ctx.conn.execute("SELECT result FROM scheduling_actions WHERE mailbox=? AND thread=? "
+                                        "AND mode='book' AND status='canceled' ORDER BY rowid DESC LIMIT 1",
+                                        (ctx.mailbox, args.thread)).fetchone()
+            previous = json.loads(canceled[0] or '{}') if canceled else None
         booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','queued','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
         if booked:
             raise Refused('This thread already has a booking or an uncertain attempt; review it before rescheduling.')
@@ -240,7 +278,10 @@ def run(ctx, args):
                 ('\n\nIf neither works, you can book another time here:\n' + settings['booking_url']
                  if settings.get('booking_url') else '') +
                 '\n\n' + signer(ctx))
-    check_free(ctx.calendar, starts)
+    exclude_hold = None
+    if previous and (previous.get('event') or previous.get('expected_event_id')) and previous.get('times') == [start.isoformat() for start in starts]:
+        exclude_hold = {'id': previous.get('event') or previous['expected_event_id'], 'bounds': (starts[0], starts[0] + DURATION)}
+    check_free(ctx.calendar, starts, exclude_hold=exclude_hold)
     verdict = review_thread(msgs, attendee, args.category, args.mode, starts)
     ctx.audit('scheduling-review', args.thread, {'mode':args.mode, 'category':args.category, **verdict})
     # The same action key is checked again under the mailbox lock before delivery.
@@ -252,28 +293,33 @@ def run(ctx, args):
         ctx.conn.execute('CREATE TABLE IF NOT EXISTS scheduling_actions '
                          '(key TEXT PRIMARY KEY, mailbox TEXT, thread TEXT, mode TEXT, day TEXT, status TEXT, result TEXT)')
         ctx.conn.commit()
+        reconcile(ctx, args.thread)
         old = ctx.conn.execute('SELECT status, result FROM scheduling_actions WHERE key=?', (key,)).fetchone()
-        if old:
+        if old and old[0] != 'canceled':
             return dict(json.loads(old[1] or '{}'), ok=old[0] in ('sent','queued'), status=old[0], already_attempted=True)
         booked = ctx.conn.execute("SELECT 1 FROM scheduling_actions WHERE mailbox=? AND thread=? AND mode='book' AND status IN ('pending','queued','sent','unknown')", (ctx.mailbox,args.thread)).fetchone()
         if booked:
             raise Refused('This thread already has a booking or an uncertain booking attempt; review before rescheduling.')
         day = datetime.now(TZ).date().isoformat()
-        count = ctx.conn.execute("SELECT COUNT(*) FROM scheduling_actions WHERE mailbox=? AND day=?",(ctx.mailbox,day)).fetchone()[0]
+        count = ctx.conn.execute("SELECT COUNT(*) FROM scheduling_actions WHERE mailbox=? AND day=? AND status<>'canceled'",(ctx.mailbox,day)).fetchone()[0]
         if count >= ctx.policy['defaults']['max_sends_per_day']:
             raise Refused('Daily scheduling send limit reached.')
         fresh = [m for m in cli.thread_context(ctx,args.thread)[0] if 'DRAFT' not in m['labels']]
         if not fresh or fresh[-1]['id'] != latest['id']:
             raise Refused('The conversation changed during review; read it again.')
         permission(ctx, args.category, attendee, args.thread, args.bd_confirmation)
-        check_free(ctx.calendar, starts)  # notice, calendars and buffers immediately before action
+        check_free(ctx.calendar, starts, exclude_hold=exclude_hold)  # notice, calendars and buffers immediately before action
+        event_id = hashlib.sha256((key + uuid.uuid4().hex).encode()).hexdigest()
+        payload['expected_event_id'] = event_id if args.mode == 'book' else None
         with ctx.conn:
+            if old:
+                ctx.conn.execute("UPDATE scheduling_actions SET key=? WHERE key=?", ('retired:' + event_id, key))
             ctx.conn.execute('INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)',
                              (key,ctx.mailbox,args.thread,args.mode,day,'pending',json.dumps(payload)))
         try:
             if args.mode == 'book':
                 event = ctx.calendar.create_scheduling_event(starts[0], starts[0]+DURATION,
-                                                             attendee, key, body,
+                                                             attendee, event_id, body,
                                                              settings.get('meeting_title') or 'Meeting')
                 raw = compose.build([attendee], subject, body, from_addr=ctx.mailbox,
                                     in_reply_to=reply_id, references=refs)
@@ -289,12 +335,15 @@ def run(ctx, args):
                 queued = pl.queue_send(ctx.mailbox, raw, args.thread, latest['id'], draft_id=draft['id'])
                 result = dict(payload, ok=True, sent=False, queued=True, send_id=queued['id'], state=queued['state'])
             status = 'queued'
+        except cal.ConferencePending as exc:
+            status = 'canceled'
+            result = dict(payload, ok=False, sent=False, queued=False, retry=True, reason=str(exc))
         except Exception:
             # A network failure may occur after delivery. Never automatically retry or claim rollback.
             status = 'unknown'
             result = dict(payload, ok=False, sent=False, delivery_unknown=True,
                           reason='Delivery could not be confirmed. Inspect the thread/calendar before retrying.',
-                          expected_event_id=key if args.mode=='book' else None)
+                          expected_event_id=event_id if args.mode=='book' else None)
         with ctx.conn:
             ctx.conn.execute('UPDATE scheduling_actions SET status=?, result=? WHERE key=?',
                              (status,json.dumps(result),key))

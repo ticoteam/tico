@@ -198,11 +198,12 @@ policy below. A Tico approval or an authorized person's in-chat “send it” ca
 **Who can OK** rule decides whose instruction counts. A numbered GitHub issue does not prove a Tico approver identity
 and no longer authorizes a send. Use a Tico send approval instead. The person's verified message still reaches the
 reviewer as their instruction. See docs/mail-service.md, “Per-message approval”.
-A Tico `send` approval (`hub approval request --kind send`) is
-for one exact text: put the `body_sha256` that `mail draft --json` returns in its payload. At send time the connector
-hashes the draft's text as it stands in Gmail (line ends and the space around the whole text don't count) and refuses a
-draft whose text differs, with "the draft changed after it was approved; ask for a new yes". A changed draft needs a
-new approval. With sending off in Tico a send needs a full per-message approval. The
+New email approvals are created by the frozen send queue. Use `mail send --draft <id>` or
+`POST /api/v2/email/sends`; a generic `POST /api/v2/approvals` with `kind=send` is refused.
+The card binds the complete MIME and exact To, Cc and Bcc, and approval requires loading its authorized preview.
+Only old-format approvals created before the queue migration retain their original text-bound recipient scope.
+Finance also queues its exact invoice email for this preview; approving the finance action does not approve unseen MIME.
+The
 daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
 to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
 Tico holds, what bot.yaml asks, and which policy it is reading.
@@ -746,13 +747,13 @@ policy: company admins, an inbox's person/admin, or a bot's manager for that bot
 change these settings for them.
 
 The default always-ask rules cover a new correspondent, attachments, more than ten recipients, and legal or money
-matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person, even when the legal/money prompt is off. CSS-dependent, conditional or unsupported HTML needs review; its full frozen source is shown as inert text. This is triage, not a
+matters. Inline and unnamed non-body MIME parts count as files. Decide reads all plain-text and sanitized HTML body representations; unavailable, incomplete or over-limit classification also asks a person, even when the legal/money prompt is off. Unsupported body alternatives or primary bodies, including text/enriched, always need review without a new parser, even when attachment prompts are off. CSS-dependent, conditional or unsupported HTML needs review; its full frozen source is shown as inert text. This is triage, not a
 security boundary. Read/write grants, Never, sender identity, content-bound approval and caps remain deterministic.
 The approval rule is configurable: bot managers (the default), inbox admins, or named people. Hash-bound approvals
 must match the content, subject, recipients and files. The approval card loads an authorized frozen body preview and links to the exact attachment bytes before enabling Approve. An in-chat “send it” must be an unambiguous affirmative instruction from an authorized person after they viewed the frozen send, and must name that send or reply to its approval message. Otherwise use the content-bound card. Changing content requires another send and approval.
 
 Allowed emails wait in SQLite for the company's undo window (two minutes by default). The connector rechecks access,
-policy, approval authority, aggregate daily caps and pacing before dispatch. Cancel works until dispatch; delivered
+policy, approval authority, aggregate daily caps and pacing before dispatch. Retained daily limits count the union of verified Sent history and queue attempts, de-duplicating their provider message ids. Cancel works until dispatch; delivered
 mail cannot be recalled. Pending sends recover across server/runner restarts. An uncertain provider result is
 **Unknown**, counted against caps and never automatically retried. An expired claim with no issued permit returns to Pending with a new fenced lease. Active, Sent and Unknown content and recipients deduplicate, including across MIME boundary and Message-ID changes. Retrying the same `operation_id` or HTTP idempotency key returns the same operation; a new intent may resend after a definite cancellation, block, failure or decline. Reply identity comes from MIME headers matched to synced history, so omitting caller metadata cannot bypass automatic-reply, bounce or repeated-reply guards. Delivery-status reports suppress previously attempted recipients; an inbox admin can
 inspect and remove a suppression through the API.
@@ -772,7 +773,7 @@ The v2 API exposes `/email/sending-policy`, `/email/inboxes/{mailbox}/sending-po
 The audit retains content/body hashes, recipients, attachment names/hashes, actor, policy decision, approval id,
 provider message id and delivery status. `/email/sends/{id}` supplies the authorized preview and `/email/sends/{id}/attachments/{part}` downloads frozen attachment bytes. MIME content is discarded after delivery or cancellation. Gmail sends the frozen raw MIME in a single request, with retries disabled; a source draft may remain in Gmail so a concurrent user edit is never deleted.
 
-Calendar creation is silent and checks inbox-level Never first. Invitations are frozen calendar attachments in the same queued email as their confirmation, so approval, undo and dispatch checks apply before any invitation is sent. Canceling a queued invitation leaves the silent calendar hold in place.
+Calendar creation is silent and checks inbox-level Never first. Invitations are frozen calendar attachments in the same queued email as their confirmation, so approval, undo and dispatch checks apply before any invitation is sent. Before freezing, the connector waits up to 15 polls for a generated conference link; if it is still unavailable it returns a retryable error and queues no invitation. The frozen invitation and visible body include the join URL, location and description. Canceling a queued invitation leaves the silent calendar hold in place. A verified canceled, blocked, declined or failed send releases the scheduling fence for a new intent; pending, sent and uncertain sends remain fenced. A rebooking checks other calendar conflicts and excludes only its unchanged canceled hold.
 
 **After upgrading.** Existing explicitly enabled bot recipient scopes and existing automation versions retain their
 previous authorization, marked **kept from before**. Existing legal inbox approvals stay approvals. New automation

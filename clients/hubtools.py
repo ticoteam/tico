@@ -5492,7 +5492,7 @@ def audit(api, args):
       "(that message's id). A decided send approval id works as --approve too.",
       {"kind": {"type": "string", "enum": list(APPROVAL_KINDS)},
        "payload": {"type": "object", "description": "The exact action, as the approvals policy describes. "
-                   "kind=send is to/cc/subject/body_sha256/mailbox. Skip this tool when the owner "
+                   "Email approvals come from mail send or POST /email/sends with frozen MIME; kind=send here is refused. When the owner "
                    "already said send; use mail send --approve <their-message-id>. A "
                    "proposal the hub applies on approval: task_cap {sender, receiver, per_day}, spend_limit "
                    "{bot | pool: company|group:<id>, per_30m_usd, daily_usd, weekly_usd, monthly_usd}."},

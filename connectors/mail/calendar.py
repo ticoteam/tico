@@ -14,6 +14,7 @@ The rules are not ours to soften (policies/shared-rules.md):
 from datetime import datetime, timedelta
 import hashlib
 import re
+import time
 
 from . import DEFAULT_TZ, Failure, zone
 from .gmail import gmail_hint
@@ -26,6 +27,12 @@ DEFAULT_DAYS = 7
 STEP_MINUTES = 15                                       # slots start on the quarter hour
 MAX_CALENDARS = 50
 MAX_EVENTS_PER_CALENDAR = 100
+
+
+class ConferencePending(Failure):
+    """No invitation has been frozen; the caller can retry conference preparation."""
+
+
 MEETING_URL = re.compile(
     r"https?://(?:meet\.google\.com|(?:[a-z0-9-]+\.)?zoom\.us|teams\.microsoft\.com|"
     r"(?:[a-z0-9-]+\.)?webex\.com)/[^\s<>\"]+", re.I)
@@ -66,7 +73,7 @@ class Calendar:
                 break
         return ids or ["primary"]
 
-    def busy(self, start, end, calendar_ids=None):
+    def busy(self, start, end, calendar_ids=None, exclude_hold=None):
         """[(start, end)] across every calendar, merged, in the mailbox's timezone."""
         ids = calendar_ids or self.calendar_ids()
         if not ids:
@@ -81,6 +88,9 @@ class Calendar:
             if data.get("groups") and any(g.get("errors") for g in data["groups"].values()):
                 raise Failure("A calendar group could not be checked.")
             for cid in batch:
+                if exclude_hold and cid in ("primary", self.mailbox):
+                    spans.extend(self.event_busy(cid, start, end, exclude_hold=exclude_hold))
+                    continue
                 result = calendars.get(cid)
                 if not isinstance(result, dict) or result.get("errors") or "busy" not in result:
                     spans.extend(self.event_busy(cid, start, end))
@@ -95,7 +105,7 @@ class Calendar:
                         raise Failure(f"Invalid busy interval returned for calendar {cid}.")
         return merge(spans)
 
-    def event_busy(self, calendar_id, start, end):
+    def event_busy(self, calendar_id, start, end, exclude_hold=None):
         """Some subscribed calendars lack freebusy support. Read their actual event instances.
 
         A failed fallback still raises; missing access never becomes an empty busy list.
@@ -123,6 +133,8 @@ class Calendar:
                         bounds.append(iso(value, zone(part.get("timeZone") or str(start.tzinfo))))
                     if bounds[0] >= bounds[1]:
                         raise ValueError("invalid event")
+                    if exclude_hold and event.get("id") == exclude_hold["id"] and tuple(bounds) == exclude_hold["bounds"]:
+                        continue
                     spans.append(tuple(bounds))
                 except (KeyError, TypeError, ValueError):
                     raise Failure(f"Invalid event interval in calendar {calendar_id}.")
@@ -189,8 +201,8 @@ class Calendar:
                 "attendees": [{"email": attendee}], "description": description,
                 "conferenceData": {"createRequest": {"requestId": event_id,
                     "conferenceSolutionKey": {"type": "hangoutsMeet"}}}}
-        return self._exec(self.service.events().insert(calendarId="primary", body=body,
-                            sendUpdates="none", conferenceDataVersion=1), "events.insert")
+        return self.ready_conference(self._exec(self.service.events().insert(calendarId="primary", body=body,
+                            sendUpdates="none", conferenceDataVersion=1), "events.insert"))
 
     def create_hub_event(self, start, end, summary, attendees, event_id, description="",
                          add_meet=True):
@@ -207,9 +219,22 @@ class Calendar:
             body["conferenceData"] = {"createRequest": {"requestId": event_id,
                 "conferenceSolutionKey": {"type": "hangoutsMeet"}}}
             kwargs["conferenceDataVersion"] = 1
-        return self._exec(self.service.events().insert(
+        event = self._exec(self.service.events().insert(
             calendarId="primary", body=body,
             sendUpdates="none", **kwargs), "events.insert")
+        return self.ready_conference(event) if add_meet else event
+
+    def ready_conference(self, event):
+        """Freeze invitations only after the asynchronous conference has a usable join URL."""
+        for attempt in range(16):
+            status = ((event.get("conferenceData") or {}).get("createRequest") or {}).get("status", {}).get("statusCode")
+            if status != "pending" and _meeting_url({"hangoutLink": event.get("hangoutLink"), "conferenceData": event.get("conferenceData")}):
+                return event
+            if attempt == 15 or status == "failure":
+                break
+            time.sleep(1)
+            event = self._exec(self.service.events().get(calendarId="primary", eventId=event["id"]), "events.get conference")
+        raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503)
 
     def get_event(self, event_id, calendar_id="primary"):
         """Get one normalized event by ID."""

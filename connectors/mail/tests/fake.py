@@ -413,6 +413,9 @@ class FakeCalendarService:
             if not (body or {}).get("id"):
                 self._next += 1
             ev = dict(body or {}, id=eid, sendUpdates=sendUpdates, **kwargs)
+            if ev.get("conferenceData"):
+                ev["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                ev["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
             self.created_events[eid] = ev
             self.events_by_calendar.setdefault(calendarId, []).append(ev)
             return ev

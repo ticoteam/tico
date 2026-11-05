@@ -74,7 +74,7 @@ def body_parts(msg):
     if msg.get_content_disposition() == "attachment" or msg.get_filename():
         return []
     if not msg.is_multipart():
-        return [msg] if msg.get_content_type() in ("text/plain", "text/html") else []
+        return [msg]
     children = list(msg.iter_parts())
     if msg.get_content_subtype() == "alternative":
         return [part for child in children for part in body_parts(child)]
@@ -120,11 +120,24 @@ def snapshot(raw, mailbox):
                     raise ValueError("Ambiguous MIME header")
             payload = part_bytes(part)
             is_body = any(part is body for body in bodies)
-            if not is_body:
+            supported = part.get_content_type() in ("text/plain", "text/html")
+            unsupported_body = not supported and (is_body or (part.get_content_maintype() == "text"
+                and not part.get_filename() and part.get_content_disposition() != "attachment"))
+            if unsupported_body:
+                complete = False
+            if not is_body or not supported:
                 name = str(part.get_filename() or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin"))[:255]
                 files.append({"name": name, "sha256": digest(payload), "size": len(payload),
                               "type": part.get_content_type(), "part": index})
-                if part.get_content_type() not in ("text/plain", "text/html") or part.get_content_disposition() == "attachment" or part.get_filename():
+                if not supported:
+                    if unsupported_body and part.get_content_maintype() == "text":
+                        try:
+                            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                        except LookupError:
+                            text = payload.decode("utf-8", errors="replace")
+                        visible.append({"type": part.get_content_type(), "text": text})
+                    continue
+                if part.get_content_disposition() == "attachment" or part.get_filename():
                     continue
             try:
                 text = payload.decode(part.get_content_charset() or "utf-8", errors="strict")

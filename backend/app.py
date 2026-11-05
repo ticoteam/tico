@@ -5753,6 +5753,8 @@ def create_app(settings=None):
     @app.post("/api/v2/approvals")
     def approval_request(request: Request, body: M.ApprovalCreate):
         who = request.state.identity
+        if body.kind == "send":
+            raise Problem("email_send", "Email approvals come from the frozen send queue; submit the email to /api/v2/email/sends", 422)
         if body.kind == "support":
             from .support import require_on
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)

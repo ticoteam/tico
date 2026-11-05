@@ -1536,10 +1536,7 @@ def attach_to_task(ctx, task_id, draft_id, attachments):
 
 
 def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None, task_id=""):
-    """An optional Tico send approval request for a draft with files: the existing `send` payload
-    plus this draft's id and each file's name, size and sha256, which the send checks again.
-    `file_ids` ({sha256: Tico file id}) adds a `file_id` to the files that are on the task, so the
-    approval card can open them; the send never compares it."""
+    """A draft summary and command that enters the frozen send queue; metadata alone never requests approval."""
     file_ids = file_ids or {}
     payload = {"to": list(to), "cc": list(cc), "subject": subject,
                "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
@@ -1548,9 +1545,7 @@ def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None,
                                 **({"file_id": file_ids[a["sha256"]]} if a["sha256"] in file_ids
                                    else {})}
                                for a in files]}
-    task = f" --task {task_id}" if task_id else ""
-    command = ("hub approval request --kind send --payload "
-               + shlex.quote(json.dumps(payload, sort_keys=True)) + task)
+    command = ("mail send --as " + shlex.quote(ctx.slug) + " --draft " + shlex.quote(draft_id))
     lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
              f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
     lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})"

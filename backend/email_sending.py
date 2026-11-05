@@ -219,6 +219,13 @@ def approved(c, auth, row, policy):
     ap = H.approval(c, aid)
     if ap:
         payload = ap.get("payload") or {}
+        cutover = c.execute("SELECT applied_at FROM schema_migrations WHERE version=?",
+                            ("20261105040656_email_sending_queue",)).fetchone()
+        legacy = (not payload.get("email_send_id") and cutover and ap.get("created_at")
+                  and H.parse_ts(ap["created_at"]) < H.parse_ts(cutover[0]))
+        if not legacy and (payload.get("email_send_id") != row["id"]
+                           or payload.get("content_sha256") != row["content_sha256"]):
+            return False
         if (ap.get("kind") != "send" or ap.get("decision") != "approved" or ap.get("consumed_at")
                 or ap.get("requested_by_id") != row["actor"]
                 or not can_ok(c, auth, ap.get("decided_by_id"), row["mailbox"], row["bot"], policy)):
@@ -235,7 +242,7 @@ def approved(c, auth, row, policy):
         if recipients != set(json.loads(row["recipients"])):
             domains = access.company_domains(c)
             external = lambda values: {a for a in values if not domains or not access.inside(a, domains)}
-            if payload.get("content_sha256") or external(recipients) != external(json.loads(row["recipients"])):
+            if not legacy or payload.get("content_sha256") or external(recipients) != external(json.loads(row["recipients"])):
                 return False
         if payload.get("subject") != row["subject"]:
             return False
@@ -348,11 +355,14 @@ def registry_restrictions(c, auth, row, approved_send, *, dispatch=False):
                          (row["mailbox"], row["id"])).fetchall()
         local_now = H.parse_ts(H.now()).astimezone(zone(DEFAULT_TZ))
         day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        own_count = sum(item["actor"] == row["actor"] and H.parse_ts(item["provider_attempted_at"] or item["claimed_at"] or item["created_at"]).astimezone(zone(DEFAULT_TZ)).date() == local_now.date() for item in sent)
-        historical_count = c.execute("SELECT count(*) FROM mail_messages WHERE mailbox=? AND lower(from_addr)=? "
+        historical = {item[0] for item in c.execute("SELECT msg_id FROM mail_messages WHERE mailbox=? AND lower(from_addr)=? "
                                      "AND deleted_at IS NULL AND epoch>=? AND EXISTS (SELECT 1 FROM json_each(labels) WHERE value='SENT')",
-                                     (row["mailbox"], row["mailbox"], day_start)).fetchone()[0]
-        if dispatch and max(own_count, historical_count) >= caps["max_sends_per_day"]:
+                                     (row["mailbox"], row["mailbox"], day_start))}
+        # Sync can lag dispatch: neither set contains the other. Provider ids identify their overlap.
+        attempts = {item["provider_message_id"] or "queue:" + item["id"] for item in sent
+                    if item["actor"] == row["actor"] and H.parse_ts(item["provider_attempted_at"] or item["claimed_at"]
+                    or item["created_at"]).astimezone(zone(DEFAULT_TZ)).date() == local_now.date()}
+        if dispatch and len(historical | attempts) >= caps["max_sends_per_day"]:
             reasons.append("registry_daily_cap")
         if not approved_send and any((item["provider_attempted_at"] or item["claimed_at"] or item["created_at"]) > H.shift(H.now(), days=-caps["per_recipient_cooldown_days"])
                 and set(json.loads(item["recipients"])) & set(recipients) for item in sent):
@@ -526,8 +536,9 @@ def settle_automation(c, row, state, detail="", message=""):
                      {"ok": state == "sent", "message": message, "detail": detail or state})
 
 
-def request_approval(c, auth, row, policy):
-    payload = {"to": json.loads(row["recipients"]), "cc": [], "mailbox": row["mailbox"], "subject": row["subject"],
+def request_approval(c, auth, row, policy, metadata=None):
+    groups = snapshot(row["raw"], row["mailbox"])["recipient_headers"]
+    payload = {**(metadata or {}), **groups, "mailbox": row["mailbox"], "subject": row["subject"],
                "body_sha256": row["body_sha256"], "content_sha256": row["content_sha256"],
                "attachments": json.loads(row["attachments"]), "email_send_id": row["id"],
                "preview_url": "/api/v2/email/sends/" + row["id"]}
@@ -535,7 +546,7 @@ def request_approval(c, auth, row, policy):
     c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (approval["id"], row["id"]))
 
 
-def enqueue(c, auth, actor, body, classification, via="", operation_key=""):
+def enqueue(c, auth, actor, body, classification, via="", operation_key="", approval_metadata=None):
     mailbox = body.mailbox.strip().lower()
     if body.approval_id.isdigit():
         classification = {**classification, "legacy_github_approval": body.approval_id}
@@ -585,7 +596,7 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key=""):
         c.execute("INSERT INTO email_send_operations VALUES(?,?,?)", (actor, operation_key, ident))
     if row["state"] == "waiting_approval" and not found["approved"]:
         # Only a content-bound card or an instruction after a verified preview can release this snapshot.
-        request_approval(c, auth, row, found["policy"])
+        request_approval(c, auth, row, found["policy"], approval_metadata)
     if classification.get("status") == "classified":
         H.event(c, actor, "judge.call", "email.sending", {"label": "email.sending", "questions": 1,
                                                           **classification})

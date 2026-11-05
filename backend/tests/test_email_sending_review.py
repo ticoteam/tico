@@ -6,6 +6,7 @@ import sqlite3
 from contextlib import closing
 from email.message import EmailMessage
 from unittest import mock
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -19,6 +20,129 @@ from backend.tests.test_email_sending import (BOX, CONTACT, H, S, approved, auto
 
 def raw(message):
     return base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+
+@pytest.mark.parametrize("form", ["alternative", "inline_text", "primary_text", "primary_unknown"])
+@pytest.mark.parametrize("legal_prompt", [True, False])
+def test_unsupported_recipient_visible_bodies_always_ask(inbox, form, legal_prompt):
+    autonomous(inbox, ask_attachments=False, ask_legal_money=legal_prompt)
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = BOX, CONTACT, "Alternative body"
+    message.set_content("Thanks for the update.")
+    commitment = "<bold>We accept the contract and agree to pay $100000.</bold>"
+    if form == "alternative":
+        message.add_alternative(commitment, subtype="enriched")
+    elif form == "inline_text":
+        message.make_mixed()
+        part = EmailMessage()
+        part.set_content(commitment, subtype="enriched")
+        part["Content-Disposition"] = "inline"
+        message.attach(part)
+    elif form == "primary_text":
+        message.set_content(commitment, subtype="enriched")
+    else:
+        message.set_content(commitment.encode(), maintype="application", subtype="x-body")
+    snap = S.snapshot(raw(message), BOX)
+    assert snap["classification_complete"] is False
+    with mock.patch.object(judge, "server_engine", return_value=object()), mock.patch.object(judge, "ask") as ask:
+        response = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
+    ask.assert_not_called()
+    assert response["classification"]["legal_or_money"] is None
+    assert response["state"] == "waiting_approval"
+    preview = inbox.get("/api/v2/email/sends/" + response["id"], headers=headers()).json()
+    assert preview["preview_complete"] and preview["send"]["attachments"]
+
+
+def test_new_old_format_approval_cannot_authorize_an_added_internal_bcc(inbox):
+    _, _, attempt = setup_attempt(inbox, "ops")
+    original = mime(to=["ben@acme.example"], body="Sensitive legal reply")
+    snap = S.snapshot(original, BOX)
+    payload = {"mailbox": BOX, "to": ["ben@acme.example"], "cc": [], "subject": snap["subject"],
+               "body_sha256": snap["body_sha256"], "attachments": []}
+    refused = inbox.post("/api/v2/approvals", json={"kind": "send", "payload": payload}, headers=headers(attempt["token"]))
+    assert refused.status_code == 422 and "/api/v2/email/sends" in refused.text
+    with inbox.app.state.store.transaction() as c:
+        approval = H.approval_request(c, "bot:ops", "send", payload, to="human:ana")
+        H.approval_decide(c, "human:ana", approval["id"], "approved")
+    from backend.email_content import parsed
+    expanded = parsed(original)
+    expanded["Bcc"] = "cara@acme.example"
+    queued = queue(inbox, actor="bot:ops", raw=raw(expanded), approval_id=approval["id"])
+    assert queued["state"] == "waiting_approval" and not queued["decision"]["approved"]
+    card = api_post(inbox, "approvals/" + queued["approval_id"], {"decision": "approved"}, expected=409)
+    assert "preview" in str(card)
+    approved(inbox, queued)
+    with inbox.app.state.store.read() as c:
+        payload = H.approval(c, queued["approval_id"])["payload"]
+    assert payload["to"] == ["ben@acme.example"] and payload["cc"] == [] and payload["bcc"] == ["cara@acme.example"]
+    # A claimed queue id cannot make the public endpoint a second approval creator.
+    assert inbox.post("/api/v2/approvals", json={"kind": "send", "payload": payload}, headers=headers(attempt["token"])).status_code == 422
+
+
+def test_only_approvals_that_predate_queue_cutover_keep_the_old_recipient_scope(inbox):
+    original = S.snapshot(mime(to=["ben@acme.example"]), BOX)
+    with inbox.app.state.store.transaction() as c:
+        approval = H.approval_request(c, "bot:ops", "send", {"mailbox": BOX, "to": ["ben@acme.example"],
+            "cc": [], "subject": original["subject"], "body_sha256": original["body_sha256"]}, to="human:ana")
+        H.approval_decide(c, "human:ana", approval["id"], "approved")
+        cutover = c.execute("SELECT applied_at FROM schema_migrations WHERE version='20261105040656_email_sending_queue'").fetchone()[0]
+        c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(cutover, seconds=-1), approval["id"]))
+    queued = queue(inbox, actor="bot:ops", raw=mime(to=["ben@acme.example"], Bcc="cara@acme.example"), approval_id=approval["id"])
+    assert queued["decision"]["approved"] and queued["state"] == "pending"
+
+
+@pytest.mark.parametrize("synced,cap,allowed", [(False, 2, False), (True, 2, False), (True, 3, True)])
+def test_retained_daily_cap_counts_the_union_of_history_and_queue(inbox, synced, cap, allowed):
+    autonomous(inbox)
+    registry(inbox, defaults={"max_sends_per_day": cap, "per_recipient_cooldown_days": 0})
+    with inbox.app.state.store.transaction() as c:
+        incoming(c, sender=BOX, mid="pre-cutover")
+        c.execute("UPDATE mail_messages SET labels='[\"SENT\"]',epoch=? WHERE msg_id='pre-cutover'", (H.parse_ts(H.now()).timestamp(),))
+    first = queue(inbox, raw=mime(body="First new send"))
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])["id"] == first["id"]
+    assert post(inbox, "connectors/email/sends/" + first["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
+    post(inbox, "connectors/email/sends/" + first["id"] + "/result", {"status": "sent", "message": "new-provider"}, token=machine["token"])
+    if synced:
+        with inbox.app.state.store.transaction() as c:
+            incoming(c, sender=BOX, mid="new-provider")
+            c.execute("UPDATE mail_messages SET labels='[\"SENT\"]',epoch=? WHERE msg_id='new-provider'", (H.parse_ts(H.now()).timestamp(),))
+    third = queue(inbox, raw=mime(body="Third overall send"))
+    leased = claim(inbox, machine["token"])
+    assert bool(leased) is allowed
+    if leased:
+        assert leased["id"] == third["id"]
+        assert post(inbox, "connectors/email/sends/" + third["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
+
+
+def test_standing_booking_cancel_reconciles_and_queues_a_new_intent(inbox):
+    from contextlib import nullcontext
+    from connectors.mail import __main__ as cli, scheduling
+    message = {"id": "inbound", "from": CONTACT, "to": [BOX], "cc": [], "labels": [], "epoch": 1,
+               "subject": "Meeting", "headers": {"message-id": "<inbound@vendor.example>"}}
+    args = SimpleNamespace(thread="thread", category="influencer", bd_confirmation="", mode="book",
+                           slot="2030-01-08T10:00:00-08:00", acceptance_message="inbound")
+    with closing(sqlite3.connect(":memory:")) as connection:
+        calendar = mock.MagicMock()
+        calendar.create_scheduling_event.side_effect = lambda start, end, attendee, event_id, *rest: {"id": event_id, "hangoutLink": "https://meet.google.com/abc-defg-hij"}
+        ctx = SimpleNamespace(conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock(),
+                              policy={"defaults": {"max_sends_per_day": 20}})
+        def submit(mailbox, raw, thread_id, reply_id):
+            return queue(inbox, actor="bot:ops", raw=raw, thread_id=thread_id, reply_to_id=reply_id)
+        def read(path):
+            response = inbox.get("/api/v2/" + path, headers=headers())
+            assert response.status_code == 200, response.text
+            return response.json()
+        with mock.patch.object(cli, "thread_context", return_value=([message], "", "", "", [])), \
+                mock.patch.object(scheduling, "permission"), mock.patch.object(scheduling, "review_thread", return_value={}), \
+                mock.patch.object(scheduling, "check_free"), mock.patch.object(scheduling, "mailbox_lock", side_effect=lambda _: nullcontext()), \
+                mock.patch.object(scheduling.pl, "queue_send", side_effect=submit), mock.patch.object(scheduling.pl, "HUB_GET", side_effect=read):
+            first = scheduling.run(ctx, args)
+            post(inbox, "email/sends/" + first["send_id"] + "/cancel", {})
+            second = scheduling.run(ctx, args)
+            assert second["queued"] and second["send_id"] != first["send_id"] and second["state"] == "waiting_approval"
+            assert connection.execute("SELECT count(*) FROM scheduling_actions WHERE status='canceled'").fetchone()[0] == 1
+            assert scheduling.run(ctx, args)["send_id"] == second["send_id"]
 
 
 def test_negative_chat_cannot_approve_a_different_large_send_through_the_api(inbox):

@@ -12,6 +12,7 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import hubdb as H
+from backend import mailbox_access as MA
 from backend.finance import actions as FA
 from backend.finance import delivery
 from backend.finance import jobs
@@ -32,6 +33,9 @@ LATER = "2026-10-16T13:00:00.000000Z"
 def _mailbox(c, can=("read", "send"), box=BOX) -> None:
     tools = [{"service": "gmail", "identity": box, "can": list(can)}]
     BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
+    row = MA.ensure_mailbox(c, box, kind="shared", created_by=OWNER)
+    MA.grant(c, OWNER, row["id"], "bot", "bookkeeper", "read_write" if "send" in can else "read")
+    MA.grant(c, OWNER, row["id"], "person", "ana", "read_write")
 
 
 def _customer(c, emails=(EMAIL,)) -> str:
@@ -92,14 +96,17 @@ def test_a_bots_reminder_asks_a_person_and_records_nothing_until_they_say_yes(bo
         assert c.execute("SELECT COUNT(*) FROM fin_invoice_reminders").fetchone()[0] == 0
 
 
-def test_a_person_yes_records_the_reminder_and_issues_a_send_approval_for_its_exact_text(books):
+def test_finance_yes_records_the_reminder_but_the_frozen_email_still_needs_its_own_preview(books):
     with books.transaction() as c:
         iid, send_id, text = _approved_reminder(c)
         appr = H.approval(c, send_id)
-        assert appr["kind"] == "send" and appr["decision"] == "approved" and appr["decided_by_id"] == OWNER, appr
+        assert appr["kind"] == "send" and appr["decision"] is None, appr
         payload = appr["payload"]
         assert payload["to"] == [EMAIL] and payload["cc"] == [] and payload["mailbox"] == BOX, payload
         assert payload["body_sha256"] == delivery.digest(text)
+        queued = c.execute("SELECT * FROM email_sends WHERE id=?", (payload["email_send_id"],)).fetchone()
+        assert queued["state"] == "waiting_approval" and payload["content_sha256"] == queued["content_sha256"]
+        assert payload["bcc"] == [] and not c.execute("SELECT * FROM email_send_previews").fetchone()
         assert c.execute("SELECT send_approval_id FROM fin_invoice_reminders WHERE invoice_id=?",
                          (iid,)).fetchone()[0] == send_id
 
@@ -107,6 +114,7 @@ def test_a_person_yes_records_the_reminder_and_issues_a_send_approval_for_its_ex
 def test_the_mail_connector_sends_the_exact_text_to_the_exact_recipients_and_nothing_else(books, monkeypatch):
     with books.transaction() as c:
         _iid, send_id, text = _approved_reminder(c)
+        H.approval_decide(c, OWNER, send_id, "approved")
         _mail_reads(c, monkeypatch)
         exact = pl.approval_check(send_id, [EMAIL], [], "", slug="bookkeeper", body=text)
         assert exact["full"] is True, exact

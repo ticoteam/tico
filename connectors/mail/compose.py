@@ -31,14 +31,43 @@ def with_invitation(raw, event, mailbox, attendees, start, end, summary):
         return str(value).replace("\\", "\\\\").replace("\r", "").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
     def stamp(value):
         return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    from .calendar import _meeting_url
+    join = _meeting_url(event)
+    points = (event.get("conferenceData") or {}).get("entryPoints") or []
+    conference = [str(point["uri"]).replace("\r", "").replace("\n", "") for point in points if point.get("uri")]
+    description = "\n".join(filter(None, [event.get("description"), "Join: " + join if join else "", *conference]))
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Tico//Calendar//EN", "METHOD:REQUEST", "BEGIN:VEVENT",
              "UID:" + text(event.get("iCalUID") or str(event["id"]) + "@google.com"), "SEQUENCE:0",
              "DTSTAMP:" + stamp(start), "DTSTART:" + stamp(start), "DTEND:" + stamp(end),
              "SUMMARY:" + text(summary), "ORGANIZER:mailto:" + mailbox]
+    if join:
+        lines += ["URL:" + join]
+    if event.get("location"):
+        lines += ["LOCATION:" + text(event["location"])]
+    if description:
+        lines += ["DESCRIPTION:" + text(description)]
+    lines += ["CONFERENCE;VALUE=URI:" + uri for uri in dict.fromkeys([join, *conference]) if uri]
     lines += ["ATTENDEE;RSVP=TRUE:mailto:" + address for address in attendees]
     lines += ["END:VEVENT", "END:VCALENDAR", ""]
     msg = BytesParser(policy=policy.SMTP).parsebytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
-    msg.add_attachment("\r\n".join(lines), subtype="calendar", filename="invitation.ics", params={"method": "REQUEST"})
+    details = "\n".join(filter(None, ["Join: " + join if join else "",
+        "Location: " + str(event["location"]) if event.get("location") else "",
+        str(event.get("description") or "")]))
+    if details:
+        body = msg.get_body(preferencelist=("plain",))
+        if body is None:
+            raise ValueError("An invitation needs a visible plain-text body")
+        body.set_content(body.get_content().rstrip() + "\n\n" + details + "\n")
+    folded = []
+    for line in lines:
+        current = ""
+        for character in line:
+            if len((current + character).encode()) > 75:
+                folded.append(current)
+                current = " "
+            current += character
+        folded.append(current)
+    msg.add_attachment("\r\n".join(folded), subtype="calendar", filename="invitation.ics", params={"method": "REQUEST"})
     return base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
 RE_PREFIX = re.compile(r"(?i)^\s*(re\s*:\s*)+")
