@@ -1168,10 +1168,12 @@ class Files:
         return cache[task_id]
 
     def view(self, c, who, row, caches):
-        version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
-                            (row["id"], row["current_version"])).fetchone()
-        last = c.execute("SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
-                         (row["id"],)).fetchone()
+        version = (caches["versions"].get(row["id"]) if "versions" in caches else
+                   c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
+                             (row["id"], row["current_version"])).fetchone())
+        last = (caches["activity"].get(row["id"]) if "activity" in caches else
+                c.execute("SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
+                          (row["id"],)).fetchone())
         link = row["locator"] == "remote_link"
         synced = row["state"] == "ready" and (link or version is not None)
         provider = row["provider"] or ""
@@ -1226,6 +1228,16 @@ class Files:
                     raise Problem("validation", "That cursor is not valid", 422) from exc
                 start = next((i for i, r in enumerate(rows) if (r["last_activity_at"], r["id"]) < (stamp, ident)), len(rows))
             page = rows[start:start + limit]
+            # Display metadata is read together after visibility and pagination; the guards still decide each file.
+            caches.update(versions={}, activity={})
+            for part in H.chunks([r["id"] for r in page]):
+                marks = ",".join("?" * len(part))
+                caches["versions"].update((v["file_id"], v) for v in c.execute(
+                    "SELECT v.* FROM bot_file_versions v JOIN bot_files f "
+                    "ON f.id=v.file_id AND f.current_version=v.version WHERE v.file_id IN (" + marks + ")", part))
+                caches["activity"].update((a["file_id"], a) for a in c.execute(
+                    "SELECT * FROM bot_file_activity WHERE id IN (SELECT max(id) FROM bot_file_activity "
+                    "WHERE file_id IN (" + marks + ") GROUP BY file_id)", part))
             more = start + limit < len(rows)
             nxt = (base64.urlsafe_b64encode(f"{page[-1]['last_activity_at']}|{page[-1]['id']}".encode()).decode()
                    if more and page else None)
