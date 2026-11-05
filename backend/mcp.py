@@ -192,7 +192,7 @@ def caller_kind(auth, who):
     Counsel is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
     `Identity.agent`, `Identity.via`."""
     from . import hubdb as H
-    if who.attempt_id:
+    if getattr(who, "attempt_id", ""):
         from . import turn_scope
         with auth.store.read() as c:
             scoped = turn_scope.scope(c, who)
