@@ -265,6 +265,8 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       await pane.locator('[data-pm-letter="pm_2"]').waitFor();
       await pane.locator('[data-pm-intake-select]').waitFor();
+      await pane.locator('[data-pm-legal]').waitFor();
+      await pane.locator('[data-pm-grants]', {hasText: 'No grants'}).waitFor();
       assert.ok(await noSideways(page), 'Mail fits a phone');
       await shot(page, 'phone');
       await pane.locator('[data-pm-order]').click();

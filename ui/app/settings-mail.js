@@ -88,6 +88,7 @@ async function pmAccess(run) {
     let generation = 0;
     const showGrants = async (after = '', append = false) => {
       const current = ++generation, address = scope.value;
+      if (!append) host.querySelector('[data-pm-grants]').textContent = 'Loading…';
       try {
         const d = await get(`/v2/postal/addresses/${encodeURIComponent(address)}/grants?limit=50${after ? '&after=' + encodeURIComponent(after) : ''}`, {fresh: true});
         if (run !== PM.run || generation !== current || scope.value !== address) return;
