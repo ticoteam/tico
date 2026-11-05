@@ -190,9 +190,13 @@ WIDE_GAP_NOT_RUNS = [
     "Run writing production acceptance tests",
 ]
 # Review 1 (PR 2599): a change verb in the gap is work on the acceptance tests, not a run, at either scope.
-CHANGE_VERB_NOT_RUNS = [
-    "Finish changing production acceptance tests", "Run changing production acceptance tests",
-    "Verify and modify production acceptance tests", "Complete fixing production acceptance tests",
+# Each verb the gap rejects in Review 1 fixes, in its base and -ing form, so removing any one from the gap fails a test.
+GAP_VERBS_ADDED = ["change", "edit", "modify", "fix", "remove", "delete", "rewrite", "revise", "extend", "refactor"]
+GAP_VERB_FORMS = [form for verb in GAP_VERBS_ADDED
+                  for form in (verb, verb[:-1] + "ing" if verb.endswith("e") else verb + "ing")]
+CHANGE_VERB_NOT_RUNS = [f"Finish {form} production acceptance tests" for form in GAP_VERB_FORMS] + [
+    "Run changing production acceptance tests", "Verify and modify production acceptance tests",
+    "Complete fixing production acceptance tests",
 ]
 
 
