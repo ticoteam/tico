@@ -65,7 +65,7 @@ def test_department_membership_defaults_and_server_permissions(api):
     post(api, 'task-rules', {'department': 'Web'}, expected=422)
     post(api, 'task-rules', {'department': 'engineering', 'actions': ['delete']}, expected=422)
     put(api, 'task-rules/' + created['key'], {'triggers': [{'key': 'done_untouched', 'hours': 0}]}, expected=422)
-    put(api, 'system-routines/health_scan', {'on': True}, token='cara-test', expected=403)
+    put(api, 'system-routines/kpi_asks', {'on': True}, token='cara-test', expected=403)
 
 
 def test_full_wait_one_history_note_and_reopen_undo(api, monkeypatch):

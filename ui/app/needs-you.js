@@ -214,6 +214,7 @@ function approvalTitle(it) {
   if (it?.kind !== 'approval') return it?.title || '';
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
+  if (it.what === 'mail_alert') return `Mail sending: ${approvalWho(p.bot)}`;
   return it.title || '';
 }
 function approvalFacts(what, p, it = {}) {
@@ -248,6 +249,11 @@ function approvalFacts(what, p, it = {}) {
     rows = [['For', p.pool ? shown(p.pool) : approvalWho(p.bot)], ['30 min', approvalUsd(p.per_30m_usd)], ['Day', approvalUsd(p.daily_usd)],
       ['Week', approvalUsd(p.weekly_usd)], ['Month', approvalUsd(p.monthly_usd)]];
     named = ['bot', 'pool', 'per_30m_usd', 'daily_usd', 'weekly_usd', 'monthly_usd'];
+  } else if (what === 'mail_alert') {
+    // A bot's mail sending, as it asks for it now (backend/maintenance_steps/check_health.py _mail_payload). Approving turns it on.
+    rows = [['Bot', approvalWho(p.bot)], ['Sends mail', p.outbound_send ? 'Yes' : 'No'],
+      ['Forward to', Array.isArray(p.forward_to) && p.forward_to.length ? p.forward_to.map(String).join(', ') : 'Nobody']];
+    named = ['bot', 'outbound_send', 'forward_to'];
   } else if (what === 'finance') {
     // A Finance action waiting on this person (backend/finance/actions.py): its summary, and for a budget change that
     // needs room above it, which budget is raised and to what (backend/finance/handlers.py _raise_note).

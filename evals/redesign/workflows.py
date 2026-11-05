@@ -1281,7 +1281,7 @@ def wf7_steps(org, f):
     # startup with nobody yet to own it; the automations tick (the Org's first, then this one) catches up for Dana.
     at(org, org.now() + dt.timedelta(minutes=2))
     do(org, f, "health", W5, builtin_health, org)
-    do(org, f, "monitor", W5, org.api, "get", "/api/v2/health-monitor", who=DANA, wave=W5)
+    do(org, f, "monitor", W5, org.api, "get", "/api/v2/health/findings", who=DANA, wave=W5)
     # The run guard trips on its own (backend/turn_budgets.py): WF9's loop from one seed task. Its held notices are the
     # hub's (CONTRACT section 1). Health's event path is a later PR (CONTRACT section 6).
     do(org, f, "budget", W2, wf9_budget, org)
