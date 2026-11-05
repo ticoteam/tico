@@ -18,7 +18,7 @@ const path = require('node:path');
     await page.goto('http://recorder.example/preview/index.html?scene=library');
     await page.evaluate(() => {
       const a = window.__PREVIEW__.state.meetings.m1.actions;
-      a.saved = true; a.actor = 'human:dana';
+      a.saved = true; a.actor = 'human:dana'; a.shared_url='https://app.acme.example';
       a.shared = {can_send:true, audience:['human:sam','human:dana'],
         presence:{actors:[{actor:'human:sam',name:'Sam'}]},
         sections:{task:[{version:1,id:'shared-1',section:'task',text:'Draft',status:'proposed',detail:{owner:'human:sam',body:'Details'}}]}};
@@ -36,7 +36,7 @@ const path = require('node:path');
         item.version++;
         if (args.body.text !== undefined) item.text=args.body.text;
         Object.assign(item.detail,args.body.detail || {});
-        if (args.action === 'send') { item.status='pushed'; f.sent=structuredClone(item); }
+        if (args.action === 'send') { item.status='pushed'; item.result_ref='created-task'; f.sent=structuredClone(item); }
         return {item:structuredClone(item)};
       };
     });
@@ -79,6 +79,7 @@ const path = require('node:path');
     assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved before Send');
     assert.match(await page.evaluate(()=>window.pendingFixture.sent.detail.due),/^2026-12-01T.*Z$/);
     assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
+    assert.equal(await page.getByRole('button',{name:'Open',exact:true}).getAttribute('data-url'),'https://app.acme.example/#/task/created-task');
     await page.evaluate(() => {
       const a=window.pendingFixture.a;
       a.shared.sections.task[0].status='proposed';
