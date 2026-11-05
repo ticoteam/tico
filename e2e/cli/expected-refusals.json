@@ -36,6 +36,7 @@
  "db": "credential",
  "decision outcome": "not_found",
  "doc ask": "librarian_off",
+ "email inbox": "forbidden",
  "file approved": "not_found",
  "file link": "not_found",
  "file list": "not_found",
