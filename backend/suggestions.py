@@ -166,7 +166,7 @@ def _post(secret, base, path, payload, *, decode=True):
     """A bounded response and fixed error messages keep remote text and bearer keys out of step details."""
     try:
         with httpx.Client(transport=TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False) as client:
-            with client.stream("POST", base + path, headers={"Authorization": "Bearer " + secret}, json=payload) as reply:
+            with client.stream("POST", base + path, headers={"Authorization": "Bearer " + secret, "User-Agent": G.user_agent()}, json=payload) as reply:
                 if not 200 <= reply.status_code < 300:
                     raise GatewayError(f"Gateway returned HTTP {reply.status_code}")
                 data = bytearray()

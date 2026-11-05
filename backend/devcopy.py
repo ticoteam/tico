@@ -41,6 +41,7 @@ EMPTY = (
     "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
+    "suggestions",   # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
     "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those

@@ -76,6 +76,7 @@ def http(install, monkeypatch):
     def handle(request):
         assert not writing, "HTTP must run outside every write transaction"
         assert request.headers["authorization"] == "Bearer install-test-key"
+        assert request.headers["user-agent"].startswith("Tico-Client/")   # the edge refuses a library's default
         payload = json.loads(request.content)
         calls.append((request.url.path, payload))
         if state["status"] != 200:
