@@ -88,6 +88,54 @@ const scenarios = {
     await page.close();
   },
 
+  'a Mailboxes read from before a permission save cannot replace the controls during or after it': async browser => {
+    for (const finishRead of ['during', 'after']) {
+      const fake = mailboxesFake(), google = googleFake();
+      const {page, seen} = await open(browser, fake, google, {ready: ADMIN_READY});
+      const card = page.locator('#mailboxes-may');
+      const calendar = await card.locator('[data-google-may=change_calendar]').elementHandle();
+      let readStarted, saveStarted;
+      const reading = new Promise(resolve => { readStarted = resolve; });
+      const saving = new Promise(resolve => { saveStarted = resolve; });
+      await page.route('**/api/v2/mailboxes', route => readStarted(route));
+      await page.route('**/api/v2/google/permissions', route => saveStarted(route));
+      await page.evaluate(() => { window.mailboxesRead = renderSettingsMailboxes(); });
+      const read = await reading;
+      const stale = fake.answer('/api/v2/mailboxes');
+      await card.locator('[data-google-may=change_calendar]').check();
+      const save = await saving;
+      const body = save.request().postDataJSON();
+      assert.deepEqual(body, {organize_mail: true, send_mail: false, change_calendar: true});
+      const controls = () => card.locator('[data-google-may]').evaluateAll(els =>
+        els.map(el => [el.dataset.googleMay, el.checked, el.disabled]));
+      const pending = [['organize_mail', true, true], ['send_mail', false, true], ['change_calendar', true, true]];
+      assert.deepEqual(await controls(), pending);
+      const finish = async () => {
+        await read.fulfill({contentType: 'application/json', body: JSON.stringify(stale)});
+        await page.evaluate(() => window.mailboxesRead);
+        assert.equal(await calendar.evaluate(el => el.isConnected), true, `${finishRead}: the clicked control stays mounted`);
+      };
+      if (finishRead === 'during') {
+        await finish();
+        assert.deepEqual(await controls(), pending, 'an old read cannot roll back or unlock a pending save');
+      }
+      await page.unroute('**/api/v2/mailboxes');
+      await page.evaluate(() => renderSettingsMailboxes());
+      assert.deepEqual(await controls(), pending, 'another render leaves the pending save alone');
+      assert.equal(await calendar.evaluate(el => el.isConnected), true);
+      const answer = google.answer('/api/v2/google/permissions', save.request().url(), 'PUT', body);
+      Object.assign(fake.may, {organize: true, send: false, change_calendar: true});
+      await save.fulfill({contentType: 'application/json', body: JSON.stringify(answer)});
+      await page.waitForFunction(() => [...document.querySelectorAll('#mailboxes-may [data-google-may]')].every(el => !el.disabled));
+      if (finishRead === 'after') await finish();
+      assert.deepEqual(await controls(), pending.map(([field, checked]) => [field, checked, false]));
+      await page.evaluate(() => renderSettingsMailboxes());
+      assert.deepEqual(await controls(), pending.map(([field, checked]) => [field, checked, false]), 'a fresh read shows the saved settings');
+      assert.deepEqual(seen.errors, []);
+      await page.close();
+    }
+  },
+
   'What Tico may do: Read always, each box saves all three together, a refusal puts the box back': async browser => {
     const fake = mailboxesFake(), google = googleFake();
     const {page, seen} = await open(browser, fake, google, {ready: ADMIN_READY});
@@ -96,20 +144,31 @@ const scenarios = {
     assert.equal(await card.locator('[data-google-may-read] input').count(), 0, 'Read has no box');
     const boxes = () => card.locator('[data-google-may]').evaluateAll(els => els.map(el => [el.dataset.googleMay, el.checked]));
     assert.deepEqual(await boxes(), [['organize_mail', true], ['send_mail', false], ['change_calendar', false]]);
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/v2/google/permissions') && response.request().method() === 'PUT');
     await card.locator('[data-google-may=change_calendar]').check();
-    const end = Date.now() + 5000;
-    while (!writesTo(google, '/api/v2/google/permissions', 'PUT').length && Date.now() < end) await page.waitForTimeout(50);
+    assert.equal((await saved).status(), 200);
     assert.deepEqual(writesTo(google, '/api/v2/google/permissions', 'PUT').map(w => w.body),
       [{organize_mail: true, send_mail: false, change_calendar: true}]);
     await page.waitForFunction(() => [...document.querySelectorAll('[data-google-may]')].every(el => !el.disabled));
-    // A refusal (this route, added last, answers before the fake): the box goes back to how it was.
-    await page.route('**/api/v2/google/permissions', route => route.fulfill({status: 403, contentType: 'application/json',
-      body: JSON.stringify({error: {code: 'forbidden', detail: 'Only an admin changes this', retryable: false}})}));
+    // Hold the refusal until check() has verified the optimistic state; rollback is asserted after the answer.
+    let refuse;
+    const refusal = new Promise(resolve => { refuse = resolve; });
+    await page.route('**/api/v2/google/permissions', async route => {
+      await refusal;
+      await route.fulfill({status: 403, contentType: 'application/json',
+        body: JSON.stringify({error: {code: 'forbidden', detail: 'Only an admin changes this', retryable: false}})});
+    });
+    const refused = page.waitForRequest(request => request.url().endsWith('/api/v2/google/permissions') && request.method() === 'PUT');
     await card.locator('[data-google-may=send_mail]').check();
+    assert.deepEqual((await refused).postDataJSON(), {organize_mail: true, send_mail: true, change_calendar: true});
+    assert.deepEqual(await boxes(), [['organize_mail', true], ['send_mail', true], ['change_calendar', true]]);
+    assert.equal(await card.locator('[data-google-may]:disabled').count(), 3, 'the boxes stay locked while the server has not answered');
+    refuse();
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-google-may=send_mail]');
       return el && !el.disabled && !el.checked;
     });
+    assert.deepEqual(await boxes(), [['organize_mail', true], ['send_mail', false], ['change_calendar', true]]);
     assert.deepEqual(seen.errors, []);
     await page.close();
   },
