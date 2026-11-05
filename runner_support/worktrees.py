@@ -321,13 +321,17 @@ def _recover_retired(base, default, link, task, env, client):
         return
     branch = checked_branch(link['branch'])
     if branch == recovery['branch']:
-        remote = remote_branch(base, branch, env)
-        if remote:
+        link.setdefault('task_id', task)
+        start = _saved_history(base, branch, link, env, remote_required=True)
+        if start:
             for published in recovery.get('published_heads') or [recovery.get('published_head')]:
                 if published and (not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published)
-                                  or git(base, 'merge-base', '--is-ancestor', published, remote, env=env, check=False).returncode):
+                                  or git(base, 'merge-base', '--is-ancestor', published, start, env=env, check=False).returncode):
                     raise ValueError('Origin no longer contains the last published head; kept local history unchanged')
-            fast_forward(base, branch, remote, env)
+            if start != 'refs/heads/' + branch:
+                fast_forward(base, branch, start, env)
+            if link.get('snapshot_skipped'):
+                client.patch(f'tasks/{task}/links/{link["link_id"]}', {'snapshot_skipped': link['snapshot_skipped']})
             return
         client.patch(f'tasks/{task}/links/{link["link_id"]}', {'recovery_branch_missing': True})
         link['branch'] = checked_branch(recovery['fallback_branch'])
@@ -786,6 +790,40 @@ def wip_branch(row):
     return 'wip/' + row['task_id'][:8] + '-' + (row.get('id') or row['link_id'])[:6]
 
 
+def _saved_history(base, branch, row, env, *, remote_required=False):
+    """Restore and recovery choose the newest saved head containing local and published task history."""
+    local = 'refs/heads/' + branch
+    if git(base, 'show-ref', '--verify', local, env=env, check=False).returncode:
+        local = None
+    try:
+        task_remote = remote_branch(base, branch, env)
+        saved = [ref for name in (wip_branch(row), 'wip/' + row['task_id'][:8])
+                 if (ref := remote_branch(base, name, env))]
+    except ValueError:
+        if remote_required or not local:
+            raise
+        row['restore_source'] = 'local (remote unavailable)'
+        return local
+    # A retired checkout's local branch alone does not prove its work was published.
+    if remote_required and not (task_remote or saved):
+        return None
+    required = [ref for ref in (local, task_remote) if ref]
+    start = None
+    for candidate in [*required, *saved]:
+        if any(git(base, 'merge-base', '--is-ancestor', floor, candidate, env=env, check=False).returncode
+               for floor in required):
+            continue
+        if start is None or git(base, 'merge-base', '--is-ancestor', start, candidate, env=env, check=False).returncode == 0:
+            start = candidate
+    if required and start is None:
+        raise ValueError('Task branch has separate history; kept worktree')
+    row.pop('snapshot_skipped', None)
+    for snapshot in saved:
+        if git(base, 'merge-base', '--is-ancestor', snapshot, start, env=env, check=False).returncode:
+            row['snapshot_skipped'] = snapshot
+    return start
+
+
 def remote_branch(base, branch, env):
     checked_branch(branch)
     listed = git(base, 'ls-remote', '--exit-code', 'origin', 'refs/heads/' + branch, env=env, check=False)
@@ -1162,24 +1200,9 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
     git(base, 'worktree', 'prune', '--expire', 'now', env=env)
     isolation.mkdir(path.parent, mode=0o755)
     local = git(base, 'show-ref', '--verify', 'refs/heads/' + branch, env=env, check=False).returncode == 0
-    try:
-        task_remote = remote_branch(base, branch, env)
-        saved = remote_branch(base, wip_branch(row), env)
-        legacy = remote_branch(base, 'wip/' + row['task_id'][:8], env) if not saved else None
-        saved = saved or legacy
-    except ValueError:
-        if not local:
-            raise
-        task_remote, saved = None, None
-        row['restore_source'] = 'local (remote unavailable)'
-    start = branch if local else task_remote or 'origin/' + default
-    if saved:
-        if not (local or task_remote) or git(base, 'merge-base', '--is-ancestor', start, saved, env=env, check=False).returncode == 0:
-            start = saved
-        else:
-            row['snapshot_skipped'] = saved
+    start = _saved_history(base, branch, row, env) or 'origin/' + default
     if local:
-        if start != branch:
+        if start != 'refs/heads/' + branch:
             fast_forward(base, branch, start, env)
         git(base, 'worktree', 'add', str(path), branch, env=env)
     else:

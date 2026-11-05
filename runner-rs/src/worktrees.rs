@@ -548,15 +548,21 @@ async fn recover_retired(base: &Path, default: &str, link: &mut Map<String, Valu
     let branch = checked_branch(&own(link, "branch")).await?;
     let fallback = own(&recovery, "fallback_branch");
     if branch == own(&recovery, "branch") {
-        if let Some(remote) = remote_branch(base, &branch, env).await? {
+        link.entry("task_id").or_insert_with(|| json!(task));
+        if let Some(start) = saved_history(base, &branch, link, env, true).await? {
             let heads = recovery.get("published_heads").and_then(Value::as_array).map(|heads| heads.iter().map(text_of).collect::<Vec<_>>())
                 .filter(|heads| !heads.is_empty()).unwrap_or_else(|| vec![own(&recovery, "published_head")]);
             for published in heads {
-                if !published.is_empty() && (!is_sha(&published) || !git(base, env, &["merge-base", "--is-ancestor", &published, &remote], false).await?.ok()) {
+                if !published.is_empty() && (!is_sha(&published) || !git(base, env, &["merge-base", "--is-ancestor", &published, &start], false).await?.ok()) {
                     return Err(WtErr::msg("Origin no longer contains the last published head; kept local history unchanged"));
                 }
             }
-            fast_forward(base, &branch, &remote, env).await?;
+            if start != format!("refs/heads/{branch}") {
+                fast_forward(base, &branch, &start, env).await?;
+            }
+            if let Some(snapshot) = link.get("snapshot_skipped") {
+                client.patch(&format!("tasks/{task}/links/{}", own(link, "link_id")), &json!({"snapshot_skipped": snapshot})).await.map_err(|e| WtErr::msg(e.detail))?;
+            }
             return Ok(());
         }
         client.patch(&format!("tasks/{task}/links/{}", own(link, "link_id")), &json!({"recovery_branch_missing": true})).await.map_err(|e| WtErr::msg(e.detail))?;
@@ -985,6 +991,66 @@ fn secret_name(name: &str) -> bool {
 pub fn wip_branch(row: &Value) -> String {
     let link = Some(text_of(&row["id"])).filter(|s| !s.is_empty()).unwrap_or_else(|| text_of(&row["link_id"]));
     format!("wip/{}-{}", text_of(&row["task_id"]).chars().take(8).collect::<String>(), link.chars().take(6).collect::<String>())
+}
+
+/// Restore and recovery choose the newest saved head containing local and published task history.
+async fn saved_history(base: &Path, branch: &str, row: &mut Map<String, Value>, env: &Env, remote_required: bool) -> R<Option<String>> {
+    let local_ref = format!("refs/heads/{branch}");
+    let local = git(base, env, &["show-ref", "--verify", &local_ref], false).await?.ok().then_some(local_ref);
+    let found: R<(Option<String>, Vec<String>)> = async {
+        let task_remote = remote_branch(base, branch, env).await?;
+        let mut saved = vec![];
+        for name in [wip_branch(&Value::Object(row.clone())), format!("wip/{}", own(row, "task_id").chars().take(8).collect::<String>())] {
+            if let Some(snapshot) = remote_branch(base, &name, env).await? {
+                saved.push(snapshot);
+            }
+        }
+        Ok((task_remote, saved))
+    }.await;
+    let (task_remote, saved) = match found {
+        Ok(found) => found,
+        Err(_) if !remote_required && local.is_some() => {
+            row.insert("restore_source".into(), json!("local (remote unavailable)"));
+            return Ok(local);
+        }
+        Err(e) => return Err(e),
+    };
+    // A retired checkout's local branch alone does not prove its work was published.
+    if remote_required && task_remote.is_none() && saved.is_empty() {
+        return Ok(None);
+    }
+    let required: Vec<&String> = local.iter().chain(task_remote.iter()).collect();
+    let mut start: Option<String> = None;
+    for candidate in required.iter().copied().chain(saved.iter()) {
+        let mut contains_history = true;
+        for floor in &required {
+            if !git(base, env, &["merge-base", "--is-ancestor", floor, candidate], false).await?.ok() {
+                contains_history = false;
+                break;
+            }
+        }
+        if !contains_history {
+            continue;
+        }
+        if let Some(previous) = &start {
+            if !git(base, env, &["merge-base", "--is-ancestor", previous, candidate], false).await?.ok() {
+                continue;
+            }
+        }
+        start = Some(candidate.clone());
+    }
+    if !required.is_empty() && start.is_none() {
+        return Err(WtErr::msg("Task branch has separate history; kept worktree"));
+    }
+    row.remove("snapshot_skipped");
+    if let Some(start) = &start {
+        for snapshot in saved {
+            if !git(base, env, &["merge-base", "--is-ancestor", &snapshot, start], false).await?.ok() {
+                row.insert("snapshot_skipped".into(), json!(snapshot));
+            }
+        }
+    }
+    Ok(start)
 }
 
 async fn remote_branch(base: &Path, branch: &str, env: &Env) -> R<Option<String>> {
@@ -1476,35 +1542,10 @@ where
     git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
     crate::isolation::mkdir(path.parent().unwrap(), 0o755)?;
     let local = git(&base, env, &["show-ref", "--verify", &format!("refs/heads/{branch}")], false).await?.ok();
-    let task = own(row, "task_id");
-    let found: R<(Option<String>, Option<String>)> = async {
-        let task_remote = remote_branch(&base, &branch, env).await?;
-        let mut saved = remote_branch(&base, &wip_branch(&value), env).await?;
-        if saved.is_none() {
-            saved = remote_branch(&base, &format!("wip/{}", task.chars().take(8).collect::<String>()), env).await?;
-        }
-        Ok((task_remote, saved))
-    }
-    .await;
-    let (task_remote, saved) = match found {
-        Ok(f) => f,
-        Err(e) if !local => return Err(e),
-        Err(_) => {
-            row.insert("restore_source".into(), json!("local (remote unavailable)"));
-            (None, None)
-        }
-    };
-    let mut start = if local { branch.clone() } else { task_remote.clone().unwrap_or_else(|| format!("origin/{default}")) };
-    if let Some(saved) = saved {
-        if !(local || task_remote.is_some()) || git(&base, env, &["merge-base", "--is-ancestor", &start, &saved], false).await?.ok() {
-            start = saved;
-        } else {
-            row.insert("snapshot_skipped".into(), json!(saved));
-        }
-    }
+    let start = saved_history(&base, &branch, row, env, false).await?.unwrap_or_else(|| format!("origin/{default}"));
     let p = path.display().to_string();
     if local {
-        if start != branch {
+        if start != format!("refs/heads/{branch}") {
             fast_forward(&base, &branch, &start, env).await?;
         }
         git(&base, env, &["worktree", "add", &p, &branch], true).await?;
@@ -2115,13 +2156,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retired_recovery_fetches_published_history_and_never_rewinds_local_work() {
+    async fn retired_recovery_fetches_published_history_and_rejects_separate_local_work() {
         let (_folder, base, head) = retired_repository();
         let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
         let mut link = retired_link(&head);
         recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap();
         assert_eq!(checkout_target(&base, "tico/task", "main", &test_env()).await.unwrap(), ("refs/heads/tico/task".into(), head));
-        sh(&base, &["checkout", "tico/task"]);
+        sh(&base, &["checkout", "-B", "tico/task", "main"]);
         std::fs::write(base.join("file"), "unpublished local work").unwrap();
         sh(&base, &["commit", "-am", "Local work"]);
         let local = sh(&base, &["rev-parse", "HEAD"]);
@@ -2129,6 +2170,74 @@ mod tests {
         let err = recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap_err();
         assert!(err.text().contains("separate history"));
         assert_eq!(sh(&base, &["rev-parse", "tico/task"]), local);
+    }
+
+    #[tokio::test]
+    async fn restore_and_recovery_choose_the_newest_saved_history() {
+        for (case, branch_tip, snapshot_tip, local_tip, expected) in [
+            ("snapshot-newer", Some("published"), Some("snapshot"), None, "snapshot"),
+            ("branch-newer", Some("latest"), Some("snapshot"), Some("published"), "latest"),
+            ("no-snapshot", Some("latest"), None, None, "latest"),
+            ("no-branch", None, Some("snapshot"), None, "snapshot"),
+            ("local-newer", Some("published"), Some("snapshot"), Some("latest"), "latest"),
+            ("neither", None, None, None, "main"),
+        ] {
+            for recovery in [false, true] {
+                let (folder, old_base, published) = retired_repository();
+                let workspace = folder.0.join("workspace");
+                let base = workspace.join("repos/org__product");
+                std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+                std::fs::rename(old_base, &base).unwrap();
+                let remote = folder.0.join("origin.git");
+                let mut heads = HashMap::from([("published", published.clone()), ("main", sh(&base, &["rev-parse", "main"]))]);
+                sh(&base, &["checkout", "-b", "saved", &published]);
+                for tip in ["snapshot", "latest"] {
+                    std::fs::write(base.join("file"), tip).unwrap();
+                    sh(&base, &["commit", "-am", tip]);
+                    heads.insert(tip, sh(&base, &["rev-parse", "HEAD"]));
+                }
+                sh(&base, &["checkout", "main"]);
+                if let Some(tip) = branch_tip {
+                    sh(&base, &["push", "origin", &format!("{}:refs/heads/tico/task", heads[tip])]);
+                } else {
+                    sh(&base, &["push", "origin", "--delete", "tico/task"]);
+                }
+                if let Some(tip) = snapshot_tip {
+                    sh(&base, &["push", "origin", &format!("{}:refs/heads/wip/task-link", heads[tip])]);
+                }
+                if let Some(tip) = local_tip {
+                    sh(&base, &["branch", "tico/task", &heads[tip]]);
+                }
+                sh(&base, &["config", "remote.origin.url", "https://github.com/org/product.git"]);
+                sh(&base, &["config", &format!("url.{}.insteadOf", remote.display()), "https://github.com/org/product.git"]);
+                let mut row = json!({"id": "link", "task_id": "task", "path": "tasks/task/product",
+                                     "repo": "org/product", "full_name": "org/product", "branch": "tico/task",
+                                     "default_branch": "main", "state": "pending"}).as_object().unwrap().clone();
+                if recovery {
+                    row.insert("detail_json".into(), json!(json!({"checkout_state": "queued", "setup_pending": true,
+                        "recovery": {"branch": "tico/task", "published_heads": [published], "fallback_branch": "tico/recovery"}}).to_string()));
+                    let (url, server) = serve_rows(Arc::new(Mutex::new(json!({})))).await;
+                    let client = Client::new(&url, "fixture", 5, 0).unwrap();
+                    let mut repo = json!({"full_name": "org/product", "default_branch": "main", "setup_command": "touch setup-ran"}).as_object().unwrap().clone();
+                    prepare(&workspace, &Value::Object(row.clone()), &mut repo, &test_env(), &client).await
+                        .unwrap_or_else(|e| panic!("{case}, recovery: {}", e.text()));
+                    assert!(workspace.join("tasks/task/product/setup-ran").exists(), "{case}");
+                    server.abort();
+                } else {
+                    act(&workspace, &mut row, "restore", &test_env(), &[], || async { false }).await
+                        .unwrap_or_else(|e| panic!("{case}, restore: {}", e.text()));
+                }
+                let path = workspace.join("tasks/task/product");
+                assert_eq!(sh(&path, &["rev-parse", "HEAD"]), heads[expected], "{case}, recovery={recovery}");
+                let branch = if recovery && branch_tip.is_none() && snapshot_tip.is_none() { "tico/recovery" } else { "tico/task" };
+                assert_eq!(sh(&path, &["symbolic-ref", "--short", "HEAD"]), branch, "{case}");
+                if let Some(tip) = branch_tip {
+                    assert_eq!(sh(&remote, &["rev-parse", "tico/task"]), heads[tip], "{case}");
+                } else {
+                    assert!(!sh_ok(&remote, &["show-ref", "--verify", "refs/heads/tico/task"]), "{case}");
+                }
+            }
+        }
     }
 
     #[tokio::test]

@@ -178,7 +178,7 @@ def test_retired_recovery_never_moves_a_branch_backwards_or_replaces_separate_hi
     workspace, base, remote, row, client = trees
     published = publish_task_branch(base, row)
     if separate == 'local':
-        git(base, 'branch', row['branch'], published)
+        git(base, 'branch', row['branch'], 'main')
         git(base, 'checkout', row['branch'])
         (base / 'file').write_text('local work that must stay')
         git(base, 'add', 'file')
@@ -195,6 +195,61 @@ def test_retired_recovery_never_moves_a_branch_backwards_or_replaces_separate_hi
     if separate == 'local':
         assert git(base, 'rev-parse', row['branch']) == before
     assert not any(call.args[1].get('recovery_branch_missing') for call in client.patch.call_args_list)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('mode', ['restore', 'recovery-add', 'recovery-prepare'])
+@pytest.mark.parametrize('branch_tip,snapshot_tip,local_tip,expected', [
+    ('published', 'snapshot', None, 'snapshot'),
+    ('latest', 'snapshot', 'published', 'latest'),
+    ('latest', None, None, 'latest'),
+    (None, 'snapshot', None, 'snapshot'),
+    ('published', 'snapshot', 'latest', 'latest'),
+    (None, None, None, 'main'),
+], ids=['snapshot-newer', 'branch-newer', 'no-snapshot', 'no-branch', 'local-newer', 'neither'])
+def test_restore_and_recovery_choose_the_newest_saved_history(trees, mode, branch_tip, snapshot_tip, local_tip, expected):
+    workspace, base, remote, row, client = trees
+    heads = {'published': publish_task_branch(base, row), 'main': git(base, 'rev-parse', 'main')}
+    git(base, 'checkout', '-b', 'saved', heads['published'])
+    for tip in ('snapshot', 'latest'):
+        (base / 'file').write_text(tip)
+        git(base, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-am', tip)
+        heads[tip] = git(base, 'rev-parse', 'HEAD')
+    git(base, 'checkout', 'main')
+    if branch_tip:
+        git(base, 'push', 'origin', heads[branch_tip] + ':refs/heads/' + row['branch'])
+    else:
+        git(base, 'push', 'origin', '--delete', row['branch'])
+    if snapshot_tip:
+        git(base, 'push', 'origin', heads[snapshot_tip] + ':refs/heads/' + W.wip_branch(row))
+    if local_tip:
+        git(base, 'branch', row['branch'], heads[local_tip])
+    path = workspace / row['path']
+    if mode == 'restore':
+        W.act(workspace, row, 'restore', os.environ.copy())
+    else:
+        retired_allocation(row, client, heads['published'])
+        if mode == 'recovery-add':
+            W.command(client, 'add', 'org/product')
+        else:
+            row['detail_json'] = json.dumps({
+                'checkout_state': 'queued', 'setup_pending': True,
+                'recovery': client.post.return_value['recovery']})
+            W.prepare(workspace, row, client.get.return_value['repositories'][0], os.environ.copy(), client)
+        assert (path / 'setup-ran').exists()
+        assert client.patch.call_args.args[1]['checkout_state'] == 'ready'
+    assert git(path, 'rev-parse', 'HEAD') == heads[expected]
+    fallback = mode != 'restore' and not (branch_tip or snapshot_tip)
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == (
+        'tico/12345678-recovery-unique' if fallback else row['branch'])
+    assert (path / 'file').read_text() == {
+        'main': 'initial', 'published': 'published task work', 'snapshot': 'snapshot', 'latest': 'latest'}[expected]
+    if branch_tip:
+        assert git(remote, 'rev-parse', row['branch']) == heads[branch_tip]
+    else:
+        assert subprocess.run(['git', '-C', str(remote), 'show-ref', '--verify', 'refs/heads/' + row['branch']],
+                              capture_output=True).returncode != 0
+    assert any(call.args[1].get('recovery_branch_missing') for call in client.patch.call_args_list) == fallback
 
 
 @pytest.mark.slow
