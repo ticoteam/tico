@@ -130,8 +130,8 @@ def test_mcp_and_cli_read_the_same_list_and_set_an_inbox_audience(api):
     assert not err and result["group_id"] == "ops-team"
     assert "inbox:ibx_a" not in ids(api, "cara-test")
     from clients import hubcli, remotecli
-    for words in (["tool", "index", "--limit", "5"], ["tools", "index"]):
-        assert remotecli.tool_name(hubcli.parser().parse_args(words).fn) == "hub_tool_index"
+    for words in (["tool", "index", "--limit", "5"], ["tools", "index"]):     # `hub tools` is the old spelling
+        assert remotecli.tool_name(hubcli.parser().parse_args(hubcli.rename_argv(words)[0]).fn) == "hub_tool_index"
     args = hubcli.parser().parse_args(["tool", "check", "close-crm"])
     assert remotecli.tool_name(args.fn) == "hub_tool_check" and args.id == "close-crm"
     args = hubcli.parser().parse_args(["inbound", "audience", "ibx_a", "company"])
