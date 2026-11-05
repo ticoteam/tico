@@ -230,10 +230,12 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
 @pytest.mark.slow
 @pytest.mark.skipif(not os.environ.get('TICO_NATIVE_CLI'), reason='Build CLI and set TICO_NATIVE_CLI')
 def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp_path):
+    import asyncio
+    from starlette.responses import JSONResponse
     from backend.tests.test_api import post
     targets = [post(api, 'tasks', {'title': f'Review pricing {n}', 'body': 'Review pricing and report back.', 'owner': 'human:ana', **({'number': 42} if n == 0 else {})}, 'ana-test')['id']
                for n in range(45)]
-    batches, uploads, sent_tasks_before_delete = [], [], {}
+    batches, uploads, sent_tasks_before_delete, races = [], [], {}, {}
     lost_item = False
     sock = socket.socket()
     sock.bind(('127.0.0.1', 0))
@@ -257,6 +259,18 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
                 return await receive()
             delivered = True
             return {'type': 'http.request', 'body': body, 'more_body': False}
+        if path.startswith('/recorder-test/races/'):
+            parts = path.split('/')
+            rid = parts[3]
+            if len(parts) == 4:
+                races[rid] = {'order': payload['order'], 'held': asyncio.Event(),
+                              'release': asyncio.Event(), 'links': [], 'uploads': []}
+            elif parts[4] == 'wait':
+                await asyncio.wait_for(races[rid]['held'].wait(), timeout=5)
+            elif parts[4] == 'release':
+                races[rid]['release'].set()
+            return await JSONResponse({'ok': True})(scope, replay_body, send)
+        race = races.get(path.split('/')[4]) if path.startswith('/api/v2/meetings/') else None
         if path.endswith('/delete') and '/meetings/' in path:
             rid = path.split('/')[-2]
             with api.app.state.store.read() as c:
@@ -265,11 +279,24 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
                     (rid,))})
         fail = False
         if path.endswith('/tasks') and '/meetings/' in path:
-            batches.append((payload['task_ids'], dict(scope['headers']).get(b'idempotency-key')))
-            fail = len(batches) == 2
+            batch = (payload['task_ids'], dict(scope['headers']).get(b'idempotency-key'))
+            if race:
+                race['links'].append(batch)
+                fail = len(race['links']) == 1
+                if not fail and race['order'] == 'link-last':
+                    race['held'].set()
+                    await asyncio.wait_for(race['release'].wait(), timeout=10)
+            else:
+                batches.append(batch)
+                fail = len(batches) == 2
         lose = path.endswith('/items') and payload.get('text') == 'Original retry title' and not lost_item
         if path.endswith('/items'):
             uploads.append((payload, dict(scope['headers']).get(b'idempotency-key')))
+            if race:
+                race['uploads'].append(payload)
+                if race['order'] == 'upload-last':
+                    race['held'].set()
+                    await asyncio.wait_for(race['release'].wait(), timeout=10)
         if lose:
             messages = []
             async def collect(message):
@@ -313,10 +340,24 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
         assert retry['text'] == 'Current retry title' and retry['version'] == 2
         assert {key: retry['detail'][key] for key in ('owner', 'body', 'due')} == {
             'owner': 'human:ben', 'body': 'Current retry details', 'due': '2026-12-01T12:00:00Z'}
+        assert {race['order'] for race in out['races']} == {'link-last', 'upload-last'}
+        for replay in out['races']:
+            race = races[replay['meeting']]
+            assert len(race['uploads']) == 1  # Create reuses Add's item after choosing an owner.
+            assert len(race['links']) == 2 and race['links'][0] == race['links'][1]
+            original = replay['original']
+            web = post(api, f"meetings/{replay['meeting']}/items/{original['id']}/push",
+                       {'version': original['version'], 'detail': {'owner': 'human:ana'}}, 'ben-test')
+            assert not web['pushed'] and web['item']['result_ref'] == replay['created']
+            rows = get(api, f"meetings/{replay['meeting']}/items")['sections']['task']
+            assert len(rows) == 1 and rows[0]['id'] == original['id']
+            with api.app.state.store.read() as c:
+                created = c.execute('SELECT id,owner_id FROM tasks WHERE title=?', (original['text'],)).fetchall()
+                assert [(row['id'], row['owner_id']) for row in created] == [(replay['created'], 'human:ben')]
         with api.app.state.store.read() as c:
-            assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 46
+            assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 48
             assert c.execute('SELECT count(*) FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id '
-                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 2
+                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 4
             assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 1
             assert c.execute('SELECT deleted_at FROM media_control WHERE meeting_id=?', (out['pending'],)).fetchone()[0]
             assert c.execute('SELECT discarded_at FROM live_meetings WHERE id=?', (out['live'],)).fetchone()[0]

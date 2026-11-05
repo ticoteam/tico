@@ -477,16 +477,18 @@ impl Tico {
                     .filter(|(index, _)| reply["results"][*index]["status"] == 404)
                     .map(|(_, tid)| tid.clone())
                     .collect();
-                for tid in batch {
-                    if op.kind == "unlink" || skipped.contains(tid) {
-                        if let Some(links) = delivery.receipt["links"].as_object_mut() {
-                            links.remove(tid);
+                store.update_delivery(id, delivery, |current| {
+                    for tid in batch {
+                        if op.kind == "unlink" || skipped.contains(tid) {
+                            if let Some(links) = current.receipt["links"].as_object_mut() {
+                                links.remove(tid);
+                            }
+                        } else {
+                            current.receipt["links"][tid] = json!(op.kind);
                         }
-                    } else {
-                        delivery.receipt["links"][tid] = json!(op.kind);
                     }
-                }
-                store.delivery(id, delivery)?;
+                    Ok(())
+                })?;
                 store.update_context(id, |c| {
                     c.skipped_task_links += skipped.len();
                     c.items.retain(|item| {

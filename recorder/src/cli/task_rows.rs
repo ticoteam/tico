@@ -26,6 +26,84 @@ fn recording(store: &Store, title: &str) -> Result<String> {
     Ok(record.id)
 }
 
+fn receipt_race(store: &Store, tico: &Tico, task: &str, order: &str) -> Result<serde_json::Value> {
+    let id = recording(store, &format!("Receipt race {order}"))?;
+    let meeting = tico.send_to(store, &id, false, "team")?;
+    let gate = format!("/recorder-test/races/{meeting}");
+    tico.call(&gate, Some(&json!({"order":order})), "")?;
+    ensure!(
+        tico.queue_links(store, &id, &[task.into()]).is_err(),
+        "Fixture fails the first link request"
+    );
+    store.update_context(&id, |c| {
+        c.items.push(Item {
+            id: "added".into(),
+            kind: "task".into(),
+            title: format!("Receipt race {order}"),
+            ..Default::default()
+        });
+        Ok(())
+    })?;
+    std::thread::scope(|scope| -> Result<()> {
+        let held = scope.spawn(|| {
+            if order == "link-last" {
+                tico.flush_saved_links(store, &id)
+            } else {
+                tico.upload_pending_item(store, &id, "added")
+            }
+        });
+        let completed = (|| -> Result<()> {
+            tico.call(&format!("{gate}/wait"), Some(&json!({})), "")?;
+            if order == "link-last" {
+                tico.upload_pending_item(store, &id, "added")?;
+            } else {
+                tico.flush_saved_links(store, &id)?;
+            }
+            Ok(())
+        })();
+        let released = tico.call(&format!("{gate}/release"), Some(&json!({})), "");
+        let finished = held.join().expect("receipt race worker");
+        completed?;
+        released?;
+        finished
+    })?;
+    let receipt = store.get(&id)?.deliveries[0].receipt.clone();
+    let original = receipt["items"]["added"].clone();
+    ensure!(
+        original["id"].as_str().is_some(),
+        "Link retry lost the Add receipt"
+    );
+    ensure!(
+        receipt["links"][task] == "linked",
+        "Add lost the link receipt"
+    );
+    ensure!(
+        receipt["uploads"]["added"].is_null(),
+        "Upload intent was restored"
+    );
+    ensure!(
+        store.context(&id)?.task_link_operations.is_empty(),
+        "Link remains queued"
+    );
+    store.update_context(&id, |c| {
+        c.items
+            .iter_mut()
+            .find(|item| item.id == "added")
+            .unwrap()
+            .owner = "human:ben".into();
+        Ok(())
+    })?;
+    tico.send_task(store, &id, "added", "human:ben", "Ben", false)?;
+    let created = store
+        .context(&id)?
+        .items
+        .into_iter()
+        .find(|item| item.id == "added")
+        .unwrap()
+        .task_id;
+    Ok(json!({"meeting":meeting,"original":original,"created":created,"order":order}))
+}
+
 pub fn run(store: &Store, base: &str) -> Result<()> {
     ensure!(
         std::env::var_os("TICO_RECORDER_DATA_DIR").is_some(),
@@ -184,9 +262,13 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
         Ok(())
     })?;
     let retry_meeting = tico.send_to(&Store::open(store.root())?, &retry, false, "team")?;
+    let mut races = vec![];
+    for order in ["link-last", "upload-last"] {
+        races.push(receipt_race(store, &tico, &tasks[0], order)?);
+    }
     println!(
         "{}",
-        json!({"synthetic":true,"meeting":meeting,"created":created,"retry_meeting":retry_meeting,"local":store.context(&local)?,"local_id":local,"pending":pending,"live":live})
+        json!({"synthetic":true,"meeting":meeting,"created":created,"retry_meeting":retry_meeting,"races":races,"local":store.context(&local)?,"local_id":local,"pending":pending,"live":live})
     );
     Ok(())
 }

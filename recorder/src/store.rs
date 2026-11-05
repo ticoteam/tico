@@ -946,6 +946,32 @@ impl Store {
         self.db()?.execute("INSERT INTO deliveries VALUES(?,?,?) ON CONFLICT(recording_id,destination_id) DO UPDATE SET document=excluded.document",params![id,value.destination_id,serde_json::to_string(value)?])?;
         Ok(())
     }
+    /// Merge only the caller's fields into the current receipt; link retries run beside uploads.
+    pub(crate) fn update_delivery(
+        &self,
+        id: &str,
+        value: &mut Delivery,
+        change: impl FnOnce(&mut Delivery) -> Result<()>,
+    ) -> Result<()> {
+        let mut db = self.db()?;
+        let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let text: Option<String> = transaction
+            .query_row(
+                "SELECT document FROM deliveries WHERE recording_id=? AND destination_id=?",
+                params![id, value.destination_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut current = match text {
+            Some(text) => serde_json::from_str(&text)?,
+            None => value.clone(),
+        };
+        change(&mut current)?;
+        transaction.execute("INSERT INTO deliveries VALUES(?,?,?) ON CONFLICT(recording_id,destination_id) DO UPDATE SET document=excluded.document",params![id,current.destination_id,serde_json::to_string(&current)?])?;
+        transaction.commit()?;
+        *value = current;
+        Ok(())
+    }
     pub fn remove_delivery(&self, id: &str, destination: &str) -> Result<()> {
         self.db()?.execute(
             "DELETE FROM deliveries WHERE recording_id=? AND destination_id=?",
