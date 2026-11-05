@@ -300,6 +300,7 @@ const scenarios = {
     const {page, seen} = await open(browser, fake, googleFake(), {hash: '#/settings/inboxes/settings', ready: '[data-ib-settings-page]', extra: more.extra});
     await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
     await page.locator('#set-google [data-google-mode]').waitFor();
+    await page.locator('#inboxes-email-sending [data-send-form]').waitFor();
     assert.deepEqual(await page.locator('.ib-section > h2').allTextContents(), ['Email', 'Texts', 'Letters in', 'Letters out']);
     // The existing settings, each in its section and order. Sending, alerts and letters out are other changes' cards:
     // each section has a card with a header, and one still on its placeholder says Coming soon.

@@ -475,6 +475,29 @@ def refresh_soon(base):
 
 
 # ----------------------------------------------------------------------------- resolving an id
+def _model_key(text):
+    """A model's name with case and punctuation dropped, so `gpt-6.1-terra` and `GPT-6.1 Terra` are the same model."""
+    return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+
+
+# The models a Tico tier may not run here: the held rows in providers.MODEL_CATALOG (Dev 693). A tier whose current
+# version runs one is left out whole, and a pinned version that runs one is left out, so the Gateway's index, picker,
+# lineup and resolver never offer the id, whatever HQ publishes.
+HELD_MODELS = frozenset(_model_key(m) for m in ("gpt-6.1-terra",))
+
+
+def _held(version):
+    return _model_key(version.get("model")) in HELD_MODELS
+
+
+def live_row(row):
+    """The tier as a customer may see it, or None: its current version must run no held model, and no held version is kept."""
+    current = next((v for v in row["versions"] if v["version"] == row["current"]), None)
+    if current is None or _held(current):
+        return None
+    return {**row, "versions": [v for v in row["versions"] if not _held(v)]}
+
+
 def _index(cat):
     """{id: entry} for every auto and pinned id of `cat`'s tiers and decisions, built once per catalog."""
     found = _indexes.get(id(cat))
@@ -482,10 +505,11 @@ def _index(cat):
         return found[1]
     table = {}
     for kind, rows in (("chat", cat["models"]), ("decide", cat["decisions"])):
-        for row in rows:
-            current = next((v for v in row["versions"] if v["version"] == row["current"]), None)
-            if current is None:             # a decision tier this release has no price for yet
+        for raw in rows:
+            row = live_row(raw)
+            if row is None:                 # no current version, or one that runs a held model: not offered
                 continue
+            current = next(v for v in row["versions"] if v["version"] == row["current"])
             table[row["id"]] = {"tier": row, "version": current, "auto": True, "kind": kind}
             for version in row["versions"]:
                 table[version["id"]] = {"tier": row, "version": version, "auto": False, "kind": kind}
@@ -585,6 +609,8 @@ def listed_rows():
         if tier["id"] == MEETING_TIER:
             continue                         # the meeting tier is not a bot's pick: meeting_rows
         row = row_for(f"{tier['id']}-{tier['current']}")
+        if row is None:                      # its current version runs a held model
+            continue
         if tier["id"] == tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL):
             row["recommended"] = True
         rows.append(row)
@@ -619,7 +645,15 @@ def default_model(department=DEFAULT_DEPARTMENT, level=DEFAULT_LEVEL, fast=False
     if tier_id(department, level, fast) not in _index(cat):
         department = DEFAULT_DEPARTMENT
     if tier_id(department, level, fast) not in _index(cat):
-        return f"{tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL)}-{FIRST_VERSION}"
+        general = f"{tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL)}-{FIRST_VERSION}"
+        if tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL) in _index(cat):
+            return general
+        # General Medium itself runs a held model: the first department tier still offered takes its place.
+        for row in cat["models"]:
+            live = live_row(row)
+            if live is not None and live.get("department"):
+                return f"{live['id']}-{live['current']}"
+        return general
     return f"{tier_id(department, level, fast)}-{current_version(department, level, fast, cat)}"
 
 
@@ -654,7 +688,8 @@ def view(cat=None):
                                   "fast": bool(row.get("fast")), "current": row["current"], "versions": [
                 {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"],
                  **({"context": v["context"]} if v.get("context") else {})}
-                for v in reversed(row["versions"])]} for row in cat["models"] if row.get("department")}}
+                for v in reversed(row["versions"])]} for row in (live_row(r) for r in cat["models"] if r.get("department"))
+                if row is not None}}
 
 
 def lineup(query="", cat=None):
@@ -668,7 +703,10 @@ def lineup(query="", cat=None):
         hay = " ".join(texts).lower()
         return all(w in hay for w in words)
     models = []
-    for row in cat["models"]:
+    for raw in cat["models"]:
+        row = live_row(raw)
+        if row is None:
+            continue
         now = next(v for v in row["versions"] if v["version"] == row["current"])
         when = LEVEL_WHEN.get(row["level"], "") + (" Faster, and may cost more." if row["fast"] else "")
         department = row["department"] or ""
@@ -679,7 +717,7 @@ def lineup(query="", cat=None):
                   "model": row["versions"][0]["model"] if row["versions"] else "",
                   "pinned": next((v["id"] for v in row["versions"] if v["version"] == row["current"]), ""),
                   "price": row["versions"][0]["price"] if row["versions"] else None}
-                 for row in cat["decisions"] if keep(row["name"], row["when"], row["id"])]
+                 for row in (live_row(r) for r in cat["decisions"]) if row is not None and keep(row["name"], row["when"], row["id"])]
     services = [{"id": row["id"], "name": row["name"], "when": row["for"], "price": row["price"],
                  "status": row["status"], "tools": row["tools"], "details": row.get("details") or []}
                 for row in cat["services"] if keep(row["name"], row["for"], row["id"], " ".join(row["tools"]))]

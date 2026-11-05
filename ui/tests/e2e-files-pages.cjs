@@ -1,7 +1,7 @@
 // Journey: bot files and pages, as Dana. The Engineering Lead's pages and files (the pages seed) show in Library > Files
 // with their titles; a page opens and draws its title, its version and its status line. Runs on a phone and a desktop.
 const assert = require('node:assert/strict');
-const {journey, open, go, call, must, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
+const {journey, open, go, call, must, expectFailure, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
 
 journey('e2e-files-pages', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
@@ -27,6 +27,51 @@ journey('e2e-files-pages', async ({hub, browser, phone}) => {
   assert.match(status, /v\d+/, `${where}: the page shows its version`);
   const view = await drawn(page, '#pg-view', text => text.includes('Engineering weekly'), `${where}: the page draws its title`);
   assert.match(view, /Engineering weekly/, `${where}: the page shows its title`);
+  const audienceReader = await open(browser, hub, 'priya', {phone, hash: new URL(page.url()).hash});
+  await audienceReader.locator('#pg-view .pg-title').waitFor();
+  assert.equal(await audienceReader.locator('[data-pg-audience]').count(), 0);
+  expectFailure(audienceReader, 404, /^\/api\/v2\/pages\//, 'GET');
+  const access = page.locator('[data-pg-audience]');
+  await access.waitFor();
+  assert.equal((await access.innerText()).trim(), "Everyone who can see where it's filed");
+  await access.click();
+  const editor = page.locator('#access-editor');
+  await editor.locator('[data-access-everyone]').uncheck();
+  await editor.locator('[data-access-pick="people"][value="dana"]').check();
+  const saved = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
+  await editor.locator('button[type=submit]').click();
+  assert.equal((await saved).status(), 200);
+  await page.locator('.pg-status .pg-lock').waitFor();
+  await drawn(audienceReader, '#pg-view', text => text.includes('not yours to see'), `${where}: audienceReader loses the open page`);
+  assert.equal(await audienceReader.locator('.pg-card').count(), 0);
+  await page.locator('[data-pg-audience]').click();
+  await editor.locator('[data-access-everyone]').check();
+  const cleared = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
+  await editor.locator('button[type=submit]').click();
+  assert.equal((await cleared).status(), 200);
+  await drawn(page, '[data-pg-audience]', text => text.includes("Everyone who can see where it's filed"), `${where}: cleared audience`);
+  await audienceReader.locator('#pg-view .pg-title').waitFor();
+  assert.equal(await audienceReader.locator('[data-pg-audience], .pg-lock').count(), 0);
+  assertClean(audienceReader, `${where}: audienceReader regains the page`);
+  const audienceId = new URL((await saved).url()).pathname.split('/').pop();
+  const legal = await must(hub, 'dana', 'POST', 'groups', {name: 'Legal'});
+  const contracts = await must(hub, 'dana', 'POST', 'groups', {name: 'Contracts', parent: legal.id, add: {people: ['priya']}});
+  await must(hub, 'dana', 'PATCH', 'pages/' + audienceId, {audience: {teams: [legal.id]}});
+  await audienceReader.locator('#pg-view .pg-title').waitFor();
+  await must(hub, 'dana', 'PATCH', 'groups/' + contracts.id, {remove: {people: ['priya']}});
+  await drawn(audienceReader, '#pg-view', text => text.includes('not yours to see'), `${where}: group removal closes the open page`);
+  assert.equal(await audienceReader.locator('#pg-view iframe').count(), 0);
+  await must(hub, 'dana', 'PATCH', 'groups/' + contracts.id, {add: {people: ['priya']}});
+  await audienceReader.locator('#pg-view .pg-title').waitFor();
+  await must(hub, 'dana', 'PATCH', 'groups/' + contracts.id, {parent: ''});
+  await drawn(audienceReader, '#pg-view', text => text.includes('not yours to see'), `${where}: moving a nested group closes the open page`);
+  await must(hub, 'dana', 'PATCH', 'groups/' + contracts.id, {parent: legal.id});
+  await audienceReader.locator('#pg-view .pg-title').waitFor();
+  await must(hub, 'dana', 'PATCH', 'pages/' + audienceId, {audience: null});
+  await must(hub, 'dana', 'DELETE', 'groups/' + contracts.id);
+  await must(hub, 'dana', 'DELETE', 'groups/' + legal.id);
+  assertClean(audienceReader, `${where}: group access resets reach the open page`);
+  await audienceReader.context().close();
   assertClean(page, `${where}: page open`);
   await shot(page, `e2e-page-${where}`);
 

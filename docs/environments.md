@@ -35,8 +35,8 @@ holds `bot-<slug>/` bot checkouts (older `emp-<slug>/` folders keep working), th
 Bot runs receive only granted Credentials from Tico. `env remove` never deletes it.
 
 Every run is given the workspace as `HUB_WORKSPACE`, alongside `HUB_API_URL`, `HUB_TOKEN`,
-`HUB_BOT` and `HUB_DIR` (this checkout). It is how `hub bot create` knows where a new bot
-repository goes, and how a bot finds a sibling's work.
+`HUB_BOT` and `HUB_DIR` (Tico's own install; never use it for Git work). `HUB_WORKSPACE` is how
+`hub bot create` knows where a new bot repository goes, and how a bot finds a sibling's work.
 
 ### `environment.json`
 
@@ -361,6 +361,8 @@ Litestream backup, `litestream restore -o <file>` first and pass that file. The 
   Granola and meeting-bot connections, calendar actions, usage alerts, stored request replies (`EMPTY` in
   `backend/devcopy.py`). Every table is listed as `KEEP`, `HISTORY` or `EMPTY`; one in none of them (added later)
   is emptied and named in the output;
+- empties `cloud_machine_deletions` and `cloud_machine_enrollment_failures`: these belong to live HQ machines,
+  so a copy never carries deletion retries or enrollment failure counts for real machines;
 - keeps tasks, docs, people and bots, the last `--days` of messages and events (0 keeps all), and the finished runs
   in that window with their steps, so run details and replay work. Unfinished jobs and runs are removed;
 - has no way in: bot tokens cleared, external agents and computers revoked, run tokens and leases ended;

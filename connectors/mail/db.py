@@ -149,6 +149,8 @@ CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
 CREATE INDEX IF NOT EXISTS messages_from ON messages(mailbox, from_addr);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
 CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
+CREATE TABLE IF NOT EXISTS queued_drafts(mailbox TEXT NOT NULL, draft_id TEXT NOT NULL, send_id TEXT NOT NULL,
+ PRIMARY KEY(mailbox,draft_id));
 """
 
 
@@ -160,6 +162,8 @@ def connect(path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    if "send_facts_json" not in {row[1] for row in conn.execute("PRAGMA table_info(messages)")}:
+        conn.execute("ALTER TABLE messages ADD COLUMN send_facts_json TEXT NOT NULL DEFAULT '{}'")
     conn.commit()
     return conn
 
@@ -511,6 +515,7 @@ def _message_values(mailbox, msg):
         "list_id": msg.get("list_id") or "",
         "is_internal": 1 if msg.get("is_internal") else 0,
         "has_unsubscribe": 1 if (msg.get("unsubscribe") or msg.get("has_unsubscribe")) else 0,
+        "send_facts_json": json.dumps(msg.get("send_facts") or {}, sort_keys=True),
     }
 
 
@@ -530,6 +535,7 @@ def _decode_message(row):
     d["body_truncated"] = bool(d.get("body_truncated"))
     d["is_internal"] = bool(d.get("is_internal"))
     d["has_unsubscribe"] = bool(d.get("has_unsubscribe"))
+    d["send_facts"] = json.loads(d.pop("send_facts_json", "{}") or "{}")
     d["id"] = d.get("msg_id")
     return d
 
@@ -555,7 +561,7 @@ def upsert_message(conn, mailbox, msg, when=None):
                             (mailbox, values["msg_id"])).fetchone()
     cols = ("thread_id", "epoch", "date", "from_addr", "from_header", "to_json",
             "cc_json", "subject", "snippet", "labels_json", "body", "body_truncated",
-            "attachments_json", "list_id", "is_internal", "has_unsubscribe")
+            "attachments_json", "list_id", "is_internal", "has_unsubscribe", "send_facts_json")
     args = [values[c] for c in cols]
     if existing:
         if _same_content(existing, values) and not existing["deleted_at"]:
@@ -564,7 +570,7 @@ def upsert_message(conn, mailbox, msg, when=None):
             "UPDATE messages SET thread_id=?, epoch=?, date=?, from_addr=?, from_header=?, "
             "to_json=?, cc_json=?, subject=?, snippet=?, labels_json=?, body=?, "
             "body_truncated=?, attachments_json=?, list_id=?, is_internal=?, "
-            "has_unsubscribe=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
+            "has_unsubscribe=?, send_facts_json=?, updated_at=?, deleted_at=NULL, pushed_at=NULL "
             "WHERE mailbox=? AND msg_id=?",
             args + [when, mailbox, values["msg_id"]])
         conn.commit()
@@ -572,9 +578,9 @@ def upsert_message(conn, mailbox, msg, when=None):
     conn.execute(
         "INSERT INTO messages (mailbox, msg_id, thread_id, epoch, date, from_addr, "
         "from_header, to_json, cc_json, subject, snippet, labels_json, body, "
-        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, "
+        "body_truncated, attachments_json, list_id, is_internal, has_unsubscribe, send_facts_json, "
         "fetched_at, updated_at, deleted_at, pushed_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)",
         [mailbox, values["msg_id"]] + args + [when, when])
     conn.commit()
     return True

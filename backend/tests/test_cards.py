@@ -116,7 +116,7 @@ def test_place_server_timing_sums_kinds_and_bounds_the_slowest_entries(api, monk
     assert measured == sorted(expected.items(), key=lambda item: -item[1])[:len(measured)]
 
 
-def test_place_server_timing_counts_pins_the_caller_cannot_read(api, monkeypatch):
+def test_place_server_timing_keeps_access_cost_without_naming_hidden_pins(api, monkeypatch):
     from backend import cards
 
     clock = [0]
@@ -134,9 +134,11 @@ def test_place_server_timing_counts_pins_the_caller_cannot_read(api, monkeypatch
     assert response.status_code == 200, response.text
     durations = {name: float(ms) for name, ms in
                  (entry.split(";dur=") for entry in response.headers["Server-Timing"].split(", ")[2:])}
-    assert durations["card-hidden"] == 2000 and durations["card-updates"] == 2000
+    assert "card-hidden" not in durations
+    assert durations["card-updates"] == 2000
     assert durations["cards"] == 4000
     assert len(response.json()["pins"]) == 1
+    assert response.json()["pins"][0]["position"] == 0
 
 
 def test_card_settings_are_checked_and_never_a_query(api):

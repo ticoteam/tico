@@ -23,6 +23,7 @@ from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
 from . import bot_settings as BS
+from . import sources as SRC
 
 # The wait after a usage limit whose provider gave no reset time; a reported reset is used instead.
 LIMIT_COOLDOWN = 1800        # seconds a bot waits after its runtime reported a usage limit
@@ -3998,15 +3999,15 @@ class Execution:
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
-        from . import worktrees
+        from . import task_context, worktrees
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
         if chat_goal and chat_goal["bot"] != row["bot_id"]:
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
         # Runner wire names (backend/runner_wire.py): the stored text beside the decoded values, as runners read them.
-        runner_wire.message(c, msg)
-        runner_wire.messages(c, history)
+        runner_wire.message(c, msg, who=bot_who, auth=self.auth)
+        runner_wire.messages(c, history, who=bot_who, auth=self.auth)
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)     # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
@@ -4050,6 +4051,7 @@ class Execution:
                             # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                             # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                             "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                            "task_context": task_context.for_turn(c, self.auth, acting or bot_who, task),
                             # Asked from the Updates chat: the recent updates that person may read and open, read now as
                             # them (backend/updates_chat.py). None for every other turn.
                             "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
@@ -4545,7 +4547,9 @@ class Execution:
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (aid, queued["job_id"]))
             H.mark_delivered(c, H.KEEPER, queued["id"])
             text = str(queued["body"] or "")
-            lines.append(f"- From {queued['sender_id']} at {str(queued['created_at'])[11:16]} UTC:\n"
+            # A keeper line reads by what made it ("Task update", "Stuck check"), never as the keeper.
+            who = (SRC.message_source({}, dict(queued))["name"] or "System") if queued["sender_id"] == H.KEEPER else f"From {queued['sender_id']}"
+            lines.append(f"- {who} at {str(queued['created_at'])[11:16]} UTC:\n"
                          + (text if len(text) <= FOLD_TEXT else text[:FOLD_TEXT] + "\u2026"))
             folded.append(queued["job_id"])
         if not folded:
@@ -4591,7 +4595,8 @@ class Execution:
                          "WHERE i.attempt_id=? AND i.acked_at IS NULL AND m.deleted_at IS NULL", (aid,)).fetchall()
         return {"attempt_id": aid, "messages": runner_wire.messages(c, [
             H.message_view(c, row) for row in rows
-            if privacy.message_readable(c, "bot:" + attempt["bot_id"], row, current=True)])}
+            if privacy.message_readable(c, "bot:" + attempt["bot_id"], row, current=True)],
+            who=Identity("bot:" + attempt["bot_id"], "bot", attempt_id=aid))}
 
     def idle_inputs(self, c, who, aid):
         """A poll with no eligible queued input, without restoring or changing an attempt."""
@@ -4762,6 +4767,8 @@ class Execution:
     def events(self, c, who, aid, body):
         # Late output is archived with its historical attempt, never applied to current work.
         row = self.attempt(c, who, aid, active=False)
+        from . import counsel
+        revoked = row["bot_id"] == H.COUNSEL and counsel.revoked_page_run(c, aid)
         seq = row["last_seq"]
         from .login_waits import stored
         # Fetch only the sequences in this bounded request, not the attempt's output history.
@@ -4772,7 +4779,7 @@ class Execution:
         last_event = None
         now = H.now()
         for event in body.events:
-            clean = stored(event.kind, event.payload)
+            clean = {"text": counsel.REMOVED_PAGE} if revoked else stored(event.kind, event.payload)
             payload = encode(clean)
             existing = existing_events.get(event.seq)
             if existing:
@@ -4786,7 +4793,7 @@ class Execution:
             existing_events[event.seq] = (event.kind, payload)
             inserts.append((aid, event.seq, event.kind, payload, now))
             last_event = (event.kind, clean)
-            if event.kind == "goal" and row["lease_until"] > now and row["state"] != "expired":
+            if not revoked and event.kind == "goal" and row["lease_until"] > now and row["state"] != "expired":
                 goals.append(event.payload)
             seq = event.seq
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)", inserts)
@@ -4926,6 +4933,9 @@ class Execution:
     def complete(self, c, who, aid, body, rule_check=None):
         """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
+        from . import counsel
+        if row["bot_id"] == H.COUNSEL and counsel.revoked_page_run(c, aid):
+            body = body.model_copy(update={"text": counsel.REMOVED_PAGE})
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
         # rest of the turn's work, to run when the quarantine lifts, unless `quarantine_stops.requeues` holds it for review
@@ -5642,7 +5652,8 @@ class Execution:
                              counts=not (stopped or limited or busy or yielded or outage))
         if not stopped and timeout_cut:
             self.auto_reconcile(c, attempt_id=aid)
-        return {"attempt_id": aid, "outcome": body.outcome, "message": runner_wire.message(c, reply, as_read=True)}
+        return {"attempt_id": aid, "outcome": body.outcome, "message": runner_wire.message(
+            c, reply, as_read=True, who=Identity("bot:" + row["bot_id"], "bot", attempt_id=aid), auth=self.auth)}
 
     def account_failure(self, c, row, body, aid, conv, failure, counts):
         """What a finished run means for the bot's next ones (backend/run_backoff.py): a run that completed starts the

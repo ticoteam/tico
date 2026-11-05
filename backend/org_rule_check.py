@@ -77,6 +77,7 @@ from . import team_rules
 from . import threads as T
 from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
+from . import sources as SRC
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -403,6 +404,7 @@ def _place_now(c, place, author, recipients):
     return place or None
 
 
+@SRC.scoped("rule-check")
 def check_as(store, primary, principal, sender, via, operation, output, recipients=(), *, context=None, obj="",
              draft=False, skip=(), place=None, attempt_id="", origin=None):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
@@ -531,6 +533,7 @@ def refused(problem):
     return {"refused": problem}
 
 
+@SRC.scoped("rule-check")
 def outside_edition(store, primary, output, to=""):
     """A Company page edition against the rules whose Who is Outside editions. Not `preflight`: that one skips a person's
     writes and fails open, and an edition goes outside the company whoever wrote it. Here anything short of the judge
@@ -656,6 +659,7 @@ def _repeats(c, author, rule_id):
                      (author, "org_rule:" + rule_id, _day())).fetchone()[0]
 
 
+@SRC.scoped("rule-check")
 def _tell_bot(c, author, text):
     """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
@@ -673,6 +677,7 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
+@SRC.scoped("rule-check")
 def _review_task(c, hold_id, author, rule, reviewer):
     """The review task for a hold (or its appeal). Its title is the plain REVIEW_TITLE, which is also its thread's row in
     the sidebar, so it names no one and no rule: the hold's text is in the body's Hold line, opened from there."""
@@ -815,11 +820,22 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    body = (replay or {}).get("body") or {}
+    if operation == "task_answer":
+        asked = H.answer_question(c, body.get("target") or {})
+        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
+    elif operation in ("answer", "reply"):
+        text, text_refs = H.answer_text(H.message(c, replay["message"]),
+                                        replay.get("text") or body.get("text") or "", text=text)
+    else:
+        text_refs = {}
+    from .files import page_references
+    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))], text_refs)
     # The run the output came from: Send anyway writes as the bot with it, so the run's private tasks and meetings are
     # checked against the destination again, as the original write was.
     # The check's own input (`input`) too: a rule changed since is checked on what this check was shown, and Send anyway
     # refuses once the object moved. `path` is the write's route, whose privacy guard Send anyway runs again.
-    stored = {"text": text, "replay": replay,
+    stored = {"text": text, **text_refs, "replay": replay,
               "provenance": {"attempt_id": verdict.get("attempt_id") or "", "path": PATH.get(),
                              "authenticated": verdict.get("sender") or author, "via": verdict.get("via") or "",
                              "place": verdict.get("place"), "origin": verdict.get("origin")},
@@ -999,6 +1015,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload"] or "{}")
+    if not summary:
+        from .files import readable_page_refs
+        stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
     destinations = json.loads(hold["destinations"] or "[]")
@@ -1159,6 +1178,7 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None)
     return holds_listed(c, who, task_id=task_id, cursor=cursor, limit=limit, auth=auth)
 
 
+@SRC.scoped("rule-check")
 def _finish_task(c, hold):
     """The review task closes once none of its holds waits."""
     tid = hold["task_id"]
@@ -1902,7 +1922,9 @@ def install(app, store, auth, mutate):
                     ingest = prepare[hold["operation"]](store, ident, stored.get("replay") or {})
                 except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send
                     LOG.warning("Hold replay preflight failed: %s", type(exc).__name__)
-        return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience))
+        from . import ask_ingest
+        return ask_ingest.judged(store, ingest, lambda: mutate(
+            request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience)))
 
     @app.post("/api/v2/rule-holds/{hold_id}/appeal")
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):

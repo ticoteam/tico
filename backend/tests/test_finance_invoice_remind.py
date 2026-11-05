@@ -5,6 +5,7 @@ refused with the reason. A stage is for an invoice that is that many days past i
 day: no due date, a due date not yet passed, and a stage not yet reached are each refused before any stage is used."""
 
 from backend import bot_settings as BS
+from backend import mailbox_access as MA
 from backend.finance.core.errors import CONFLICT
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, account, act, books, finance_template, store)
@@ -19,6 +20,9 @@ def _mailbox(c) -> None:
     """The Bookkeeper's stored gmail tool that can send (what a real install is given)."""
     tools = [{"service": "gmail", "identity": BOX, "can": ["read", "send"]}]
     BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
+    row = MA.ensure_mailbox(c, BOX, kind="shared", created_by=OWNER)
+    MA.grant(c, OWNER, row["id"], "bot", "bookkeeper", "read_write")
+    MA.grant(c, OWNER, row["id"], "person", "ana", "read_write")
 
 
 def _invoice(c, *, emails=(EMAIL,), due=DUE, issued=ISSUED, link="") -> tuple[str, str]:

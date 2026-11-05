@@ -72,6 +72,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
+from typing import Any
 
 from .batch_work import isolated
 from . import delivery
@@ -99,6 +100,7 @@ from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
 from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
 from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
 from . import bot_settings as BS
+from . import sources as SRC
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -202,8 +204,9 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert", "letter")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
+                   "letter": ("letter_id", "approval_hash", "proof", "recipient", "return_address", "mail_class", "total_micros"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
                    "merge": ("repo", "pr"),
@@ -1090,7 +1093,7 @@ def person_sent(message):
     return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
-def _json(value, default=None):
+def _json(value, default=None) -> Any:
     """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
     name (row['refs'] is the dict), so a dict or list passes through."""
     if isinstance(value, (dict, list)):
@@ -1105,6 +1108,66 @@ def _json(value, default=None):
 
 def _dump(value):
     return json.dumps(value, sort_keys=True, default=str) if value is not None else None
+
+
+def sourced_text(text, sources=(), refs=None):
+    """Pair generated text with the identities it copies, for message refs or event/history data.
+
+    Keep the pair together when forwarding text to another store: its readers use readable_page_refs before
+    projecting away metadata. Existing refs survive, and repeated copies keep only one of each source.
+    """
+    refs = dict(refs or {})
+    kept = list(refs.get("body_sources") or [])
+    for source in sources:
+        if source and source not in kept:
+            kept.append(source)
+    if kept:
+        refs["body_sources"] = kept
+    return text, refs
+
+
+def answer_question(conn, target):
+    """The stored question behind either kind of structured answer target."""
+    if target.get("comment"):
+        return message(conn, target["comment"])
+    row = conn.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
+                       (target.get("file"), target.get("version"))).fetchone()
+    return message(conn, row[0]) if row and row[0] else None
+
+
+def answer_text(question, answers, *, text=None, other=None, passed=None, refs=None, file_subject=False):
+    """Pair answer prose with sources resolved from the stored question, never from the submitted picks.
+
+    A map names structured picks; a string quotes an option or the question's fallback. Callers may supply their
+    prose, but source resolution stays here for held, automatic, quoted and delivered answers alike.
+    """
+    asked = (question or {}).get("refs") or {}
+    questions = asked.get("questions") or []
+    passed = passed or {}
+    labels = {q["id"]: {o["label"]: o.get("source") or {"file": o["file"]}
+                         for o in q.get("options") or [] if o.get("source") or o.get("file")}
+              for q in questions}
+    labels = {qid: sources for qid, sources in labels.items() if sources}
+    if isinstance(answers, str):
+        wanted = answers.strip().casefold()
+        copied = {q["id"]: [o["label"] for o in q.get("options") or []
+                            if str(o["label"]).strip().casefold() == wanted] for q in questions}
+    else:
+        copied = answers or {}
+    sources = [source for qid, options in labels.items() for label, source in options.items()
+               if label in copied.get(qid, []) or label in passed.get(qid, [])]
+    default = asked.get("if_no_answer") or {}
+    if isinstance(answers, str) and answers.strip().casefold() == str(default.get("do") or "").strip().casefold():
+        sources.append(default.get("source"))
+    if file_subject and (asked.get("target") or {}).get("file"):
+        sources.append(asked["target"])
+    if text is None:
+        lines = [f"{qid}: {', '.join(picks)}" for qid, picks in sorted(copied.items()) if picks]
+        text = "\n".join([*lines, *([other] if other else [])])
+    refs = dict(refs or {})
+    if isinstance(answers, dict) and labels and refs.get("answer"):
+        refs["answer"] = {**refs["answer"], "label_sources": labels}
+    return sourced_text(text, sources, refs)
 
 
 def payload_hash(payload):
@@ -1761,6 +1824,7 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "via": VIA.get()}
         if VIA.get() in ("botops", "assistant") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
+    detail = SRC.stamp_data(detail, actor)      # what a keeper event was for (backend/sources.py), when a scope names it
     row = {"id": new_id(), "created_at": now(), "actor": str(actor), "action": action,
            "target": str(target or ""), "detail": _dump(detail)}
     conn.execute("INSERT INTO events (id, created_at, actor, action, target, detail) "
@@ -3555,7 +3619,7 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
     row = {"id": new_id(), "conversation_id": conv["id"], "sender_id": actor, "recipient_id": target,
-           "kind": kind, "body": str(body or ""), "refs": _dump(refs or {}),
+           "kind": kind, "body": str(body or ""), "refs": _dump(SRC.stamp(refs or {}, actor)),
            "in_reply_to": in_reply_to, "created_at": now(), "delivered_at": delivered_at,
            "read_at": read_at, "expires_at": expires_at, "wait_s": wait_s}
     if delivered_at is None:
@@ -3671,6 +3735,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
         refuse(conn, actor, "identity", f"{message_id} was not addressed to {actor}")
     path_mentioned(conn, actor, "reply", body if classify_text is None else classify_text, (comment_refs or {}).get("task"))
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
+    body, refs = answer_text(asked, body if classify_text is None else classify_text, text=body, refs=refs)
     if unknown:
         refs["unknown"] = True
     if turn_id:
@@ -3695,10 +3760,10 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
                                                               "task_id": about}, actor, revision=0)
     if about and asked["sender_id"] == "bot:goal-manager" and is_human(actor):
         from . import strategy_merge
-        strategy_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
+        strategy_merge.on_reply(conn, actor, task(conn, about), body, text_sources=refs.get("body_sources", []))
     if about and is_human(actor):
         from . import ask_ingest
-        ask_ingest.on_reply(conn, actor, about, body)     # repeats the ask filter merged here hear the answer too
+        ask_ingest.on_reply(conn, actor, about, body, text_sources=refs.get("body_sources", []))
     return msg
 
 
@@ -3731,6 +3796,23 @@ def mark_delivered(conn, actor, message_id, recipient=None):
                      (now(), message_id))
     event(conn, actor, "message.delivered", message_id)
     return message(conn, message_id)
+
+
+def asks_seen(conn, actor, ids, read=False):
+    """`actor`, a person, has the questions `ids` asked of them on their Needs you (delivered) or opened them there or on
+    their task (`read`, delivered too). Only open questions to them change, each once: a withdrawn question then says
+    whether they had seen it (backend/task_holds.py). Returns the ids that changed."""
+    at, out = now(), []
+    for mid in list(dict.fromkeys(str(i) for i in ids if i))[:200]:
+        cur = conn.execute(
+            "UPDATE messages SET delivered_at=coalesce(delivered_at,?)" + (", read_at=coalesce(read_at,?)" if read else "")
+            + " WHERE id=? AND recipient_id=? AND kind='ask' AND deleted_at IS NULL AND id IN (SELECT m.id FROM messages m "
+            "WHERE m.id=messages.id AND " + OPEN_ASK_SQL + ") AND (delivered_at IS NULL" + (" OR read_at IS NULL)" if read else ")"),
+            (at, at, mid, actor) if read else (at, mid, actor))
+        if cur.rowcount:
+            out.append(mid)
+            event(conn, actor, "message.read" if read else "message.delivered", mid)
+    return out
 
 
 def mark_read(conn, actor, message_id, recipient=None):
@@ -3859,6 +3941,17 @@ def task_private_readable(conn, actor, row):
     if not row:
         return False
     row = dict(row)
+    from . import counsel, teammate_access
+    copied = counsel.page_copies(conn).get(row["id"])
+    if copied and (not copied["removed"] or copied["page"]["state"] == "deleted"):
+        # Native hub connections autocommit. A read gate must not leave their later writes in a new transaction.
+        outside = not conn.in_transaction
+        try:
+            if not counsel.page_copy_readable(conn, copied, teammate_access._viewer_for(conn, actor)):
+                return False
+        finally:
+            if outside and conn.in_transaction:
+                conn.rollback()
     if not task_private(conn, row):
         return True
     if "owner_id" not in row or "requester_id" not in row:
@@ -4998,7 +5091,7 @@ def _answered(conn, actor, task_id, card, told=None):
         return False
     name = person_name(conn, person)
     said = str(card.get("note") or "").strip() or {"done": "Done.", "declined": "Declined."}.get(card["status"], "")
-    closer = "Tico" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
+    closer = "The system" if actor == KEEPER else person_name(conn, actor)   # the keeper closes an ask that expired
     if card["status"] == "closed":
         who = f"{name} closed the ask" if actor == person else f"{closer} closed the ask to {name}"
     else:
@@ -5123,9 +5216,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if kind == "pr" and match:
         # GitHub treats owner and repository names case-insensitively, so one pull request is one link.
         # A duplicate made before this matched by exact URL stays reachable through its own URL.
-        have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
-                          "ORDER BY url=? DESC, created_at LIMIT 1",
-                    (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url))
+        from . import pr_identity as PR
+        candidates = _rows(conn.execute(
+            "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
+            "ORDER BY url=? DESC, created_at",
+            (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url)))
+        have = next((p for p in candidates if PR.same(p, url)), None)
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
@@ -5551,12 +5647,13 @@ CHECK_MODEL_SQL = ("SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task
                    "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner_id=?")
 
 
-def _subtask_result_parent(conn, row):
-    """The bot-owned parent allowed to receive this child's result, without widening its readers."""
+def _subtask_result_parent(conn, row, *, bot_only=True):
+    """The parent allowed to receive this child's result, without widening its readers."""
     parent = task(conn, TR.parent_of(conn, row["id"]) or "")
-    if not parent or not is_bot(parent["owner_id"]):
+    if not parent or bot_only and not is_bot(parent["owner_id"]):
         return None
-    if not bot_reads_task(conn, parent["owner_id"], parent) or not task_private_readable(conn, parent["owner_id"], row):
+    if ((is_bot(parent["owner_id"]) and not bot_reads_task(conn, parent["owner_id"], parent))
+            or not task_private_readable(conn, parent["owner_id"], row)):
         return None
     if task_private(conn, row) and (not task_private(conn, parent) or not all(
             task_private_readable(conn, who, row) for who in (parent["owner_id"], parent["requester_id"]) if who)
@@ -5669,8 +5766,9 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     if resume_hint:
         text = ("Subtask result returned to this task's session. Continue this task here; the result needs "
                 "no relay, separate delivery turn or task run command.\n\n" + text)
-    _wake(conn, parent, parent["owner_id"], text, refs=refs, source=source or row["id"],
-          quiet_bots=silent, quiet=silent)
+    verdict_moves.forward(conn, parent, parent["owner_id"], text, refs,
+                          sources=[*(moved or {}).get("source_tasks", []), row["id"]], source=source,
+                          quiet_bots=silent, quiet=silent)
 
 
 def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
@@ -5861,10 +5959,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if is_human(actor) and row["owner_id"] == "bot:goal-manager":
         from . import strategy_merge
         # a person's answer to the Strategy Bot's merged item goes to each asker
-        strategy_merge.on_reply(conn, actor, row, text)
+        strategy_merge.on_reply(conn, actor, row, text, text_sources=refs.get("body_sources", []))
     if is_human(actor):
         from . import ask_ingest
-        ask_ingest.on_reply(conn, actor, task_id, text)     # repeats the ask filter merged here hear the answer too
+        ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
     return msg
 
 
@@ -6286,7 +6384,7 @@ ASK_QUOTE_MAX = 4000        # a quoted answer is what the person said, not a doc
 
 
 @private_task_write
-def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False):
+def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False, text_sources=()):
     """Settle an open question on a task that was answered somewhere else, or is no longer wanted.
 
     With `quote`, the person's words from where they answered (a chat, a call): the question's asker, or the task's
@@ -6332,15 +6430,18 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
                 "quoted": True, "for": person}
         if relay:
             del refs["quiet"]
+        _, refs = sourced_text(quote, text_sources, refs)
+        text, refs = answer_text(asked, quote, text=f'{name(person)} (quoted by {name(actor)}): "{quote}"', refs=refs)
         if asked["refs"].get("questions"):
             # Read as any other structured answer (`task_answers`): the person's words are its free text.
             refs["answer"] = {"target": {"comment": message_id}, "other": quote, "dismiss": False,
                               "answers": {q["id"]: [] for q in asked["refs"]["questions"]},
                               "by": person, "quoted_by": actor, "at": ts, "quoted": True}
+            _, refs["answer"] = sourced_text(quote, refs.get("body_sources", []), refs["answer"])
         # The answer is the person's words, recorded by `actor`. A bot that asked hears it on its next turn (its inbox)
         # when someone else recorded it; an asker recording its own, or the keeper, needs no message.
         own = actor == asker or not is_bot(asker)
-        reply = _write_message(conn, actor, asker, f'{name(person)} (quoted by {name(actor)}): "{quote}"',
+        reply = _write_message(conn, actor, asker, text,
                                conversation(conn, asked["conversation_id"]), "answer", refs, message_id, None,
                                delivered_at=ts if own else None, read_at=ts if own else None)
     _task_event(conn, task_id, actor, "ask", message_id, "answered" if reply else "withdrawn")
@@ -6410,10 +6511,6 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent and review_gate.is_review(conn, parent, title):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
-    if parent:
-        review_gate.refuse_second(conn, actor, parent, title, review_prs)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -6442,6 +6539,13 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    if parent:
+        audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "guest": None}
+        body = review_gate.bind_prs(conn, actor, parent, title, body, child=audience)
+        if review_gate.is_review(conn, parent, title):
+            review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
+                              prs=review_gate.request_prs(conn, parent, title, body))
+        review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     title = str(title or "").strip()
     body = str(body or "")
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
@@ -7313,6 +7417,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, verdict_moves.skip, after)
         else:
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
+    elif row.get("blocked_since") and not after.get("blocked_since"):
+        from . import check_pools, verdict_moves
+        check_pools.safely(conn, verdict_moves.resumed, task_id)
     from . import task_check_backs
     task_check_backs.ensure(conn, after)
     if check_back_at is not None or check_back_note is not None:
@@ -7973,6 +8080,7 @@ def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=Non
     for a caller whose id is deterministic (backend/task_check_backs.py)."""
     if subject_type not in HISTORY_SUBJECTS:
         raise ValueError(f"unknown history subject type {subject_type!r}")
+    data = SRC.stamp_data(data, actor)
     event_id = event_id or new_id()
     conn.execute("INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, action_id, "
                  "via, data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -8913,7 +9021,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
     return approval(conn, row["id"])
 
 
-def approval_decide(conn, actor, approval_id, decision, note=""):
+def approval_decide(conn, actor, approval_id, decision, note="", *, note_sources=()):
     """Rule 6. Only a human decides, and only once."""
     _writer(conn, actor)
     if not is_human(actor):
@@ -8932,7 +9040,8 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
     conn.execute("UPDATE approvals SET decision=?, decided_by_id=?, decided_at=?, decided_via=?, decided_for=? "
                  "WHERE id=?", (decision, actor, ts, "assistant" if delegated else None,
                                 _dump(delegated) if delegated else None, approval_id))
-    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note})
+    note, provenance = sourced_text(note, note_sources)
+    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note, **provenance})
     after = approval(conn, approval_id)
     if row.get("task_id"):
         from . import task_holds
@@ -8940,9 +9049,10 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
     if conv:
+        text, refs = sourced_text(f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
+                                  note_sources, {"approval": approval_id})
         _write_message(conn, KEEPER, row["requested_by_id"],
-                       f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
-                       conv, "notice", {"approval": approval_id}, None, None)
+                       text, conv, "notice", refs, None, None)
     _recount(conn, row["requested_by_id"])
     hook(conn, "approval.decided", approval_id, lambda: {**_approval_facts(row), "decision": decision, "decided_by_id": actor},
          actor, revision=decision)
@@ -9373,7 +9483,7 @@ def conversations_for(conn, actor, limit=100):
 
 
 def chats_with(conn, actor, bot_actor_id):
-    """The open chats (not task threads) that this actor and this bot are both in, newest first.
+    """The actor's open chat with this bot, or its readable Home after the bot's chats move, newest first.
     Found directly, not from the newest conversations: a bot's page opened a month after the last
     message still finds its chat (conversations_for scans a recent window only)."""
     out = []
@@ -9383,6 +9493,15 @@ def chats_with(conn, actor, bot_actor_id):
         row["participants"] = _json(row.get("participants"), []) or []
         if actor in row["participants"] and bot_actor_id in row["participants"]:
             out.append(row)
+    from . import bot_home_merge
+    home_id = bot_home_merge.home_for_chat(conn, actor, bot_actor_id, create=False)
+    if home_id:
+        home = _one(conn, "SELECT * FROM conversations WHERE id=?", (home_id,))
+        if home and all(row["id"] != home_id for row in out):
+            home["participants"] = _json(home.get("participants"), []) or []
+            out.append(home)
+            out.sort(key=lambda row: (row.get("last_message_at") or row.get("created_at") or "", row["id"]),
+                     reverse=True)
     return out
 
 
@@ -9836,8 +9955,9 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
                              key=lambda row: (-sum(v for k, v in row.items() if k != "actor"), row["actor"]))}
 
 
-def task_history(conn, task_id):
-    return _rows(conn.execute(f"SELECT {TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
+def task_history(conn, task_id, *, provenance=False):
+    columns = TASK_EVENT_COLUMNS + (", data" if provenance else "")
+    return _rows(conn.execute(f"SELECT {columns} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
 
 
 def unanswered_ask(conn, task_row, *, actor=None):

@@ -567,10 +567,12 @@ files a task for you, or sets its own task waiting on you (`hub task update --st
 <you> --note "<what you need to do>"`). A bot's waiting note, or the first paragraph of a task it gives
 you, must say in one or two plain sentences what it needs and what happens after, with no ids, file
 paths or tool names; Tico refuses it otherwise. A task a bot set waiting on you before that rule, with
-no plain ask, sits at the bottom of Needs you as "Waiting for <bot> to explain" while the bot's task roundup lists it to restate it. All of these appear in **Needs you** at the top of **Tasks** with
-**Reply**, **Approve** / **Decline**, **Done** / **Close**. Needs you is your queue: approvals and
-questions first (each blocks a bot), then your own tasks in rank order. Tickets on a numbered type
-stay on their board and come to Needs you only with a question for you ([Tasks](tasks.md)). There
+no plain ask, sits at the bottom of Needs you while the bot's task roundup lists it to restate it.
+**Needs you** at the top of **Tasks** lists everything waiting on you across all boards. Rows answerable
+on a card open that card; other rows open the full task. **Catch up** walks the answerable cards one
+at a time. The tab, list header and Tasks badges share their count, independent of the selected board;
+the badges hide at zero. Tickets on a numbered type stay on their board and come to Needs you only
+with a question for you ([Tasks](tasks.md)). There
 is no priority; a mover (anyone in the leadership, product or engineering group) drags a task up or
 down, into another column, or between lanes; everyone else sees the board and comments.
 
@@ -600,12 +602,21 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
+| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Manager** | people, a task given to it, its own clock | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |
+
+A production acceptance run is recognised by its title: a run verb (run, rerun, re-run, execute, perform, carry out,
+complete, finish, check, verify or do), then at most two words, none of them a build or change verb such as write,
+update or fix, then "production acceptance", then the end of the title, a colon, a comma, an opening bracket, or one of
+these words: for, after, on, against, in, at, with, from, to, before, during, of, and, through, across, test, tests,
+suite, run, pass, sweep, check, checks, again, now, today, as or once. A title that starts "Production acceptance run"
+also counts. The same title counts whether the task is top-level or a subtask. "Run production acceptance for billing"
+is a run. "Write production acceptance tests" and "Finish writing production acceptance tests" are ordinary work and go
+to a Doer, and so is "Run production acceptance plan": "plan" is not one of those words, so that title is not a run.
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
 snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a

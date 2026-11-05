@@ -17,6 +17,10 @@ software: a web frontend your team builds, a script, another service. This page 
   connection is safe. The same key with a different body is `409 idempotency_conflict`.
   Message receipts saved before an upgrade still accept the same request when the earlier server hashed its
   resolved Home. The retry uses the saved room and recipient, even if routing has since changed.
+- **Bot asks to people:** a task, handoff, wait or question that fails the person’s asking criteria returns
+  `422 ask_refused`, with the reason and fix in `error.detail`. Nothing is created or changed, and it counts toward
+  no quarantine or org-rule hold. A progress note is refused with instructions to post an update. Chores use the
+  main ask budget. Merged repeats and fail-open behavior are unchanged.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers
@@ -73,11 +77,22 @@ The operation groups below are generated from the committed spec's tags. After r
 | Feedback | A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
+| Email | Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids. |
+| Letters out | Physical letters sent through the Gateway; approvals bind the saved proof and price. |
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
+| Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
 | Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
+
+`GET /api/v2/needs-you` returns `plate_count` in every response: count-only (`count=1`), unchanged,
+selected ids, full list and pages. It counts unique task, question, waiting, approval, ask, stale and
+memory_tidy items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
+Thread and update attention are excluded. `count` retains the broader attention total used by the
+desktop poll. Both counts describe the whole list, including unread pages. Live `needs` events also
+carry `plate_count`; a client subtracts any plate items it still holds that were just answered locally.
+Use `ids=` to mend changed rows after a live event, and `limit`/`cursor` to load more rows as needed.
 
 ## Stable and internal
 

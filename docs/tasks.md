@@ -7,7 +7,7 @@ each standard status except waiting and declined (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
-other types. A type is always selected, and both the list and board show only its tasks. The board
+other types. A type is always selected, and Open and Board show only its tasks. The board
 uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
 way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
 it. A task that finishes leaves the board unless its finished steps are unfolded. Done tasks are under
@@ -44,10 +44,15 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
-**Needs you** counts the tasks waiting on you in the selected type and filters, plus approvals and
-questions outside any task. The count includes those on unread pages and stays the same on a phone
-and desktop. Tasks folded or merged into another card count only through that card, even before it loads.
-Thread mentions, unread DMs and held messages are counted in Inbox.
+**Needs you** counts everything waiting on you across every board: tasks, questions, waits, recent declines,
+approvals, asks, stale checks and nightly memory tidy. The tab and Tasks navigation badges show the
+same count on desktop and phone; the badges hide at zero. Under **Asked by**, approvals, questions
+outside tasks, stale checks and memory tidies lead under **Approvals and questions**, with their own count.
+**Catch up** opens the answerable cards one at a time. It has no number and appears only when a card is
+available. Other rows open the full task. Board, search and task filters stay with Open and Board and
+never narrow this queue. Folded or merged tasks count only through their card. The count includes unread
+pages; answering removes an item immediately and Undo restores it. Live changes update the held rows.
+Thread mentions, unread DMs and held messages keep their own count in Threads; updates stay in Updates.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
@@ -460,47 +465,48 @@ Trees with unpushed work stay and show the reason. Keep the task at its real ste
 
 ## What bots may put on you
 
-Bots can file a person more than they can decide. The ask filter judges each bot item before it lands on a person's
+Bots can file a person more than they can decide. Tico checks each bot ask before it lands on a person's
 Needs you: a task filed for them, a question to them (on a task or not) and a bot task set waiting on them. People's
-own writes (also through their Assistant), required approvals and Tico's own items are never filtered; they still
+own writes (also through their Assistant), required approvals and Tico's own items skip this check; they still
 count toward how full the plate is. When your Tico has a [decision model](how-it-works.md), one call per item asks
 the `person-ask-ingest` question set (`questions/person-ask-ingest.json`): is it clear, what kind of ask it is, which
 of your lines it meets, whether it repeats one of your open items, how urgent it is and whether the bot recommends
-something. Plain code then decides from the answers, your settings and your open items (snoozed ones left out):
+something. The model reads the whole ask: the question line, its why, each option with its then, the recommended option
+and the task body. The question lines come first and are never cut; the body follows and fills what is left of 1,500
+characters, and is left out when the lines use up that room. A question set can run past 1,500 characters on its own;
+then it reads in full, with no body. An ask without structured questions is cut to 1,500 characters. Plain code then
+decides from the answers, your settings and your open items (snoozed ones left out):
 
 | The item | What happens |
 | --- | --- |
-| Repeats one of your open items | Joins it: the bot keeps its own, and your answer there goes back to it once. |
-| A progress note | FYI: stays with the bot; no wait is set. |
-| A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
-| Work the bot could do itself, or unclear | Sent back to the bot. |
+| Repeats one of your open items | Joins it when the bot may read that item in full. Otherwise the item is judged as new. The bot keeps its own, and your answer there goes back to it once, if the bot can still read the item. |
+| A progress note | Refused: post it as an update instead. |
+| A hands-only chore (grant access, merge, add a key) | Uses the main budget and appears as an ordinary Needs you item. |
+| Work the bot could do itself, or unclear | Refused, with the reason and what to fix. |
 | Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also meets one of your lines and recommends something. 10B or more: only something that can't wait at all. |
 
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
-note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
-refusal: the write succeeds and stays with the bot, and its reply says why and what to do, naming the bot's manager.
-A question sent back from a bot's own task leaves that task's status and note as they were; the reason is a quiet
-comment on it.
-Anything the filter can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
-its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
-readout counts the outcomes and what people let through.
+note: that is refused however urgent, and a repeat still joins your open item when the bot may read it in full. A
+refusal fails the bot's write with `422 ask_refused`: the error gives the reason and a plain fix, including the
+bot's manager where relevant. No task, wait, question or message is created. An existing task keeps its owner,
+status and note. A refusal counts toward no quarantine and creates no org-rule hold. A bulk handoff reports each
+refused item under skipped and continues with the rest.
+Anything Tico can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
+its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text. Each judged
+item, including a refusal, has an `ask_ingest_items` audit row; a refusal's ref is empty because nothing was created.
+Decide's readout counts those outcomes and reconciles their calls.
 
-**Settings → Tasks → What bots may put on you** sets Off or On, the budget, the chores budget and up to
-ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
-**Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
-ships as **On**. **Filtered for you**, a folded line at the foot of Needs you, lists what was kept off today, and
-**Let it through** puts an item on your plate in one click and tells the bot once. A Rehearsal saved before this
-change reads as On. **Replay a day** on the settings card judges one past day's bot
-items with your settings and your plate as it was then, so you can see what On would have done before you turn it
-on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
-"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
-judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
-titles they may read.
+**Settings → Tasks → What bots may put on you** sets Off or On, the budget and up to ten lines of what you want to be
+asked about; an owner or admin sets the team default everyone starts from, and **Use the team default** goes back to
+it. A change applies to the next item; nothing already on a plate moves. It ships as **On**. Off makes no check. A
+stored Rehearsal reads as On. An old stored `chores_budget` is ignored.
+**Replay a day** judges one past day's existing bot items with your settings and your plate as it was then; nothing
+moves. Refused writes have no saved item text to replay. Older items kept with a bot before refusals were introduced
+can still be replayed. An owner or admin replaying someone else's day sees only the titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings` (`mode` is `off` or `on`; a `rehearsal` sent is saved as `on`),
-`GET /api/v2/ask-ingest/filtered?hours=24`,
-`POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
-of up to 25; the person, or an owner or admin).
+`POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page of up to 25; the person, or an owner or admin).
+The old kept-items list and let-through endpoints are retired.
 
 ## Picking work back up
 
@@ -960,9 +966,10 @@ to a working step. Deleting a waiting step returns its tickets to the step they 
 when that step is gone, so no ticket is lost to a deleted column.
 
 A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
-Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
-dependency on one of those checks holds it. A Review or QA check that is itself Waiting, or blocked by
-an open task, holds its ticket at its step with the check's reason ("QA blocked: GitHub refused the remote
+On an engineering ticket (a Dev ticket), Review, QA and Security check children, and a production acceptance run a bot
+owns under the ticket, keep the ticket in its pipeline step; only an explicit dependency on one of those checks holds it.
+On any other ticket, such a child is held like any other open child task.
+On an engineering ticket, a Review or QA check that is itself Waiting, or blocked by an open task, holds its ticket at its step with the check's reason ("QA blocked: GitHub refused the remote
 test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's thread for that
 hold. When the check works again, the ticket returns to its step.
 

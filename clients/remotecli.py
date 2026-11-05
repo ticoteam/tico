@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import uuid
@@ -248,7 +249,7 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "email", "connections", "alerts"):
+    if args.cmd in ("mail", "email", "letter", "connections", "alerts"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
         return via_tool(client, args)
@@ -341,7 +342,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task bulk", "task model", "task meetings"):
+    if fn in ("task child create", "task tree", "task bulk", "task model", "task meetings", "task context"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):
@@ -1364,6 +1365,19 @@ def strategy_section_text(result, key):
 
 
 def email_text(result, action):
+    if action in ("archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"):
+        verb = {"archive": "Archived", "unarchive": "Unarchived", "mark-read": "Marked read",
+                "mark-unread": "Marked unread", "label": "Labeled", "unlabel": "Unlabeled"}[action]
+        text = f"{verb} {result['count']} messages in {result['mailbox']}."
+        if not result['count']:
+            return text
+        undo = result['undo']
+        words = ['hub', 'email', undo['action'].replace('_', '-'), result['mailbox']]
+        if 'label' in undo:
+            words.append(undo['label'])
+        command = shlex.join(words + undo['ids'])
+        return text + (" Undo: " + command if len(command) <= 1000 else
+                       " Undo: use the inverse action and ids from --json.")
     if action == "mailboxes":
         boxes = result.get("mailboxes") or []
         return "# Email mailboxes\n\n" + ("\n".join("- " + box["address"] for box in boxes) or "No readable mailboxes.")
@@ -1389,7 +1403,8 @@ def email_text(result, action):
 def main(args, who=None):
     try:
         result = run(args, who)
-        if args.cmd == "email" and not args.json:
+        if args.cmd == "email" and args.sub in ("mailboxes", "inbox", "search", "thread", "message", "archive",
+                                                "unarchive", "mark-read", "mark-unread", "label", "unlabel") and not args.json:
             print(email_text(result, args.sub))
         elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))
@@ -1408,6 +1423,8 @@ def main(args, who=None):
         elif args.cmd in ("brand", "growth") and not getattr(args, "json", False) and args.fn != "growth numbers":
             print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
+            print(result["text"])
+        elif args.fn == "meeting read" and getattr(args, "notes", False):
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.

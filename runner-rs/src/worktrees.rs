@@ -102,7 +102,11 @@ pub fn safe_path(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
     let path = root.join(raw);
     let parts: Vec<_> = raw.components().collect();
     let dotdot = parts.iter().any(|c| matches!(c, std::path::Component::ParentDir));
-    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() || is_symlink(&path) {
+    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() {
+        return Err("Use a worktree inside the team workspace".into());
+    }
+    crate::repo_safety::outside_installation(&path)?;
+    if is_symlink(&path) {
         return Err("Use a worktree inside the team workspace".into());
     }
     let resolved = resolve(&path);
@@ -146,6 +150,7 @@ pub fn disk_floor(workspace: &Path) -> R<()> {
 
 /// Runner git in a worktree or base clone (worktrees.git): the restricted environment, at most 120 s.
 pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
+    crate::repo_safety::outside_installation(path)?;
     if args.len() >= 2 && args[0] == "worktree" && args[1] == "prune" && is_symlink(&path.join(".git").join("worktrees")) {
         return Err(WtErr::msg("Worktree registrations point outside the base clone; left as they are"));
     }
@@ -170,6 +175,7 @@ pub struct TaskLock(#[allow(dead_code)] crate::lock::FileLock);
 pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     let tasks = workspace.join("tasks");
     let folder = tasks.join(".locks");
+    crate::repo_safety::outside_installation(&folder)?;
     if is_symlink(&tasks) || is_symlink(&folder) {
         return Err(WtErr::msg("Worktree locks point through a symlink; left as they are"));
     }
@@ -228,6 +234,7 @@ fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBu
     }
     let tasks = resolve(workspace).join("tasks");
     let folder = tasks.join(".checkout-state");
+    crate::repo_safety::outside_installation(&folder)?;
     if is_symlink(&tasks) || is_symlink(&folder) {
         return Err(WtErr::msg("Worktree initialization state points through a symlink; left as it is"));
     }
@@ -253,7 +260,7 @@ fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBu
 /// foreign hard link in it changes nothing.
 fn adopt_task_state(workspace: &Path, name: &str) {
     let folder = resolve(workspace).join("tasks").join(name);
-    if folder.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+    if crate::repo_safety::outside_installation(&folder).is_ok() && folder.symlink_metadata().is_ok_and(|m| m.is_dir()) {
         crate::isolation::adopt(&[folder]);
     }
 }
@@ -597,6 +604,8 @@ async fn patch_checkout(client: &Client, task: &str, link: &str, checkout_state:
 /// Create a queued checkout, or resume an interrupted one, with its local proof written before and after
 /// `git worktree add` (_create_or_resume_checkout). Returns (expected_head, checkout_target, expected_base).
 async fn create_or_resume(path: &Path, c: &Checkout<'_>, base: &Path, default: &str, link: &Map<String, Value>, task: &str, client: &Client) -> R<(String, String, String)> {
+    crate::repo_safety::outside_installation(path)?;
+    crate::repo_safety::outside_installation(base)?;
     let mut state = Some(own(link, "checkout_state")).filter(|s| !s.is_empty()).unwrap_or_else(|| "queued".into());
     let fresh_queued = state == "queued";
     let (mut expected, mut target, mut expected_base) = (own(link, "expected_head"), own(link, "checkout_target"), own(link, "expected_base"));
@@ -695,6 +704,7 @@ fn setup_environment(env: &Env) -> Env {
 /// Run the repository's setup command in a new worktree (worktrees.setup): as the bot user, its own process
 /// group, output discarded, at most ten minutes. It gets no granted credentials, so it takes no leased turn user.
 async fn setup(path: &Path, command: &str, env: &Env) -> R<()> {
+    crate::repo_safety::outside_installation(path)?;
     if command.is_empty() {
         return Ok(());
     }
@@ -790,9 +800,9 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
     let mut link = row.as_object().cloned().unwrap_or_default();
     link.extend(detail(row));
     link.insert("link_id".into(), row["id"].clone());
+    let path = safe_path(workspace, &text_of(&row["path"]))?;
     let _lock = locked(workspace, &text_of(&row["path"])).await?;
     let mut branch = checked_branch(&text_of(&row["branch"])).await?;
-    let path = safe_path(workspace, &text_of(&row["path"]))?;
     let name = own(repo, "full_name");
     let state = Some(own(&link, "checkout_state")).filter(|s| !s.is_empty()).unwrap_or_else(|| "queued".into());
     if state == "queued" || state == "initializing" {
@@ -1248,6 +1258,8 @@ impl Drop for Scratch {
 
 /// True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited.
 async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -> R<bool> {
+    crate::repo_safety::outside_installation(path)?;
+    crate::repo_safety::outside_installation(gitdir)?;
     let Ok(text) = regular_file::text(path.join(name), 20 * CONTENT) else { return Ok(false) };
     let mut stages: HashMap<&str, String> = HashMap::new();
     for stage in ["1", "2", "3"] {
@@ -1263,7 +1275,9 @@ async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -
         return Ok(false);
     }
     let base = stages.get("1").cloned().unwrap_or_default();
-    let scratch = Scratch(gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple())));
+    let scratch = gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple()));
+    crate::repo_safety::outside_installation(&scratch)?;
+    let scratch = Scratch(scratch);
     std::fs::create_dir_all(&scratch.0)?;
     let (o, b, t) = (scratch.0.join("ours"), scratch.0.join("base"), scratch.0.join("theirs"));
     regular_file::write(&o, ours.as_bytes(), 20 * CONTENT, true)?;
@@ -1364,6 +1378,7 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
+    safe_path(workspace, &own(row, "path"))?;
     let _lock = locked(workspace, &own(row, "path")).await?;
     let done = act_inner(workspace, row, action, env, vault, &still_closed).await;
     match done {
@@ -1961,6 +1976,9 @@ mod tests {
         std::fs::create_dir_all(folder.0.join("tasks/task/product")).unwrap();
         manager.clone().sync(Arc::new(IdleHost), vec![]).await;
         assert_eq!(manager.latest()[0]["error"], json!("Could not find it: Tracked path is not a Git worktree; left as it is"));
+        std::fs::write(folder.0.join("tasks/task/product/.git"), "gitdir: /nonexistent/worktree\n").unwrap();
+        manager.clone().sync(Arc::new(IdleHost), vec![]).await;
+        assert!(manager.latest()[0]["error"].as_str().unwrap().starts_with("Could not read its remote: Git config failed"));
         server.abort();
     }
 
@@ -2026,6 +2044,28 @@ mod tests {
         assert_eq!(host.attempts.load(Ordering::SeqCst), 2);
         assert_eq!(std::fs::read_to_string(&wanted).unwrap(), "unfinished work");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn workspace_state_and_scratch_refuse_install_links_before_writing() {
+        let root = std::env::temp_dir().join(format!("tico-state-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = crate::env::root().join("templates");
+        for relative in ["tasks", "tasks/.locks", "tasks/.checkout-state", "scratch"] {
+            let workspace = root.join(uuid::Uuid::new_v4().simple().to_string());
+            let link = workspace.join(relative);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let problem = match relative {
+                "tasks" | "tasks/.locks" => locked(&workspace, "task").await.err().unwrap().text(),
+                "tasks/.checkout-state" => marker_path(&workspace, "link", true).unwrap_err().text(),
+                _ => untouched_conflict(&workspace, &link, "file", &Env::new()).await.unwrap_err().text(),
+            };
+            assert!(problem.starts_with("Repository path is inside the Tico install:"), "{problem}");
+            assert!(!target.join(".locks").exists());
+            assert!(!target.join(".checkout-state").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

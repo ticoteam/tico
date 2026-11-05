@@ -6,7 +6,7 @@
 // What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
 // NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
 const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Sign in or connect'], ['review', 'Review and send'],
-  ['hands', 'Hands needed'], ['do', 'Do']];
+  ['do', 'Do']];
 const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
@@ -79,10 +79,10 @@ const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', th
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
-  const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
+  const name = stale ? KEEPER_LABEL : actorLabel(from) || KEEPER_LABEL;
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
   const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
-  const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
+  const face = stale ? personCircle(KEEPER_LABEL, 18) : actorFace(from, 18);
   const open = thread && it.conversation_id
     ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
     : it.kind === 'thread_held'
@@ -102,16 +102,9 @@ function needRowHTML(it, ctx = {}) {
 // thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
+const NEEDS_TASK_KINDS = ['task', 'question', 'waiting', 'declined'];
 const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
-const needsExtras = () => (S.v2?.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && !decideGone(decideItemKey(it)));
-// The Tasks count includes these on unread pages too, less cards just answered here. The whole attention count also
-// includes Inbox's items and other task types; switching to it while paging makes the number depend on scrolling.
-function needsExtrasCount() {
-  const counts = S.v2?.needsByKind;
-  if (!counts) return needsExtras().length;
-  const gone = (S.v2.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && decideGone(decideItemKey(it))).length;
-  return Math.max(0, NEEDS_EXTRA_KINDS.reduce((n, kind) => n + (counts[kind] || 0), 0) - gone);
-}
+const needsExtras = () => needsQueueItems().filter(it => NEEDS_EXTRA_KINDS.includes(it.kind));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
@@ -215,6 +208,7 @@ function approvalTitle(it) {
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
   if (it.what === 'mail_alert') return `Mail sending: ${approvalWho(p.bot)}`;
+  if (it.what === 'letter') return 'Send letter';
   return it.title || '';
 }
 function approvalFacts(what, p, it = {}) {
@@ -222,7 +216,19 @@ function approvalFacts(what, p, it = {}) {
   const shown = v => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
   const plain = v => typeof v === 'string' || typeof v === 'number';
   let rows, named;
-  if (what === 'publish') {
+  if (what === 'letter') {
+    const address = a => a && typeof a === 'object' ? [a.name, a.line1, a.line2, [a.city, a.state, a.postal_code].filter(Boolean).join(' ')].filter(Boolean).join('\n') : '';
+    const link = document.createElement('a');
+    link.textContent = 'Open PDF proof';
+    if (/^\/api\/v2\/files\/[A-Za-z0-9_-]+$/.test(String(p.proof || ''))) {
+      link.href = p.proof; link.target = '_blank'; link.rel = 'noopener';
+    }
+    rows = [['Proof', link], ['Recipient', address(p.recipient)], ['Return address', address(p.return_address)],
+      ['Class', shown(p.mail_class).replaceAll('_', ' ')], ['Print', `${p.color ? 'Color' : 'Black and white'} · ${p.duplex ? 'Duplex' : 'Single sided'}`],
+      ['Pages', shown(p.page_count)], ['Total', '$' + (Number(p.total_micros) / 1000000).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6})]];
+    if (p.reason) rows.push(['Why an OK is needed', shown(p.reason)]);
+    named = Object.keys(p);
+  } else if (what === 'publish') {
     const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
     rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url, p.title) : shown(p.url)],
       text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
@@ -378,57 +384,7 @@ async function staleDecide(button, path, body) {
     }
   }
 }
-// Filtered for you: what the ask filter kept off your plate today (backend/ask_ingest.py), folded at the foot of Needs
-// you. Let it through puts an item on your plate in one click and tells the bot that asked.
-const ASK_FILTER_WHY = {
-  status: 'A progress note: nothing to decide', covered: 'Same as one you already have open',
-  unclear: 'Doesn\u2019t say what to decide', own_work: 'Work a bot can do itself',
-  chores_full: 'Your hands-only chores were full', criteria: 'Over your budget and meets none of your lines',
-  recommends: 'Over your budget, without a recommendation or a reason it can\u2019t wait',
-  urgent_only: 'Your plate is full and it isn\u2019t urgent',
-};
-const ASK_FILTER_OUTCOME = {sent_back: 'Sent back', fyi: 'FYI', merged: 'Merged'};
-async function askFilteredLoad(state) {
-  const r = await v2Get('/v2/ask-ingest/filtered?hours=24');
-  if (TASKS_ST !== state) return;
-  const items = r?.items || [];
-  if (JSON.stringify(items) === JSON.stringify(state.filtered || [])) return;
-  state.filtered = items;
-  tasksRender(state);
-}
-function askFilteredRow(it) {
-  const done = !!it.let_through_at;
-  const what = ASK_FILTER_OUTCOME[it.would] || 'Filtered';
-  const title = it.task ? `<a href="#/task/${encodeURIComponent(it.task)}">${esc(it.title || 'Untitled')}</a>` : esc(it.title || 'A question');
-  const act = done ? '<span class="muted">Let through</span>'
-    : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
-  return `<div class="tl-filtered-row" role="listitem">
-    <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
-    <span class="tl-filtered-act">${act}</span></div>`;
-}
-function askFilteredHTML(state) {
-  const items = state?.filtered || [];
-  if (!items.length) return '';
-  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">Filtered for you</span>
-      <span class="tl-gcount tnum">${items.length}</span><span class="spacer"></span>
-      <a class="tl-gchat" href="#/settings/tasks" data-ask-filter-settings>What bots may put on you</a></summary>
-    <div class="tl-rows" role="list" aria-label="Filtered for you">${items.map(askFilteredRow).join('')}</div></details>`;
-}
-document.addEventListener('click', async ev => {
-  const button = ev.target.closest?.('[data-let-through]');
-  if (!button) return;
-  button.disabled = true;
-  try {
-    await post(`/v2/ask-ingest/items/${encodeURIComponent(button.dataset.letThrough)}/let-through`);
-    toast('On your plate; the bot that asked is told');
-    await v2Refresh();
-    if (TASKS_ST && isTasksRoute(S.route)) { await tasksLoad(TASKS_ST); }
-  } catch (e) {
-    toast(e.message || 'Not let through', true);
-    button.disabled = false;
-  }
-});
+
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.

@@ -11,7 +11,9 @@ An install that had routines moved them once, on the upgrade to Automations; see
 ## Making one
 
 - **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.
-  An automation's page shows its **Runs** and **Versions**.
+  An automation's page shows its **Runs** and **Versions**. On **Runs**, click a run to see its steps. A failed step
+  shows its reason after the word failed: the first line of its error, or the detail of its first failed action,
+  cut at 80 characters.
 - **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
   action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 
