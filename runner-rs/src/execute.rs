@@ -248,8 +248,10 @@ fn task_private(task: &Value) -> bool {
 
 /// A stateless bot's message with no task behind it (crate::continuity::stateless): a new session each time, none saved,
 /// and no process reused or kept. Decided by the task, not the session key, since `session: bot` keys every turn "bot".
+/// Make page also starts and stops its provider process within the request's scratch lifetime.
 pub fn stateless_chat(attempt: &Value) -> bool {
-    crate::continuity::stateless(&attempt["config"]) && text_of(&attempt["task"]["id"]).is_empty()
+    attempt["make_page"]["task"].is_object()
+        || crate::continuity::stateless(&attempt["config"]) && text_of(&attempt["task"]["id"]).is_empty()
 }
 
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
@@ -1500,6 +1502,12 @@ impl Runner {
                 }
             }
             env = crate::env::environment(&ctx, &attempt, &mut vault).await.map_err(Fail::runtime)?;
+            if attempt["make_page"]["task"].is_object() {
+                // Captured in base_env too, so every fallback keeps the same disposable workspace.
+                for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
+                    env.insert(key.into(), execution_path.display().to_string());
+                }
+            }
             // The subscription this bot runs on: Claude keys its login to HOME, so it is the turn's own environment,
             // the same one the host process and the turn's shell commands get.
             if let Some(p) = &selected {
@@ -1612,11 +1620,6 @@ impl Runner {
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
-            if attempt["make_page"]["task"].is_object() {
-                for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
-                    env.insert(key.into(), execution_path.display().to_string());
-                }
-            }
             memory_before = redact::head(&execution_path);
             if packet_only {
                 if !crate::harness_tools::caps_of(&config).packet_only {
@@ -2939,10 +2942,12 @@ mod tests {
             "conversation": {"id": "personal", "root_id": "personal", "audience_class": "private"},
             "make_page": {"task": {"id": "t1"}}});
         assert_eq!(session_key(&turn), "make-page:a1");
+        assert!(stateless_chat(&turn));
         turn["id"] = json!("a2");
         assert_eq!(session_key(&turn), "make-page:a2");
         turn.as_object_mut().unwrap().remove("make_page");
         assert_eq!(session_key(&turn), "root:personal:private");
+        assert!(!stateless_chat(&turn));
     }
 
     #[test]
