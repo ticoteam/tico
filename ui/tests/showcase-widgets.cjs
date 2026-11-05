@@ -71,7 +71,7 @@ async function framed(page) {
   };
   await page.route('**/api/v2/places/**', swap);
   await page.route('**/api/v2/pages/**', swap);
-  await page.route(FRAME, route => route.fulfill({contentType: 'text/html', body: SERVED}));
+  await page.route(FRAME, route => route.fulfill({contentType: 'text/html; charset=utf-8', body: SERVED}));
 }
 
 run('showcase-widgets', ['org', 'toured', 'groups', 'pages'], async ({hub, browser, phone, tag}) => {
