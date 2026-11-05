@@ -233,7 +233,7 @@ async function runScripts(files, jobs, run) {
 
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
-  const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meetings-pending', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
+  const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meetings-pending', 'task-live', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
                 'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'threads-halfway', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs;
