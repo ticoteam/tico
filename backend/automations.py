@@ -27,8 +27,9 @@ tells a slow catch-up from a loop, so a person decides: release the held runs to
 Turning the automation off or deleting it skips them too. A burst of distinct events inside a minute or two is a
 backlog and simply queues.
 
-Mail actions are carried out by the computer that reads the mailbox: it claims them (a lease of MAIL_LEASE_MINUTES,
-MAIL_TRIES claims at most) and reports each result; their step and run wait until then (`settle_mail`).
+Archive, label and leave run on the server for Whole Workspace mailboxes; other mail actions are carried out by the
+computer that reads the mailbox. Both claim a lease of MAIL_LEASE_MINUTES (MAIL_TRIES claims at most) and report each
+result; their step and run wait until then (`settle_mail`).
 
 The run state keeps every step's outputs for 30 days; after that `prune` keeps the status, cost and times only.
 """
@@ -128,6 +129,7 @@ MAIL_TRIES = 3           # claims a mail action gets before it fails
 # Mail actions safe to carry out again on any computer (Gmail label changes): an expired lease another computer held
 # goes back to the queue for these. The rest may already have run there (a sent draft, a sent unsubscribe request).
 REPEATABLE_MAIL = ("archive", "label", "leave")
+SERVER_MAIL = "server:workspace-mail"
 BOTOPS ="bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
@@ -2007,14 +2009,15 @@ class Hub:
             return pick
 
     def drain(self, limit=200):
-        """Run queued runs until none is left (or `limit`, so one request never drains forever)."""
+        """Advance queued runs, then Workspace mail; each pass is bounded so one request never drains forever."""
         done = 0
         while done < limit:
             rid = self.claim()
             if not rid:
-                return done
+                break
             self.go(rid)
             done += 1
+        drain_workspace_mail(self.store)
         return done
 
     def go(self, rid):
@@ -2074,7 +2077,7 @@ def _entries(record):
 
 
 def settle_mail(c, state):
-    """The run's queued mail actions as their computer reported them: a step waits while one of its actions is out
+    """The run's queued mail actions as their executor reported them: a step waits while one of its actions is out
     and is ok or failed by the results, and a run with nothing else to wait for waits while a step does. Returns the
     run's status."""
     pending = failed = False
@@ -2131,7 +2134,7 @@ def _chain_end(c, mid, state):
 
 
 def _requeue(c, row):
-    """Where a mail action goes when its lease runs out or its computer asks to retry: back in the queue, unless
+    """Where a mail action goes when its lease runs out or its executor asks to retry: back in the queue, unless
     its run has ended failed meanwhile."""
     run = c.execute("SELECT status FROM automation_runs WHERE id=?", (row["run_id"],)).fetchone() if row["run_id"] else None
     return "canceled" if run and run["status"] in ("failed", "skipped") else "queued"
@@ -2181,6 +2184,128 @@ def _mail_report(c, row, state, result):
         _chain_end(c, row["id"], "skipped" if state == "failed" else "canceled")
     if state in ("done", "failed") and row["run_id"]:
         _settle_run(c, row["run_id"])
+    if state == "done" and row["action"] in REPEATABLE_MAIL:
+        # Both executors leave the same ids-only receipt; mail content stays in Gmail.
+        auto = c.execute("SELECT flow FROM automations WHERE id=?", (row["automation_id"],)).fetchone()
+        via = H.VIA.set("automation:" + row["automation_id"])
+        try:
+            H.event(c, A.acts_as(c, {"flow": flow_of(auto)}) if auto else H.KEEPER, "mail.organize", row["mailbox"],
+                    {"mailbox": row["mailbox"], "action": row["action"], "count": 1, "ids": [row["msg_id"]]})
+        finally:
+            H.VIA.reset(via)
+
+
+def _server_mail(c, mailbox, action):
+    from . import google_workspace
+    return action in REPEATABLE_MAIL and google_workspace.authority(c, mailbox) == "workspace"
+
+
+# A retry waits one lease interval, so repeated doorbells cannot exhaust its tries during a Gmail outage.
+_MAIL_DUE = "((state='queued' AND (attempts=0 OR claimed_at IS NULL OR claimed_at<=:cutoff)) " \
+            "OR (state='claimed' AND claimed_at<=:cutoff))"
+
+
+def _claim_workspace_mail(store, mid):
+    """Lease one repeatable action in a short write; another drain or computer cannot also claim it."""
+    with store.transaction() as c:
+        now = H.now()
+        row = c.execute("SELECT * FROM automation_mail_actions WHERE id=:id AND " + _MAIL_DUE,
+                        {"id": mid, "cutoff": H.shift(now, minutes=-MAIL_LEASE_MINUTES)}).fetchone()
+        if not row or not _server_mail(c, row["mailbox"], row["action"]):
+            return None
+        if _requeue(c, row) == "canceled":
+            _mail_report(c, row, "canceled", {"ok": False, "detail": "canceled: the run failed"})
+            return None
+        if row["after"]:
+            prev = c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (row["after"],)).fetchone()
+            if not prev or prev["state"] != "done":
+                return None
+        if row["attempts"] >= MAIL_TRIES:
+            _mail_report(c, row, "failed", {"ok": False, "detail": f"no result after {MAIL_TRIES} tries"})
+            return None
+        c.execute("UPDATE automation_mail_actions SET state='claimed',claimed_at=?,claimed_by=?,attempts=attempts+1 "
+                  "WHERE id=?", (now, SERVER_MAIL, mid))
+        return {**dict(row), "state": "claimed", "claimed_at": now, "claimed_by": SERVER_MAIL,
+                "attempts": row["attempts"] + 1}
+
+
+def _workspace_mail(store, row):
+    """Recheck the owner's current rights, then change Gmail under a read connection, never a write lock."""
+    from connectors.mail import Refused
+    from connectors.mail.actions import label_name
+    from connectors.mail.labels import NEEDS_OWNER
+    from . import gmail_live, mailbox_access
+
+    with store.read() as c:
+        if not _server_mail(c, row["mailbox"], row["action"]):
+            return None                    # its credential changed: let the computer claim it instead
+        if store.settings.rehearsal or store.settings.demo:
+            raise Problem("rehearsal", "This install does not organize live email", 403)
+        owner = c.execute("SELECT owner_id FROM automations WHERE id=?", (row["automation_id"],)).fetchone()
+        args = json.loads(row["args"])
+        refused = mailbox_access.action_refusal(c, owner["owner_id"] if owner else "", row["mailbox"],
+                                                row["action"], args)
+        if refused:
+            raise Problem("forbidden", refused, 403)
+        if _requeue(c, row) == "canceled":
+            return None
+        if not row["msg_id"]:
+            raise Refused(f"the {row['action']} action names no message.")
+        if row["action"] == "archive":
+            gmail_live.organize(c, row["mailbox"], [row["msg_id"]], remove=("INBOX",))
+            return {"ok": True, "detail": "archived"}
+        name = (NEEDS_OWNER if row["action"] == "leave"
+                else label_name(args.get("label") or args.get("tag") or args.get("name")))
+        label = gmail_live.resolve_label(c, row["mailbox"], name, create=True)
+        gmail_live.organize(c, row["mailbox"], [row["msg_id"]], add=(label,))
+        return {"ok": True, "detail": "left for you" if row["action"] == "leave" else f"labelled {name}"}
+
+
+def drain_workspace_mail(store, limit=200):
+    """A bounded pass after run writes and on scheduler ticks, including retries and recovered leases.
+
+    Each row is tried at most once per pass. Candidates include chained rows; their predecessor is checked at the
+    lease, so a successful first action allows the next in this pass, while a retry leaves its successors waiting.
+    """
+    from connectors.mail import Refused
+
+    with store.read() as c:
+        candidates, picked, workspace = [], set(), {}
+        for row in c.execute("SELECT id,mailbox,action,\"after\",(SELECT p.state FROM automation_mail_actions p "
+                             "WHERE p.id=r.\"after\") AS previous_state FROM automation_mail_actions r WHERE action IN "
+                             "('archive','label','leave') AND " + _MAIL_DUE + " ORDER BY created_at,rowid",
+                             {"cutoff": H.shift(H.now(), minutes=-MAIL_LEASE_MINUTES)}):
+            if row["mailbox"] not in workspace:
+                workspace[row["mailbox"]] = _server_mail(c, row["mailbox"], row["action"])
+            if workspace[row["mailbox"]]:
+                if row["after"] and row["after"] not in picked and row["previous_state"] != "done":
+                    continue                # a chain waiting on a computer must not crowd out ready work
+                candidates.append(row["id"])
+                picked.add(row["id"])
+                if len(candidates) >= limit:
+                    break
+    done = 0
+    for mid in candidates:
+        row = _claim_workspace_mail(store, mid)
+        if row is None:
+            continue
+        retry = False
+        try:
+            result = _workspace_mail(store, row)
+        except Problem as exc:
+            result, retry = {"ok": False, "detail": exc.detail}, exc.retryable
+        except Refused as exc:
+            result = {"ok": False, "detail": exc.msg}
+        with store.transaction() as c:
+            current = c.execute("SELECT * FROM automation_mail_actions WHERE id=?", (mid,)).fetchone()
+            if (not current or current["state"] != "claimed" or current["claimed_by"] != SERVER_MAIL
+                    or current["claimed_at"] != row["claimed_at"]):
+                continue                    # a later lease owns the result now
+            state = (_requeue(c, row) if result is None or (retry and row["attempts"] < MAIL_TRIES)
+                     else "done" if result["ok"] else "failed")
+            _mail_report(c, row, state, {**json.loads(row["result"] or "{}"), **(result or {})})
+        done += 1
+    return done
 
 
 def tick(store, at=None):
@@ -3003,9 +3128,13 @@ def install(app, store, auth, mutate):
         def work(c):
             mailbox = body.mailbox.strip().lower()
             runner = mail_computer(c, who, mailbox)
+            from . import google_workspace
+            server_mail = google_workspace.authority(c, mailbox) == "workspace"
             now = H.now()
             for row in c.execute("SELECT * FROM automation_mail_actions WHERE mailbox=? AND state='claimed' "
                                  "AND claimed_at<?", (mailbox, H.shift(now, minutes=-MAIL_LEASE_MINUTES))).fetchall():
+                if server_mail and row["action"] in REPEATABLE_MAIL:
+                    continue                # only the server recovers these leases
                 if row["attempts"] >= MAIL_TRIES:
                     _mail_report(c, row, "failed", {**json.loads(row["result"] or "{}"), "ok": False,
                                                     "detail": f"no result after {MAIL_TRIES} tries"})
@@ -3023,9 +3152,10 @@ def install(app, store, auth, mutate):
             rows, spent = [], 0
             # An action waits for the one before it in its step's chain (`after`) to be done: a chain is claimed in order.
             for r in c.execute("SELECT * FROM automation_mail_actions AS r WHERE r.state='queued' AND r.mailbox=? "
+                               "AND (?=0 OR r.action NOT IN ('archive','label','leave')) "
                                "AND (r.\"after\" IS NULL OR EXISTS (SELECT 1 FROM automation_mail_actions AS p "
                                "WHERE p.id=r.\"after\" AND p.state='done')) ORDER BY r.created_at LIMIT 20",
-                               (mailbox,)):
+                               (mailbox, server_mail)):
                 size = len(r["args"] or "") + len(r["result"] or "")
                 if rows and spent + size > LIST_BYTES:
                     break                  # the rest stay queued for the next claim
