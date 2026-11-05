@@ -1181,6 +1181,7 @@ function meetPendingRender(state, rec, data) {
         <div class="mp-form-row"><select data-pending-field="owner" aria-label="Owner"></select><input data-pending-field="due" type="date" aria-label="Due">
           <span class="grow"></span><button type="button" class="ghost" data-dismiss>Dismiss</button><button type="button" class="primary" data-send>Create</button></div>
         <div class="mp-sub"><span data-edited></span><span class="err" data-save-error hidden>Not saved · <button type="button" class="linkish" data-retry>Retry</button></span></div>
+        <div class="mp-sub err" data-owner-error role="alert" hidden></div>
         <div class="mp-sub" data-pending-duplicate hidden></div></div>`;
       list.append(node);
       for (const field of node.querySelectorAll('[data-pending-field]')) {
@@ -1188,6 +1189,7 @@ function meetPendingRender(state, rec, data) {
           const key = field.dataset.pendingField;
           const value = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
           meetPendingPatch(draft, key, value);
+          if (key === 'owner' && draft.errorCode === 'owner') { draft.error = ''; draft.errorCode = ''; }
           clearTimeout(draft.timer);
           if (!draft.error) draft.timer = setTimeout(() => meetPendingSave(state, rec.id, item.id), 700);
         };
@@ -1220,6 +1222,7 @@ function meetPendingRender(state, rec, data) {
           await meetItemsLoad(state, rec.id);
         } catch (e) {
           draft.error = e.message;
+          draft.errorCode = e.body?.error?.code || '';
           if (e.body?.error?.item) {
             const current = e.body.error.item;
             draft.current = current; draft.version = current.version; draft.base = current;
@@ -1230,12 +1233,12 @@ function meetPendingRender(state, rec, data) {
             box.hidden = false;
             box.innerHTML = `<a href="#/task/${encodeURIComponent(duplicate.id)}">${esc(duplicate.name)}</a> <button type="button" class="linkish">Send anyway</button>`;
             box.querySelector('button').onclick = () => finish(true, true);
-          } else toast(e.message, true);
+          } else if (draft.errorCode !== 'owner') toast(e.message, true);
         }
         finally { draft.sending = false; node.querySelectorAll('button, input, textarea, select').forEach(field => field.disabled = false); }
         await meetItemsLoad(state, rec.id);
         const error = node.querySelector('[data-save-error]');
-        if (error) error.hidden = !draft.error;
+        if (error) error.hidden = !draft.error || draft.errorCode === 'owner';
       };
       node.querySelector('[data-send]').onclick = () => finish(true);
       node.querySelector('[data-dismiss]').onclick = () => finish(false);
@@ -1250,7 +1253,7 @@ function meetPendingRender(state, rec, data) {
         const options = [...(S.people || []).map(p => ['human:' + p.id, p.name || p.id]),
                          ...activeEmps().map(b => ['bot:' + b.id, b.display_name])]
           .filter(([actor]) => !data.audience || data.audience.includes(actor));
-        const html = '<option value="">Choose</option>' + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
+        const html = '<option value="">Choose who this is for</option>' + options.map(([actor, name]) => `<option value="${esc(actor)}">${esc(name)}</option>`).join('');
         if (field.innerHTML !== html) field.innerHTML = html;
       }
       const next = key === 'due' ? String(value).slice(0, 10) : value;
@@ -1261,7 +1264,10 @@ function meetPendingRender(state, rec, data) {
       }
     }
     node.querySelector('[data-edited]').textContent = item.updated_by ? sharedEdited(item.updated_by, meetAuthor) : '';
-    node.querySelector('[data-save-error]').hidden = !draft.error;
+    node.querySelector('[data-save-error]').hidden = !draft.error || draft.errorCode === 'owner';
+    const ownerError = node.querySelector('[data-owner-error]');
+    ownerError.hidden = draft.errorCode !== 'owner';
+    ownerError.textContent = draft.errorCode === 'owner' ? draft.error : '';
     let conflict = node.querySelector('[data-current]');
     if (!conflict) { conflict = document.createElement('div'); conflict.className = 'mp-sub'; conflict.dataset.current = ''; node.querySelector('.mp-prop-body').append(conflict); }
     conflict.hidden = !draft.current;

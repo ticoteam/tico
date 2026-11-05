@@ -17,6 +17,13 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 | `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
 | `hub_finance_card_fill` | `hub finance card-fill` | `card_id`, `merchant`, `amount` | not available yet |
 
+The Finance transactions list (its feed read) leaves out an `ignored` row that the bank has ended: its `provider_status`
+is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the list shows `cancelled` as "Canceled" and
+`reversed` as "Returned"). Setting `status` to `failed` lists those alone. A row the bank voids or reverses after a finished
+reconciliation cleared it keeps its booked status: it stays in the list, does not appear under `failed`, and its
+`provider_status` holds the bank's word. A row a person ignored stays in the list as `ignored` until the bank ends it; then
+it leaves the list like any other row the bank ended.
+
 ## Acting
 
 `hub finance act help` lists every action kind with the right it needs; `hub finance act help --payload

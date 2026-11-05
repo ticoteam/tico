@@ -127,7 +127,7 @@
     suggested: '', recording: null, meeting: null, sending: null,
     // Speech through the signed-in Tico; `none` before sign-in without keys of your own.
     speech: { source: 'tico', stream: true, transcribe: true, tico: 'Tico Team' },
-    update: { state: 'none', version: '', notes: '', blocked: '' },
+    update: { state: 'none', version: '', notes: '', blocked: '', error: '', progress: null, current: '0.5.143', location: '', movable: false },
   };
   const state = {
     status, library: { rows: libraryRows, events, calendar_stale: false, connected: true }, desktop_orgs: [],
@@ -305,7 +305,9 @@
       scenes.recording();
       state.status.update = { state: 'ready', version: '0.6.0', notes: 'Live text through your Tico.', blocked: 'After this recording' };
     },
-    'update-error': () => { state.status.update = { state: 'error', version: '0.6.0', notes: '', blocked: '' }; },
+    'update-error': () => { Object.assign(state.status.update, { state: 'error', version: '0.6.0', error: "Couldn't check for updates" }); },
+    // Opened from Downloads: macOS runs a read-only copy, so the app offers Move to Applications.
+    'update-move': () => { Object.assign(state.status.update, { location: "Can't update from here", movable: true }); },
     // Long names and titles everywhere they show.
     long: () => {
       scenes.live();
@@ -527,6 +529,23 @@
     },
     make_default: ({ id }) => { state.settings.connections.forEach((c) => (c.default = c.id === id)); },
     set_audio: ({ microphone, meeting: on }) => Object.assign(state.settings, { microphone, meeting_audio: on }),
+    // Check for updates: Checking…, then Downloading, then Update ready (or Up to date with ?latest).
+    update_check: () => {
+      const u = state.status.update;
+      const latest = new URLSearchParams(location.search).has('latest');
+      Object.assign(u, { state: 'checking', error: '' });
+      setTimeout(() => {
+        if (latest) { u.state = 'current'; return; }
+        Object.assign(u, { state: 'downloading', version: '0.5.150', progress: 40 });
+        setTimeout(() => Object.assign(u, { state: 'ready', progress: null }), 400);
+      }, 400);
+    },
+    // A newer copy is already in Applications with ?newer; otherwise the move succeeds.
+    move_to_applications: ({ how }) => {
+      window.moves = [...(window.moves || []), how];
+      if (how === 'copy' && new URLSearchParams(location.search).has('newer')) return { ask: '0.5.150' };
+      return {};
+    },
     dismiss_error: () => { state.status.error = ''; },
     dismiss_notice: () => { state.status.notice = ''; },
     dismiss_connect: () => { state.status.connect = null; },
