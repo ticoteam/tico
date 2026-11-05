@@ -760,7 +760,10 @@ def test_dashboard_page_public_pin_only_widens_scoped_turns_on_real_paths(api, m
     get(api, 'files/' + fid, unscoped['token'], expected=404)
     post(api, f'attempts/{unscoped["id"]}/started', {'thread_id': 'unscoped-page-reader'}, machine['token'])
     post(api, f'attempts/{unscoped["id"]}/complete', {'outcome': 'completed', 'last_seq': 0}, machine['token'])
-    t, attempt = task_turn(api)
+    t = post(api, 'tasks', {'owner': 'ops', 'title': 'Read the Dashboard page',
+                            'body': 'Review the pinned page.', 'private': False})
+    attempt = claim(api, machine, 'ops', key='scoped-pin-reader')
+    assert attempt and attempt['task']['id'] == t['id']
     post(api, 'pins', {'place': 'task:' + t['id'], 'item': 'page:' + fid})
 
     def check():
