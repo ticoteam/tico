@@ -4068,14 +4068,14 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
                                         "private task")
     before = task_readers(row)
     if replace is not None:
-        kept = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in replace) if r in before]
         fresh = new_readers(conn, actor, row, replace)
+        wanted = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in replace) if r in before or r in fresh]
     else:
         gone = {_reader_target(conn, actor, v) if str(v).startswith("group:") else resolve_actor(conn, v) or v
                 for v in remove}
         kept = [r for r in before if r not in gone]
         fresh = [r for r in new_readers(conn, actor, row, add) if r not in kept]
-    wanted = kept + fresh
+        wanted = kept + fresh
     if fresh and check:
         check(fresh)
     if len(wanted) > MAX_TASK_READERS:

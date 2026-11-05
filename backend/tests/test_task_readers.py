@@ -347,7 +347,8 @@ def test_a_private_run_adds_only_readers_who_read_what_it_carries(api):
     # Once Ben reads every task the run carries, the same add goes through.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (theirs["id"],))
-    assert change(api, own["id"], {"add": ["ben"]}, attempt["token"]).json()["readers"] == ["human:ben"]
+    r = change(api, own["id"], {"add": ["ben"]}, attempt["token"])
+    assert r.status_code == 200 and r.json()["readers"] == ["human:ben"], r.text
 
 
 def test_a_task_made_public_then_private_again_has_no_readers(api):
