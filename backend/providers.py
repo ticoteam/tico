@@ -297,6 +297,15 @@ LONG_PROMPT = _Priced({
     # below is strictly over, so the limit is one token lower.
     "gpt-6.1-terra": (271_999, (2.50, 0.125, 9.375)),
 }, gateway_tiers.long_prompt_for)
+# The models whose long-prompt tier is billed per request in the judge and memory-tidy calls: each call is one request,
+# and its prompt pays the tier when over the limit. Claude Haiku 5.5 is not listed: its tier stays off these calls until
+# its rate for them is approved.
+PER_REQUEST_LONG_TIER = frozenset({"gpt-6.1-terra"})
+
+
+def per_request_long_tier(model):
+    """Whether a judge or memory-tidy call to `model` is priced as one request (PER_REQUEST_LONG_TIER)."""
+    return str(model or "").strip().lower() in PER_REQUEST_LONG_TIER
 
 
 def price_of(model):
