@@ -42,7 +42,7 @@ def _ready(api, machine):
     post(api, "chat/ops", {"text": "Tidy your mail instructions"}, token="ana-test")
 
 
-def test_botops_adds_its_own_tasks_worktree_with_its_own_rights(api, botops):
+def test_botops_adds_its_own_tasks_worktree_with_its_own_rights(api, botops, underlying_authority):
     _ready(api, botops)
     task, attempt = _commented(api, botops)
     for path in (f"/api/v2/tasks/{task['id']}/worktrees", f"/api/v2/tasks/{task['id']}/worktrees/attach"):
@@ -53,7 +53,7 @@ def test_botops_adds_its_own_tasks_worktree_with_its_own_rights(api, botops):
             assert tried.json() == {"actor": "bot:botops", "role": "bot"}, (path, cite)
 
 
-def test_a_worktree_on_someone_elses_task_still_borrows(api, botops):
+def test_a_worktree_on_someone_elses_task_still_borrows(api, botops, underlying_authority):
     """Only BotOps' own task is its own work: a worktree on Ops' task goes through the requester's rights as before."""
     _ready(api, botops)
     _, attempt = _commented(api, botops)
@@ -127,7 +127,7 @@ def test_a_relayed_comment_still_lends_nothing_and_gets_no_card(api, botops, und
     assert tried.json()["error"]["code"] == "on_behalf_of"
 
 
-def test_a_worktree_refusal_says_who_can_give_the_access(api, botops):
+def test_a_worktree_refusal_says_who_can_give_the_access(api, botops, underlying_authority):
     _ready(api, botops)
     task, attempt = _commented(api, botops)
     path = f"/api/v2/tasks/{task['id']}/worktrees"

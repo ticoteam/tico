@@ -51,7 +51,7 @@ ALLOWLIST = (
     # Task bots consult rules and the shipped manual, without raw SQL or export routes.
     ("GET", r"/api/v2/(?:rules(?:/[^/]+)?|docs/manual)", False),
     # Task work creates/updates tasks and asks, comments, files or answers through checked writes.
-    ("POST", r"/api/v2/(?:tasks|task-questions|tasks/[^/]+(?:/(?:comments|answers|files|close|reopen|ask|snooze|unsnooze|links|relations|waits|run-now|check-back|later))?)", False),
+    ("POST", r"/api/v2/(?:tasks(?:/dry-run)?|task-questions|tasks/[^/]+(?:/(?:comments|answers|files|close|reopen|ask|snooze|unsnooze|links|relations|waits|run-now|check-back|later))?)", False),
     # Worktree setup in the runner prompt reserves/attaches a checkout and reports that exact link's state.
     ("POST", r"/api/v2/tasks/[^/]+/worktrees(?:/attach)?", False),
     # The local worktree CLI reads this computer's writable repository configuration.
@@ -71,13 +71,18 @@ ALLOWLIST = (
 )
 
 
-def require_route(c, auth, who, method, path, query=None):
+def require_route(c, auth, who, method, path, query=None, route_template=None):
     from . import turn_scope
     scoped = turn_scope.scope(c, who)
     if scoped is None:
         return
     turn_scope.require_read_route(c, who, method, path)
-    if not any(method in methods.split() and (make or not scoped.make_page) and re.fullmatch(pattern, path)
+    def matches(pattern):
+        # A literal /threads/search or a future /pages/export must not match a resource-id slot.
+        template = pattern.replace("[^/]+", r"\{[^/{}]+\}").replace("[0-9]+", r"\{[^/{}]+\}")
+        return bool(route_template and re.fullmatch(pattern, path) and re.fullmatch(template, route_template))
+
+    if not any(method in methods.split() and (make or not scoped.make_page) and matches(pattern)
                for methods, pattern, make in ALLOWLIST):
         raise Problem("forbidden", "Route unavailable to a scoped turn", 403)
     download = re.fullmatch(r"/api/v2/files/([^/]+)(?:/(?:versions/([0-9]+)|thumb|poster))?", path)

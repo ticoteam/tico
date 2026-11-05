@@ -75,6 +75,9 @@ def project(c, scoped, payload, *, auth=None):
         marks = ','.join('?' * len(chunk))
         legacy_sources.extend(c.execute(f"SELECT id,title,task_id,scope FROM bot_files WHERE task_id IN ({marks}) OR scope IN ({marks})",
                                          (*chunk, *("task:" + tid for tid in chunk))))
+        legacy_sources.extend(c.execute(f"SELECT f.id,f.title,substr(p.place,6) AS task_id,'' AS scope FROM pins p "
+                                         f"JOIN bot_files f ON p.item='page:' || f.id WHERE p.place IN ({marks})",
+                                         tuple("task:" + tid for tid in chunk)))
         legacy_sources.extend(c.execute(f"SELECT f.id,v.name AS title,f.task_id,f.scope FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
                                          f"WHERE f.task_id IN ({marks})", chunk))
         legacy_sources.extend(c.execute(f"SELECT b.id,b.name AS title,a.task_id,'' AS scope FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
@@ -214,7 +217,7 @@ def project(c, scoped, payload, *, auth=None):
                 return gone
             if parent in SOURCE_LISTS and rejected(value.get('id')):
                 return gone
-            if has_denied(value.get('source')):
+            if has_denied(value.get('source')) or has_denied(value.get('ref')):
                 return gone
             if parent == 'options' and not value.get('file') and not value.get('source') and value.get('label') in legacy_titles:
                 return gone
@@ -239,7 +242,8 @@ def project(c, scoped, payload, *, auth=None):
             shown_refs = out.get('refs', {})
             answer, shown_answer = refs.get('answer', {}), shown_refs.get('answer', {})
             hidden_body = (has_denied(refs.get('body_sources', [])) or has_denied(answer.get('target')) or
-                           answer.get('answers') != shown_answer.get('answers'))
+                           answer.get('answers') != shown_answer.get('answers') or
+                           answer.get('not') != shown_answer.get('not'))
             if hidden_body:
                 for key in ('body', 'text'):
                     if key in out:

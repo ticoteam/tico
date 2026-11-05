@@ -9,9 +9,9 @@ from backend.tests.test_api import api, assign, claim, get, headers, post, ready
 from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_file_reviews import ask, answer
 from backend.tests.test_files import turn
+from backend.tests.test_member_bots import botops  # noqa: F401
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_member_bots import botops  # noqa: F401
 from backend.tests.test_pages import HTML
 from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
 
@@ -133,8 +133,8 @@ def test_scoped_routes_deny_sql_csv_history_downloads_and_new_surfaces(api, make
     token = attempt["token"]
     for path in ("history.csv?kind=decision", "history?kind=decision", "events", "admin",
                  "live-meetings/missing/events", "runners/me/events", "bots/ops/turns",
-                 f"turns/{attempt['id']}/steps", "not-yet-reviewed"):
-        get(api, path, token, expected=403)
+                 f"turns/{attempt['id']}/steps", "not-yet-reviewed", "threads/search", "threads/rail"):
+        get(api, path, token, expected=404 if make and path.startswith("threads/") else 403)
     post(api, "sql", {"sql": "SELECT hex(detail) FROM events"}, token, expected=403)
     for path in ("/healthz", "/download/missing", "/index.html"):
         response = api.get(path, headers=headers(token))
@@ -224,12 +224,19 @@ def test_legacy_fallback_keeps_unrelated_labels_and_opaque_text(api):
     post(api, f'tasks/{other["id"]}/comments', {"text": "Choose a label", "ask": {
         "who": "ben", "questions": [{"id": "label", "header": "Label", "question": "Which label?", "options": [
             {"label": "Restricted source", "then": "Use this label"}, {"label": "Keep", "then": "Keep this label"}]}]}})
+    parent_question = post(api, f'tasks/{data["task"]["id"]}/comments', {"text": "Choose a source", "ask": {
+        "who": "ben", "questions": [{"id": "label", "header": "Source", "question": "Which source?", "options": [
+            {"label": "Restricted source", "then": "Use this source"}, {"label": "Keep", "then": "Keep this source"}]}]}})["comment"]
+    place = get(api, "places/task:" + data["task"]["id"])
+    assert "page:" + data["hidden"] in [p["item"] for p in place["pins"]]
     text = '{"digest":"example"} ' + data["hidden"]
     comment = post(api, f'tasks/{data["task"]["id"]}/comments', {"text": text})["comment"]
     narrow(api, data)
     shown = get(api, "tasks", attempt["token"])
     row = next(t for t in shown["tasks"] if t["id"] == other["id"])
     assert row["ask"]["refs"]["questions"][0]["options"][0]["label"] == "Restricted source"
+    parent_shown = get(api, "messages/" + parent_question["id"], attempt["token"])
+    assert [o["label"] for o in parent_shown["refs"]["questions"][0]["options"]] == ["Keep"]
     assert get(api, "messages/" + comment["id"], attempt["token"])["body"] == text
 
 
@@ -256,8 +263,9 @@ def test_unknown_saved_file_ref_survives_the_real_message_writer(api):
 
 
 def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api, botops):
-    post(api, "tasks", {"owner": "botops", "title": "Review project context", "body": "Review", "private": False})
+    task = post(api, "tasks", {"owner": "botops", "title": "Review the deployment task", "body": "Review its files."})
     attempt = claim(api, botops, "botops")
+    assert attempt["task"]["id"] == task["id"]
     token = attempt["token"]
     for path in ("bots/ops/repositories", "automations", "inbox", "tico/fleet", "bots/ops/turns",
                  "turns/" + attempt["id"] + "/steps"):
@@ -267,3 +275,30 @@ def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api, b
         response = api.request(method, "/api/v2/" + path, json={}, headers={
             **headers(token), "X-Tico-On-Behalf-Of": "turn"})
         assert response.status_code == 403, (path, response.text)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_passed_labels_also_remove_the_generated_answer_body(api, legacy):
+    data = sources(api)
+    question = post(api, "tasks/" + data["task"]["id"] + "/comments", {
+        "text": "Which source should we use?", "ask": {"who": "ana", "questions": [{
+            "id": "decision", "header": "Sources", "question": "Which source should we use?", "multi": True,
+            "options": [{"label": data["source_label"], "file": data["hidden"] + "@1", "then": "Use this source"},
+                        {"label": "Allowed source", "file": data["allowed"] + "@1",
+                         "then": "Use this source", "recommended": True}]}]}},
+        data["publisher"]["token"])["comment"]
+    answered = answer(api, {"task": data["task"], "question": question}, ["Allowed source"])
+    assert data["source_label"] in answered["comment"]["body"]
+    assert answered["answer"]["not"]["decision"] == [data["source_label"]]
+    if legacy:
+        with api.app.state.store.transaction() as c:
+            refs = H.message(c, answered["comment"]["id"])["refs"]
+            refs.pop("body_sources")
+            refs["answer"].pop("label_sources")
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), answered["comment"]["id"]))
+    _, attempt = scoped(api, data, False)
+    archived = api.patch("/api/v2/files/" + data["hidden"], json={"archived": True}, headers=headers())
+    assert archived.status_code == 200, archived.text
+    shown = get(api, "messages/" + answered["comment"]["id"], attempt["token"])
+    no_sources(shown, secrets(data))
+    assert shown["refs"]["answer"]["answers"]["decision"] == ["Allowed source"]
