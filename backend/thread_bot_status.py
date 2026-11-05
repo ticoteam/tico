@@ -235,6 +235,7 @@ def _blocked(c, bot, location, refusal):
     """(detail, fix) when something stops the bot, else None; `refusal` is the claim's latest recorded refusal."""
     from .health import BOT_SETTINGS, COMPUTERS, HELD
     from .models_preset import LOGIN_NAMES
+    from .cloud_machines import resting
     row = H.bot(c, bot) or {}
     slug = row.get("slug") or bot
     machine = location.get("machine") or {}
@@ -246,9 +247,13 @@ def _blocked(c, bot, location, refusal):
         return PAUSED, _fix("#/bot/" + slug + "/more")
     if location.get("external"):
         return None if location.get("online") else (OFFLINE, _fix("#/bot/" + slug + "/more"))
-    if not computer or not location.get("online"):
+    asleep = computer in resting(c)
+    if not computer or not location.get("online") or asleep:
         from .views import cloud_machine_wait
-        if computer and cloud_machine_wait(c, bot):
+        cloud = cloud_machine_wait(c, bot)
+        if computer and cloud:
+            if asleep:
+                return cloud[0].upper() + cloud[1:], None
             return None                  # its cloud machine is starting for this turn
         return OFFLINE, _fix(computer_href or "#/bot/" + slug + "/more")
     reason = (refusal or {}).get("reason")

@@ -894,7 +894,7 @@ def check_edit(c, who, message_id, text, viewer=None):
     if not _sender(who):
         return
     actor, v = T._actor_of(viewer if viewer is not None else who)
-    message = T._own_say(c, actor, v, message_id)
+    message = T._own_say(c, actor, v, message_id, check_writer=False)
     thread = T.thread_row(c, message["conversation_id"])
     if thread is None:
         return

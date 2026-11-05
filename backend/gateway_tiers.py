@@ -79,29 +79,108 @@ DECISIONS = (
 )
 # Medium and High serve the same typed contract from a language model, at that model's price.
 
+# The services, as HQ lists them in its catalog. `details` are label/value pairs Settings > Gateway shows under a
+# service; an older HQ's rows have none.
 SERVICES = (
-    {"id": "decide", "name": "Decide · Classify", "for": "Calibrated answers to typed questions about a state",
-     "price": "From $0.06 per 1M tokens", "status": "live", "tools": ["hub_decision_ask", "hub_classify"]},
+    {"id": "decide", "name": "Decide", "for": "Answer yes/no, choice and score questions about a state",
+     "price": "From $0.06 per 1M input tokens", "status": "live", "tools": ["hub_decision_ask", "hub_decision_readout", "hub_decision_outcome"],
+     "details": [
+         {"label": "Low", "value": "Jev 1.13 · $0.06 per 1M input"},
+         {"label": "Medium", "value": "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M"},
+         {"label": "High", "value": "Claude Opus 5.5 · $5 / $25 per 1M"},
+     ]},
+    {"id": "classify", "name": "Classify", "for": "Pick one of your options for a state",
+     "price": "From $0.06 per 1M input tokens", "status": "live", "tools": ["hub_classify"],
+     "details": [
+         {"label": "Low", "value": "Jev 1.13 · $0.06 per 1M input"},
+     ]},
     {"id": "inbox.email", "name": "Inbox · Email", "for": "Receive sign-in codes and notices",
-     "price": "Free addresses · $0.14 per 1,000 received", "status": "live",
-     "tools": ["hub_inbound_create_email", "hub_inbound_wait"]},
-    {"id": "inbox.numbers", "name": "Inbox · Numbers", "for": "Receive texts and codes on a number",
-     "price": "From $14 per 30 days", "status": "approval", "tools": []},
-    {"id": "search", "name": "Search", "for": "Web search with sources and a short answer",
-     "price": "Tokens like Low · $0.00875 per search", "status": "live",
-     "tools": ["hub_gateway_search"]},
-    {"id": "fetch", "name": "Fetch", "for": "Read a web page or PDF", "price": "$1.25 per 1,000 pages + tokens",
-     "status": "live", "tools": ["hub_gateway_fetch"]},
+     "price": "Free addresses · $0.14 per 1,000 received", "status": "live", "tools": ["hub_inbound_create_email", "hub_inbound_wait"],
+     "details": [
+         {"label": "Addresses", "value": "Free"},
+         {"label": "Received", "value": "$0.14 per 1,000"},
+     ]},
+    {"id": "inbox.numbers", "name": "Inbox · Texts", "for": "A US number that receives texts, like sign-in codes",
+     "price": "From $14 per 30 days", "status": "approval", "tools": [],
+     "details": [
+         {"label": "Number", "value": "From $14 per 30 days"},
+         {"label": "Sending", "value": "Receive only"},
+     ]},
+    {"id": "alerts", "name": "Alerts", "for": "Urgent texts and calls to your own phone",
+     "price": "$1 per alert", "status": "live", "tools": [],
+     "details": [
+         {"label": "Alert", "value": "$1, texts and calls included"},
+         {"label": "Phone check", "value": "Free code to confirm your number"},
+         {"label": "Sent from", "value": "One Tico number"},
+     ]},
+    {"id": "search", "name": "Search", "for": "Search the web and read what it finds",
+     "price": "$0.00875 per search, plus tokens at $0.15 / $0.75 per 1M", "status": "live", "tools": ["hub_gateway_search"],
+     "details": [
+         {"label": "Search", "value": "$0.00875 each"},
+         {"label": "Tokens", "value": "$0.15 / $0.75 per 1M, like Low"},
+         {"label": "Engines", "value": "Exa, then Parallel"},
+     ]},
+    {"id": "fetch", "name": "Fetch", "for": "Read a web page or PDF",
+     "price": "$1.25 per 1,000 pages + tokens", "status": "live", "tools": ["hub_gateway_fetch"],
+     "details": [
+         {"label": "Pages", "value": "$1.25 per 1,000"},
+         {"label": "Reads", "value": "Web pages and PDFs"},
+     ]},
     {"id": "images", "name": "Images", "for": "Make an image from a prompt and reference images",
-     "price": "Per image, at cost + 25%", "status": "live", "tools": ["hub_gateway_image"]},
-    {"id": "transcribe", "name": "Transcribe", "for": "Speech to text", "price": "", "status": "next", "tools": []},
-    {"id": "send-email", "name": "Send email", "for": "Send from a company address", "price": "", "status": "later",
-     "tools": []},
-    {"id": "enrich", "name": "Enrich", "for": "Facts about a company or person", "price": "", "status": "later",
-     "tools": []},
-    {"id": "voice", "name": "Voice", "for": "Calls and spoken replies", "price": "", "status": "later", "tools": []},
-    {"id": "mail", "name": "Physical mail and registered agent", "for": "A street address that takes post",
-     "price": "", "status": "planned", "tools": []},
+     "price": "Per image, at cost + 25%", "status": "live", "tools": ["hub_gateway_image"],
+     "details": [
+         {"label": "Storyboard", "value": "Gemini 3.1 Flash Image"},
+         {"label": "Photo", "value": "GPT-5.4 Image 2"},
+         {"label": "Graphic", "value": "GPT-5.4 Image 2"},
+         {"label": "Character", "value": "Gemini 3 Pro Image"},
+         {"label": "Price", "value": "At cost + 25%"},
+     ]},
+    {"id": "transcribe", "name": "Transcribe", "for": "Turn a recording into text, and live speech into text",
+     "price": "$0.33 per audio hour · live text $0.30 per audio hour", "status": "live", "tools": [],
+     "details": [
+         {"label": "Recordings", "value": "ElevenLabs Scribe v2 · $0.33 per hour"},
+         {"label": "Live", "value": "xAI · $0.30 per hour"},
+     ]},
+    {"id": "mail.physical", "name": "Physical mail and registered agent", "for": "A street address for letters, scanned and read, with a registered agent",
+     "price": "$10 a month per state, shared · private at cost + 25%", "status": "live", "tools": ["hub_mail_list", "hub_mail_read"],
+     "details": [
+         {"label": "States", "value": "DE, CA · others on request"},
+         {"label": "Shared address", "value": "$10 a month per state"},
+         {"label": "Private box", "value": "Box cost + 25%"},
+         {"label": "Scans", "value": "$1 a letter up to 10 pages, then $0.25 a page"},
+         {"label": "Forwarding", "value": "Postage + 25%"},
+         {"label": "Registered agent", "value": "On request"},
+     ]},
+    {"id": "mail.send", "name": "Send letters", "for": "Print and mail letters, First-Class or Certified",
+     "price": "Print and postage at cost + 25%", "status": "next", "tools": [],
+     "details": []},
+    {"id": "email.send", "name": "Send email", "for": "Send a message from a Tico address",
+     "price": None, "status": "later", "tools": [],
+     "details": []},
+    {"id": "enrich", "name": "Enrich", "for": "Look up a company or a person",
+     "price": None, "status": "later", "tools": [],
+     "details": []},
+    {"id": "voice", "name": "Voice", "for": "Speak and listen on a call",
+     "price": None, "status": "later", "tools": [],
+     "details": []},
+    {"id": "storage.s3", "name": "Object Storage", "for": "S3-compatible storage for files and backups",
+     "price": None, "status": "next", "tools": [],
+     "details": []},
+    {"id": "finance.accounting", "name": "Accounting", "for": "On-demand accounting for invoices, bills, payments, and financial reports",
+     "price": None, "status": "next", "tools": [],
+     "details": []},
+    {"id": "legal.software", "name": "Legal", "for": "On-demand software for legal matters, documents, and deadlines",
+     "price": None, "status": "next", "tools": [],
+     "details": []},
+    {"id": "crm.software", "name": "CRM", "for": "A workspace for customer accounts, contacts, opportunities, and sales follow-up",
+     "price": None, "status": "next", "tools": [],
+     "details": []},
+    {"id": "support.software", "name": "Customer Support", "for": "A support desk for customer requests, shared inboxes, and ticket follow-up",
+     "price": None, "status": "next", "tools": [],
+     "details": []},
+    {"id": "marketing.software", "name": "Marketing", "for": "Marketing tools and bots for campaigns and market intelligence",
+     "price": None, "status": "next", "tools": [],
+     "details": []},
 )
 STATUSES = ("live", "approval", "next", "later", "planned")
 
@@ -174,7 +253,7 @@ def _snapshot():
     return {"schema": SCHEMA, "as_of": "2026-10-25",
             "departments": [{"id": ident, "name": name} for ident, name in DEPARTMENTS],
             "levels": [{"id": ident, "name": name} for ident, name in LEVELS],
-            "models": models, "decisions": decisions, "services": [dict(row) for row in SERVICES],
+            "models": models, "decisions": decisions, "services": [{**row, "details": [dict(d) for d in row["details"]]} for row in SERVICES],
             "changes": [{"date": "2026-10-25", "text": "Department tiers with Low, Medium, High and Fast."}]}
 
 
@@ -188,6 +267,13 @@ def _number(value):
 
 def _text(value, default=""):
     return value if isinstance(value, str) and _NAME.fullmatch(value) else default
+
+
+def _clean_details(value):
+    """A service's `details` (`[{label, value}]`, short text each), up to 12; [] when HQ sent none or none are usable."""
+    rows = value if isinstance(value, list) else []
+    return [{"label": row["label"], "value": row["value"]} for row in rows
+            if isinstance(row, dict) and _text(row.get("label")) and _text(row.get("value"))][:12]
 
 
 def _clean_price(price):
@@ -311,7 +397,8 @@ def validate(doc):
                 and row.get("status") in STATUSES:
             services.append({"id": row["id"][:60], "name": row["name"], "for": _text(row.get("for")),
                              "price": _text(row.get("price")), "status": row["status"],
-                             "tools": [t for t in row.get("tools") or [] if isinstance(t, str) and len(t) < 60][:12]})
+                             "tools": [t for t in row.get("tools") or [] if isinstance(t, str) and len(t) < 60][:12],
+                             "details": _clean_details(row.get("details"))})
     changes = [{"date": _text(row.get("date")), "text": _text(row.get("text"))} for row in doc.get("changes") or []
                if isinstance(row, dict) and _text(row.get("text"))][:20]
     return {"schema": SCHEMA, "as_of": _text(doc.get("as_of")),
@@ -594,7 +681,7 @@ def lineup(query="", cat=None):
                   "price": row["versions"][0]["price"] if row["versions"] else None}
                  for row in cat["decisions"] if keep(row["name"], row["when"], row["id"])]
     services = [{"id": row["id"], "name": row["name"], "when": row["for"], "price": row["price"],
-                 "status": row["status"], "tools": row["tools"]}
+                 "status": row["status"], "tools": row["tools"], "details": row.get("details") or []}
                 for row in cat["services"] if keep(row["name"], row["for"], row["id"], " ".join(row["tools"]))]
     return {"as_of": cat.get("as_of", ""), "models": models, "decisions": decisions, "services": services,
             "note": "A model id without a version always means the tier's current version; add -<version> to pin it."}

@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import time_machine
 
 from backend import demo
 from backend.tests.test_demo import NOW, signed_in
@@ -62,6 +63,7 @@ PAGES = {
     "settings": page("bots"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
+    "settings-alerts": page("alerts/me"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
 }
@@ -81,6 +83,13 @@ def test_every_nav_page_has_a_demo_mapping():
         assert name in PAGES or name in NO_DEMO_DATA, (
             f"{name}: add a demo_sections module for {name}, then map it here "
             "(PAGES in backend/tests/test_demo_coverage.py)")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -119,3 +128,9 @@ def test_task_pages_have_demo_data(api):
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
+
+
+def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
+    grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
+    assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
+    assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None

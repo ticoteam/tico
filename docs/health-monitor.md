@@ -19,10 +19,22 @@ See [Company turn levels](computers.md#company-turn-levels) for what counts, def
 This record does not provide the separate automatic fixer.
 
 Health's **Stuck bots** check and `hub health check` name the bot, its queue split as `hub pipeline` splits it (jobs
-that can start, jobs behind an interrupted run awaiting review, jobs held on purpose), the oldest age, why it cannot
+that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
+jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
+**Questions nobody can read** names held tasks waiting on a system, missing or inactive recipient, or someone who
+can no longer read the task or any source, including bot activity. A synced bot without desktop delivery cannot
+take asks and is flagged too. It checks saved asks and explicit waits.
+
+A cloud machine asleep while all its jobs wait on purpose shows those waits as queue information. If any job needs
+a fix, such as signing in its check model, Health marks the bot stuck even when an older task waits on purpose.
+Ready jobs do not hide that fix, even at the company turn limit. If no job needs a fix, the company hold still shows.
+Its last boot's load raises no reporting warning while it rests, even if it just contacted Tico. The queue
+cutoff uses the next runnable job's age, including when readiness still needs a fresh report. Spending limits and
+other holds still apply while that report is missing. Work that can run but stays asleep past that cutoff still
+raises a problem; **Starting** means the machine is starting.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose

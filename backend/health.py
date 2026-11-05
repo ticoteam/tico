@@ -29,6 +29,8 @@ from . import bot_settings as BS
 
 QUEUE_MINUTES = 15          # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting there waiting for the reply
+QUEUE_WAITS = ("updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait",
+               "task_next_run", "task_cap", "auto_start_off", "handed_back", "scoped", "task_quarantine", "company_limit", "backoff", "bot_limit")
 # Keep the stuck threshold compatible with older runners' twenty-minute claim window and fourteen-minute stop.
 # New runners hand unstarted work back immediately and cap active turns at five minutes by default.
 RESTART_STUCK_MINUTES = 34
@@ -76,6 +78,7 @@ def _queue_items(rows, full, bot_reader):
         why = ("Quarantined: queued work waits for the quarantine to clear."
                if row["reason"] == "quarantined" else row["why"])
         items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
+                      "quarantine_held": row.get("quarantine_held", 0),
                       "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
                       "text": f"{row['name'][:120]} ({row['slug']}): {_queue_words(row, minutes)}; {why}",
                       "fixes": fixes,
@@ -85,7 +88,7 @@ def _queue_items(rows, full, bot_reader):
 
 def _queue_words(row, minutes):
     """A bot's queue in one phrase, split as Pipeline splits it: jobs that can start, jobs an interrupted run fences,
-    and jobs held on purpose. The age is the oldest job named first."""
+    jobs held on purpose, and refusal-count holds. The age is the oldest job named first."""
     words = []
     if row["queued"]:
         words.append(f"{_plural(row['queued'], 'job')} queued, oldest {minutes} min")
@@ -94,6 +97,8 @@ def _queue_words(row, minutes):
         words.append(f"{_plural(row['dead'], 'job')} behind an interrupted run awaiting review{age}")
     if row.get("held"):
         words.append(f"{row['held']} held on purpose")
+    if row.get("quarantine_held"):
+        words.append(f"{_plural(row['quarantine_held'], 'job')} held after repeated refusals; resumes after cooldown")
     return "; ".join(words) or "nothing queued"
 
 
@@ -102,6 +107,8 @@ def _silent_words(computer):
     words = [f"{_plural(computer['queued'], 'job')} queued"] if computer["queued"] else []
     if computer["dead"]:
         words.append(f"{_plural(computer['dead'], 'job')} behind an interrupted run awaiting review")
+    if computer.get("quarantine_held"):
+        words.append(f"{_plural(computer['quarantine_held'], 'job')} held after repeated refusals; resumes after cooldown")
     return " and ".join(words)
 
 
@@ -519,14 +526,19 @@ def _rejected_summary(rows):
 
 def silent_computers(c, minutes=SILENT_MINUTES):
     """Computers that have not checked in for `minutes` while work is queued for their active bots, longest silence
-    first: [{id, label, operator, last_seen, minutes, queued, dead, bots}]. `queued` can start and `dead` waits behind an
-    interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this. A
+    first: [{id, label, operator, last_seen, minutes, queued, dead, quarantine_held, bots}]. `queued` can start,
+    `dead` waits behind an interrupted run nobody reviewed, and `quarantine_held` waits for refusal cooldown, as
+    Pipeline splits them. A computer that never checked in is setup, not this. A
     cloud machine stopped when idle is not silent: it starts when its work can run (cloud_machines.resting)."""
     from .cloud_machines import resting as resting_machines
-    from .execution import unfenced_sql
+    from .execution import queued_task_sql, unfenced_sql
+    from .task_quarantine import free_sql
     resting = resting_machines(c)
+    quarantine_free = free_sql(queued_task_sql())
     rows = c.execute(
-        f"SELECT r.id, r.label, r.owner_id, r.last_seen_at, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        f"SELECT r.id, r.label, r.owner_id, r.last_seen_at, "
+        f"sum(CASE WHEN ({quarantine_free}) AND NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        f"sum(CASE WHEN NOT ({quarantine_free}) THEN 1 ELSE 0 END) quarantine_held, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
         "FROM runners_with_state r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot_id=a.bot AND j.state='queued' AND j.held=0 "
@@ -534,7 +546,8 @@ def silent_computers(c, minutes=SILENT_MINUTES):
         "WHERE r.revoked_at IS NULL AND r.last_seen_at < ? GROUP BY r.id ORDER BY r.last_seen_at",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
     return [{"id": r["id"], "label": r["label"], "owner_id": r["owner_id"], "last_seen_at": r["last_seen_at"],
-             "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
+             "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"] - r["quarantine_held"],
+             "dead": r["dead"], "quarantine_held": r["quarantine_held"],
              "bots": sorted(r["bots"].split(","))} for r in rows if r["id"] not in resting]
 
 
@@ -572,11 +585,12 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
     claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
     beside a young free one is neither."""
-    from .execution import bot_claimable, prime_claimables, queued_reasons
+    from .execution import prime_claimables, queued_reasons
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
     # Each bot's queue is shown as Pipeline splits it (pipeline_stats.queue_counts), so the counts match `hub pipeline`:
-    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `held` waits on purpose
+    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `quarantine_held` waits for refusal
+    # cooldown, and `held` waits on purpose
     # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
     # held job behind an interrupted run as dead, and work held on purpose is not stuck.
     split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
@@ -643,16 +657,27 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     every_job = [job for part in H.chunks(aged_bots) for job in c.execute(queued_jobs_sql(part), part)]
     suspect = _queue_suspects(c, every_job)
     # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
-    from .cloud_machines import homes
+    from .cloud_machines import GOING, STALE, homes, problem_words
     on_cloud = homes(c)
+
+    def queue_reasons(runner_id, slug, ignore_refusals=()):
+        groups = {}
+        for job, why in queued_reasons(c, settings, runner_id, slug, limits, suspect=suspect, loads=loads,
+                                       ignore_refusals=ignore_refusals):
+            key = why or "slow"
+            group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
+            group["queued"] += 1
+            group["oldest"] = min(group["oldest"], job["created_at"])
+        return list(groups.values())
+
     for bot in c.execute("SELECT id,slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["id"]
         count, oldest = queued.get(slug, (0, None))
         where = assigned.get(slug)
         shown = split.get(slug, {})
         row = {"bot": slug, "slug": bot["slug"], "name": bot["display_name"] or bot["slug"], "queued": shown.get("queued", 0),
-               "dead": shown.get("dead", 0), "held": shown.get("held", 0),
-               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at"),
+               "dead": shown.get("dead", 0), "held": shown.get("held", 0), "quarantine_held": shown.get("quarantine_held", 0),
+               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at") or shown.get("oldest_quarantine_at"),
                "computer": where[1] if where else ""}
         if bot["state"] != "active":
             if count:
@@ -663,12 +688,37 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
             continue
         report = report_for(slug, where) if count else {}
         cloud = on_cloud.get(slug)
-        if cloud and (not where or where[0] not in online_ids):
-            # Started when it has work: only a refusal, or work that waited too long for it, is stuck.
-            if count and (cloud["problem"] or (oldest and oldest < cutoff)):
-                from .cloud_machines import problem_words
+        if cloud and (not where or where[0] not in online_ids or cloud["state"] in GOING):
+            if count and cloud["problem"]:
                 stuck.append({**row, "reason": "cloud_machine", "runner_id": where[0] if where else "", "runtime": "",
-                              "problem": problem_words(cloud["problem"]) or "Starting"})
+                              "problem": problem_words(cloud["problem"])})
+            elif count and oldest and oldest < cutoff:
+                if where and cloud["state"] in GOING:
+                    claimable = (('company_limit', None, False) if company_stopped else
+                                 _claimable(c, settings, where[0], slug, limits, suspect=suspect, loads=loads,
+                                            ignore_refusals=STALE))
+                    if claimable is None:
+                        continue
+                    refused, first, person = _fenced_queue_reason(row, *claimable)
+                    if refused:
+                        row["queue_reasons"] = queue_reasons(where[0], slug, ignore_refusals=STALE)
+                        # Ready jobs ("slow") and intentional waits must not hide a refusal that needs a fix.
+                        refused = next((group["reason"] for group in row["queue_reasons"]
+                                        if group["reason"] not in ("slow", *QUEUE_WAITS)), refused)
+                        held_row = {**row, "reason": refused, "runner_id": where[0], "runtime": ""}
+                        if refused in QUEUE_WAITS:
+                            slow.append({**held_row, "resting": True})
+                        else:
+                            stuck.append(held_row)
+                        continue
+                    if not (first and first < (person_cutoff if person else cutoff)):
+                        continue        # the next claimable job is young; older held jobs do not age its wake
+                    row["oldest_queued"], row["oldest"] = row["oldest"], first
+                problem = ("Starting" if cloud["state"] == "starting" else
+                           f"Not started after {QUEUE_MINUTES} min" if cloud["state"] in GOING else
+                           f"Not connected after {QUEUE_MINUTES} min")
+                stuck.append({**row, "reason": "cloud_machine", "runner_id": where[0] if where else "", "runtime": "",
+                              "problem": problem})
             continue
         if where and where[0] not in online_ids:
             waiting.append({**row, "reason": "computer_offline"})
@@ -709,13 +759,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                     continue        # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
             # Counts belong to the individual job's task, not the representative oldest job.
-            groups = {}
-            for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect, loads=loads):
-                key = why or "slow"
-                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
-                group["queued"] += 1
-                group["oldest"] = min(group["oldest"], job["created_at"])
-            row["queue_reasons"] = list(groups.values())
+            row["queue_reasons"] = queue_reasons(where[0], slug)
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
             slow.append({**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"})
@@ -829,6 +873,7 @@ HELD = {
                   RUNS),
     "handed_back": ("{computer} handed its last try back before starting it: it tries again in a moment", RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    "task_quarantine": ("Held after repeated refusals; resumes after cooldown or quarantine clear", RUNS),
     # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
     "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
     # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
@@ -966,7 +1011,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "slug", "name", "queued", "oldest", "computer", "reason")}
-                   | {"dead": row.get("dead", 0), "held": row.get("held", 0),
+                   | {"dead": row.get("dead", 0), "held": row.get("held", 0), "quarantine_held": row.get("quarantine_held", 0),
                        "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
                        **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
@@ -1452,6 +1497,49 @@ def _server_settings(c, settings):
 
 
 SILENT_WAIT_HOURS = 1       # a task set waiting on a person this long with nothing said to them is stuck unseen
+
+
+def unreadable_waits(c):
+    """Name held questions whose recipient cannot sign in, run, or read every task source."""
+    from . import ask_routing, task_privacy
+    task_privacy.snapshot(c)
+    fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
+    rows = c.execute(
+        f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
+        "JOIN messages m ON m.sender_id=t.owner_id JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE {H.MESSAGE_TASK_SQL}=t.id AND t.status='waiting' "
+        f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
+        f"UNION SELECT {fields},t.waiting_on AS recipient,NULL AS message_id FROM tasks t "
+        "WHERE t.status='waiting' AND t.waiting_on IS NOT NULL) w "
+        "ORDER BY w.id")
+    found, seen = [], set()
+    for batch in iter(lambda: rows.fetchmany(500), []):
+        # Health polls the whole queue: load its question ancestry and task reads together.
+        mids = sorted({r["message_id"] for r in batch if r["message_id"]})
+        messages = {m["id"]: m for m in c.execute(
+            "SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))", (H._dump(mids),))}
+        H.prime_message_rows(c, messages.values())
+        task_privacy.prime_messages(c, messages.values())
+        tids = {r["id"] for r in batch}
+        for message in messages.values():
+            try:
+                tids.update(task_privacy.message_tasks(c, message))
+            except Problem:
+                pass                    # The individual check refuses unreadable provenance.
+        H.prime_tasks(c, tids)
+        for r in batch:
+            row = dict(r)
+            key = row["id"], row["recipient"]
+            if key in seen:
+                continue
+            source = messages.get(row.pop("message_id"))
+            if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source, sender=row["owner_id"]):
+                continue
+            seen.add(key)
+            found.append(row)
+            if len(found) == 20:
+                return found
+    return found
 
 
 def silent_waits(c, at=None):
@@ -1989,13 +2077,13 @@ def view(c, who, settings, auth, github, config):
     if full and (denies := _harness_denies_check(c, settings)):
         checks.append(denies)
     if full:
-        from .worktrees import current_error, supported
+        from .worktrees import current_error, supported, statuses
         if supported(c):
             usage, failing = {}, []
-            for row in c.execute("SELECT t.owner_id,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'"):
+            for row in statuses(c, c.execute("SELECT t.owner_id,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'")):
                 detail = json.loads(row['detail'] or '{}')
                 bot = H.actor_id(row['owner_id'])
-                usage[bot] = usage.get(bot, 0) + detail.get('size_mb', 0)
+                usage[bot] = usage.get(bot, 0) + (0 if row['state'] == 'retired' else detail.get('size_mb', 0))
                 if error := current_error(row['state'], detail):
                     failing.append((bot, error))
             names = _bot_names(c, [bot for bot, _ in failing])      # one read for the bots named, not one a worktree
@@ -2034,6 +2122,13 @@ def view(c, who, settings, auth, github, config):
                 f"{item['title'] if not item['private'] or H.task_private_readable(c, who.actor, H.task(c, item['task_id'])) else 'A private task'}"
                 f" {task_loops.describe(item)}" for item in loops[:3]) + ". Likely a bug; nothing is blocked.",
                 [_fix("Open tasks", "#/tasks")]))
+    if full and (unreadable := unreadable_waits(c)):
+        named = [(row, H.task_private_readable(c, who.actor, row)) for row in unreadable[:3]]
+        checks.append(_check("unreadable_waits", "Questions nobody can read", "warn", "; ".join(
+            f"{row['title']} waits on {row['recipient']}, who cannot read or answer the question"
+            if readable else "A private task waits on someone who cannot read or answer the question"
+            for row, readable in named) + ("." if len(unreadable) <= 3 else f"; and {len(unreadable) - 3} more."),
+            [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named]))
     if full and (silent := silent_waits(c)):
         named = [(row, H.task_private_readable(c, who.actor, row)) for row in silent[:3]]     # only three are named
         checks.append(_check("silent_waits", "Waiting on people", "warn", "; ".join(
@@ -2091,15 +2186,26 @@ def view(c, who, settings, auth, github, config):
             + ([f"{_plural(asleep, 'cloud machine')} stopped until work comes."] if asleep else []))))
 
     from .performance import load_statuses, recent_overloads
-    from .start_places import NOT_REPORTING, computer_hold, hold_rows
+    from .start_places import MEMORY_HOLD, NOT_REPORTING, computer_hold, hold_rows
+    from .cloud_machines import resting as resting_machines
+    resting_ids = resting_machines(c)
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     rows = hold_rows(c, [computer["id"] for computer in computers])          # and their runner rows, once
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
-        if hold and not (computer["resting"] and hold[0] == NOT_REPORTING):    # a stopped cloud machine reports nothing
+        # Its last boot's load cannot hold a machine that is asleep on purpose.
+        hold = None
+        if computer["id"] not in resting_ids:
+            hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
+            if not hold:
+                # Runner-local memory admission still reports a wait when diagnostics are off.
+                local_memory = next((w['reason'] for w in computer['turn_counts']['waits']
+                                     if w['reason'].startswith(MEMORY_HOLD)), None)
+                if local_memory:
+                    hold = local_memory, local_memory
+        if hold:
             words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
                      else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING
                      else f"{hold[1]}: new starts wait until it is below 80%.")
@@ -2237,16 +2343,22 @@ def view(c, who, settings, auth, github, config):
     quarantined = [s for s in blocked if s["bot"] not in held and s["reason"] == "quarantined"]
     blocking = [s for s in blocked if s["bot"] not in held and s["reason"] not in ("setup", "quarantined")]
     busy = [row for row in slow if row["reason"] == "busy"]
-    readable = auth.bot_accesses(c, who, [row["bot"] for row in busy]) if busy and not full else {}
+    resting = [row for row in slow if row.get("resting")]
+    readable = auth.bot_accesses(c, who, [row["bot"] for row in busy + resting]) if (busy or resting) and not full else {}
     busy_rows = _stuck(c, [{**row, "reason": row["wait_reason"], "runtime": ""} for row in busy
                           if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth)
+    resting_rows = _stuck(c, [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]],
+                          online_ids, who, full, auth)
     if blocking:
-        items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
-        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_next_run", "task_cap", "auto_start_off", "handed_back",
-                                      "scoped", "company_limit", "backoff", "bot_limit")
+        items = _queue_items(blocking + busy_rows + resting_rows, full, kind == "bot") if full or kind == "bot" else []
+        bad = any(s["reason"] not in ("slow", *QUEUE_WAITS)
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),
+                             [_fix("Open Runs", "#/settings", "runs")] if full else [], items=items))
+    elif resting:
+        items = _queue_items(resting_rows + busy_rows, full, kind == "bot") if full or kind == "bot" else []
+        checks.append(_check("queue", "Work queueing", "info", _diagnostic_summary("Work is waiting on purpose.", items),
                              [_fix("Open Runs", "#/settings", "runs")] if full else [], items=items))
     elif slow and len(busy) == len(slow):
         items = _queue_items(busy_rows, full, kind == "bot") if full or kind == "bot" else []

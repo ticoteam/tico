@@ -170,8 +170,13 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub card remove <id>
     hub connections list [--cursor C] [--limit N]
                                            every connection you may see: status, scope, who reads it, its bots
+    hub email mailboxes                    your readable email mailboxes (hub mail is postal mail)
+    hub email inbox <address> [--q Q] [--limit N] [--cursor C] [--json]
+    hub email search <address> "<gmail query>" [--limit N] [--cursor C] [--json]
+    hub email thread <address> <thread-id> [--json]
+    hub email message <address> <message-id> [--json]
     hub inbound audience <inbox-id> company|team [--group G]
-                                           who reads an Email & Phone inbox (owner or admin)
+                                           who reads a Tico address or number (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
     hub pin update <pin-id> [--size S] [--position N]
     hub pin remove <pin-id>
@@ -1003,6 +1008,24 @@ def parser():
 
     sub.add_parser("whoami").set_defaults(fn="whoami")
 
+    alerts = sub.add_parser('alerts', help='your own phone and paid alert preferences').add_subparsers(dest='sub')
+    for action in ('show', 'remove', 'confirm', 'verify', 'test', 'set', 'company'):
+        item = alerts.add_parser(action); item.set_defaults(fn='alerts ' + action)
+        if action == 'confirm': item.add_argument('code')
+        if action == 'verify':
+            item.add_argument('phone')
+            item.add_argument('--sms-consent', action='store_true', required=True)
+            item.add_argument('--call-consent', action='store_true', default=False)
+        if action == 'test':
+            item.add_argument('--accept-charge', action='store_true', required=True, help='company pays $1 if accepted')
+            item.add_argument('--operation-id', required=True, help='stable id for this paid test and retries')
+        if action in ('set', 'company'): item.add_argument('--monthly-cap', type=int)
+        if action == 'set':
+            for flag in ('urgent-needs', 'legal-mail', 'bot-stuck', 'urgent-calls', 'emergency-exception'):
+                item.add_argument('--' + flag, action=argparse.BooleanOptionalAction, default=None)
+            for flag in ('timezone', 'quiet-start', 'quiet-end'):
+                item.add_argument('--' + flag)
+
     inbound = sub.add_parser('inbound', help='shared company email and SMS inboxes').add_subparsers(dest='sub')
     item = inbound.add_parser('inboxes'); item.set_defaults(fn='inbound inboxes')
     item.add_argument('--after'); item.add_argument('--limit', type=int)
@@ -1041,6 +1064,23 @@ def parser():
     item.add_argument('--kind', choices=('legal','government_tax','bill','check','financial','junk','other'))
     item.add_argument('--after'); item.add_argument('--limit', type=int)
     item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
+
+    email = sub.add_parser('email', help='read email; Whole Workspace mailboxes read live from Gmail').add_subparsers(dest='sub')
+    for action in ('mailboxes', 'inbox', 'search', 'thread', 'message'):
+        item = email.add_parser(action)
+        item.set_defaults(fn='email ' + action)
+        item.add_argument('--json', action='store_true', help='print the API response as JSON')
+        if action != 'mailboxes':
+            item.add_argument('mailbox', metavar='address')
+        if action in ('inbox', 'search'):
+            item.add_argument('--limit', type=int, default=50)
+            item.add_argument('--cursor', help='opaque next_cursor from the previous page')
+            if action == 'inbox':
+                item.add_argument('--q', default='', help='Gmail search syntax within the inbox')
+            else:
+                item.add_argument('q', help='Gmail search syntax')
+        if action in ('thread', 'message'):
+            item.add_argument('id', metavar=action + '-id')
 
     # The Company page, read-only (docs/company-page.md): owners and admins; nothing here publishes or changes a reader.
     sub.add_parser('company-page', help='the Company page: transparency, address, last update').set_defaults(fn='company-page')
@@ -1301,7 +1341,7 @@ def parser():
     s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
-    s = question.add_parser("ask")
+    s = question.add_parser("ask", description="Ask a teammate. A system recipient routes to your manager or the company owner.")
     s.add_argument("words", nargs="*")
     s.add_argument("--wait", type=float, default=60)
     s.set_defaults(fn="question ask")
@@ -1707,7 +1747,7 @@ def parser():
     s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
-    s = task.add_parser("ask")
+    s = task.add_parser("ask", description="Ask the requester. A system requester routes to your manager or the company owner.")
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")
