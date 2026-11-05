@@ -13,6 +13,10 @@ pub struct Item {
     pub quote: String,
     pub at_ms: u64,
     pub owner: String,
+    pub due: String,
+    pub body: String,
+    /// A note-taker match is a proposal until the person chooses Link.
+    pub proposed_task_id: String,
     pub document: String,
     pub change: String,
     pub selected: bool,
@@ -61,6 +65,11 @@ pub struct Context {
     pub chat: Vec<Turn>,
     /// Transcript already reviewed for drafts, so automatic drafting only sends new speech.
     pub drafted_through_ms: u64,
+    /// Candidate ids are refreshed every five minutes; their current read access is checked before use.
+    pub task_candidates: Vec<String>,
+    pub task_candidates_at: i64,
+    pub task_candidates_destination: String,
+    pub kept_on_mac: bool,
 }
 impl Store {
     pub fn context(&self, id: &str) -> Result<Context> {

@@ -60,6 +60,10 @@ fn view(
 }
 
 commands! {
+    link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
+    accept_link_item(id: String) => |app| app.accept_link_item(&id);
+    unlink_item(id: String) => |app| app.unlink_item(&id);
+    edit_task_detail(id: String, due: String, body: String) => |app| app.edit_task_detail(&id, &due, &body);
     stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
@@ -106,6 +110,14 @@ commands! {
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
     set_visible(visible: bool) => |app| app.visible = visible;
+}
+
+#[tauri::command(async)]
+fn task_picker(state: State<'_, Shared>, query: String, offset: usize) -> Result<Value, String> {
+    let (config, destination) = lock(&state).task_picker_context();
+    tico_recorder_native::network::Tico::saved(&config, &destination)
+        .and_then(|tico| tico.search_tasks(&query, offset))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
@@ -341,6 +353,11 @@ fn main() {
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
+            task_picker,
+            link_selected_tasks,
+            accept_link_item,
+            unlink_item,
+            edit_task_detail,
             view,
             meeting_link,
             share_screen,

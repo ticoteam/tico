@@ -407,6 +407,19 @@ impl Tico {
         response(request.bearer_auth(&self.token).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
+    pub fn unlink_meeting_task(&self, meeting: &str, task: &str) -> Result<Value> {
+        let mut url = reqwest::Url::parse(&settings::safe_url(&self.destination.base_url)?)?;
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("Invalid Tico address"))?
+            .extend(["api", "v2", "meetings", meeting, "tasks", task]);
+        response(
+            self.client
+                .delete(url)
+                .bearer_auth(&self.token)
+                .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
+                .send()?,
+        )
+    }
     /// The events a Tico event stream (SSE) has now: `(id, type, payload)` until its first
     /// keep-alive, which follows what was already there. The stream is then closed.
     pub fn events(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
@@ -767,10 +780,13 @@ impl Tico {
                 let detail = if section == "doc" {
                     json!({"document":item.document,"change":item.change,"why":"Proposed from the meeting transcript"})
                 } else {
-                    json!({"owner":item.owner})
+                    json!({"owner":item.owner,"due":item.due,"body":item.body})
                 };
                 let at_ms = (!item.quote.is_empty()).then_some(item.at_ms);
-                let payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
+                let mut payload = json!({"section":section,"text":item.title,"quote":item.quote,"at_ms":at_ms,"detail":detail});
+                if !item.proposed_task_id.is_empty() {
+                    payload["proposed_task_id"] = json!(item.proposed_task_id);
+                }
                 let mut item_id = delivery.receipt["items"][&item.id]["id"]
                     .as_str()
                     .unwrap_or("")
@@ -818,6 +834,8 @@ impl Tico {
                     store.delivery(id, &delivery)?;
                 }
             }
+            // Links need an approved meeting and follow every durable item receipt.
+            self.save_links(store, id, &context, &mut delivery)?;
             delivery.status = "sent".into();
             delivery.receipt["sent_at"] = json!(chrono::Utc::now().to_rfc3339());
             store.delivery(id, &delivery)?;
@@ -922,11 +940,23 @@ impl Tico {
             .unwrap_or("me");
         let body = json!({"title":item.title.chars().take(300).collect::<String>(),
             "body":crate::assist::task_body(&record, &item, sender, &link),"owner":owner,"private":private});
-        let reply = self.call(
-            "/api/v2/tasks",
-            Some(&body),
-            &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
-        )?;
+        let reply = if let Some(entry) = filed.filter(|entry| entry.status == "sent") {
+            let server_item = entry.receipt["items"][item_id]["id"]
+                .as_str()
+                .context("This item is not saved on the meeting")?;
+            let result = self.call_meeting(
+                &format!("/meetings/{}/items/{server_item}/push", entry.meeting_id),
+                Some(&json!({})),
+                &format!("recorder:{id}:push:{server_item}"),
+            )?;
+            json!({"task":{"id":result["item"]["result_ref"]}})
+        } else {
+            self.call(
+                "/api/v2/tasks",
+                Some(&body),
+                &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
+            )?
+        };
         let task = reply["task"]["id"]
             .as_str()
             .context("Tico did not return the new task")?
@@ -945,16 +975,6 @@ impl Tico {
             }
             Ok(())
         })?;
-        // Sent with the meeting earlier as a proposed item: the task replaces it there.
-        if let Some(entry) = filed
-            && let Some(filed_item) = entry.receipt["items"][item_id]["id"].as_str()
-        {
-            let _ = self.call_meeting(
-                &format!("/meetings/{}/items/{filed_item}", entry.meeting_id),
-                Some(&json!({"status":"dismissed"})),
-                &format!("recorder:{id}:dismiss:{filed_item}"),
-            );
-        }
         Ok(())
     }
 }

@@ -1672,11 +1672,18 @@ def install_live_meetings(app, store, auth, write):
             if not chunks:
                 raise Problem("transcript", "A live meeting needs transcript text before finalization", 409)
             duration_ms = max(chunk["end_ms"] for chunk in chunks)
+            participants = []
+            if row['visibility'] != 'team':
+                for (actor,) in c.execute('SELECT actor FROM live_meeting_access WHERE meeting_id=? UNION '
+                                          'SELECT actor FROM live_meeting_humans WHERE meeting_id=?', (rid, rid)):
+                    person = H.human(c, H.actor_id(actor)) if H.is_human(actor) else None
+                    if person and person.get('email'):
+                        participants.append(person['email'])
             body_import = MeetingImport(title=row["title"], started_at=row["started_at"],
                                         duration_seconds=duration_ms / 1000, source="tico-live", external_id=rid,
                                         transcript=[{"speaker": chunk["speaker"], "start_ms": chunk["start_ms"],
                                                      "end_ms": chunk["end_ms"], "text": chunk["text"]}
-                                                    for chunk in chunks], review="pending")
+                                                    for chunk in chunks], participants=participants, review="pending")
             result = app.state.import_meeting(c, who, body_import, [], live_client=row["client"])
             imported_id = result["id"]
             c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated_at=? WHERE id=?",

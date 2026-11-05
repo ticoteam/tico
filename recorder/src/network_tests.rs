@@ -2540,3 +2540,247 @@ fn a_retry_names_the_audience_and_a_narrowing_tico_refuses_is_shown_as_said() {
     );
     assert!(calls[1].2.contains("refile"));
 }
+
+#[test]
+fn recorder_links_resume_forty_five_tasks_after_an_interrupted_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Resumable links");
+    store
+        .update_context(&record.id, |c| {
+            for n in 0..45 {
+                c.items.push(crate::workspace::Item {
+                    id: format!("local-{n}"),
+                    kind: "link".into(),
+                    task_id: format!("task-{n:03}"),
+                    ..Default::default()
+                });
+            }
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"meeting-fixture"})),
+        Some(json!({})),
+        None,
+        Some(who),
+        Some(json!({})),
+        Some(json!({})),
+    ]);
+    assert!(tico.send(&store, &record.id, false).is_err());
+    let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+    assert_eq!(receipt["links"].as_object().unwrap().len(), 20);
+    let reopened = Store::open(dir.path()).unwrap();
+    tico.send(&reopened, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let batches: Vec<_> = calls
+        .iter()
+        .filter(|(path, _, _)| path.contains("/tasks "))
+        .collect();
+    assert_eq!(
+        batches
+            .iter()
+            .map(|(_, body, _)| body["task_ids"].as_array().unwrap().len())
+            .collect::<Vec<_>>(),
+        [20, 20, 20, 5]
+    );
+    assert_eq!(batches[1].1, batches[2].1);
+    assert_eq!(batches[1].2, batches[2].2);
+    assert!(
+        calls
+            .iter()
+            .all(|(path, _, _)| !path.contains("/items") && !path.contains("POST /api/v2/tasks "))
+    );
+    assert_eq!(
+        reopened.get(&record.id).unwrap().deliveries[0].receipt["links"]
+            .as_object()
+            .unwrap()
+            .len(),
+        45
+    );
+}
+
+#[test]
+fn recorder_saves_approval_notes_and_proposal_before_sent_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Ordered Save");
+    store
+        .update_context(&record.id, |c| {
+            c.notes = "Notes".into();
+            c.items.push(crate::workspace::Item {
+                id: "proposal".into(),
+                title: "Follow up".into(),
+                proposed_task_id: "matched".into(),
+                kind: "task".into(),
+                due: "2026-12-01".into(),
+                body: "Details".into(),
+                ..Default::default()
+            });
+            c.items.push(crate::workspace::Item {
+                id: "sent".into(),
+                task_id: "already-sent".into(),
+                kind: "task".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "meeting-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"title":"Ordered Save"})),
+        Some(json!({"version":1})),
+        Some(json!({})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"server-proposal"}})),
+        Some(json!({})),
+    ]);
+    tico.send_to(&store, &record.id, false, "team").unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[1].0.contains("/review"));
+    assert!(calls[3].0.contains("/edit"));
+    assert_eq!(calls[5].1["proposed_task_id"], "matched");
+    assert_eq!(calls[5].1["detail"]["body"], "Details");
+    assert_eq!(
+        calls[6].1,
+        json!({"task_ids":["already-sent"],"kind":"sent"})
+    );
+    let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+    assert_eq!(receipt["approved"], true);
+    assert_eq!(receipt["notes_saved"], true);
+    assert_eq!(receipt["items"]["proposal"]["id"], "server-proposal");
+}
+
+#[test]
+fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "This Mac");
+    store
+        .update_context(&record.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            for (id, kind) in [("queued", "link"), ("sent", "task")] {
+                c.items.push(crate::workspace::Item {
+                    id: id.into(),
+                    kind: kind.into(),
+                    task_id: format!("task-{id}"),
+                    ..Default::default()
+                });
+            }
+            c.items.push(crate::workspace::Item {
+                id: "proposal".into(),
+                title: "Follow up".into(),
+                proposed_task_id: "matched".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "pending".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({}))]);
+    tico.keep_local(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[0].0.contains("/pending/review"));
+    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
+    let context = store.context(&record.id).unwrap();
+    assert!(context.kept_on_mac && context.live_removed);
+    assert_eq!(context.items.len(), 2);
+    assert_eq!(context.items[0].task_id, "task-sent");
+    assert!(context.items[1].proposed_task_id.is_empty());
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["dismissed"],
+        true
+    );
+}
+
+#[test]
+fn recorder_drafts_only_offer_active_tasks_and_reauthorize_cached_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Candidate cache");
+    let (tico, seen, worker) = server(vec![
+        Some(
+            json!({"tasks":[{"id":"visible","number":42,"title":"Review pricing","status":"open"}]}),
+        ),
+        Some(json!({"tasks":[]})),
+    ]);
+    assert_eq!(tico.draft_tasks(&store, &record.id).unwrap()[0].number, 42);
+    assert!(tico.draft_tasks(&store, &record.id).unwrap().is_empty());
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[0].0.contains("owner=human%3Atest")
+            && calls[0]
+                .0
+                .contains("status=open%2Cdoing%2Cwaiting%2Creview%2Cready")
+    );
+    assert!(calls[1].0.contains("ids=visible"));
+}
+
+#[test]
+fn recorder_note_taker_rejects_unoffered_task_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Matched proposal");
+    let reply = json!({"items":[{"link":999,"quote":"I will send the proposal"},{"link":42,"quote":"I will send the proposal"}]});
+    let (tico, seen, worker) = server(vec![Some(
+        json!({"choices":[{"message":{"content":reply.to_string()}}]}),
+    )]);
+    let config = Settings {
+        transcription_url: tico.destination.base_url.clone(),
+        ..Default::default()
+    };
+    let candidates = vec![crate::task_links::Task {
+        id: "visible".into(),
+        number: 42,
+        title: "Review pricing".into(),
+        status: "open".into(),
+    }];
+    assert_eq!(
+        crate::assist::draft_with_tasks(&store, &config, "test-key", &record.id, &candidates)
+            .unwrap(),
+        1
+    );
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].proposed_task_id,
+        "visible"
+    );
+    let calls = seen.lock().unwrap();
+    let input: Value =
+        serde_json::from_str(calls[0].1["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        input["TASKS"],
+        json!([{"number":42,"title":"Review pricing"}])
+    );
+}

@@ -23920,6 +23920,86 @@
         ]
       }
     },
+    "/api/v2/meetings/{rid}/items/{iid}/link": {
+      "post": {
+        "summary": "Accept a readable task proposal without creating a task; the meeting must be shared",
+        "operationId": "acceptMeetingTaskProposal",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Iid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingTaskProposalAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/{rid}/tasks": {
       "get": {
         "summary": "Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap",
@@ -58506,6 +58586,49 @@
         "required": [
           "next_cursor",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskProposalAccepted": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "proposed_task_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "result_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "proposed_task_id",
+              "result_ref",
+              "status"
+            ],
+            "additionalProperties": true
+          },
+          "pushed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item",
+          "pushed"
         ],
         "additionalProperties": true
       },

@@ -1,6 +1,8 @@
 //! The recorder's state and actions. It owns the library, the recording in progress and the
 //! background jobs; the window only draws `view()` and calls the actions below. Nothing here
 //! knows about Tauri, so it is tested as plain Rust.
+#[path = "task_links.rs"]
+mod task_links;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -60,7 +62,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 7] = [
+const BACKGROUND: [&str; 8] = [
     "live",
     "calendar",
     "autodraft",
@@ -68,6 +70,7 @@ const BACKGROUND: [&str; 7] = [
     "ask",
     "roster",
     "speech",
+    "task-links",
 ];
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
@@ -329,6 +332,8 @@ pub struct Recorder {
     message: (String, Instant),
     pub error: String,
     draft_status: String,
+    link_tasks: Value,
+    link_tasks_at: Instant,
     chat_error: String,
     /// A question or message that failed, offered back in the input.
     chat_retry: String,
@@ -449,6 +454,8 @@ impl Recorder {
             message: (String::new(), Instant::now()),
             error: String::new(),
             draft_status: String::new(),
+            link_tasks: Value::Null,
+            link_tasks_at: Instant::now() - Duration::from_secs(60),
             chat_error: String::new(),
             chat_retry: String::new(),
             adding: None,
@@ -578,6 +585,8 @@ impl Recorder {
         let record = self.store.get(id)?;
         self.context = self.store.context(id).unwrap_or_default();
         self.current = Some(record);
+        self.link_tasks = Value::Null;
+        self.link_tasks_at = Instant::now() - Duration::from_secs(60);
         self.meeting = Some(id.to_owned());
         self.live = json!({});
         self.chat_error.clear();
@@ -888,9 +897,13 @@ impl Recorder {
             return;
         }
         let (config, store) = (self.config.clone(), self.store.clone());
+        let destination = self.router();
         self.job_for("autodraft", Some(id.clone()), move || {
+            let tasks = Tico::saved(&config, &destination)
+                .and_then(|tico| tico.draft_tasks(&store, &id))
+                .unwrap_or_default();
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft(&store, &config, &key, &id)?}))
+            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
@@ -907,6 +920,16 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            if reply.kind == "task-links" {
+                if here {
+                    self.link_tasks = reply
+                        .result
+                        .ok()
+                        .filter(|v| v["scope"] == self.link_scope())
+                        .unwrap_or(Value::Null);
+                }
+                continue;
+            }
             if reply.kind == "signin" {
                 self.signing_in = false;
                 // Signing in to several orgs keeps the ones that worked when a later one fails.
@@ -1140,6 +1163,7 @@ impl Recorder {
         {
             self.reload();
         }
+        self.refresh_task_links();
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -1984,6 +2008,16 @@ impl Recorder {
         }
         let context = self.store.context(id).unwrap_or_default();
         if context.live_id.is_empty() || context.live_removed {
+            let result = self.store.update_context(id, |c| {
+                c.kept_on_mac = true;
+                c.items.retain(|item| item.kind != "link");
+                for item in &mut c.items {
+                    item.proposed_task_id.clear();
+                }
+                Ok(())
+            });
+            self.report(result);
+            self.reload_open();
             return;
         }
         if self.meeting.as_deref() == Some(id) {
@@ -2821,7 +2855,10 @@ impl Recorder {
             .filter(|item| item.task_id.is_empty())
             .chain(items.iter().filter(|item| !item.task_id.is_empty()));
         let rows: Vec<Value> = order
+            .filter(|item| item.kind != "link" || self.linked_task(&item.task_id).is_some())
             .map(|item| {
+                let linked = self.linked_task(&item.task_id);
+                let proposal = self.linked_task(&item.proposed_task_id);
                 let chosen = if item.owner.is_empty() {
                     self.last_owner.clone()
                 } else {
@@ -2840,7 +2877,13 @@ impl Recorder {
                     .unwrap_or_default();
                 json!({
                     "id": item.id,
-                    "title": item.title,
+                    "title": linked.map(|task| task["title"].clone()).unwrap_or(json!(item.title)),
+                    "number": linked.map(|task| task["number"].clone()),
+                    "status": linked.map(|task| task["status"].clone()),
+                    "proposed_task_id": proposal.map(|task| task["id"].clone()),
+                    "proposed_number": proposal.map(|task| task["number"].clone()),
+                    "due": item.due,
+                    "body": item.body,
                     "kind": item.kind,
                     "document": item.document,
                     "quote": item.quote,
@@ -2850,7 +2893,8 @@ impl Recorder {
                     "sent": !item.task_id.is_empty(),
                     "sent_to": item.sent_to,
                     "task_id": item.task_id,
-                    "task_url": item.task_url,
+                    "task_url": if item.kind == "link" { self.link_tasks["browser"].as_str().map(|base| format!("{base}/#/task/{}", item.task_id)).unwrap_or_default() } else { item.task_url.clone() },
+                    "can_link": proposal.is_some() && mode == "ready" && !self.context.kept_on_mac,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,
                     "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
@@ -2860,6 +2904,8 @@ impl Recorder {
             })
             .collect();
         json!({
+            "link_scope": self.link_scope(),
+            "can_link": mode == "ready" && !self.context.kept_on_mac,
             "mode": mode,
             "org": org,
             "orgs": self.config.destinations.iter().map(|row| json!({"id":row.id,"name":row.name})).collect::<Vec<_>>(),

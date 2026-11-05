@@ -37,7 +37,7 @@ DOC_BOT = "doc-updater"
 # Only these keys mean anything per section, so anything else is a mistake worth naming.
 DETAIL_KEYS = {
     "doc": ("document", "change", "why"),
-    "task": ("owner", "due", "priority"),
+    "task": ("owner", "due", "priority", "body"),
     "feature": ("side", "app", "area", "bug", "current", "expected", "labels"),
 }
 PRIORITIES = ("p0", "p1", "p2", "p3")
@@ -50,6 +50,7 @@ class ItemCreate(M.Contract):
     detail: dict = Field(default_factory=dict)
     quote: str = Field(default="", max_length=4_000)
     at_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    proposed_task_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ItemEdit(M.Contract):
@@ -144,10 +145,10 @@ def add(c, record, author, body):
     detail = detail_of(section, body.detail)
     ts, iid = H.now(), H.new_id()
     c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
-              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at) "
-              "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?)",
+              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at,proposed_task_id) "
+              "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?,?)",
               (iid, record["id"], section, body.text.strip(), json.dumps(detail, sort_keys=True),
-               body.quote.strip(), body.at_ms, author, ts, ts))
+               body.quote.strip(), body.at_ms, author, ts, ts, body.proposed_task_id))
     H.event(c, author, "meeting.item_added", record["id"], {"item": iid, "section": section})
     return view(one(c, record["id"], iid))
 
@@ -200,7 +201,7 @@ def owner_of(c, detail):
 def push_task(c, settings, task_create, who, record, row, detail):
     owner = owner_of(c, detail)
     priority = detail.get("priority") or "p2"
-    body = "\n\n".join([row["text"], f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
+    body = "\n\n".join([detail.get("body") or row["text"], f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
     created = task_create(c, who, M.TaskCreate(title=row["text"][:300], body=body, owner=owner,
                                               due=detail.get("due") or None))
     return created["task"]["id"]
@@ -318,6 +319,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         result = mutate(request, body, work,
                         check=lambda c: media.authorized(c, request.state.identity, rid))
         with store.read() as c:
+            media.authorized(c, request.state.identity, rid)
             return {**result, 'item': task_references.redact(c, auth, request.state.identity, result['item'])}
 
     @app.get("/api/v2/meetings/{rid}/items")
@@ -354,7 +356,31 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         human_only(who)
         def work(c):
             record = media.authorized(c, who, rid)
+            if body.proposed_task_id:
+                if body.section != 'task':
+                    raise Problem('section', 'Only a task item can propose a link', 422)
+                auth.task(c, who, body.proposed_task_id)
             return {"item": add(c, record, who.actor, body)}
+        return item_answer(request, rid, body, work)
+
+    @app.post("/api/v2/meetings/{rid}/items/{iid}/link")
+    @app.post("/api/meetings/{rid}/items/{iid}/link")
+    def accept_link(request: Request, rid: str, iid: str, body: M.Empty):
+        who = request.state.identity
+        human_only(who)
+        def work(c):
+            media.require_live(media.authorized(c, who, rid))
+            row = one(c, rid, iid)
+            if row['status'] == 'pushed':
+                return {'item': view(row), 'pushed': False}
+            if row['status'] != 'proposed':
+                raise Problem('status', 'This item was dismissed', 409)
+            if row['section'] != 'task' or not row['proposed_task_id']:
+                raise Problem('proposal', 'This item has no task to link', 409)
+            task = auth.task(c, who, row['proposed_task_id'])
+            c.execute('INSERT OR IGNORE INTO meeting_task_links(id,meeting_id,task_id,kind,created_by,created_at) '
+                      "VALUES(?,?,?,'proposal',?,?)", (H.new_id(), rid, task['id'], who.actor, H.now()))
+            return {'item': record_push(c, who, rid, iid, task['id']), 'pushed': True}
         return item_answer(request, rid, body, work)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}")

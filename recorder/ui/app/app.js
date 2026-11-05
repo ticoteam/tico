@@ -24,7 +24,7 @@
       editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null, address: false,
       pop: null, tsearch: false, showAudio: false, confirm: null, hideSide: false,
-      share: null, finish: null,
+      share: null, finish: null, taskPicker: null, taskQuery: '',
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
     },
   };
@@ -364,7 +364,7 @@
   }
   /** Tasks: ones already in Tico by number, then proposals drafted as people talk, each created or dismissed. */
   function actions(a) {
-    let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span><button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
+    let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span>${a.can_link ? '<button class="btn small" data-act="task-picker-open">Link</button>' : ''}<button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
     if (a.draft_status) html += `<div class="notice inline">${icon('alert')}<span class="grow">${esc(a.draft_status)}</span></div>`;
     if (a.mode === 'choose' && a.items.some((it) => !it.sent)) {
       html += `<div class="choose-org"><span class="faint">Owners from</span>${a.orgs.map((o) => `<button class="btn small" data-act="choose-org" data-id="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>`;
@@ -378,6 +378,7 @@
   }
   /** Tico's task number, when the task's id or link ends in one. */
   function taskNumber(it) {
+    if (it.number) return String(it.number);
     const id = String(it.task_id || '');
     if (/^\d+$/.test(id)) return id;
     const tail = /\/(\d+)\/?(?:[?#].*)?$/.exec(String(it.task_url || ''));
@@ -386,8 +387,8 @@
   function task(it) {
     const n = taskNumber(it);
     const open = it.task_url ? `<button class="link" data-act="open-url" data-url="${esc(it.task_url)}">Open</button>` : '';
-    const sub = [it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
-    return `<li class="item task"><span class="check done">${icon('check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div></li>`;
+    const sub = [it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
+    return `<li class="item task"><span class="check done">${icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div></div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
   }
   function proposal(it) {
     const id = esc(it.id);
@@ -402,11 +403,44 @@
     const create = it.sending
       ? `<span class="spin" style="margin:0 8px"></span>`
       : `<button class="btn small" data-act="create-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${esc(why)}">${anyway ? 'Create anyway' : 'Create'}</button>`;
+    const link = it.proposed_task_id && it.can_link ? `<button class="btn small" data-act="accept-link-item" data-id="${id}">Link #${esc(it.proposed_number)}</button>` : '';
     return `<li class="item proposal ${picking ? 'picking' : ''}">
       <span class="check dashed"></span>
-      <div class="content"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Task">${esc(it.title)}</span><div class="sub">${at}${owner}${doc}</div>${anyway ? `<div class="error">May quote paused speech</div>` : ''}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
-      <div class="item-tail">${create}<button class="icon-btn tiny" data-act="remove-item" data-id="${id}" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>
+      <div class="content"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Task">${esc(it.title)}</span><div class="sub">${at}${owner}${doc}<button class="link" data-act="task-detail" data-id="${id}">Details</button></div>${anyway ? `<div class="error">May quote paused speech</div>` : ''}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
+      <div class="item-tail">${link || create}<button class="icon-btn tiny" data-act="remove-item" data-id="${id}" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>
     </li>`;
+  }
+
+  // ---- Transcript sidebar ----
+  let taskSearchTimer;
+  async function loadTaskPicker(more = false) {
+    const picker = S.ui.taskPicker;
+    if (!picker) return;
+    const request = (picker.request || 0) + 1;
+    picker.request = request;
+    picker.loading = true; picker.error = '';
+    render();
+    try {
+      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), offset: more ? picker.next : 0 });
+      if (S.ui.taskPicker !== picker || picker.request !== request || picker.scope !== JSON.stringify(S.meeting?.actions.link_scope)) return;
+      picker.rows = more ? picker.rows.concat(reply.tasks) : reply.tasks;
+      picker.next = reply.next_offset;
+    } catch (error) {
+      if (S.ui.taskPicker === picker && picker.request === request) { picker.rows = []; picker.error = String(error); }
+    } finally {
+      if (S.ui.taskPicker === picker && picker.request === request) { picker.loading = false; render(); }
+    }
+  }
+  function taskPickerSheet() {
+    const p = S.ui.taskPicker;
+    if (!p) return '';
+    if (!S.meeting?.actions.can_link || p.scope !== JSON.stringify(S.meeting.actions.link_scope)) { S.ui.taskPicker = null; return ''; }
+    return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><input class="field" data-model="taskQuery" placeholder="Search tasks" aria-label="Search tasks"><div class="pop-list">${p.rows.map((task) => `<button class="menu-item" data-act="task-pick" data-id="${esc(task.id)}" aria-pressed="${p.picks.includes(task.id)}"><span class="check">${p.picks.includes(task.id) ? icon('check', 12) : ''}</span><span class="grow">#${esc(task.number)} ${esc(task.title)} · ${esc(task.status)}</span></button>`).join('')}</div>${p.loading ? '<span class="spin"></span>' : !p.rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? '<button class="link" data-act="task-picker-more">More</button>' : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!p.picks.length || p.loading ? 'disabled' : ''}>Link</button></div></div>`;
+  }
+  function taskDetailSheet() {
+    const item = S.ui.taskDetail;
+    if (!item || !S.meeting?.actions.items.some((i) => i.id === item)) return '';
+    return `<div class="scrim" data-act="task-detail-close"></div><div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Task details"><h2>Details</h2><label>Due<input class="field" type="date" data-model="detailDue" aria-label="Due"></label><label>Details<textarea class="field" data-model="detailBody" rows="6" aria-label="Details"></textarea></label><div class="sheet-foot"><button class="btn quiet" data-act="task-detail-close">Cancel</button><button class="btn primary" data-act="task-detail-save">Save</button></div></div>`;
   }
 
   // ---- Transcript sidebar ----
@@ -1003,7 +1037,7 @@
     const first = S.status.first_run && !S.library?.rows?.length;
     if (first && S.page === 'library') S.page = 'signin';
     else if (!first && S.page === 'signin') S.page = 'library';
-    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
+    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet() + taskDetailSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
     const active = document.activeElement;
     const key = active?.dataset?.key || active?.dataset?.model;
     const selection = key && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
@@ -1194,6 +1228,7 @@
 
   // ---- Navigation ----
   async function openMeeting(id) {
+    S.ui.taskPicker = null; S.ui.taskDetail = null;
     S.ui.pop = null;
     S.ui.share = null;
     S.ui.finish = null;
@@ -1220,6 +1255,7 @@
     await act('open_meeting', { id });
   }
   async function back() {
+    S.ui.taskPicker = null; S.ui.taskDetail = null;
     S.ui.pop = null;
     S.ui.share = null;
     if (S.page === 'settings') {
@@ -1475,6 +1511,29 @@
       const c = S.meeting?.chat;
       if (c?.retry) act('ask', { question: c.retry });
     },
+    'task-picker-open': () => {
+      S.ui.taskQuery = ''; S.ui.pop = null; S.ui.share = null; S.ui.finish = null;
+      S.ui.taskPicker = { rows: [], picks: [], next: null, scope: JSON.stringify(S.meeting?.actions.link_scope) };
+      S.ui.focusNext = '[data-model="taskQuery"]'; loadTaskPicker();
+    },
+    'task-picker-close': () => { S.ui.taskPicker = null; render(); },
+    'task-picker-more': () => loadTaskPicker(true),
+    'task-pick': (el) => {
+      const p = S.ui.taskPicker; if (!p) return;
+      p.picks = p.picks.includes(el.dataset.id) ? p.picks.filter((id) => id !== el.dataset.id) : [...p.picks, el.dataset.id]; render();
+    },
+    'task-picker-link': () => {
+      const p = S.ui.taskPicker; if (!p?.picks.length) return;
+      S.ui.taskPicker = null; act('link_selected_tasks', { ids: p.picks }); render();
+    },
+    'accept-link-item': (el) => act('accept_link_item', { id: el.dataset.id }),
+    'unlink-item': (el) => act('unlink_item', { id: el.dataset.id }),
+    'task-detail': (el) => {
+      const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.id); if (!it) return;
+      S.ui.taskDetail = it.id; S.ui.detailDue = it.due || ''; S.ui.detailBody = it.body || ''; render();
+    },
+    'task-detail-close': () => { S.ui.taskDetail = null; render(); },
+    'task-detail-save': () => { const id = S.ui.taskDetail; S.ui.taskDetail = null; act('edit_task_detail', { id, due: S.ui.detailDue, body: S.ui.detailBody }); },
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'add-open': () => { S.ui.adding = true; S.ui.focusNext = '[data-model="addItem"]'; render(); },
     // Create files the proposal as a private Tico task; one that may quote paused speech asks twice.
@@ -1570,6 +1629,7 @@
     const el = event.target;
     if (el.dataset.model) {
       setModel(el.dataset.model, el.value);
+      if (el.dataset.model === 'taskQuery') { clearTimeout(taskSearchTimer); taskSearchTimer = setTimeout(() => loadTaskPicker(), 250); }
       if (el.dataset.model === 'notes') {
         grow(el);
         paintMentions(el);
@@ -1713,6 +1773,8 @@
     if (S.ui.pop) {
       S.ui.pop = null;
       render();
+    } else if (S.ui.taskPicker || S.ui.taskDetail) {
+      S.ui.taskPicker = null; S.ui.taskDetail = null; render();
     } else if (S.ui.share || S.ui.finish || S.ui.screen) {
       S.ui.share = null; S.ui.finish = null; S.ui.screen = null; render();
     } else if (S.status.connect) {
