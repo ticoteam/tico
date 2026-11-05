@@ -130,7 +130,7 @@ def groups(world):
 @seed("connection")
 def connection(world):
     """A tool the Engineering Lead's computer reports (the runner's heartbeat): Acme Billing, read and refund, so
-    Library › Tools lists it in use, with writes."""
+    Tools lists it in use, with writes."""
     row = {"ready": True, "runtime": "claude", "model": "claude-opus-5-5", "repository_present": True,
            "configuration_valid": True, "problems": []}
     bots = {slug: {**row, **({"tools": [{"service": "acme-billing", "identity": "Acme billing account",

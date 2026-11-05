@@ -195,7 +195,7 @@ appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}
 `bot.yaml` from that line. The bot is created `planned`, with `outbound_send: false`, one
 routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
 declared off and switched on when its setup starts, and gmail `read`/`draft` plus calendar `read` on that mailbox. It reads only that mailbox,
-through the grant it gets as its person's message bot (Settings > Inboxes); another mailbox is that mailbox's
+through the grant it gets as its person's message bot (Tools); another mailbox is that mailbox's
 person's grant to give. It starts with filing off (no labels, no archive) and shows what it would do.
 
 There is no per-user OAuth. One Google service account acts as every mailbox; the `tools:` block

@@ -809,7 +809,7 @@ def operation_issues(c, who, auth):
         if key and key["status"] == "failing":
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
-                needs_person=True, action="Check the key in Settings > Inboxes.")
+                needs_person=True, action="Check the key in Tools > Settings > Email.")
         sync_owners = google_workspace.workspace_sync_owners(c)
         for box in google_workspace.workspace_mailboxes(c):
             if box["address"] not in sync_owners:
@@ -827,9 +827,9 @@ def operation_issues(c, who, auth):
                 holder = labels.get(grant["holder"]) or "another computer"
                 bot_computer = labels.get(host) or "the computer that runs their message bot"
                 add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Inboxes to move it "
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Tools > Settings > Email to move it "
                     "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
-                    action="Open Settings > Inboxes")
+                    action="Open Tools > Settings > Email")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.

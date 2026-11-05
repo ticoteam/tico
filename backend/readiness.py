@@ -189,7 +189,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     if name:
         if name not in _held(c, bot):
             return verdict(False, "This bot has no " + name + " Credential", "Give the bot the " + name +
-                           " Credential in Credentials", "#/credentials")
+                           " Credential in Credentials", "#/tools/keys?show=credentials")
         return verdict(True)
     # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
     # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes

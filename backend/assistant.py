@@ -290,7 +290,7 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/google/workspace(/.*)?"), (None, r"/api/v2/google/oauth-client"),
     # What Tico may do in Google: Send mail lets every bot write outside, a person's own word as a bot's Mail sending is.
     (None, r"/api/v2/google/permissions"),
-    # Who can use a mailbox (Settings > Inboxes, backend/mailboxes.py): connecting one, sharing it, each access and
+    # Who can use a mailbox (Tools, backend/mailboxes.py): connecting one, sharing it, each access and
     # stopping it are the person's own tap, never a chat's.
     (None, r"/api/v2/mailboxes(/.*)?"),
     (None, r"/api/v2/letters/(settings|outboxes/.*|bots/.*/settings)"),

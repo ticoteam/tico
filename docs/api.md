@@ -327,11 +327,11 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 
 ## Company inbound email and SMS
 
-**Settings > Inboxes** lists the company's Tico addresses and numbers with every other inbox (`#/settings/inboxes`;
+**Tools** lists the company's Tico addresses and numbers with every other inbox (`#/tools?show=mail`;
 the old `#/settings/inbound`, `#/settings/company-inbox` and `#/settings/email-phone` links open it). Each one's page
-(`#/settings/inboxes/tico/<id>`, `#/settings/inboxes/number/<id>`) shows who reads it, its automations and its recent
+(`#/tools/number/<id>`) shows who reads it, its automations and its recent
 messages; a released address stays listed as Not in use with the messages it received. **Messages**
-(`#/settings/inboxes/messages`) reads every inbox at once, or the ones picked, with channel, sender, search, code and spam
+(`#/tools/messages`) reads every inbox at once, or the ones picked, with channel, sender, search, code and spam
 filters and older pages. All current people, native bot runs and registered external agents can read them. Runner/service credentials
 and support sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
 
@@ -347,7 +347,7 @@ Each inbox has an audience. `company`, the default, is everyone above. An owner 
 under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
 `messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
 (`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
-MCP: `hub_inbound_audience`. An inbox's page in Settings > Inboxes shows who reads it, and an admin changes it there.
+MCP: `hub_inbound_audience`. An inbox's page in Tools shows who reads it, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can

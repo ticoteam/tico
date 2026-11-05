@@ -197,7 +197,7 @@ function settingsConfirm({title, text, ok = 'Confirm', danger = true}) {
 const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
-  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'general'; location.hash = INTEGRATIONS; return; }
+  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; SETTINGS_TAB = 'general'; return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
@@ -341,7 +341,7 @@ function pageSettingsThemeBind() {
   };
 }
 function settingsShow(tab) {
-  if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
+  if (tab === 'credentials' || tab === 'cloud') { location.hash = tab === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; return; }
   tab = SETTINGS_ALIAS[tab] || tab;
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
   if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks

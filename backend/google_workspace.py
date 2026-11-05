@@ -1,6 +1,6 @@
-"""Settings > Inboxes, the Workspace connection: one service-account key for the whole Workspace, kept on this server.
+"""Tools > Settings > Email, the Workspace connection: one service-account key for the whole Workspace, kept on this server.
 
-An admin makes the key once (scripts/google-setup.sh, or a key file uploaded in Settings > Inboxes). The key is sealed
+An admin makes the key once (scripts/google-setup.sh, or a key file uploaded in Tools > Settings > Email). The key is sealed
 (vault.cipher, context `google-workspace:<id>`) and never leaves the server. A computer asks for a token for one
 mailbox and one service; the server signs a JWT with the key, impersonating that mailbox, and answers with the access
 token only (`mint`). The key covers mailboxes on the Workspace's domain (`covers`).
@@ -46,7 +46,7 @@ WORKSPACE_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.modify"],
 # authorized by name (gmail.modify does not cover gmail.readonly there), so the authorized list carries these too.
 READ_ONLY_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
                     "calendar": ["https://www.googleapis.com/auth/calendar.readonly"]}
-# What Tico may do in Google beyond reading (Settings > Inboxes), one JSON row in registry_metadata. Each is on until an
+# What Tico may do in Google beyond reading (Tools > Settings > Email), one JSON row in registry_metadata. Each is on until an
 # admin turns it off. Organize mail and Send mail both need gmail.modify (Google has no narrower scope Tico uses), so
 # Send mail is also held in Tico: off, no bot sends (backend/mail_settings.py, connectors/mail/policy.py).
 PERMISSIONS_KEY = "google_permissions"
@@ -411,7 +411,7 @@ def forget_tokens():
 
 def oauth_client(c, settings):
     """Tico's Google OAuth client for Connect Google: (client_id, client_secret, 'env' | 'settings'), or None.
-    The server's environment wins; otherwise the client an admin pasted into Settings > Inboxes."""
+    The server's environment wins; otherwise the client an admin pasted into Tools > Settings > Email."""
     if settings.google_oauth_client_id and settings.google_oauth_client_secret:
         return settings.google_oauth_client_id, settings.google_oauth_client_secret, "env"
     found = c.execute("SELECT client_id, secret_sealed FROM google_oauth_clients WHERE singleton=1").fetchone()
@@ -791,7 +791,7 @@ class OAuthClientBody(M.Contract):
 
 
 def _view(row):
-    """A key row as Settings > Inboxes shows it: never the key, its sealed text or its key id."""
+    """A key row as Tools > Settings > Email shows it: never the key, its sealed text or its key id."""
     if row is None:
         return None
     return {"status": row["status"], "domain": row["domain"], "project_id": row["project_id"],
@@ -902,7 +902,7 @@ def team_statuses(c, after=""):
 
 
 def install(app, store):
-    """Settings > Inboxes' Workspace routes. Installed after install_credentials, so the vault is there to seal with.
+    """Tools > Settings > Email's Workspace routes. Installed after install_credentials, so the vault is there to seal with.
     None of them goes through `mutate`: each one checks its own rights (an admin, or a setup code)."""
     from .credentials import administrator, require_admin
     use_vault(app.state.vault)
@@ -926,14 +926,14 @@ def install(app, store):
             if row is None or row["used_at"] is not None or row["expires_at"] <= stamp:
                 _bad_code(now)
                 raise Problem("setup_code", "That setup code is not valid. Run the setup command again from "
-                                            "Settings > Inboxes.", 401)
+                                            "Tools > Settings > Email.", 401)
             payload = _parse_upload(raw)
             fields = validate_key(payload.get("key"))
             if not _admin_of(c, row["created_by"], settings.credential_admins):
                 raise Problem("forbidden", "The person who made this setup command is no longer a credential "
                                            "administrator", 403)
             if row["generation"] < _newest(c):
-                raise Problem("superseded", "A newer setup command was made. Run the newest one from Settings > Inboxes.",
+                raise Problem("superseded", "A newer setup command was made. Run the newest one from Tools > Settings > Email.",
                               409)
             if not _consume_code(c, row["code_hash"], stamp):
                 _bad_code(now)
@@ -942,7 +942,7 @@ def install(app, store):
 
     @app.get(GOOGLE_PATH)
     def workspace_status(request: Request):
-        """Settings > Inboxes for whoever is signed in: the Workspace key, a replacement waiting, the OAuth client, and
+        """Tools > Settings > Email for whoever is signed in: the Workspace key, a replacement waiting, the OAuth client, and
         whether this person's own mailbox is covered by the key (`me` is null for anyone who is not a person here)."""
         from .google_connect import mailbox_for, require_self
         who = request.state.identity
@@ -976,7 +976,7 @@ def install(app, store):
 
     @app.get(PEOPLE_PATH)
     def team_google(request: Request, after: str = ""):
-        """Settings > Inboxes' team list, for an admin: each person with a mailbox, and whether it is connected
+        """Tools > Settings > Email's team list, for an admin: each person with a mailbox, and whether it is connected
         (`connected`, `none`, `pending`, `failing`, or `workspace` when the Workspace key covers it). A page at a
         time: `after` is the `next` of the page before."""
         who = request.state.identity
@@ -1040,7 +1040,7 @@ def install(app, store):
             if row is None:
                 _bad_code(now)
                 raise Problem("setup_code", "That setup code is not valid. Run the setup command again from "
-                                            "Settings > Inboxes.", 401)
+                                            "Tools > Settings > Email.", 401)
             used = _epoch(row["used_at"]) if row["used_at"] else None
             if used is None or now - used > USED_CODE_SECONDS:
                 raise Problem("forbidden", "This setup command has no upload to keep keys for, or its window has passed",

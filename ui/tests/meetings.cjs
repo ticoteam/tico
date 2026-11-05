@@ -156,7 +156,7 @@ async function shot(page, name) {
 
       // Close goes to its integration page.
       await page.locator('#meet-sources .meet-src-btn').click();
-      assert.equal(await page.locator('#meet-src-dialog [data-src=close] a').getAttribute('href'), '#/integrations/close-crm');
+      assert.equal(await page.locator('#meet-src-dialog [data-src=close] a').getAttribute('href'), '#/tools/close-crm');
       await page.keyboard.press('Escape');
       await page.locator('#meet-src-dialog').waitFor({state: 'detached'});
 

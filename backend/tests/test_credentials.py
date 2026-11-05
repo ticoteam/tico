@@ -354,7 +354,9 @@ def test_a_run_that_reads_its_credentials_again_writes_one_reveal_row(api):
     for _ in range(3):     # a run's tool calls each read the credential again
         assert get(api,'credential-runtime',attempt['token'])['credentials']
     with api.app.state.store.read() as c:
-        rows=c.execute("SELECT count(*) FROM events WHERE target=? AND action='credential.revealed'",(cid,)).fetchone()[0]
+        # PostHog's key is on the proxy, so the run is handed a proxy token: credential.proxied, not .revealed.
+        rows=c.execute("SELECT count(*) FROM events WHERE target=? AND action IN ('credential.revealed','credential.proxied')",
+                       (cid,)).fetchone()[0]
         assert rows==1
     row=get(api,'credentials')['credentials'][0]
     assert row['last_used_at'] and row['last_used_by']=='finance'

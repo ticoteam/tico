@@ -615,7 +615,7 @@ def record_use(c,actor,action,cid,detail,windowed):
 
 def last_used(c,cid):
     """`last_used_at` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
-    key) for Library › Tools: the newest use of the credential, from credential_uses."""
+    key) for Tools: the newest use of the credential, from credential_uses."""
     row=c.execute('SELECT used_at,bot FROM credential_uses WHERE credential_id=? ORDER BY used_at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
         return {'last_used_at':None,'last_used_by':''}

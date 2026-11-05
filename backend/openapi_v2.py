@@ -3260,7 +3260,7 @@ STABLE.extend([
 ])
 
 
-# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+# Tools (backend/mailboxes.py): which inboxes Tico uses and who may use each.
 TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
 _MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
 _MAILBOX_REF = obj({"id": "s", "name": "s"})

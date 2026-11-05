@@ -36,7 +36,7 @@ routines:
 # arrives in, never the value. Store a Credential in Tico and grant it to this bot;
 # the runner delivers it during a run. Declaring access here does not create a grant. BotOps replaces {{mailbox}} from
 # the Mailbox: line in the reviewed instructions. Only the assigned mailbox is read, through the grant this bot gets
-# as its person's message bot (Settings > Inboxes); another mailbox is that mailbox's person's to share.
+# as its person's message bot (Tools); another mailbox is that mailbox's person's to share.
 tools:
   - service: gmail
     identity: "{{mailbox}}"
