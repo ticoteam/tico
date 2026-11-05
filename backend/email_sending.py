@@ -435,6 +435,9 @@ def decision(c, auth, row, *, dispatch=False):
     original = _original(c, row)
     is_reply = bool(original and row["thread_id"] == original["thread_id"]
                     and original["from_addr"].lower() in recipients and original["from_addr"].lower() != row["mailbox"])
+    legality = json.loads(row["classification"]).get("legal_or_money")
+    if not isinstance(legality, bool):
+        reasons.append("legal_or_money_or_unclassified")
     if not grandfathered:
         if policy["mode"] == "ask_first":
             reasons.append("ask_first")
@@ -446,7 +449,7 @@ def decision(c, auth, row, *, dispatch=False):
             reasons.append("attachments")
         if policy["ask_many_recipients"] and len(recipients) > 10:
             reasons.append("more_than_10_recipients")
-        if policy["ask_legal_money"] and json.loads(row["classification"]).get("legal_or_money") is not False:
+        if policy["ask_legal_money"] and legality is True:
             reasons.append("legal_or_money_or_unclassified")
     if any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]) and any(not known(c, row["mailbox"], a) for a in recipients):
         blocked.append("known_addresses_only")

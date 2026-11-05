@@ -310,8 +310,9 @@ def test_rehearsal_keeps_restrictions_but_discards_send_permits_and_proofs(inbox
     '<p style="content: \'We agree to pay $100000\'">Thanks.</p>',
     '<link rel="stylesheet" href="https://assets.acme.example/contract.css"><p>Thanks.</p>',
 ])
-def test_css_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html):
-    autonomous(inbox, ask_legal_money=True)
+@pytest.mark.parametrize("prompt_legal", [False, True])
+def test_css_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(inbox, html, prompt_legal):
+    autonomous(inbox, ask_legal_money=prompt_legal)
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"
     msg.set_content(html, subtype="html")
@@ -327,3 +328,11 @@ def test_css_dependent_body_is_previewed_but_cannot_be_classified_as_harmless(in
     assert queued["classification"]["status"] == "incomplete_content"
     shown = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()
     assert shown["preview_complete"] and shown["bodies"] == frozen["visible_bodies"]
+
+
+@pytest.mark.parametrize("body,status", [("Thanks.", "unavailable"), ("a" * 16001 + "Pay $100000", "incomplete_content")])
+def test_unknown_classification_needs_approval_even_when_the_legal_prompt_is_off(inbox, body, status):
+    autonomous(inbox, ask_legal_money=False)
+    with mock.patch.object(judge, "server_engine", return_value=None):
+        queued = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(body=body)})["send"]
+    assert queued["state"] == "waiting_approval" and queued["classification"]["status"] == status
