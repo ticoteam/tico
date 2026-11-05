@@ -71,7 +71,14 @@ def test_provenance_keeps_a_bots_fyi_held_and_its_comment_editable(api):
     token = ops_token(api, r)
     refs = {'body_sources': [{'file': 'source-file', 'command': True}],
             'sources': [{'file': 'another-source'}]}
-    sent = post(api, 'messages', {'to': 'cpo', 'text': 'QA results are available.', 'refs': refs}, token=token)
+    sent = post(api, 'messages', {'to': 'cpo', 'text': 'QA results are available.', 'refs': refs}, token=token,
+                key='qa-result-with-sources')
+    repeated = post(api, 'messages', {'to': 'cpo', 'text': 'QA results are available.',
+                                     'refs': {'body_sources': [{'file': 'refreshed-source'}]}}, token=token,
+                    key='qa-result-with-sources')
+    assert repeated['id'] == sent['id']
+    post(api, 'messages', {'to': 'cpo', 'text': 'A different QA result.', 'refs': refs}, token=token,
+         key='qa-result-with-sources', expected=409)
     assert jobs(api, 'cpo') == 0 and sent['refs'].get(B.MARK) == B.RULE
     assert all(sent['refs'][key] == value for key, value in refs.items())
     with api.app.state.store.transaction() as c:

@@ -2320,7 +2320,9 @@ class Store:
     def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
-        hashed = digest(encode(body))
+        # A message's copied-text sources do not change the send that this key identifies.
+        content = {**body, "refs": H.routing_refs(body["refs"])} if isinstance(body, dict) and "refs" in body else body
+        hashed = digest(encode(content))
         principal = self._principal(identity)
         refusal = logged = None
         # Only a money write asks for the durable commit; every other keyed write keeps the plain call.
