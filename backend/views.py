@@ -1908,7 +1908,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         if item["kind"] in ("question", "ask"):
             item["why"] = card_why(item)
         item["tier"] = decide_tier(item, at, own)
-    return sorted(items, key=needs_key)
+    from .files import readable_page_refs
+    return sorted(readable_page_refs(c, auth, who, items), key=needs_key)
 
 
 def _readable(auth, c, who, task_id):

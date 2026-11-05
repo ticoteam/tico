@@ -186,3 +186,19 @@ def test_identical_content_in_another_task_resolves_its_own_live_review(api):
     with api.app.state.store.read() as c:
         # A bare saved digest has no independent live identity in the deleted page's task.
         assert files.page_ref_denials(c, api.app.state.auth, Identity("human:ana", "owner"), digest) == {fid: "A deleted page"}
+
+
+def test_sibling_review_defaults_are_scrubbed_on_the_recipients_needs_you(api):
+    tid, _, fid = public_page(api)
+    question = ask("cara")
+    question["questions"][0]["options"][0].update(label="Confidential draft", file=fid + "@1")
+    question["if_no_answer"] = {"do": "Confidential draft", "kind": "reversible"}
+    post(api, f"tasks/{tid}/files", {"name": "ordinary.txt", "text": "Public notes", "ask": question}, token="ops-test")
+    assert "Confidential draft" in json.dumps(get(api, "needs-you", token="cara-test"))
+    edit(api, fid, {"people": ["ben"]})
+    for deleted in (False, True):
+        if deleted:
+            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+        for path in ("needs-you", "needs-you/summary", "tasks/" + tid):
+            shown = json.dumps(get(api, path, token="cara-test"))
+            assert fid not in shown and "Confidential draft" not in shown, (path, shown)

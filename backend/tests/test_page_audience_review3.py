@@ -183,6 +183,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     post(api, f"tasks/{tid}/answers", {"target": {"file": sibling["file_id"], "version": 1},
          "answers": {"verdict": [title]}}, token="reader-test")
     post(api, f"tasks/{tid}/files", {"name": "other-notes.txt", "text": "Other notes", "ask": sibling_ask})
+    recipient_ask = {**sibling_ask, "who": "cara", "if_no_answer": {"do": title, "kind": "reversible"}}
+    post(api, f"tasks/{tid}/files", {"name": "recipient-notes.txt", "text": "Public notes", "ask": recipient_ask}, token="ops-test")
     # Version uploads and blob archives use the same production writers as the task's Files panel.
     uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
     assert uploaded["file_id"] == fid and uploaded["version"] == 2
