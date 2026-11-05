@@ -175,11 +175,12 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     read_version = get(api, "tasks/" + read_task, token="reader-test")["task"]["version"]
     post(api, "tasks/" + read_task, {"version": read_version, "private": False}, token="reader-test")
     assert "Canary confidential quote." in json.dumps(get(api, "tasks/" + read_task, token="cara-test"))
-    pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid, private=False, pick=True)
+    pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid, private=False,
+                      pick=True, question="Which folio should ship?")
     picked_label = pick["question"]["refs"]["questions"][0]["options"][0]["label"]
     picked_answer = review_answer(api, pick, [picked_label], token="reader-test")
     spend_pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="cara", parent=tid,
-                           topic="canary-spend", private=False, pick=True,
+                           topic="canary-spend", private=False, pick=True, question="Which folio should we render?",
                            spend={"label": picked_label, "amount": "12.50", "what": "Render the folio"})
     spend_answer = review_answer(api, spend_pick, [picked_label], token="cara-test")
     approval_id = spend_answer["answer"]["spend_approval"]
@@ -367,7 +368,8 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     assert recreated.status_code == 200, recreated.text
     replacement = recreated.json()["page"]["file_id"]
     assert replacement != fid
-    remake = review_ask(api, "ops-test", [{"file": replacement}], on="ana", parent=tid, private=False)
+    remake = review_ask(api, "ops-test", [{"file": replacement}], on="ana", parent=tid, private=False,
+                        question="Is the replacement folio ready?")
     assert review_answer(api, remake, ["Approve"])["answer"]["reviewed"][0]["file"] == replacement
 
 

@@ -18,7 +18,7 @@ def held_answers(api, tid, fid, label):
     """Create holds through the pick, comment, ordinary-file and typed-answer production routes."""
     ordinary = post(api, f"tasks/{tid}/files", {"name": "held-public.txt", "text": "Public choice"})["file_id"]
     pick = review_ask(api, "ops-test", [{"file": fid}, {"file": ordinary}], on="reader", parent=tid,
-                      topic="held-pick", private=False, pick=True)
+                      topic="held-pick", private=False, pick=True, question="Which draft needs a held review?")
     question = ask("reader")
     question["questions"][0]["options"][0].update(label=label, file=fid + "@1")
     comment = post(api, f"tasks/{tid}/comments", {"text": "Choose the draft", "ask": question}, token="ops-test")["comment"]
