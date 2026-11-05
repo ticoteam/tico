@@ -17,18 +17,21 @@ def listing(c, auth, who, tid, *, carried=None):
     if not carried:
         return {"pages": [], "meetings": []}
     pages, linked, cache = [], [], {}
-    for row in c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.archived=0 "
+    for row in c.execute("SELECT f.*,coalesce(v.created_at,f.last_activity_at) AS context_updated_at "
+                         "FROM pages p JOIN bot_files f ON f.id=p.file_id LEFT JOIN bot_file_versions v "
+                         "ON v.file_id=f.id AND v.version=f.current_version WHERE p.archived=0 "
                          "AND f.archived=0 AND f.state<>'deleted' AND (f.scope=? OR EXISTS "
                          "(SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id)) "
-                         "ORDER BY f.last_activity_at DESC,f.id DESC", ("task:" + task["id"], "task:" + task["id"])):
+                         "ORDER BY context_updated_at DESC,f.id DESC", ("task:" + task["id"], "task:" + task["id"])):
         if (all(turn_scope.file_contained(c, auth, row, t, who) for t in carried)
                 and file_visible(c, auth, who, row, cache)):
             pages.append({"id": row["id"], "title": row["title"][:200], "version": row["current_version"],
-                          "updated_at": row["last_activity_at"]})
+                          "updated_at": row["context_updated_at"]})
             if len(pages) == MAX_ITEMS:
                 break
     for item in c.execute("SELECT m.id FROM meeting_task_links l JOIN meetings m ON m.id=l.meeting_id "
-                          "WHERE l.task_id=? ORDER BY coalesce(json_extract(m.metadata,'$.started'),m.created_at) DESC,m.id DESC",
+                          "WHERE l.task_id=? ORDER BY coalesce(julianday(json_extract(m.metadata,'$.started')),"
+                          "julianday(m.created_at)) DESC,m.id DESC",
                           (task["id"],)):
         row = meetings.get(item[0], c)
         if not turn_scope.meeting_contained(c, row):

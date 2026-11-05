@@ -173,8 +173,7 @@ def test_make_scope_guards_legacy_routes_logs_reads_and_rechecks_revocation(api,
                  "/api/v2/meetings/transcript?id=" + linked):
         response = api.get(path, headers=headers(attempt["token"]))
         assert response.status_code == 200, response.text
-    sql = post(api, "sql", {"sql": "SELECT id FROM meetings ORDER BY id"}, attempt["token"])
-    assert sql["rows"] == [[linked]]
+    post(api, "sql", {"sql": "SELECT id FROM meetings ORDER BY id"}, attempt["token"], expected=403)
     store = api.app.state.store
     with store.read() as c:
         assert [tuple(r) for r in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))] == [
@@ -300,3 +299,21 @@ def test_botops_borrowing_a_persons_rights_keeps_its_task_scope(api):
     api.app.state.store.settings.test_identities["acted"] = acted
     get(api, "meetings/transcript?id=" + mid)
     get(api, "meetings/transcript?id=" + mid, "acted", expected=404)
+
+
+def test_context_orders_meetings_by_utc_and_pages_by_version_time(api):
+    t = task(api, private=False)
+    for mid, started in (("earlier", "2026-11-05T01:00:00+02:00"), ("later", "2026-11-05T00:00:00Z")):
+        with api.app.state.store.transaction() as c:
+            meetings.snapshot({"id": mid, "kind": "meeting", "private": False, "title": mid,
+                               "started": started, "owner": "ana@acme.example"}, conn=c)
+            c.execute("INSERT INTO meeting_task_links VALUES(?,?,?,'linked','human:ana',?)",
+                      (H.new_id(), mid, t["id"], H.now()))
+    _, publisher = turn(api, "cpo")
+    fid = published(api, publisher, task=t["id"])
+    with api.app.state.store.transaction() as c:
+        stamp = c.execute("SELECT created_at FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
+        c.execute("UPDATE bot_files SET last_activity_at='2099-01-01' WHERE id=?", (fid,))
+    result = get(api, "tasks/" + t["id"] + "/context")
+    assert [r["id"] for r in result["meetings"]] == ["later", "earlier"]
+    assert result["pages"][0]["updated_at"] == stamp
