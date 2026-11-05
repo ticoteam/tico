@@ -1,4 +1,4 @@
-"""The systemd user units `scripts/tico install` writes for a Linux checkout runner."""
+"""The systemd user units `scripts/tico-computer install` writes for a Linux checkout runner."""
 import os
 import plistlib
 import re
@@ -74,8 +74,8 @@ def test_a_unit_starts_its_job_by_the_runner_name_an_older_release_also_has(kind
 
 @pytest.mark.parametrize("kind", ["bot", "connectors", "close-calls", "importers"])
 def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
-    # The plist scripts/tico install writes on a Mac, rendered by bash from the script's own heredoc.
-    script = (ROOT / "scripts" / "tico").read_text()
+    # The plist scripts/tico-computer install writes on a Mac, rendered by bash from the script's own heredoc.
+    script = (ROOT / "scripts" / "tico-computer").read_text()
     body = re.search(r'cat > "\$file" <<PL\n(.*?)\nPL\n', script, re.S).group(1)
     command = {"bot": "run"}.get(kind, kind)
     rendered = subprocess.run(["bash", "-c", f"cat <<PL\n{body}\nPL\n"], capture_output=True, check=True, timeout=30,
@@ -87,7 +87,7 @@ def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also
     run_through_forwarder(argv)
 
 
-# -- scripts/tico on Linux, with systemctl and loginctl faked ----------------------------------------------
+# -- scripts/tico-computer on Linux, with systemctl and loginctl faked ----------------------------------------------
 
 def fake_linux(tmp_path, linger="no"):
     if sys.platform != "linux":
@@ -115,7 +115,7 @@ def fake_linux(tmp_path, linger="no"):
 
 
 def tico(env, *args):
-    return subprocess.run([str(ROOT / "scripts" / "tico"), *args], capture_output=True, text=True, env=env, timeout=120)
+    return subprocess.run([str(ROOT / "scripts" / "tico-computer"), *args], capture_output=True, text=True, env=env, timeout=120)
 
 
 @pytest.mark.slow

@@ -1,0 +1,734 @@
+#!/usr/bin/env bash
+# Operate the Tico runner on this computer (a Mac: launchd jobs; Linux: systemd user units): install it, check it,
+# restart it, update it.
+# Usage: scripts/tico-computer [-e ENV] install|uninstall|restart [bot|connectors|close-calls|importers|all]
+#        scripts/tico-computer [-e ENV] status | doctor | logs [bot|connectors|close-calls|importers] [-n N] [-f]
+#        scripts/tico-computer [-e ENV] update | open | help   (restart/update wait for turns in flight; TICO_RESTART_NOW=1 skips)
+#        scripts/tico-computer env create|list|show|remove ...          the companies on this Mac
+#        scripts/tico-computer -e ENV enroll --code-file F --label L    register this Mac for one company
+#        scripts/tico-computer -e ENV profile add|list|login            the computer's login its bots run on
+#        scripts/tico-computer [-e ENV] screen on|off|status            offer this computer's screen to the web app (Linux)
+#        scripts/tico-computer -e ENV bot create SLUG --name "Display" [--template T]  a catalog template
+#                                                                       or employee-repo (the default)
+#        scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|logs
+#        scripts/tico-computer -e ENV server flight [summary --since 30m|stacks|memory]  the flight file (backend/flight.py)
+# -e ENV (or TICO_ENV) picks a company environment; without it this is the original (default) setup.
+set -euo pipefail
+
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"   # ~/.local/bin/tico-computer is a symlink here
+HUB="$(cd "$(dirname "$SELF")/.." && pwd)"
+if [ -n "${TICO_RUNNER_PYTHON:-}" ]; then
+  PYTHON="$TICO_RUNNER_PYTHON"
+elif [ -x "$HUB/runtime/runner-venv/bin/python" ]; then
+  PYTHON="$HUB/runtime/runner-venv/bin/python"
+else
+  PYTHON="$HUB/runtime/cloud-venv/bin/python"
+fi
+# The environment comes before the command, so every lifecycle command reads the same way.
+ENV_SLUG="${TICO_ENV:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -e|--env) ENV_SLUG="${2:-}"; shift 2 ;;
+    -e=*|--env=*) ENV_SLUG="${1#*=}"; shift ;;
+    *) break ;;
+  esac
+done
+# The supervisor: launchd on a Mac, systemd --user on Linux (TICO_OS=Linux is for tests).
+IS_LINUX=0
+[ "${TICO_OS:-$(uname -s)}" = Linux ] && IS_LINUX=1
+CONFIG="${TICO_RUNNER_CONFIG:-$HOME/.config/tico/runner.json}"
+# launchd can start before an external checkout volume is mounted, and macOS may deny
+# service log writes there. Keep service logs on the local home volume instead.
+LOG_DIR="$HOME/.config/tico/logs"
+AGENTS="$HOME/Library/LaunchAgents"
+DOMAIN="gui/$(id -u)"
+SITE="https://hub.acme.example"
+ENV_DIR=""
+ENROLL_HINT="scripts/setup-runner.sh"
+
+# `python -m` puts the working directory on the module path, so every call runs from the checkout.
+engine() { (cd "$HUB" && "$PYTHON" -m runner_support.engine "$@"); }
+# This checkout's Rust runner (tico-runner), downloaded or built first when there is none yet.
+runner_bin() { engine path 2>/dev/null || { engine prepare >&2 && engine path; }; }
+# The runner's own commands go to the Rust runner; the side jobs and their doctors stay Python.
+runner() {
+  case "$1" in
+    enroll|profile|status|doctor|adopt|screen)
+      local bin
+      bin="$(runner_bin)" || { echo "no Rust runner for this checkout (see above)" >&2; return 1; }
+      (cd "$HUB" && TICO_ROOT="$HUB" TICO_RUNNER_PYTHON="$PYTHON" "$bin" --config "$CONFIG" "$@") ;;
+    *) (cd "$HUB" && "$PYTHON" -m runner_support --config "$CONFIG" "$@") ;;
+  esac
+}
+json_field() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+config_field() { json_field "$CONFIG" "$1"; }
+env_field() { json_field "$ENV_DIR/environment.json" "$1"; }
+usage() { sed -n '2,15p' "$SELF"; }
+UNIT_DIR="${TICO_SYSTEMD_USER_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
+
+if [ -n "$ENV_SLUG" ]; then
+  ENV_DIR="${TICO_ENVIRONMENTS_DIR:-$HOME/.config/tico/environments}/$ENV_SLUG"
+  [ -f "$ENV_DIR/environment.json" ] \
+    || { echo "no environment $ENV_SLUG at $ENV_DIR (scripts/tico-computer env list)" >&2; exit 1; }
+  CONFIG="$ENV_DIR/runner.json"
+  # On a Mac the environment directory may live on (or link to) an external volume, where launchd cannot
+  # open a job's log, so the job never starts (EX_CONFIG). Its logs stay on the home volume, like the default's.
+  if [ "$IS_LINUX" = 1 ]; then LOG_DIR="$ENV_DIR/logs"; else LOG_DIR="$HOME/.config/tico/logs/$ENV_SLUG"; fi
+  SITE="$(env_field url)"
+  ENROLL_HINT="scripts/tico-computer -e $ENV_SLUG enroll --code-file <file> --label <name>"
+fi
+
+label() {
+  # One environment's services never collide with another's, or with the original default labels.
+  if [ -n "$ENV_SLUG" ]; then printf 'team.tico.tico.%s.%s' "$ENV_SLUG" "$1"
+  else printf 'team.tico.tico-%s' "$1"; fi
+}
+plist() { printf '%s/%s.plist' "$AGENTS" "$(label "$1")"; }
+# Linux: tico-bot.service, or tico-<env>-bot.service for a company environment (runner_support/systemd_units.py unit_name).
+unit_name() {
+  if [ -n "$ENV_SLUG" ]; then printf 'tico-%s-%s.service' "$ENV_SLUG" "$1"; else printf 'tico-%s.service' "$1"; fi
+}
+unit_file() { printf '%s/%s' "$UNIT_DIR" "$(unit_name "$1")"; }
+# The file that installs a job, whichever supervisor this computer has.
+service_file() { if [ "$IS_LINUX" = 1 ]; then unit_file "$1"; else plist "$1"; fi; }
+sctl() { systemctl --user "$@"; }
+logfile() {
+  # launchd writes where the installed plist says; fall back to the default location.
+  [ -f "$(plist "$1")" ] && plutil -extract StandardOutPath raw -o - "$(plist "$1")" 2>/dev/null \
+    || printf '%s/tico-%s.log' "$LOG_DIR" "$1"
+}
+command_for() {
+  case "$1" in bot) echo run ;; connectors) echo connectors ;; close-calls) echo close-calls ;; importers) echo importers ;; esac
+}
+# BSD stat takes -f, GNU stat takes -c.
+file_mode() {
+  # GNU stat -f prints filesystem information before failing on BSD's format.
+  local tico_file_mode
+  if tico_file_mode="$(stat -f %Lp "$1" 2>/dev/null)"; then
+    printf '%s\n' "$tico_file_mode"
+  else
+    stat -c %a "$1"
+  fi
+}
+open_url() {
+  if command -v open >/dev/null 2>&1; then open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1"
+  else echo "$1"; fi
+}
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+require_setup() {
+  [ -x "$PYTHON" ] || { echo "runner Python missing: $PYTHON"; exit 1; }
+  [ -f "$CONFIG" ] || { echo "runner registration missing: $CONFIG (run $ENROLL_HINT)"; exit 1; }
+  [ "$(file_mode "$CONFIG")" = 600 ] || { echo "runner config must have mode 600"; exit 1; }
+  # A registration carries the environment it was made for: never operate one company's bots
+  # with another's registration after a directory is copied or restored.
+  if [ -n "$ENV_DIR" ] && [ "$(config_field environment 2>/dev/null || true)" != "$(env_field id)" ]; then
+    echo "$CONFIG was not enrolled for $ENV_SLUG; enroll this environment or restore its registration" >&2
+    exit 1
+  fi
+}
+
+# systemd --user needs a user session to talk to; over a bare ssh login it may be missing.
+require_systemd_user() {
+  command -v systemctl >/dev/null 2>&1 \
+    || { echo "systemctl not found: this computer has no systemd. Run the runner from a supervisor of your own with TICO_SUPERVISED=1 set, or use the Docker runner (sh install.sh --runner)." >&2; exit 1; }
+  sctl show-environment >/dev/null 2>&1 \
+    || { echo "no systemd user session here (systemctl --user failed). Log in on the computer itself, or run: export XDG_RUNTIME_DIR=/run/user/$(id -u), then try again." >&2; exit 1; }
+}
+
+# Lingering keeps a user's systemd running after the last logout and starts it at boot; without it the jobs stop when
+# the ssh session that installed them ends.
+linger_note() {
+  local note
+  note="$(cd "$HUB" && "$PYTHON" -m runner_support.systemd_units linger 2>/dev/null || true)"
+  [ -z "$note" ] || echo "$note"
+}
+
+# Link ~/.local/bin/tico (scripts/tico: these commands and the teamwork CLI) and ~/.local/bin/tico-computer, once.
+link_commands() {  # link_commands NAME...
+  [ -d "$HOME/.local/bin" ] || return 0
+  local name
+  for name in "$@"; do
+    if [ ! -e "$HOME/.local/bin/$name" ] && [ ! -L "$HOME/.local/bin/$name" ]; then
+      ln -s "$HUB/scripts/$name" "$HOME/.local/bin/$name" && echo "linked ~/.local/bin/$name -> $HUB/scripts/$name"
+    fi
+  done
+  return 0   # a link that cannot be made never fails the command it rides on
+}
+
+require_environment() {
+  [ -n "$ENV_DIR" ] || { echo "$1 needs an environment: scripts/tico-computer -e <slug> $1 ..." >&2; exit 1; }
+}
+
+targets() {
+  case "${1:-all}" in
+    all) printf '%s\n' bot connectors close-calls importers ;;
+    bot|connectors|close-calls|importers) printf '%s\n' "$1" ;;
+    *) echo "choose bot, connectors, close-calls, importers, or all" >&2; exit 1 ;;
+  esac
+}
+
+# Tico no longer records, so a machine set up earlier still has a processing job that would only
+# fail in a loop. Install, restart and uninstall take it away.
+retire_processing() {
+  [ -f "$(plist processing)" ] || return 0
+  launchctl bootout "$DOMAIN/$(label processing)" 2>/dev/null || true
+  rm -f "$(plist processing)"
+  echo "removed $(label processing) (Tico no longer records)"
+}
+
+install_one_systemd() {
+  local kind="$1" unit log extra=()
+  unit="$(unit_name "$kind")"; log="$LOG_DIR/tico-$kind.log"
+  mkdir -p "$LOG_DIR"; chmod 0700 "$LOG_DIR"; touch "$log"; chmod 0600 "$log"
+  [ -z "$ENV_SLUG" ] || extra=(--env "$ENV_SLUG")
+  (cd "$HUB" && "$PYTHON" -m runner_support.systemd_units write "$kind" --python "$PYTHON" --config "$CONFIG" --root "$HUB" \
+     --log "$log" --path "$PATH" --dir "$UNIT_DIR" ${extra[@]+"${extra[@]}"}) >/dev/null
+  sctl daemon-reload
+  sctl enable "$unit" >/dev/null 2>&1
+  sctl restart "$unit"
+  echo "installed $unit"
+}
+
+install_one() {
+  [ "$IS_LINUX" = 1 ] && { install_one_systemd "$1"; return; }
+  local kind="$1" service command file log
+  service="$(label "$kind")"; command="$(command_for "$kind")"; file="$(plist "$kind")"; log="$LOG_DIR/tico-$kind.log"
+  mkdir -p "$LOG_DIR"
+  chmod 0700 "$LOG_DIR"
+  touch "$log"
+  chmod 0600 "$log"
+  # `-m runner`, not `-m runner_support`: the plist outlives this release, and an older target release has only runner/
+  # (runner/__init__.py; runner/__main__.py forwards it here).
+  cat > "$file" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$service</string>
+  <key>ProgramArguments</key><array>
+    <string>$PYTHON</string><string>-m</string><string>runner</string>
+    <string>--config</string><string>$CONFIG</string><string>$command</string>
+  </array>
+  <key>WorkingDirectory</key><string>$HUB</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>$HOME</string><key>PATH</key><string>$PATH</string>
+    <key>USER</key><string>$USER</string><key>LOGNAME</key><string>$USER</string>
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$log</string><key>StandardErrorPath</key><string>$log</string>
+</dict></plist>
+PL
+  chmod 0600 "$file"
+  plutil -lint "$file" >/dev/null
+  bootstrap "$service" "$file"
+  echo "installed $service"
+}
+
+# One environment's local backend. The variables come from its own server.env, so the job and a
+# hand-run backend.server read exactly the same configuration.
+install_server_systemd() {
+  local unit log extra=()
+  unit="$(unit_name api)"; log="$LOG_DIR/api.log"
+  mkdir -p "$LOG_DIR"; chmod 0700 "$LOG_DIR"; touch "$log"; chmod 0600 "$log"
+  [ -z "$ENV_SLUG" ] || extra=(--env "$ENV_SLUG")
+  (cd "$HUB" && "$PYTHON" -m runner_support.systemd_units write api --python "$PYTHON" --root "$HUB" --log "$log" --path "$PATH" \
+     --dir "$UNIT_DIR" --env-file "$ENV_DIR/server.env" --port "$(env_field port)" ${extra[@]+"${extra[@]}"}) >/dev/null
+  sctl daemon-reload
+  sctl enable "$unit" >/dev/null 2>&1
+  sctl restart "$unit"
+  echo "installed $unit on $SITE"
+}
+
+install_server() {
+  [ "$IS_LINUX" = 1 ] && { install_server_systemd; return; }
+  local service file log port
+  service="$(label api)"; file="$(plist api)"; log="$LOG_DIR/api.log"; port="$(env_field port)"
+  {
+    cat <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$service</string>
+  <key>ProgramArguments</key><array>
+    <string>$PYTHON</string><string>-m</string><string>backend.server</string>
+    <string>--host</string><string>127.0.0.1</string><string>--port</string><string>$port</string>
+  </array>
+  <key>WorkingDirectory</key><string>$HUB</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>$HOME</string><key>PATH</key><string>$PATH</string>
+    <key>USER</key><string>$USER</string><key>LOGNAME</key><string>$USER</string>
+PL
+    while IFS= read -r line; do
+      case "$line" in ''|\#*) continue ;; esac
+      printf '    <key>%s</key><string>%s</string>\n' "$(xml "${line%%=*}")" "$(xml "${line#*=}")"
+    done < "$ENV_DIR/server.env"
+    cat <<PL
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$log</string><key>StandardErrorPath</key><string>$log</string>
+</dict></plist>
+PL
+  } > "$file"
+  chmod 0600 "$file"
+  plutil -lint "$file" >/dev/null
+  bootstrap "$service" "$file"
+  echo "installed $service on $SITE"
+}
+
+bootstrap() {
+  local i
+  launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+  # Unloading a running job returns before its process has stopped, and loading the label again until it
+  # has fails with "Input/output error". Wait for launchd to let go of it.
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    launchctl print "$DOMAIN/$1" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  if ! launchctl bootstrap "$DOMAIN" "$2"; then
+    # launchd can briefly retain a just-removed label. One bounded retry keeps an
+    # upgrade safe without hiding a persistent configuration error.
+    sleep 2
+    launchctl bootstrap "$DOMAIN" "$2"
+  fi
+  started "$1"
+}
+
+# A loaded job is not a running one: launchd refuses to spawn a job whose log or directory it cannot open
+# (exit 78, EX_CONFIG) and retries forever without a line in the log. Wait briefly for a process.
+started() {
+  local i info
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    info="$(launchctl print "$DOMAIN/$1" 2>/dev/null || true)"
+    printf '%s\n' "$info" | grep -q '^[[:space:]]*pid = [0-9]' && return 0
+    printf '%s\n' "$info" | grep -q 'last exit code = 78' && break
+    sleep 1
+  done
+  printf '%s\n' "$info" | grep -q 'last exit code = 78' || return 0
+  echo "$1 is installed but launchd cannot start it (EX_CONFIG): check that its program, working directory and" \
+    "log are readable ($(plutil -extract StandardOutPath raw -o - "$(plist_for "$1")" 2>/dev/null))" >&2
+  exit 1
+}
+plist_for() { printf '%s/%s.plist' "$AGENTS" "$1"; }
+
+uninstall_one() {
+  if [ "$IS_LINUX" = 1 ]; then
+    sctl disable --now "$(unit_name "$1")" >/dev/null 2>&1 || true
+    rm -f "$(unit_file "$1")"
+    sctl daemon-reload 2>/dev/null || true
+    echo "removed $(unit_name "$1")"
+    return 0
+  fi
+  local kind="$1" service file
+  service="$(label "$kind")"; file="$(plist "$kind")"
+  launchctl bootout "$DOMAIN/$service" 2>/dev/null || true
+  rm -f "$file"
+  echo "removed $service"
+}
+
+# Bot turns in flight on this Mac: attempts the runner has claimed but not finished syncing.
+in_flight() {
+  "$PYTHON" - "$(dirname "$CONFIG")/state-$(config_field runner_id)/runner.sqlite" <<'PY'
+import sqlite3, sys
+try:
+    c = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+    print(c.execute("SELECT count(*) FROM attempts WHERE phase IN ('claimed','running')").fetchone()[0])
+except sqlite3.Error:
+    print(0)
+PY
+}
+
+restart_one() {
+  local kind="$1" service waited=0 n
+  service="$(label "$kind")"
+  [ -f "$(service_file "$kind")" ] || { echo "$kind: not installed"; return 0; }
+  # A restart kills whatever turn is running and the cloud then needs a person to review it
+  # (an update mid-turn interrupted three bots). Wait for the runner to go quiet
+  # first; TICO_RESTART_NOW=1 skips the wait when a hung turn is the reason for restarting.
+  if [ "$kind" = bot ] && [ -z "${TICO_RESTART_NOW:-}" ]; then
+    while n="$(in_flight)" && [ "$n" -gt 0 ]; do
+      [ "$waited" = 0 ] && echo "bot: $n turn(s) in flight; waiting for them to finish before restarting (TICO_RESTART_NOW=1 to skip)"
+      sleep 10; waited=$((waited + 10))
+      if [ "$waited" -ge 1800 ]; then echo "bot: still busy after 30 minutes; restarting anyway"; break; fi
+    done
+  fi
+  # kickstart -k stops the process and KeepAlive brings it straight back on the current code;
+  # a job that is installed but no longer loaded (after a logout, say) is bootstrapped instead.
+  if [ "$IS_LINUX" = 1 ]; then
+    sctl restart "$(unit_name "$kind")"; echo "restarted $(unit_name "$kind")"; return 0
+  fi
+  launchctl kickstart -k "$DOMAIN/$service" 2>/dev/null || launchctl bootstrap "$DOMAIN" "$(plist "$kind")"
+  echo "restarted $service"
+}
+
+# One job by name, the same words on both supervisors (the server job's kind is `api`).
+svc_stop() {
+  if [ "$IS_LINUX" = 1 ]; then sctl stop "$(unit_name "$1")" 2>/dev/null || true
+  else launchctl bootout "$DOMAIN/$(label "$1")" 2>/dev/null || true; fi
+}
+svc_start() {
+  if [ "$IS_LINUX" = 1 ]; then sctl start "$(unit_name "$1")"; else bootstrap "$(label "$1")" "$(plist "$1")"; fi
+}
+svc_restart() {
+  if [ "$IS_LINUX" = 1 ]; then sctl restart "$(unit_name "$1")"
+  else launchctl kickstart -k "$DOMAIN/$(label "$1")" 2>/dev/null || bootstrap "$(label "$1")" "$(plist "$1")"; fi
+}
+
+# One line per launchd job from launchctl's own view. Returns 1 when an installed job is not
+# running, or when the bot job (the one every registration needs) is not installed at all.
+job_line_systemd() {
+  local kind="$1" unit props active sub pid code detail=""
+  unit="$(unit_name "$kind")"
+  if [ ! -f "$(unit_file "$kind")" ]; then
+    echo "$kind: not installed"
+    if [ "$kind" = bot ]; then return 1; else return 0; fi
+  fi
+  props="$(sctl show "$unit" -p ActiveState -p SubState -p MainPID -p ExecMainStatus 2>/dev/null)" \
+    || { echo "$kind: installed but systemd does not know it (systemctl --user daemon-reload)"; return 1; }
+  active="$(printf '%s\n' "$props" | sed -n 's/^ActiveState=//p')"
+  sub="$(printf '%s\n' "$props" | sed -n 's/^SubState=//p')"
+  pid="$(printf '%s\n' "$props" | sed -n 's/^MainPID=//p')"
+  code="$(printf '%s\n' "$props" | sed -n 's/^ExecMainStatus=//p')"
+  if [ -n "$pid" ] && [ "$pid" != 0 ]; then detail=" (pid $pid)"; elif [ -n "$code" ]; then detail=" (last exit code $code)"; fi
+  echo "$kind: $sub$detail"
+  [ "$active" = active ] && [ "$sub" = running ]
+}
+
+job_line() {
+  [ "$IS_LINUX" = 1 ] && { job_line_systemd "$1"; return; }
+  local kind="$1" service state pid code detail=""
+  service="$(label "$kind")"
+  if ! state="$(launchctl print "$DOMAIN/$service" 2>/dev/null)"; then
+    if [ -f "$(plist "$kind")" ]; then echo "$kind: installed but not loaded"; return 1; fi
+    echo "$kind: not installed"
+    if [ "$kind" = bot ]; then return 1; else return 0; fi
+  fi
+  pid="$(printf '%s\n' "$state" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
+  code="$(printf '%s\n' "$state" | sed -n 's/^[[:space:]]*last exit code = //p' | head -n 1)"
+  state="$(printf '%s\n' "$state" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
+  if [ -n "$pid" ]; then detail=" (pid $pid)"; elif [ -n "$code" ]; then detail=" (last exit code $code)"; fi
+  echo "$kind: $state$detail"
+  [ "$state" = running ]
+}
+
+# Summarize the runner's own JSON reports (status: assignments; doctor: readiness).
+# Exits 1 when anything needs attention.
+summarize() {  # summarize status|doctor STATUS_JSON DOCTOR_JSON
+  "$PYTHON" - "$@" "$(dirname "$CONFIG")/state-$(config_field runner_id)" \
+    "$(git -C "$HUB" rev-parse HEAD 2>/dev/null || true)" <<'PY'
+import json, os, sqlite3, sys, time
+def load(path):
+    try:
+        with open(path) as f: return json.load(f)
+    except (OSError, ValueError): return None
+mode, status, doctor, state_dir, head = sys.argv[1], load(sys.argv[2]), load(sys.argv[3]), sys.argv[4], sys.argv[5]
+checks = {row["bot"]: row for row in (doctor or {}).get("checks", [])}
+ok = doctor is not None
+if mode == "status":
+    # The bot job writes the commit it started from; a pull without a restart leaves it running old code.
+    started = load(os.path.join(state_dir, "runner-revision")) or {}
+    if started.get("revision") and head and started["revision"] != head:
+        ok = False
+        print(f"runner: started from {started['revision'][:7]} (version {started.get('version')}), "
+              f"checkout is now {head[:7]} - run scripts/tico-computer restart")
+    elif started.get("revision"):
+        print(f"runner: started from {started['revision'][:7]}, the current checkout")
+    else:
+        print("runner: start revision not recorded yet (the bot job writes it when it starts)")
+    marker = os.path.join(state_dir, "heartbeat")
+    if os.path.exists(marker):
+        age = int(time.time() - os.path.getmtime(marker))
+        ok = ok and age <= 60
+        print(f"heartbeat: {age}s ago" + (" (stale: the cloud shows this Mac offline after 60s)" if age > 60 else ""))
+    else:
+        print("heartbeat: none recorded locally yet (the bot job records one every 15s; Settings > Bots shows the cloud's view)")
+    try:
+        c = sqlite3.connect("file:" + os.path.join(state_dir, "runner.sqlite") + "?mode=ro", uri=True)
+        runs = c.execute("SELECT count(*) FROM attempts WHERE phase NOT IN ('synced','historical')").fetchone()[0]
+        print(f"local work: {runs} bot run(s) in flight or unsynced")
+    except sqlite3.Error:
+        print("local work: no state database yet")
+    rows = [checks.get(row["bot"], {"bot": row["bot"], "problems": ["readiness unknown"]}) for row in status["assignments"]]
+    scope = "assigned bots"
+else:
+    rows, scope = list(checks.values()), "hostable bots"
+bad = [row for row in rows if row.get("ready") is not True]
+print(f"{scope}: {len(rows)}, {len(rows) - len(bad)} ready" + (f", {len(bad)} NOT READY" if bad else "")
+      + ("" if rows or mode != "status" else " (assign bots in Settings > Bots)"))
+for row in bad:
+    print(f"  {row['bot']}: NOT READY - " + "; ".join(row.get("problems") or ["no detail"]))
+for row in rows:
+    if row.get("materialized"):
+        print(f"  {row['bot']}: {row['materialized']}")
+    if row.get("profile"):
+        print(f"  {row['bot']}: subscription profile {row['profile']} ({row.get('sign_in', 'unknown')})")
+runtimes = (doctor or {}).get("readiness", {}).get("runtimes", {})
+# The bot job runs under launchd with only HOME/PATH/USER, not this shell's exports, so a key
+# in ~/.zshrc reads as configured here and missing there: prefer the job's own recent report.
+live = os.path.join(state_dir, "runtimes.json")
+if mode == "status" and os.path.exists(live) and time.time() - os.path.getmtime(live) <= 120:
+    runtimes, source = load(live) or runtimes, " (as the running bot job sees them)"
+else:
+    source = ""
+print(f"runtimes{source}:" if runtimes else "runtimes: unknown (readiness check failed)")
+for name, rt in sorted(runtimes.items()):
+    print(f"  {name}: " + (f"{rt.get('authenticated')}, {rt.get('version')}" if rt.get("installed") else "not installed")
+          + f" - {rt.get('detail')}")
+sys.exit(0 if ok and not bad else 1)
+PY
+}
+
+# Jobs on Linux are systemd user units: check the user session before any command that installs or drives them.
+if [ "$IS_LINUX" = 1 ]; then
+  case "${1:-help}" in
+    install|uninstall|restart|status|server|update) require_systemd_user ;;
+  esac
+fi
+
+case "${1:-help}" in
+  env)
+    shift
+    (cd "$HUB" && "$PYTHON" -m clients.environments "$@")
+    ;;
+  enroll)
+    require_environment enroll
+    shift; code=""; name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --code-file) code="$2"; shift 2 ;;
+        --label) name="$2"; shift 2 ;;
+        *) usage; exit 1 ;;
+      esac
+    done
+    [ -n "$code" ] && [ -n "$name" ] || { echo "enroll needs --code-file and --label" >&2; exit 1; }
+    workspace="$(env_field workspace)"
+    mkdir -p "$workspace/secrets"
+    chmod 0700 "$workspace" "$workspace/secrets"
+    runner enroll --url "$(env_field url)" --code-file "$code" --label "$name" \
+      --projects "$workspace" --environment "$(env_field id)"
+    echo "workspace: $workspace (bot checkouts, and secrets/ for their credentials)"
+    echo "next: scripts/tico-computer -e $ENV_SLUG profile add <name>, then profile login <name> codex"
+    ;;
+  profile)
+    require_setup
+    shift
+    runner profile "$@"
+    ;;
+  screen)
+    require_setup
+    shift
+    runner screen "$@"
+    ;;
+  bot)
+    require_environment bot
+    [ "${2:-}" = create ] || { usage; exit 1; }
+    shift 2
+    slug="${1:-}"; shift || true
+    name=""; template="employee-repo"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --template) template="$2"; shift 2 ;;
+        *) usage; exit 1 ;;
+      esac
+    done
+    printf '%s' "$slug" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' \
+      || { echo "a bot slug is lowercase letters, digits and single hyphens" >&2; exit 1; }
+    # A template is one of the directories this checkout ships, never a path out of it: either a
+    # catalog template (templates/catalog/<name>, what onboarding picks from) or the generic
+    # employee repository.
+    printf '%s' "$template" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' \
+      || { echo "a template name is lowercase letters, digits and single hyphens" >&2; exit 1; }
+    workspace="$(env_field workspace)"; repo="$workspace/bot-$slug"
+    [ ! -e "$repo" ] || { echo "$repo already exists" >&2; exit 1; }
+    [ ! -e "$workspace/emp-$slug" ] || { echo "$workspace/emp-$slug already exists" >&2; exit 1; }
+    mkdir -p "$workspace"
+    if [ -d "$HUB/templates/catalog/$template" ]; then
+      # The same materialization BotOps runs in a turn, with this environment's names and no
+      # onboarding answers: `hub bot create` is the one that has them.
+      (cd "$HUB" && "$PYTHON" - "$workspace" "$slug" "$template" "${name:-}" "$ENV_DIR/environment.json" <<'PY'
+import json, sys
+from clients import catalog
+workspace, slug, template, name, manifest = sys.argv[1:6]
+environment = json.load(open(manifest))
+names = {key: environment.get(key, "") for key in ("company_name", "app_name", "assistant_name")}
+catalog.materialize(template, slug, workspace, names, {}, display_name=name or None)
+PY
+      )
+    elif [ -d "$HUB/templates/$template" ]; then
+      cp -R "$HUB/templates/$template" "$repo"
+      "$PYTHON" - "$repo/bot.yaml" "$slug" "${name:-$slug}" <<'PY'
+import re, sys
+path, slug, name = sys.argv[1:4]
+text = open(path).read()
+text = re.sub(r"^name: .*$", "name: " + slug, text, count=1, flags=re.M)
+text = re.sub(r"^display_name: .*$", 'display_name: "' + name.replace('"', "'") + '"', text, count=1, flags=re.M)
+text = text.replace("owner:CHANGE-ME", "owner:" + slug)
+open(path, "w").write(text)
+PY
+      git -C "$repo" init -q -b main
+      git -C "$repo" add -A
+      git -C "$repo" commit -q -m "Create $slug from the $template template"
+    else
+      echo "no template $HUB/templates/catalog/$template or $HUB/templates/$template" >&2; exit 1
+    fi
+    echo "created $repo"
+    echo "next:"
+    echo "  1. $SITE > Settings > Bots > Add bot: slug $slug, repository $repo"
+    echo "  2. Assign it to this computer there, then: scripts/tico-computer -e $ENV_SLUG doctor"
+    echo "  3. To have GitHub hold its memory as well:"
+    echo "       scripts/publish-employee.sh --owner <org> --workspace $workspace $slug"
+    ;;
+  server)
+    require_environment server
+    [ "$(env_field server)" = local ] \
+      || { echo "$ENV_SLUG uses a hosted server at $SITE; there is nothing to run here" >&2; exit 1; }
+    service="$(label api)"; [ "$IS_LINUX" = 1 ] && service="$(unit_name api)"
+    case "${2:-status}" in
+      install)
+        mkdir -p "$LOG_DIR"
+        if [ "$IS_LINUX" = 1 ]; then install_server; linger_note; else mkdir -p "$AGENTS"; install_server; fi ;;
+      uninstall)
+        if [ "$IS_LINUX" = 1 ]; then sctl disable --now "$(unit_name api)" >/dev/null 2>&1 || true; rm -f "$(unit_file api)"; sctl daemon-reload 2>/dev/null || true
+        else svc_stop api; rm -f "$(plist api)"; fi
+        echo "removed $service (the database and blobs stay)" ;;
+      start) svc_start api; echo "started $service" ;;
+      stop) svc_stop api; echo "stopped $service" ;;
+      restart) svc_restart api; echo "restarted $service" ;;
+      status)
+        fail=0
+        job_line api || fail=1
+        if curl -fsS --max-time 5 "$SITE/healthz" >/dev/null 2>&1; then echo "server: healthy at $SITE"
+        else echo "server: not answering at $SITE/healthz"; fail=1; fi
+        exit "$fail" ;;
+      logs)
+        log="$LOG_DIR/api.log"
+        [ "$IS_LINUX" = 1 ] || [ ! -f "$(plist api)" ] || log="$(plutil -extract StandardOutPath raw -o - "$(plist api)")"
+        [ -f "$log" ] || { echo "no server log yet at $log"; exit 1; }
+        tail -n "${3:-60}" "$log" ;;
+      flight)
+        # Reads the files beside the database, so it answers with the server stopped or stuck.
+        shift 2
+        db="$(sed -n 's/^TICO_DB=//p' "$ENV_DIR/server.env" | tail -n 1)"
+        [ -n "$db" ] || { echo "no TICO_DB in $ENV_DIR/server.env" >&2; exit 1; }
+        [ $# -gt 0 ] || set -- summary
+        cd "$HUB" && exec "$PYTHON" -m backend.flight "$@" --dir "$(dirname "$db")/flight" ;;
+      *) usage; exit 1 ;;
+    esac
+    ;;
+  install)
+    require_setup
+    # The bot job execs the Rust runner: get it now, so a download or build that fails shows here.
+    if targets "${2:-all}" | grep -qx bot; then
+      engine prepare || { echo "the Rust runner is not ready; fix the above and run scripts/tico-computer install again" >&2; exit 1; }
+    fi
+    if [ "$IS_LINUX" = 1 ]; then mkdir -p "$LOG_DIR"; else mkdir -p "$AGENTS" "$LOG_DIR"; fi
+    retire_processing
+    while IFS= read -r kind; do install_one "$kind"; done < <(targets "${2:-all}")
+    if [ "$IS_LINUX" = 1 ]; then linger_note; fi
+    link_commands tico tico-computer
+    ;;
+  uninstall)
+    retire_processing
+    while IFS= read -r kind; do uninstall_one "$kind"; done < <(targets "${2:-all}")
+    ;;
+  restart)
+    retire_processing
+    while IFS= read -r kind; do restart_one "$kind"; done < <(targets "${2:-all}")
+    # An update run by a scripts/tico from before tico-computer ends here (through the scripts/tico that took its
+    # place), so a computer that has the tico command gets tico-computer beside it.
+    [ ! -e "$HOME/.local/bin/tico" ] || link_commands tico-computer
+    ;;
+  status)
+    require_setup
+    fail=0
+    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner/version.py")"
+    echo "runner: version $version at $HUB ($(git -C "$HUB" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
+    if [ -n "$ENV_DIR" ]; then
+      echo "environment: $ENV_SLUG ($(env_field company_name), $(env_field id)) at $SITE"
+    fi
+    echo "config: $CONFIG (runner $(config_field runner_id))"
+    while IFS= read -r kind; do job_line "$kind" || fail=1; done < <(targets all)
+    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+    if runner status > "$tmp/status.json" 2> "$tmp/err"; then
+      echo "cloud: reachable at $(config_field url)"
+      runner doctor > "$tmp/doctor.json" 2> "$tmp/err" || true
+      [ -s "$tmp/doctor.json" ] || echo "readiness check failed: $(tail -n 1 "$tmp/err")"
+      summarize status "$tmp/status.json" "$tmp/doctor.json" || fail=1
+    else
+      echo "cloud: unreachable or registration rejected: $(tail -n 1 "$tmp/err")"; fail=1
+    fi
+    if [ "$fail" = 0 ]; then echo "OK"; else echo "NOT OK: see above"; fi
+    exit "$fail"
+    ;;
+  doctor)
+    require_setup
+    fail=0
+    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+    runner doctor > "$tmp/doctor.json" 2> "$tmp/err" || true
+    [ -s "$tmp/doctor.json" ] || echo "bot doctor failed: $(tail -n 1 "$tmp/err")"
+    summarize doctor /dev/null "$tmp/doctor.json" || fail=1
+    for kind in connectors close-calls importers; do
+      [ -f "$(service_file "$kind")" ] || continue
+      if runner "$kind-doctor" > "$tmp/$kind" 2>&1; then echo "$kind doctor: local prerequisites present (no provider call made)"
+      else echo "$kind doctor: FAILED - $(tail -n 1 "$tmp/$kind")"; fail=1; fi
+    done
+    exit "$fail"
+    ;;
+  logs)
+    shift; kinds=(); files=(); lines=60; follow=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -n) lines="$2"; shift 2 ;;
+        -f) follow=1; shift ;;
+        bot|connectors|close-calls|importers) kinds+=("$1"); shift ;;
+        all) shift ;;
+        [0-9]*) lines="$1"; shift ;;   # runner.sh's positional line count
+        *) usage; exit 1 ;;
+      esac
+    done
+    # Empty arrays are never expanded: bash 3.2 (macOS /bin/bash) treats that as unbound under set -u.
+    [ "${#kinds[@]}" -gt 0 ] || kinds=(bot connectors close-calls importers)
+    for kind in "${kinds[@]}"; do
+      file="$(logfile "$kind")"
+      if [ -f "$file" ]; then files+=("$file"); else echo "$kind: no log yet at $file"; fi
+    done
+    [ "${#files[@]}" -gt 0 ] || exit 1
+    if [ -n "$follow" ]; then tail -f -n "$lines" "${files[@]}"; else tail -n "$lines" "${files[@]}"; fi
+    ;;
+  update)
+    branch="$(git -C "$HUB" rev-parse --abbrev-ref HEAD)"
+    [ "$branch" = main ] || { echo "$HUB is on $branch, not main; switch to main before updating"; exit 1; }
+    [ -z "$(git -C "$HUB" status --porcelain --untracked-files=no)" ] \
+      || { echo "$HUB has uncommitted changes; commit or discard them before updating"; exit 1; }
+    old="$(git -C "$HUB" rev-parse HEAD)"
+    git -C "$HUB" pull --ff-only
+    new="$(git -C "$HUB" rev-parse HEAD)"
+    [ "$old" != "$new" ] || { echo "already up to date at ${old:0:7}; nothing restarted"; exit 0; }
+    echo "updated ${old:0:7}..${new:0:7}"
+    git -C "$HUB" log --oneline "$old..$new"
+    if git -C "$HUB" diff --name-only "$old" "$new" | grep -q '^backend/requirements.txt$'; then
+      echo "backend/requirements.txt changed: run $PYTHON -m pip install -r $HUB/backend/requirements.txt"
+    fi
+    link_commands tico-computer
+    # exec: this file just changed under the running shell; hand over cleanly, same environment. By name, not "$SELF":
+    # the restart is always this script's, whatever ran the update.
+    if [ -n "$ENV_SLUG" ]; then exec "$HUB/scripts/tico-computer" -e "$ENV_SLUG" restart all
+    else exec "$HUB/scripts/tico-computer" restart all; fi
+    ;;
+  open)
+    if [ -n "$ENV_DIR" ] && [ "$(env_field server)" = local ] && [ -f "$ENV_DIR/local-owner.token" ]; then
+      # A local server has no identity proxy in front of it: this link hands over the owner
+      # token once and the server sets the session cookie.
+      open_url "$SITE/api/v2/local-signin?token=$("$PYTHON" -c \
+        'import sys,urllib.parse; print(urllib.parse.quote(open(sys.argv[1]).read().strip(), safe=""))' \
+        "$ENV_DIR/local-owner.token")&next=/"
+    else
+      open_url "$SITE"
+    fi
+    ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 1 ;;
+esac
