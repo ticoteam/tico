@@ -108,6 +108,26 @@ def test_registry_daily_cap_cooldown_and_recipient_caps_apply_to_direct_api(inbo
     assert "registry_daily_cap" in reasons and "registry_cooldown" in reasons
 
 
+def test_a_retained_allowance_is_revoked_when_the_current_registry_removes_its_recipient(inbox):
+    with inbox.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_mail_settings VALUES('ops',1,'[]',?,'human:ana')", (H.now(),))
+        c.execute("INSERT INTO email_sending_policies VALUES('bot:ops',?,?,'migration')", (json.dumps({
+            "mode": "on_their_own", "legacy": True, "legacy_allowances": {BOX: [CONTACT]}}), H.now()))
+    allowance = {"employee": "ops", "mailbox": BOX, "recipients": {"source": "list", "list": [CONTACT]}}
+    registry(inbox, allowances=[allowance])
+    queued = queue(inbox, actor="bot:ops")
+    assert queued["state"] == "pending"
+    with inbox.app.state.store.transaction() as c:
+        c.execute("UPDATE email_sends SET created_at=?,send_after=? WHERE id=?",
+                  (H.shift(H.now(), minutes=-3), H.shift(H.now(), minutes=-1), queued["id"]))
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"])["id"] == queued["id"]
+    allowance["recipients"]["list"] = []
+    registry(inbox, allowances=[allowance])
+    permit = post(inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])
+    assert permit["send"] is None
+
+
 def test_unnamed_inline_files_require_approval_and_bind_the_actual_bytes(inbox):
     autonomous(inbox, ask_attachments=True)
     msg = EmailMessage()

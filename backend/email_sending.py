@@ -378,7 +378,7 @@ def known(c, mailbox, address):
         "AND EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) LIMIT 1", (mailbox, address)).fetchone())
 
 
-def legacy_authorized(c, row):
+def legacy_authorized(c, auth, row):
     """Only pre-cutover paths keep their original connector checks; new automations never inherit the exception."""
     if row["automation_action_id"]:
         return bool(c.execute("SELECT 1 FROM automation_mail_actions a JOIN automations m ON m.id=a.automation_id "
@@ -396,7 +396,17 @@ def legacy_authorized(c, row):
     original = _original(c, row)
     if original and original["thread_id"] == row["thread_id"]:
         targets.add(original["from_addr"].lower())
-    targets.update((setting.get("legacy_allowances") or {}).get(row["mailbox"], []))
+    retained = set((setting.get("legacy_allowances") or {}).get(row["mailbox"], []))
+    if retained:
+        from connectors.mail import Failure, policy as local
+        path = auth.settings.registry_dir / "mail-policy.yaml"
+        try:
+            pol = local.load(path) if path.is_file() else None
+            allowance = local.allowance_for(pol, (H.bot(c, row["bot"]) or {}).get("slug", row["bot"]), row["mailbox"]) if pol else None
+            current = local.allowed_recipients(allowance, auth.settings.registry_dir.parent) if allowance else set()
+        except (Failure, OSError, ValueError):
+            current = set()
+        targets.update(retained & current)
     return all(a in targets or (domains and access.inside(a, domains)) for a in json.loads(row["recipients"]))
 
 
@@ -417,7 +427,7 @@ def decision(c, auth, row, *, dispatch=False):
             credential = c.execute("SELECT revoked_at FROM agents WHERE bot=?", (row["bot"],)).fetchone()
             if not credential or credential["revoked_at"]:
                 blocked.append("agent_revoked")
-    legacy = legacy_authorized(c, row)
+    legacy = legacy_authorized(c, auth, row)
     # A changed company policy takes effect immediately, including for grandfathered authorizations.
     grandfathered = (legacy and not policy["company_restrictions_set"]
                      and not saved(c, "inbox:" + row["mailbox"]))
