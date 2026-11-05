@@ -591,7 +591,7 @@ def granola_sync(api, args):
     return _as_person(api).post("meetings/granola/sync", {})
 
 
-@tool("hub_meeting_search", "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots see explicitly shared team meetings, never personal notes or private meetings. Empty q lists recent accessible meetings.",
+@tool("hub_meeting_search", "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots see shared Team meetings and filed meetings they were attached to, never personal notes. Empty q lists recent accessible meetings.",
       {"q": _s("Words to search for; omit for recent history"), "person": _s("Owner, participant, or speaker"),
        "since": _s("Inclusive meeting date, YYYY-MM-DD; creation date when no start is recorded"), "until": _s("Inclusive meeting date, YYYY-MM-DD"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 50},

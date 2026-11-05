@@ -79,10 +79,10 @@ const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', th
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
-  const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
+  const name = stale ? KEEPER_LABEL : actorLabel(from) || KEEPER_LABEL;
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
   const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
-  const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
+  const face = stale ? personCircle(KEEPER_LABEL, 18) : actorFace(from, 18);
   const open = thread && it.conversation_id
     ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
     : it.kind === 'thread_held'
