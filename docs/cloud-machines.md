@@ -39,6 +39,8 @@ cloud machine" under Computer).
   To replace it while the bot stays on its own cloud machine, use **Replace machine** under Computer in the bot editor,
   or `POST /api/v2/bots/{bot}/cloud-machine/replace` with an `Idempotency-Key`: it uses the same deletion, keeps size, Always on, Pause after and placement, and refuses while a turn is running (409).
   The next work makes a fresh machine; its first enrollment gets the company plan under the admin placement rule below.
+  Explicit replacement of an own or shared machine resets its retry budget even while old ids still await deletion.
+  Those old ids stay fenced until HQ settles them; they do not block the new machine.
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other.
@@ -80,21 +82,24 @@ during the request, and invalidates all of the machine's enrollment codes. A cod
 the disk is deleted.
 
 Before sending any DELETE, the server stores intent for that exact machine id in `cloud_machine_deletions`.
-Only HQ's own state releases this hold: the machine is deleted or 404, or HQ reports it with `pending` other than
+Only HQ's own state releases this hold: the machine is deleted, DELETE says 404 or `not_found`, or HQ reports it with `pending` other than
 `delete`. A plain `{ok: true}` DELETE reply never releases it, nor does a first or retry 4xx such as 429 `starts_full`.
 The hold survives restarts, unreadable lists, and lists that omit the machine or its `pending` field. A deleted
 machine's current runner and codes are revoked under the write lock. A report that clears `pending` ends retries
 without revoking a machine kept after an unanswered deletion.
 
 Each manager look checks up to four due intents, including old ids no bot row names anymore, even if the full list
-is unreadable or sizes are no longer offered. It reads `GET machines/{id}` when HQ supports it. A failed read falls
-back to a DELETE retry for that id; a DELETE 404 or a reply with `state: deleted` settles it. A GET 404 alone cannot
-settle it, since older HQs have no such route. Settled intent rows are removed. A failed or oversized list only waits
+is unreadable or sizes are no longer offered. The HQ contract here has a full list, with no confirmed per-id read,
+filter or paging. Cleanup retries DELETE for that id; a DELETE 404, `not_found` error or reply with `state: deleted`
+settles it. Settled intent rows are removed. A failed or oversized list only waits
 for the next list attempt; it cannot block these checks or a fresh machine.
 
 Retries use the stored machine id and back off on errors, including 429 and 5xx, up to 15 minutes. Accepted retries
 wait at least a minute; out of credit waits ten minutes. Extra lists, restarts, and repeated requests cannot rush
 that clock. This rule also covers the manager's deletion of a machine that never enrolled.
+Health names deletion fences older than 24 hours by machine id and bot (or shared machine), even after a fresh machine
+runs or sizes are no longer offered. Old disks may still cost money. Existing fences take their age from the deletion
+receipt when one exists; without a dated receipt, their age starts at upgrade.
 
 Changing mode or placement never clears deletion intent. A bot can move to a shared machine or another computer
 while its old own machine is being deleted. If it returns to own, the old computer gets no turn and is not bound

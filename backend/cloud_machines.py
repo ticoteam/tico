@@ -7,7 +7,6 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
 `<Gateway URL>/billing`, JSON both ways, the Gateway error shape, `402 {"error": "frozen"|"locked"}` when credit is out):
 
     GET    machines                  {machines: [Machine], sizes: [Size], caps}
-    GET    machines/<id>             -> Machine             when supported; otherwise retry DELETE by id
     POST   machines                  {key, size, enroll_token, hub_url} -> Machine   (idempotent on key)
     POST   machines/<id>/start       {size?} -> Machine      resume; a size resizes on the same disk
     POST   machines/<id>/stop        -> Machine
@@ -134,6 +133,7 @@ NAME_KEY = "cloud-machine-name:"  # + machine key: the name a person gave its co
 TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
 DELETION_BATCH = 4              # old ids reconciled per look, even when HQ's list cannot be read
+DELETION_WARN = 24 * 60 * 60     # an unsettled disk may still cost money even after its bot has a fresh machine
 HEARTBEAT = 60
 PAUSE_MINUTES = 30              # a machine with no Pause after of its own pauses after this many idle minutes
 PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
@@ -236,6 +236,8 @@ class HQ:
         if status >= 400:
             error = answer.get("error", answer.get("code"))
             error = error.get("code") if isinstance(error, dict) else error
+            if isinstance(error, str) and error.lower() == "not found":
+                error = "not_found"
             ok = isinstance(error, str) and 0 < len(error) <= 40 and error.replace("_", "").isalnum()
             raise Refused(error.lower() if ok else f"http_{status}", status)
         return answer
@@ -266,12 +268,6 @@ class HQ:
     def create(self, key, size, enroll_token, hub_url):
         return self.machine(self.call("POST", "", {"key": key, "size": size, "enroll_token": enroll_token,
                                                    "hub_url": hub_url}))
-
-    def get(self, machine_id):
-        machine = self.machine(self.call("GET", f"/{machine_id}"))
-        if machine["id"] != machine_id:
-            raise Refused("bad_answer")
-        return machine
 
     def start(self, machine_id, size=None):
         return self.machine(self.call("POST", f"/{machine_id}/start", {"size": size} if size else {}))
@@ -329,15 +325,17 @@ def deleting(c, machine_id):
     return bool(c.execute("SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone())
 
 
-def deletion_settled(answer, machine_id):
+def deletion_settled(answer, machine_id, refusal=None):
     """A DELETE can report final state, rather than just accepting the request."""
+    if refusal:
+        return refusal.status == 404 or refusal.code == "not_found"
     return isinstance(answer, dict) and answer.get("state") == "deleted" and answer.get("id", machine_id) == machine_id
 
 
 def intend_delete(c, current, reason="manual"):
     """Persist before HTTP under the claim's write lock; placement changes cannot erase this intent."""
-    c.execute("INSERT OR IGNORE INTO cloud_machine_deletions(machine_id,bot,runner_id,reason) VALUES(?,?,?,?)",
-              (current["machine_id"], current["bot"], current["runner_id"], reason))
+    c.execute("INSERT OR IGNORE INTO cloud_machine_deletions(machine_id,bot,runner_id,reason,created_at) VALUES(?,?,?,?,?)",
+              (current["machine_id"], current["bot"], current["runner_id"], reason, now()))
 
 
 def count_enrollment_failure(c, key, machine_id):
@@ -1164,14 +1162,9 @@ class Manager:
 
     def reconcile_delete(self, hq, machine_id):
         """Retry a deletion outside the write lock, with a durable backoff independent of placement."""
-        try:
-            machine = hq.get(machine_id)
-        except Refused:
-            # Older HQs have no per-id GET. Its 404 is not proof of deletion: only DELETE's 404 can settle it.
-            machine = None
         with self.store.transaction() as c:
             intent = c.execute("SELECT * FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone()
-            if not intent or self.settle_delete(c, intent, machine):
+            if not intent:
                 return
         refusal = None
         answer = None
@@ -1181,7 +1174,7 @@ class Manager:
             refusal = refused
         with self.store.transaction() as c:
             intent = c.execute("SELECT * FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone()
-            if intent and (deletion_settled(answer, machine_id) or refusal and refusal.status == 404):
+            if intent and deletion_settled(answer, machine_id, refusal):
                 self.deletion_done(c, intent)
             else:
                 deletion_retry(c, machine_id, refusal)
@@ -1318,7 +1311,7 @@ class Manager:
                 try:
                     answer = hq.delete(current["machine_id"])
                 except Refused as refused:
-                    if refused.status != 404:               # already gone at HQ is what was asked
+                    if not deletion_settled(None, current["machine_id"], refused):
                         with self.store.transaction() as c:
                             deletion_retry(c, current["machine_id"], refused)
                             if current["enroll_fails"] < ENROLL_TRIES:
@@ -1629,7 +1622,7 @@ def removable(c, auth, who, key, replace=False):
         if current["placement"] != "own":
             raise Problem("shared", "Replace the shared cloud machine at DELETE /api/v2/cloud-machines/shared", 409)
     if not current or not (present(current) or current["runner_id"]
-                           or (replace or key == SHARED) and current["machine_id"] and current["enroll_fails"]):
+                           or (replace or key == SHARED) and current["machine_id"]):
         raise Problem("not_found", "There is no shared cloud machine" if key == SHARED
                       else "This bot has no cloud machine of its own", 404)
     if not replace and key != SHARED and current["mode"] == "cloud" and current["placement"] == "own":
@@ -1682,6 +1675,7 @@ def _remove(service, who, auth, key, request, mutate, replace):
     token = request.headers.get("idempotency-key")
     if not token or len(token) > 200:
         raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
+    explicit = replace or key == SHARED
     with store.transaction() as c:
         replay = store.saved(c, who, request.url.path, token)
         if not replay:
@@ -1690,15 +1684,17 @@ def _remove(service, who, auth, key, request, mutate, replace):
             if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') AND "
                          "(runner_id=? OR (bot_id=? AND ?)) LIMIT 1", (current["runner_id"], key, replace)).fetchone():
                 raise Problem("busy", "Wait for the current turn to finish", 409)
-            if current["deleting"] or (current["stop_until"] or 0) > now():
+            if not explicit and (current["deleting"] or (current["stop_until"] or 0) > now()):
                 raise Problem("busy", "This cloud machine is stopping. Try again shortly", 409)
-            hq = service.hq(c) if present(current) else None
-            if present(current) and hq is None:
+            # An existing intent owns its retry clock. Recovery must not wait for that old disk or rush its retries.
+            send_delete = present(current) and not current["deleting"]
+            hq = service.hq(c) if send_delete else None
+            if send_delete and hq is None:
                 raise Problem("gateway", "Connect Tico Gateway first", 409)
             hold = now() + STOP_HOLD
             save(c, key, stop_until=hold, problem="replacing",
-                 **({"enroll_fails": 0} if replace or key == SHARED else {}))
-            if present(current):
+                 **({"enroll_fails": 0} if explicit else {}))
+            if send_delete:
                 intend_delete(c, current)
     if replay:
         return mutate(request, Empty(), lambda c: {"ok": True})
@@ -1715,19 +1711,19 @@ def _remove(service, who, auth, key, request, mutate, replace):
 
     refusal, answer = None, None
     try:
-        if present(current):
+        if send_delete:
             try:
                 answer = hq.delete(current["machine_id"])
             except Refused as refused:
                 refusal = refused
-                if refused.status != 404:
+                if not deletion_settled(None, current["machine_id"], refused):
                     raise Problem("gateway", "Tico did not answer. Try again in a minute." if refused.status == 0
                                   else f"Tico refused this ({refused.code}).", 502) from None
         return mutate(request, Empty(), finish)
     finally:
         with store.transaction() as c:
-            if present(current):
-                if deletion_settled(answer, current["machine_id"]) or refusal and refusal.status == 404:
+            if send_delete:
+                if deletion_settled(answer, current["machine_id"], refusal):
                     intent = c.execute("SELECT * FROM cloud_machine_deletions WHERE machine_id=?",
                                        (current["machine_id"],)).fetchone()
                     if intent:
@@ -1744,19 +1740,28 @@ def _remove(service, who, auth, key, request, mutate, replace):
 
 
 def health(c, settings=None):
-    """Health's row, or None: an active bot's cloud machine has a problem, even without queued work."""
-    if not offered(c, settings):
+    """Name active machine problems and old deletion fences, even after the bot has moved to a fresh id."""
+    old = c.execute("SELECT d.machine_id,d.bot,b.slug,count(*) OVER() AS total FROM cloud_machine_deletions d "
+                    "LEFT JOIN bots b ON b.id=d.bot WHERE d.created_at<? ORDER BY d.created_at,d.machine_id LIMIT 5",
+                    (now() - DELETION_WARN,)).fetchall()
+    if not offered(c, settings) and not old:
         return None
     active = {r["id"] for r in c.execute("SELECT b.id FROM bots b LEFT JOIN bot_control bc ON bc.bot=b.id "
                                          "WHERE b.state='active' AND coalesce(bc.draining,0)=0")}
     machines = homes(c)
     stuck = sorted(bot for bot, machine in machines.items() if bot in active and machine["problem"])
-    if not stuck:
+    if not stuck and not old:
         return None
     names = [f"{(H.bot(c, bot) or {}).get('slug') or bot}: {problem_words(machines[bot]['problem'])}"
              for bot in stuck[:5]]
-    return {"status": "warn", "summary": f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine "
-                                         f"problem: {'; '.join(names)}"}
+    summary = ([f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine problem: {'; '.join(names)}"]
+               if stuck else [])
+    if old:
+        names = [f"{'shared (_shared)' if r['bot'] == SHARED else r['slug'] or r['bot']}: {r['machine_id']}" for r in old]
+        count = old[0]["total"]
+        summary.append(f"{count} cloud machine deletion{'s' if count != 1 else ''} waiting over 24 hours: {'; '.join(names)}. "
+                       "Old disks may still cost money.")
+    return {"status": "warn", "summary": " ".join(summary)}
 
 
 # ----------------------------------------------------------------------------- routes

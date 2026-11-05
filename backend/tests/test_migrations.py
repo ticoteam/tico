@@ -110,6 +110,7 @@ def test_pending_machine_deletions_upgrade_without_losing_their_claim_fence(tmp_
     with sqlite3.connect(path) as c:
         c.execute("DROP TABLE cloud_machine_deletions")
         c.execute("DELETE FROM schema_migrations WHERE version='20261105120026_cloud_machine_deletions'")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105134042_cloud_machine_deletion_age'")
         c.execute("INSERT INTO cloud_machines(bot,machine_id,runner_id,problem,mode,placement) "
                   "VALUES('ops','m1','r1','delete_unknown','computer','shared')")
     boot(path)
@@ -176,6 +177,41 @@ def test_enrollment_failure_migration_stands_alone_without_other_machine_migrati
         up(c)
         assert c.execute("SELECT * FROM cloud_machine_enrollment_failures").fetchall() == [("m1", "ops")]
         assert c.execute("SELECT enroll_fails,create_asked_at FROM cloud_machines").fetchone() == (1, None)
+
+
+def test_deletion_fence_age_upgrade_keeps_old_ids_and_retry_clocks(tmp_path):
+    path = fresh(tmp_path)
+    receipt = H.shift(H.now(), hours=-25)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machine_deletions DROP COLUMN created_at")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105134042_cloud_machine_deletion_age'")
+        c.executemany("INSERT INTO cloud_machine_deletions(machine_id,bot,runner_id,next_try_at,failures) VALUES(?,?,?,?,?)",
+                      [("old", "ops", "r1", 1000, 3), ("unknown", "_shared", "r2", 2000, 2)])
+        H.event(c, H.KEEPER, "cloud_machine.deleted", "ops", {"machine": "old"})
+        c.execute("UPDATE events SET created_at=? WHERE action='cloud_machine.deleted'", (receipt,))
+    boot(path)
+    with sqlite3.connect(path) as c:
+        rows = c.execute("SELECT machine_id,bot,runner_id,next_try_at,failures,created_at "
+                         "FROM cloud_machine_deletions ORDER BY machine_id").fetchall()
+        assert [r[:5] for r in rows] == [("old", "ops", "r1", 1000, 3), ("unknown", "_shared", "r2", 2000, 2)]
+        assert rows[0][5] == c.execute("SELECT CAST(strftime('%s',?) AS REAL)", (receipt,)).fetchone()[0]
+        assert rows[1][5] > rows[0][5] + 24 * 60 * 60
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT machine_id,bot,runner_id,next_try_at,failures,created_at "
+                         "FROM cloud_machine_deletions ORDER BY machine_id").fetchall() == rows
+
+
+def test_deletion_fence_age_migration_stands_alone_and_does_not_reset_an_age():
+    up = _migration("20261105134042_cloud_machine_deletion_age").up
+    with sqlite3.connect(":memory:") as c:
+        up(c)
+        c.execute("INSERT INTO cloud_machine_deletions(machine_id,bot) VALUES('old','ops')")
+        up(c)
+        age = c.execute("SELECT created_at FROM cloud_machine_deletions").fetchone()[0]
+        assert age > 0
+        up(c)
+        assert c.execute("SELECT created_at FROM cloud_machine_deletions").fetchone()[0] == age
 
 
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
