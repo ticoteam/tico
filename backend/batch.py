@@ -93,7 +93,8 @@ def _row(it, actor):
     if deadline(it):
         row["due_at"] = deadline(it)
     if it.get("recommend"):
-        row["recommend"] = it["recommend"]["do"]       # what the bot would do: "do what you recommend" takes it
+        row["recommend"], provenance = H.sourced_text(it["recommend"]["do"], [it["recommend"].get("source")])
+        row.update(provenance)
     if it.get("folded"):
         # Other bots' tasks waiting on the person for the same thing: said with the card so none is lost.
         row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner_id")),
@@ -374,7 +375,9 @@ def view(c, batch, resumed=False):
     else:
         out.update({"end": True, "summary": summary(batch),
                     "note": "The list is done. Say the summary and ask whether to commit."})
-    return out
+    from .files import readable_page_refs
+    from .teammate_access import _viewer_for
+    return readable_page_refs(c, None, _viewer_for(c, batch["person"]), out)
 
 
 def _load(c, actor, batch_id):

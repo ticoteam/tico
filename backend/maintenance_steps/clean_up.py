@@ -20,7 +20,7 @@ def _prune_history(c, now):
 
 def run(c, ctx):
     store, now = ctx["store"], ctx["now"]
-    from .. import automations, events, flight, performance, rules, triggers, webhook_delivery
+    from .. import automations, events, flight, performance, presence, rules, triggers, webhook_delivery
     from .. import system_routines as SR
     with store.transaction() as tx:
         # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
@@ -32,6 +32,7 @@ def run(c, ctx):
         webhook_delivery.prune(tx, now)                # outgoing webhooks: events and finished sends keep a month
         automations.prune(tx, now)                     # automation runs: step detail keeps 30 days
         _prune_history(tx, now)
+        presence.sweep(tx, now)
     sweep_idempotency(store, now)
     sweep_mail(store, now)
     sweep_deltas(store, now)                           # finished runs' streamed text pieces keep a day

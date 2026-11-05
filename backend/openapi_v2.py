@@ -59,6 +59,8 @@ EVENTS_DESCRIPTION = (
     "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
     "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
     "A `bulk: true` event without `id` means read task lists in full.\n"
+    "- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. "
+    "Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
@@ -77,6 +79,7 @@ EVENTS_DESCRIPTION = (
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
@@ -331,7 +334,7 @@ STABLE = [
     ("/api/v2/events", "get", "Live events", "streamEvents",
      "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
      "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, "
-     "task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
+     "meeting=<ids> filters meeting_items, place=<places> filters presence (20 each); task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller, with its `version` and `count`; count=true for the number alone, version=<held> "
      "answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, "
@@ -659,9 +662,10 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. "
-     "task_roundup runs Maintenance Find stuck and returns {run, started}.", None),
+     "The retired task_roundup and learnings jobs run Maintenance Find stuck and Learn respectively and return "
+     "{run, started}.", None),
     ("/api/v2/maintenance", "get", "Health", "getMaintenance",
-     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it", None),
+     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, Learn's seven-day stats, the last run, the live run, the next run, and whether the viewer may change it", None),
     ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",
      "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes", "MaintenanceUpdate"),
     ("/api/v2/maintenance/runs", "get", "Health", "listMaintenanceRuns",
@@ -745,6 +749,9 @@ SCHEMAS = {
                     "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
                    sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
                    recipient_name={"type": "string", "description": "Display name of recipient_id"},
+                   sender_can_approve_send={"type": "boolean", "description": "On GET /messages/{mid}: whether the human sender "
+                       "currently may manage the bot addressee's mail sending (Auth.bot_manager); false for bot senders "
+                       "or non-bot addressees. This checks authority only, not send intent or the draft's contents"},
                    body_raw={"type": "string", "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"},
                    edited_at={"type": ["string", "null"], "description": "When the author last changed a task comment's text; "
                               "null when never edited"},
@@ -899,6 +906,9 @@ SCHEMAS = {
     "Me": obj({"actor": "s", "role": "s", "email": "s", "slug": {"type": "string", "description": "A bot caller: its slug (a label; the actor holds its id)."}}, required=["actor", "role", "email"]),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
+                   "administration_url": {"type": "string", "description": "Signed-in humans: the Tico account portal "
+                                          "URL, or empty for an install without a Tico account or portal company. "
+                                          "Open externally; carries no sign-in credentials."},
                    "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
                                      "when absent or invalid; grants no native IPC permission."},
                    "visuals": {"type": "string", "enum": ["full", "hosted", "media"],
@@ -1431,6 +1441,8 @@ SCHEMAS["KpiDetail"]["properties"]["links"] = items(_merge(SCHEMAS["KpiLink"], o
 # Tags add rich display data beside the existing task label keys.
 TAGS["Tags"] = "Tags, metadata, markdown checklists and reusable templates."
 STABLE.extend([
+    ('/api/v2/meetings/{rid}/items/{iid}/link', 'post', 'Meetings', 'acceptMeetingTaskProposal',
+     'Accept a readable task proposal without creating a task; the meeting must be shared', 'MeetingTaskProposalAccepted'),
     ("/api/v2/tags", "get", "Tags", "listTags", "Tags and templates", "TagList"),
     ("/api/v2/tags", "post", "Tags", "createTag", "Create a tag or template", "TagResult"),
     ("/api/v2/tags/{tag_id}", "get", "Tags", "getTag", "A tag and its visible tasks", "TagDetail"),
@@ -1438,6 +1450,8 @@ STABLE.extend([
     ("/api/v2/tags/{tag_id}/instances", "post", "Tags", "createTagInstance", "Copy a template into a task tag", "TagResult"),
 ])
 SCHEMAS.update({
+    'MeetingTaskProposalAccepted': obj({'item': obj({'id': 's', 'proposed_task_id': 'n', 'result_ref': 'n',
+                                                    'status': 's'}), 'pushed': 'b'}),
     "Tag": obj({"id": "s", "key": "s", "label": "s", "metadata": "o", "markdown": "s", "is_template": "b",
                 "template_id": "n", "owner": "n", "version": "i", "created_at": "s", "updated_at": "s"}),
     "TagList": obj({"tags": items(ref("Tag"))}),
@@ -2196,7 +2210,7 @@ STABLE.extend([
 ])
 TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
      'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
      'company\'s they may read. Paged with cursor','ConnectionList'),
 ])
@@ -2333,7 +2347,7 @@ STABLE.extend([
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
     ("/api/v2/pages/{fid}", "patch", "Pages", "editPage",
-     "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+     "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
      "PageShown"),
     ("/api/v2/files", "get", "Files", "listFiles",
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
@@ -2344,7 +2358,10 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
+    "Page": obj({"audience": {"anyOf": [ref("AccessAudience"), {"type": "null"}],
+                             "description": "Only returned to managers on a single page read or write; null inherits where it is filed"},
+                 "restricted": {"type": "boolean", "description": "Only returned to managers, including on lists and cards"},
+                 "file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
@@ -2848,7 +2865,7 @@ STABLE.extend([
     ('/api/v2/meetings/{rid}/tasks', 'get', 'Meetings', 'listMeetingTasks',
      'Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap', 'MeetingTaskLinks'),
     ('/api/v2/meetings/{rid}/tasks', 'post', 'Meetings', 'linkMeetingTasks',
-     'Link up to 20 readable tasks; sent is only for their requester; links never widen access', 'MeetingTaskLinks'),
+     'Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data', 'MeetingTaskLinkBatch'),
     ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
@@ -2858,6 +2875,8 @@ SCHEMAS.update({
     'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
                             'status': 's', 'kind': {'enum': ['linked', 'sent', 'proposal']}, 'created_by': 's'}),
     'MeetingTaskLinks': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n'}),
+    'MeetingTaskLinkBatch': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n',
+                                 'results': items(obj({'status': {'enum': [200, 404]}}))}),
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
@@ -3163,6 +3182,160 @@ SCHEMAS.update({
     "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
 })
 
+
+STABLE.extend([
+    ("/api/v2/meetings/{rid}/items", "get", "Meetings", "listMeetingItems",
+     "Pending and sent items grouped by section; can_send for every reader of a live meeting, audience for a private meeting. Task references are redacted per viewer", None),
+    ("/api/v2/meetings/{rid}/items", "post", "Meetings", "addMeetingItem", "Add a pending item, or upload an already sent item with status=pushed and a result_ref for a task you requested", None),
+    ("/api/v2/meetings/{rid}/items/{iid}", "post", "Meetings", "editMeetingItem",
+     "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits", None),
+    ("/api/v2/meetings/{rid}/items/{iid}/push", "post", "Meetings", "sendMeetingItem",
+     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
+    ("/api/v2/presence", "get", "Live events", "getPresence", "Current actors aggregated across unexpired sessions at an authorized place", None),
+    ("/api/v2/presence", "post", "Live events", "heartbeatPresence", "Heartbeat one session every 15 seconds, or leave with gone=true; sessions expire after 30 seconds", None),
+])
+
+
+# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+_MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
+_MAILBOX_REF = obj({"id": "s", "name": "s"})
+SCHEMAS.update({
+    "Mailbox": obj({"id": "s", "address": "s", "provider": "s", "kind": {"enum": ["personal", "shared"]},
+                    "person_id": "n", "person_name": "s", "connection": {"enum": ["workspace", "personal"]},
+                    "status": {"enum": ["active", "stopped"]},
+                    "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
+                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF),
+                    "used_by": obj({"people": "i", "bots": "i", "names": items({"type": "string"})}),
+                    "synced_at": "n", "newest_epoch": {"type": ["integer", "null"]},
+                    "sync": {"enum": ["", "signin", "failed"]}, "sync_error": "s"}),
+    "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
+    "MailboxList": obj({"admin": "b", "domain": "s", "may": ref("MailboxMay"), "mine": {"anyOf": [ref("Mailbox"), {"type": "null"}]},
+                        "shared": items(ref("Mailbox")), "mailboxes": items(ref("Mailbox"))}),
+    "MailboxResult": obj({"mailbox": ref("Mailbox")}),
+    "MailboxDetail": obj({"mailbox": ref("Mailbox"), "can_manage": "b", "can_stop": "b",
+                          "accesses": items(obj({"id": "n", "grantee_type": {"enum": ["person", "bot", "admins"]},
+                                                 "grantee_id": "s", "name": "s", "level": {"enum": ["read", "read_write"]},
+                                                 "implicit": "b"})),
+                          "routines": items(obj({"id": "s", "name": "s", "enabled": "b", "can_edit": "b"})),
+                          "may": ref("MailboxMay"),
+                          "candidates": items(obj({"type": {"enum": ["person", "bot"]}, "id": "s", "name": "s"}))}),
+})
+STABLE.extend([
+    ("/api/v2/mailboxes", "get", "Mailboxes", "listMailboxes",
+     "An admin's every mailbox (person, status, routines); for everyone their own mailbox and the ones shared with them", "MailboxList"),
+    ("/api/v2/mailboxes", "post", "Mailboxes", "connectMailbox",
+     "An admin connects a mailbox: a person's own by verified email, else a shared inbox when `shared`, else it waits for its person", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}", "get", "Mailboxes", "getMailbox",
+     "One mailbox: who can use it, its routines, and who could be added (for whoever manages it)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}", "delete", "Mailboxes", "stopMailbox",
+     "Stop using this mailbox in Tico (an admin, or the person whose mailbox it is)", "MailboxResult"),
+    ("/api/v2/mailboxes/{mid}/share", "post", "Mailboxes", "shareMailbox",
+     "An admin makes a mailbox that has no person a shared inbox", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses", "post", "Mailboxes", "addMailboxAccess",
+     "Give a person or a bot Read, or Read and write (the mailbox's owner, or an admin for a shared inbox)", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "patch", "Mailboxes", "changeMailboxAccess",
+     "Change one access between Read and Read and write", "MailboxDetail"),
+    ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
+     "Take one person's or bot's access away", "MailboxDetail"),
+])
+
+TAGS["Letters out"] = "Physical letters sent through the Gateway; approvals bind the saved proof and price."
+SCHEMAS["LetterOutContents"] = obj({
+    **{key: "s" for key in ("id", "requested_by", "mail_class", "currency", "status", "error", "created_at", "updated_at")},
+    **{key: "n" for key in ("acting_bot_id", "automation_id", "task_id", "thread_id", "quote_id", "quote_expires_at",
+                            "approval_id", "approval_hash", "hq_letter_id", "proof")},
+    "recipient": "o", "return_address": "o", "tracking": items(obj({"barcode": "s", "status": "n"})),
+    "page_count": {"type": ["integer", "null"]}, "total_micros": "i", "color": "b", "duplex": "b", "cancel_possible": "b",
+    "letter_id": "s", "approval_reason": "s", "accepted_at": "n", "billing": "s",
+    "charged_micros": {"type": ["integer", "null"]}, "redacted": {"enum": [False]}, "can_cancel": "b"})
+SCHEMAS["LetterOutMetadata"] = obj({**{key: "s" for key in ("id", "mail_class", "currency", "status", "billing", "created_at", "updated_at")},
+    "acting_bot_id": "n", "page_count": {"type": ["integer", "null"]}, "total_micros": "i",
+    "charged_micros": {"type": ["integer", "null"]}, "redacted": {"enum": [True]}, "can_cancel": "b"})
+SCHEMAS["LetterOutMetadata"]["additionalProperties"] = False
+SCHEMAS["LetterOut"] = {"oneOf": [ref("LetterOutContents"), ref("LetterOutMetadata")]}
+SCHEMAS["LetterOutPage"] = obj({"items": items(ref("LetterOut")), "next_before": "n"})
+SCHEMAS["LettersSettings"] = obj({"id": "s", "mode": "s", "return_address": {"type": ["object", "null"]},
+    "monthly_cap_micros": {"type": ["integer", "null"]}, "availability": "s", "checked_at": "n", "created_at": "s", "updated_at": "s"})
+SCHEMAS["LettersAccess"] = obj({"send": "b", "outbox_id": "s"})
+SCHEMAS["LettersGrants"] = obj({"outbox_id": "s", "next": "n", "grants": items(obj({"id": "s", "outbox_id": "s", "grantee_type": "s", "grantee_id": "s",
+    "level": "s", "granted_by_id": "s", "created_at": "s"}))})
+SCHEMAS["LettersGrant"] = obj({"grantee_type": "s", "grantee_id": "s", "level": "s"})
+SCHEMAS["LettersRevoked"] = obj({"revoked": "b"})
+SCHEMAS["LetterBotSettings"] = obj({"bot_id": "s", "mode": "n", "monthly_cap_micros": {"type": ["integer", "null"]}})
+STABLE.extend([
+    ("/api/v2/letters", "get", "Letters out", "listLetters", "Letters the caller may read, paged and byte capped", None),
+    ("/api/v2/letters/quotes", "post", "Letters out", "quoteLetter", "Quote a PDF or rendered text without sending", None),
+    ("/api/v2/letters/{letter_id}", "get", "Letters out", "getLetter", "Letter, approved proof and tracking", None),
+    ("/api/v2/letters/{letter_id}/send", "post", "Letters out", "sendLetter", "Ask first or submit under the sending policy", None),
+    ("/api/v2/letters/{letter_id}/cancel", "post", "Letters out", "cancelLetter", "Request cancellation; pass through the provider's honest refusal", None),
+    ("/api/v2/letters/settings", "get", "Letters out", "getLettersSettings", "Company return address, mode, cap and setup state", None),
+    ("/api/v2/letters/settings", "put", "Letters out", "setLettersSettings", "Owner or admin sets company Letters out policy", None),
+    ("/api/v2/letters/access", "get", "Letters out", "getLettersAccess", "Whether the caller has sending access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants", "get", "Letters out", "listLettersGrants", "Sending grants on the company outbox", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "put", "Letters out", "grantLettersAccess", "Owner or admin grants send access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "delete", "Letters out", "revokeLettersAccess", "Owner or admin revokes send access", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "get", "Letters out", "getBotLettersSettings", "Bot's sending policy override and optional cap", None),
+    ("/api/v2/letters/bots/{bot_id}/settings", "put", "Letters out", "setBotLettersSettings", "Bot manager sets a policy that cannot loosen company policy", None),
+])
+_LETTERS_ANSWERS = {"listLetters": "LetterOutPage", "quoteLetter": "LetterOut", "getLetter": "LetterOut",
+    "sendLetter": "LetterOut", "cancelLetter": "LetterOut", "getLettersSettings": "LettersSettings",
+    "setLettersSettings": "LettersSettings", "getLettersAccess": "LettersAccess", "listLettersGrants": "LettersGrants",
+    "grantLettersAccess": "LettersGrant", "revokeLettersAccess": "LettersRevoked", "getBotLettersSettings": "LetterBotSettings",
+    "setBotLettersSettings": "LetterBotSettings"}
+STABLE = [(*entry[:-1], _LETTERS_ANSWERS.get(entry[3], entry[-1])) for entry in STABLE]
+TAGS["Physical mail"] = "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
+SCHEMAS.update({
+    "PostalMailGrant": obj({"id": "s", "address_id": "s", "grantee_type": {"enum": ["person", "bot"]},
+                            "grantee_id": "s", "level": {"enum": ["read"]}, "granted_by_id": "s",
+                            "created_at": "s", "updated_at": "s"}),
+    "PostalMailGrants": obj({"address_id": "s", "grants": items(ref("PostalMailGrant")), "next": "n"}),
+    "PostalMailGrantResult": obj({"grant": ref("PostalMailGrant")}),
+    "PostalMailRevoked": obj({"ok": "b"}),
+    "PostalMailBots": obj({"bots": items(obj({"id": "s", "slug": "s", "display_name": "s", "state": "s",
+                                            "read_error": "n", "routing_error": "n"})), "next": "n"}),
+    "PostalMailSettings": obj({"settings": obj({"id": "i", "legal_bot_id": "n", "updated_by_id": "n",
+                                               "created_at": "s", "updated_at": "s"})}),
+})
+STABLE.extend([
+    ("/api/v2/postal/bots", "get", "Physical mail", "listPostalMailBots",
+     "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin", "PostalMailBots"),
+    ("/api/v2/postal/addresses/{address_id}/grants", "get", "Physical mail", "listPostalMailGrants",
+     "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin", "PostalMailGrants"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "put", "Physical mail", "grantPostalMailRead",
+     "Give one person or bot Read, including private letters and scans; owner or admin", "PostalMailGrantResult"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "delete", "Physical mail", "revokePostalMailRead",
+     "Revoke one Read grant; owner or admin", "PostalMailRevoked"),
+    ("/api/v2/postal/settings", "get", "Physical mail", "getPostalMailSettings",
+     "Legal mail routing; null legal_bot_id means owner", "PostalMailSettings"),
+    ("/api/v2/postal/settings", "put", "Physical mail", "setPostalMailSettings",
+     "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin", "PostalMailSettings"),
+])
+
+
+TAGS["Alerts"] = "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
+SCHEMAS.update({
+    "PersonalAlerts": obj({"phone": "n", "status": "s", "verified_at": "n", "call_consent": "b",
+                            "preferences": obj({"urgent_needs": "b", "legal_mail": "b", "bot_stuck": "b",
+                                                "urgent_calls": "b", "timezone": "s", "quiet_start": "s",
+                                                "quiet_end": "s", "emergency_exception": "b", "monthly_cap": "i"}),
+                            "monthly_spend": "i", "company_monthly_cap": "i", "company_monthly_spend": "i",
+                            "price_usd": "i", "paid_by": "s", "recent": items(obj(
+                                {"id": "s", "kind": "s", "state": "s", "error": "s", "created_at": "s"}))}),
+    "AlertPhoneCode": obj({"status": "s", "expires_in": "i"}),
+    "AlertTest": obj({"id": "s", "status": "s"}, required=["id", "status"], price_usd=_t("i"), paid_by=_t("s")),
+    "AlertCompanyCap": obj({"monthly_cap": "i", "monthly_spend": "i", "price_usd": "i"}),
+})
+STABLE.extend([
+    ("/api/v2/alerts/me", "get", "Alerts", "getMyAlerts", "Your phone, consent, preferences and last ten alert outcomes; people acting as themselves only", "PersonalAlerts"),
+    ("/api/v2/alerts/me", "put", "Alerts", "setMyAlerts", "Choose overdue-task, legal-mail and managed-bot stall alerts, quiet hours, timezone, emergency exception and monthly cap", "PersonalAlerts"),
+    ("/api/v2/alerts/me/phone", "post", "Alerts", "verifyMyAlertPhone", "Send a free verification code to your own US/Canada phone with SMS and optional call consent", "AlertPhoneCode"),
+    ("/api/v2/alerts/me/phone/confirm", "post", "Alerts", "confirmMyAlertPhone", "Confirm your own phone using its six-digit code", "PersonalAlerts"),
+    ("/api/v2/alerts/me/phone", "delete", "Alerts", "removeMyAlertPhone", "Revoke your phone and stop queued alerts; retry removal if HQ is unavailable", "PersonalAlerts"),
+    ("/api/v2/alerts/me/test", "post", "Alerts", "testMyAlerts", "Send a test for $1 paid by the company; accept_charge and a stable Idempotency-Key required; the monthly caps apply", "AlertTest"),
+    ("/api/v2/alerts/company", "get", "Alerts", "getAlertCompanyCap", "Company monthly alert cap and accepted/reserved spend, in USD; owner/admin", "AlertCompanyCap"),
+    ("/api/v2/alerts/company", "put", "Alerts", "setAlertCompanyCap", "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin", "AlertCompanyCap"),
+])
 
 def generate():
     """The document for a default installation: what docs/openapi/v2.json holds."""

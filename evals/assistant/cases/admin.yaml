@@ -404,7 +404,7 @@
   reply: |
     Dana wants the billing inbox seen by the Finance team only. The turn changes that one inbox with `hub inbound audience
     ibx_billing team --group finance`. The support inbox and its sending are left alone. Reply: one line that billing@ is now
-    for Finance only, with the link [Settings > More > Email & Phone](#/settings/inbound), and "say undo to put it back".
+    for Finance only, with the link [Settings > Inboxes](#/settings/inboxes), and "say undo to put it back".
 
 - id: admin-meeting-share-and-tasks
   group: admin

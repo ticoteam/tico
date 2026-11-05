@@ -180,6 +180,8 @@ def refresh(conn, task_id, cleared=None, at=None):
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))
         task_blocked.bump(conn, row)
         H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), note, "")
+        from . import check_pools, verdict_moves
+        check_pools.safely(conn, verdict_moves.resumed, task_id)
         return "open"
     text = f"{LEFT}: {cleared}" if cleared else NOTHING
     if cleared or row.get("blocked_kind") != "stranded" or (row.get("blocked_reason") or "").startswith("Waiting on"):

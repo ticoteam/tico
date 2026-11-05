@@ -402,6 +402,8 @@ class Builder:
                 "transcript": turns, "notes": entry["notes"], "review": entry.get("review", "live")})
             items = {}
             for section, text, detail, quote, at in entry["items"]:
+                if section == "task":
+                    detail = {"body": quote or text, **detail}
                 items[text] = self.call("POST", f"/api/meetings/{result['id']}/items",
                                         {"section": section, "text": text, "detail": detail, "quote": quote, "at_ms": at})["item"]["id"]
             for text in entry.get("push", ()):
@@ -729,6 +731,8 @@ class Builder:
         # owner already had (backend/profiles.py).
         from . import profiles as Profiles
         self.write(lambda c: Profiles.migrate(c, tell=False))
+        from .demo_sections import services
+        services.mail_access(self)
 
         def work(c):
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")

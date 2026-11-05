@@ -10,7 +10,10 @@
           "runs",
           "bots",
           "needs",
-          "threads"
+          "threads",
+          "meeting_items",
+          "presence",
+          "letters"
         ]
       },
       "event": "ready",
@@ -915,6 +918,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "Accepted.",
           "number": null,
@@ -1209,6 +1213,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "",
           "number": null,

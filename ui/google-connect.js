@@ -1,10 +1,11 @@
-/* Settings > Google, from GET /v2/google. An admin with nothing set up is asked one question: one account at a time, or
-   the whole Workspace. One account at a time sets up Google sign-in for the server once, then connects the admin's own
-   mailbox, then lists the team (GET /v2/google/people) with a link to copy for each. Whole Workspace connects every
-   mailbox of the domain with a service-account key (docs/mail.md). Each path's setup is a prompt for the person's own
-   coding agent by default, or the steps by hand. Everyone else sees only their own mailbox (read only with Tico's shared
-   app; the company's own app can also label, archive and draft). Google's sign-in opens in this tab and comes back to
-   the server; the computer that syncs mail keeps the grant. No token, key or client secret stays in the browser once it
+/* The Connection card of Inboxes > Settings > Email (ui/app/inboxes-email.js), from GET /v2/google. An admin picks one of two
+   ways: Whole company (a service-account key connects every mailbox of the domain, docs/mail.md) or Each person signs
+   in (Google sign-in for the server once, then each person connects their own mailbox). The way already set up is
+   picked; with nothing set up, neither is. Each way's setup is a prompt for the person's own coding agent by default,
+   or the steps by hand. Everyone else sees only Connect Google for their own mailbox (read only with Tico's shared app;
+   the company's own app can also label, archive and draft), and nothing when the company's key covers it. Who can use
+   each mailbox and What Tico may do are Settings > Inboxes'. Google's sign-in opens in this tab and comes back to the
+   server; the computer that syncs mail keeps the grant. No token, key or client secret stays in the browser once it
    is sent, and nothing here messages anyone. */
 'use strict';
 (function () {
@@ -24,13 +25,12 @@
 
   const dateOf = iso => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d : null; };
   const clock = iso => dateOf(iso)?.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) || '';
-  const when = iso => dateOf(iso)?.toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'}) || '';
   const live = () => !!command && Date.parse(command.expires_at) > Date.now();
   const domainOf = address => String(address || '').split('@')[1]?.trim().toLowerCase() || '';
   const defaultDomain = g => domainOf(g.me?.mailbox) || domainOf((typeof S === 'object' && S?.me?.email) || '');
   const watchable = host => host.isConnected && !host.closest('[hidden]');
   // This tab's address on the server's public URL, for a teammate or an agent to open.
-  const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/settings/google`;
+  const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/settings/inboxes/settings/email`;
   const unchecked = row => (row ? {...row, checked_at: null} : null);
   // The active row (connected or failing) and the one pending row, which is a replacement while a key is active.
   const rowsOf = g => {
@@ -61,16 +61,19 @@
           <button type="button" class="ghost" data-ws-disconnect-no>Cancel</button></div>
       </div>`;
 
-  function connectedBlock(row) {
+  // A failing key, a pending replacement or a key still to narrow shows step 3 (Check) under this, so the line's own
+  // Check connection (and its result) is only for a working key with nothing else to check.
+  function connectedBlock(row, stepped) {
     const failing = row.status === 'failing';
-    return `<div class="google-facts">
-        <div><span class="muted">Domain</span> <strong>${esc(row.domain || '')}</strong></div>
-        <div><span class="muted">Client ID</span> <code>${esc(row.client_id || '')}</code></div>
-        <div><span class="muted">Connected</span> ${esc(when(row.connected_at))}</div>
-      </div>
-      ${failing ? `<p role="alert"><strong>Failing.</strong> ${esc(row.last_error || 'Tico could not reach Google with this key.')}</p>` : ''}
-      <div class="row"><button type="button" class="ghost" data-ws-replace>Replace key</button>
+    const own = !failing && !stepped;
+    const checked = row.checked_at || row.connected_at;
+    return `<p class="google-connected" data-ws-connected>${failing ? '<strong>Failing</strong>' : '<span class="pill ok">Connected</span>'}${
+        checked ? ` <span class="muted">· checked ${esc(ago(checked))}</span>` : ''}</p>
+      ${failing ? `<p role="alert">${esc(row.last_error || 'Tico could not reach Google with this key.')}</p>` : ''}
+      <div class="row">${own ? '<button type="button" class="ghost" data-ws-recheck>Check connection</button>' : ''}
+        <button type="button" class="ghost" data-ws-replace>Replace key</button>
         <button type="button" class="ghost danger" data-ws-disconnect>Disconnect</button></div>
+      ${own ? '<div data-ws-check-result role="status"></div>' : ''}
       ${disconnectConfirm(row.domain, true)}`;
   }
 
@@ -84,27 +87,11 @@
       <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button>${more}</div></div>`;
 
   // The Workspace prompt holds the setup command, so it lives exactly as long as the command does (only in this page).
-  // What Tico may do (Settings > Google, the company's one setting): reading is always on; the rest are boxes.
-  const MAY = [
-    ['organize_mail', 'Organize mail', 'Label, archive and draft.'],
-    ['send_mail', 'Send mail', 'Each bot also needs Mail sending on: Settings > Bots > Edit > Mail sending.'],
-    ['change_calendar', 'Create and change calendar events', ''],
-  ];
+  // What Tico asks Google for follows What Tico may do (its card in Inboxes > Settings > Email, the company's one setting).
+  const MAY = [['organize_mail', 'Organize mail'], ['send_mail', 'Send mail'], ['change_calendar', 'Create and change calendar events']];
   const allows = (g, name) => g?.permissions?.[name] !== false;
   const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
     .join(', ');
-
-  function mayCard(g) {
-    const box = ([name, label, note]) => `<label class="google-may-row"><input type="checkbox" data-google-may="${name}"${
-      allows(g, name) ? ' checked' : ''}><span>${label}${note ? `<span class="muted">${note}</span>` : ''}</span></label>`;
-    // A Workspace key authorized before the read-only scopes keeps its write scopes at Google; Tico holds the boxes.
-    const ws = g.workspace;
-    const narrow = ws && ws.status !== 'pending' && ws.narrowable === false
-      ? '<p class="muted" data-google-may-narrow>Redo step 2 to narrow Google access.</p>' : '';
-    return `<section class="google-card" data-google-may-card><h3>What Tico may do</h3>
-      <div class="google-may-row" data-google-may-read><span class="google-may-always" aria-hidden="true"></span><span>Read mail and calendar<span class="muted">Always on.</span></span></div>
-      ${MAY.map(box).join('')}${narrow}</section>`;
-  }
 
   function workspacePrompt(made, g) {
     const domain = made.domain || 'your domain';
@@ -133,7 +120,7 @@
       '4. Clients > Create client > Web application. Add this authorized redirect URI, exactly:',
       `   ${g.oauth?.redirect_uri || ''}`,
       '   Google shows the client secret once, in the dialog after Create: copy it then.',
-      `5. Put the client ID and client secret into Tico at ${googleLink()} (One account at a time > Set it up myself > Client ID, Client secret > Save), in my signed-in browser. If you can't use my browser, print them once for me to paste. Never write the secret to a file or anywhere else.`,
+      `5. Put the client ID and client secret into Tico at ${googleLink()} (Each person signs in > Set it up myself > Client ID, Client secret > Save), in my signed-in browser. If you can't use my browser, print them once for me to paste. Never write the secret to a file or anywhere else.`,
       '',
       'Google has no gcloud command for these OAuth web clients, so steps 3 and 4 need the browser.',
       'Then tell me to click Connect Google.',
@@ -214,7 +201,7 @@
     const parts = [];
     // A key authorized before the read-only scopes: step 2 again with every scope, then Check, keeping the key.
     const legacy = !!active && !pend && !replacing && active.narrowable === false;
-    if (active && !replacing) parts.push(connectedBlock(active));
+    if (active && !replacing) parts.push(connectedBlock(active, !!pend || legacy));
     if (legacy) parts.push(allowStep(active));
     if (pend && !replacing) {
       if (!active) parts.push(`<p>Key uploaded for <strong>${esc(pend.domain || '')}</strong>.</p>`);
@@ -228,8 +215,9 @@
       parts.push(`<div class="row"><button type="button" class="ghost" data-ws-replace>Replace key</button>
         <button type="button" class="ghost danger" data-ws-disconnect>Disconnect</button></div>${disconnectConfirm(pend.domain, false)}`);
     }
-    if (active && !replacing && g.me?.covered_by_workspace) parts.push(`<p class="muted">Covers your mailbox, ${esc(g.me.mailbox)}.</p>`);
-    return `<section class="google-card" data-google-card="workspace"><h3>Whole Workspace</h3>${parts.join('')}
+    // A key authorized before the read-only scopes keeps its write scopes at Google; Tico holds What Tico may do.
+    if (legacy) parts.push('<p class="muted" data-google-may-narrow>Redo step 2 to narrow Google access.</p>');
+    return `<section class="google-card" data-google-card="workspace">${parts.join('')}
       <p class="muted" role="status" data-ws-status>${esc(flash)}</p></section>`;
   }
 
@@ -316,27 +304,9 @@
     return covered + personalBody(personal);
   }
 
-  const TEAM_STATUS = {connected: 'Connected', none: 'Not connected', pending: 'Connecting', failing: 'Failing',
-    workspace: 'Covered by Workspace'};
-  // Everyone else with a mailbox, from GET /v2/google/people. A link to this tab is all Tico gives them: nothing is sent.
-  // `extra` is the pages Show more added after the first (host._googleExtra), until the first page changes.
-  function teamList(g, people, extra) {
-    if (!people) return '<p class="muted">Loading…</p>';
-    if (people.error) return `<p class="muted">${esc(people.error)}</p>`;
-    const mine = g.me?.mailbox || '';
-    const last = extra || people;
-    const rows = [...(people.people || []), ...(extra?.people || [])].filter(p => p.mailbox !== mine);
-    if (!rows.length) return '<p class="muted">No one else has a mailbox yet.</p>';
-    const link = googleLink();
-    return `<ul class="google-team">${rows.map(p => `<li data-google-person="${esc(p.person_id)}">
-        <span class="google-team-who"><strong>${esc(p.name || p.person_id)}</strong> <span class="muted">${esc(p.mailbox)}</span></span>
-        <span class="google-team-status" data-status="${esc(p.status)}">${esc(TEAM_STATUS[p.status] || p.status)}</span>
-        ${p.status === 'none' || p.status === 'failing' ? `<button type="button" class="ghost" data-copy="${esc(link)}" data-copy-link>Copy link</button>` : ''}
-      </li>`).join('')}</ul>${last.more && last.next ? '<div class="row"><button type="button" class="ghost" data-google-people-more>Show more</button></div>' : ''}`;
-  }
-
-  // One account at a time, for an admin: Google sign-in for the server once, then you, then everyone else.
-  function accountsCard(host, g, personal, people) {
+  // Each person signs in, for an admin: Google sign-in for the server once, then your own mailbox. Everyone else's is
+  // in the Inboxes list.
+  function accountsCard(host, g, personal) {
     const oauth = g.oauth || {};
     let first;
     if (oauth.configured) {
@@ -346,59 +316,38 @@
       first = howToggle('accounts', how) + (how === 'agent' ? promptBlock('accounts', accountsPrompt(g)) : setupPanel(g));
     }
     const later = oauth.configured ? '' : ' google-later';
-    return `<section class="google-card" data-google-card="account"><h3>One account at a time</h3>
+    return `<section class="google-card" data-google-card="account">
       <div class="google-step" data-acct-step="signin"><h4>1 Set up Google sign-in (once)</h4>${first}</div>
       <div class="google-step${later}" data-acct-step="you"><h4>2 Connect your account</h4>${oauth.configured ? yourAccount(g, personal) : ''}</div>
-      <div class="google-step${later}" data-acct-step="team"><h4>3 Your team</h4>${oauth.configured ? teamList(g, people, host._googleExtra) : ''}</div>
       <p role="status" data-google-status></p></section>`;
   }
 
-  // Everyone who isn't an admin: their own mailbox only, never the setup.
+  // Everyone who isn't an admin: Connect Google for their own mailbox, never the setup; nothing when the company's
+  // key covers it (Inboxes > Settings > Email says so).
   function memberCard(g, personal) {
-    let body;
-    if (g.oauth?.configured) body = yourAccount(g, personal);
-    else if (g.me?.covered_by_workspace) body = '<p>Covered by the Workspace connection.</p>';
-    else body = '<p>Ask an admin to set up Google in Settings &gt; Google.</p>';
-    return `<section class="google-card" data-google-card="account"><h3>Connect your account</h3>${body}
+    if (g.me?.covered_by_workspace) return '';
+    const body = g.oauth?.configured ? yourAccount(g, personal) : '<p>Ask an admin to connect Google in Settings &gt; Inboxes.</p>';
+    return `<section class="google-card" data-google-card="account">${body}
       <p role="status" data-google-status></p></section>`;
   }
 
-  const PATH_NAME = {accounts: 'One account at a time', workspace: 'Whole Workspace'};
-  // Which paths an admin sees. Nothing set up: the one picked (or the question). One set up: that one, and the other
-  // when asked for. Both set up: both, the Workspace first, since it covers the mailboxes.
-  function pathsOf(host, g) {
+  // The way an admin sees: the one picked, else the one set up (the Workspace when both are, since it covers the
+  // mailboxes), else neither until one is picked. A way once shown stays shown when it is taken down again.
+  function modeOf(host, g) {
     const {active, pend} = rowsOf(g);
-    const ws = !!(active || pend), oauth = !!g.oauth?.configured;
-    if (ws && oauth) return ['workspace', 'accounts'];
-    const set = ws ? 'workspace' : oauth ? 'accounts' : null;
-    if (set) {
-      host._googlePick = set;          // stays on this path if it is taken down again
-      return host._googleAlso ? ['workspace', 'accounts'] : [set];
-    }
-    return host._googlePick ? [host._googlePick] : [];
+    const set = active || pend ? 'workspace' : g.oauth?.configured ? 'accounts' : '';
+    if (!host._googlePick && set) host._googlePick = set;
+    return host._googlePick || '';
   }
 
-  const chooseCard = () => `<section class="google-card" data-google-choose><h3>How do you want to connect Google?</h3>
-      <div class="google-choices">
-        <button type="button" class="google-choice" data-google-pick="accounts"><strong>One account at a time</strong>
-          <span class="muted">Each person signs in with Google. Start with you.</span></button>
-        <button type="button" class="google-choice" data-google-pick="workspace"><strong>Whole Workspace</strong>
-          <span class="muted">A Google admin connects every mailbox in the domain at once.</span></button>
-      </div></section>`;
+  const MODES = [['workspace', 'Whole company'], ['accounts', 'Each person signs in']];
+  const modeToggle = mode => `<div class="theme-seg google-mode" role="radiogroup" aria-label="How Tico connects" data-google-mode>${
+    MODES.map(([key, label]) => `<button type="button" role="radio" data-google-pick="${key}" aria-checked="${mode === key}">${label}</button>`).join('')}</div>`;
 
-  function adminView(host, g, personal, people, rows) {
-    const paths = pathsOf(host, g);
-    if (!paths.length) return chooseCard();
-    // Once for the company, above whichever ways are set up: both use it.
-    const cards = [mayCard(g), ...paths.map(path => (path === 'workspace' ? workspaceCard(host, g, rows) : accountsCard(host, g, personal, people)))];
-    if (paths.length === 1) {
-      const other = paths[0] === 'workspace' ? 'accounts' : 'workspace';
-      const {active, pend} = rowsOf(g);
-      const anySet = !!(active || pend || g.oauth?.configured);
-      cards.push(`<p class="google-switch"><button type="button" class="linkish" data-google-switch="${other}">${
-        anySet ? `Also set up ${PATH_NAME[other]}` : 'Use the other way'}</button></p>`);
-    }
-    return cards.join('');
+  function adminView(host, g, personal, rows) {
+    const mode = modeOf(host, g);
+    const body = mode === 'workspace' ? workspaceCard(host, g, rows) : mode === 'accounts' ? accountsCard(host, g, personal) : '';
+    return modeToggle(mode) + body;
   }
 
   function paintCheck(host) {
@@ -430,7 +379,7 @@
   }
 
   function paint(host) {
-    const {g, personal, people} = host._googleState;
+    const {g, personal} = host._googleState;
     const {active, pend} = rowsOf(g);
     const replacing = replacingNow(host, g);
     // Typed values live on the host, in memory only, so a field that leaves the page (Have my agent do it) comes back
@@ -439,7 +388,7 @@
     host.querySelectorAll('[data-keep]').forEach(el => { kept[el.dataset.keep] = el.value; });
     const flash = host._googleFlash || '';
     host._googleFlash = '';
-    host.innerHTML = g.can_admin ? adminView(host, g, personal, people, {active, pend, replacing, flash}) : memberCard(g, personal);
+    host.innerHTML = g.can_admin ? adminView(host, g, personal, {active, pend, replacing, flash}) : memberCard(g, personal);
     host.querySelectorAll('[data-keep]').forEach(el => { if (kept[el.dataset.keep] !== undefined) el.value = kept[el.dataset.keep]; });
     paintCheck(host);
     projectLinks(host);
@@ -573,23 +522,6 @@
     }
   }
 
-  // Each box saves on its own change, all three sent together (the server takes the whole setting).
-  async function saveMay(host, input) {
-    const boxes = [...host.querySelectorAll('[data-google-may]')];
-    const body = Object.fromEntries(boxes.map(box => [box.dataset.googleMay, box.checked]));
-    boxes.forEach(box => { box.disabled = true; });
-    try {
-      const saved = await put('/v2/google/permissions', body);
-      host._googleState.g.permissions = saved.permissions;
-      toast('Saved');
-      await window.mountGoogleConnect(host, {force: true});
-    } catch (error) {
-      input.checked = !input.checked;
-      boxes.forEach(box => { box.disabled = false; });
-      toast(error.message, true);
-    }
-  }
-
   async function saveOAuth(host, form) {
     const status = form.querySelector('[data-oauth-status]');
     const clientId = (form.querySelector('[name=client_id]')?.value || '').trim();
@@ -649,34 +581,9 @@
     }
   }
 
-  async function morePeople(host, button) {
-    const {people} = host._googleState;
-    const last = host._googleExtra || people;
-    if (!last?.next) return;
-    button.disabled = true;
-    try {
-      const page = await get('/v2/google/people?after=' + encodeURIComponent(last.next), {fresh: true});
-      host._googleExtra = {people: [...(host._googleExtra?.people || []), ...(page.people || [])], more: page.more,
-        next: page.next};
-      paint(host);
-    } catch (error) {
-      button.disabled = false;
-      const status = host.querySelector('[data-google-status]');
-      if (status) status.textContent = error.message;
-    }
-  }
-
   async function onClick(host, el) {
     if (el.hasAttribute('data-copy') || el.hasAttribute('data-copy-prompt')) return copy(el);
-    if (el.hasAttribute('data-google-people-more')) return morePeople(host, el);
     if (el.hasAttribute('data-google-pick')) { host._googlePick = el.dataset.googlePick; return paint(host); }
-    if (el.hasAttribute('data-google-switch')) {
-      const {active, pend} = rowsOf(host._googleState.g);
-      if (active || pend || host._googleState.g.oauth?.configured) host._googleAlso = true;
-      else host._googlePick = el.dataset.googleSwitch;
-      // A mount, not a paint: the team list is read only once its path shows.
-      return window.mountGoogleConnect(host, {force: true});
-    }
     if (el.hasAttribute('data-google-how')) {
       host._googleHow = {...host._googleHow, [el.dataset.googlePath]: el.dataset.googleHow};
       return paint(host);
@@ -694,7 +601,7 @@
     if (el.hasAttribute('data-ws-disconnect')) return toggle(host, '[data-ws-disconnect-confirm]', true);
     if (el.hasAttribute('data-ws-disconnect-no')) return toggle(host, '[data-ws-disconnect-confirm]', false);
     if (el.hasAttribute('data-ws-disconnect-yes')) return disconnectWorkspace(host, el);
-    if (el.hasAttribute('data-ws-check')) return check(host, false);
+    if (el.hasAttribute('data-ws-check') || el.hasAttribute('data-ws-recheck')) return check(host, false);
     if (el.hasAttribute('data-oauth-remove')) return toggle(host, '[data-oauth-remove-confirm]', true);
     if (el.hasAttribute('data-oauth-remove-no')) return toggle(host, '[data-oauth-remove-confirm]', false);
     if (el.hasAttribute('data-oauth-remove-yes')) return removeOAuth(host, el);
@@ -714,7 +621,6 @@
     });
     host.addEventListener('change', event => {
       if (event.target.matches?.('[data-ws-file]')) void uploadKey(host, event.target);
-      if (event.target.matches?.('[data-google-may]')) void saveMay(host, event.target);
     });
     host.addEventListener('input', event => {
       if (event.target.matches?.('[data-oauth-project]')) projectLinks(host);
@@ -723,30 +629,25 @@
   }
 
   // Loads GET /v2/google (and the person's own state when Connect Google is set up), then paints. A render that
-  // changes nothing is skipped, so typed values and the open confirm stay put. Settings calls this on every visit to
-  // the tab; it never makes a setup code.
+  // changes nothing is skipped, so typed values and the open confirm stay put. Inboxes calls this on every
+  // visit to the tab; it never makes a setup code.
   async function mountGoogleConnect(host, {force = false} = {}) {
     if (!host) return;
     const turn = host._googleTurn = (host._googleTurn || 0) + 1;
     clearTimeout(host._googlePoll);
-    let g, personal = null, people = null;
+    let g, personal = null;
     try {
       g = await get('/v2/google', {fresh: true});
       if (g.oauth?.configured && g.me) {
         try { personal = await get('/v2/mail/google', {fresh: true}); }
         catch (error) { personal = {error: error.message}; }
       }
-      // The team list is the admin's step 3 of one account at a time, there once Google sign-in is set up.
-      if (g.can_admin && g.oauth?.configured) {
-        try { people = await get('/v2/google/people', {fresh: true}); }
-        catch (error) { people = {error: error.message}; }
-      }
     } catch (error) {
       if (turn === host._googleTurn && host.isConnected) host.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
       return;
     }
     if (turn !== host._googleTurn || !host.isConnected) return;
-    host._googleState = {g, personal, people};
+    host._googleState = {g, personal};
     const {active} = rowsOf(g);
     // A setup command is used up by the first read that shows a key, pending or active, at its generation or newer.
     // Every read checks this, so a key that arrived while the tab was hidden still counts on the next visit.
@@ -755,10 +656,8 @@
     const replacing = replacingNow(host, g);
     const isLive = live();
     const snapshot = JSON.stringify([g.can_admin, unchecked(g.workspace), unchecked(g.pending), g.oauth, g.me,
-      g.setup?.reachable, g.permissions, personal, people, isLive]);
+      g.setup?.reachable, g.permissions, personal, isLive]);
     if (force || host._googleSnap !== snapshot || !host.childElementCount) {
-      // A changed first page starts the team list over: the pages Show more added may no longer follow it.
-      if (host._googleSnap !== snapshot) host._googleExtra = null;
       host._googleSnap = snapshot;
       paint(host);
     }

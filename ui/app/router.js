@@ -126,8 +126,18 @@ function route(hash = location.hash) {
     SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
-  else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }
-  else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
+  // Settings > Inboxes (ui/app/inboxes.js): the list, Inboxes > Settings and its sections, or one inbox.
+  else if (/^#\/settings\/inboxes\/[A-Za-z0-9_.@%:-]+(?:\/[A-Za-z0-9_.@%:-]+)?\/?$/.test(S.route)) {
+    INBOXES_VIEW = inboxesRoute(S.route.slice('#/settings/inboxes/'.length)); SETTINGS_TAB = 'inboxes'; location.replace(SETTINGS); return;
+  }
+  // The tabs Inboxes replaced: Mailboxes and one mailbox, Email & Phone, Mail, and Google's sign-in return
+  // (backend/google_connect.py INBOX), which lands on the Connection card in Inboxes > Settings > Email.
+  else if (/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(\/[A-Za-z0-9-]+)?\/?$/.test(S.route)) {
+    const [, old, rest] = S.route.match(/^#\/settings\/([a-z-]+)(?:\/([A-Za-z0-9-]+))?/);
+    INBOXES_VIEW = old === 'mailboxes' ? (rest ? 'mailbox/' + rest : '') : old === 'mail' ? 'settings/letters-in'
+      : ['inbox', 'google'].includes(old) ? 'settings/email' : rest === 'set-inbound' ? 'settings/email' : '';
+    SETTINGS_TAB = 'inboxes'; SETTINGS_REVEAL = ''; location.replace(SETTINGS); return;
+  }
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
   // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
@@ -143,7 +153,7 @@ function route(hash = location.hash) {
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
     if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
-    SETTINGS_REVEAL = card ? '#' + card : '';
+    SETTINGS_REVEAL = card ? '#' + card : ''; INBOXES_VIEW = '';
     // The Models card and Company turn levels moved from Computers to Models.
     SETTINGS_TAB = tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL) ? 'models' : tab; location.replace(SETTINGS); return;
   }

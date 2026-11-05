@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import time_machine
 
 from backend import demo
 from backend.tests.test_demo import NOW, signed_in
@@ -60,8 +61,10 @@ PAGES = {
     "replay": page("replay", "items", **{"from": WEEK_AGO.isoformat(), "to": NOW.isoformat()}),
     "changelog": page("changelog", "entries"),
     "settings": page("bots"),
+    "settings-inboxes-letters-out": page("letters", "items"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
+    "settings-alerts": page("alerts/me"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
 }
@@ -83,6 +86,13 @@ def test_every_nav_page_has_a_demo_mapping():
             "(PAGES in backend/tests/test_demo_coverage.py)")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
+
+
 @pytest.fixture(scope="module")
 def api(tmp_path_factory):
     with signed_in(demo.build(tmp_path_factory.mktemp("demo"), now=NOW)) as client:
@@ -99,6 +109,13 @@ def test_page_has_demo_data(api, name):
     assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
 
 
+def test_full_page_audience_editor_has_a_restricted_example(api):
+    pages = api.get('/api/v2/pages?bot=marketing-lead').json()['pages']
+    assert pages
+    shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
+    assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
+
+
 def test_a_demo_task_and_meeting_link_to_each_other(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     linked = []
@@ -113,9 +130,23 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
 
 
+def test_demo_task_has_an_editor_for_the_live_task_page(api):
+    meetings = api.get('/api/v2/meetings').json()['meetings']
+    task = next(row['task_id'] for meeting in meetings for row in
+                api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks'])
+    detail = api.get(f'/api/v2/tasks/{task}').json()
+    assert any(event['field'] == 'due' and event['actor'] == 'human:ana' for event in detail['events'])
+
+
 def test_task_pages_have_demo_data(api):
     pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
+
+
+def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
+    grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
+    assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
+    assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None

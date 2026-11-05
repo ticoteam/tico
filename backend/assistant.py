@@ -279,6 +279,12 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/google/workspace(/.*)?"), (None, r"/api/v2/google/oauth-client"),
     # What Tico may do in Google: Send mail lets every bot write outside, a person's own word as a bot's Mail sending is.
     (None, r"/api/v2/google/permissions"),
+    # Who can use a mailbox (Settings > Inboxes, backend/mailboxes.py): connecting one, sharing it, each access and
+    # stopping it are the person's own tap, never a chat's.
+    (None, r"/api/v2/mailboxes(/.*)?"),
+    (None, r"/api/v2/letters/(settings|outboxes/.*|bots/.*/settings)"),
+    (None, r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
+    ("PUT", r"/api/v2/postal/settings"),
     # A computer's part of a Connect Google sign-in and its Workspace tokens: computers only, never a chat's.
     (None, r"/api/v2/connectors/mail/google/.*"), (None, r"/api/v2/connectors/mail/workspace/token"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
@@ -652,6 +658,10 @@ def require_on_task(c, auth, who, path):
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
 # runner enrollment, this assistant and anything that hands back a secret, can never be proposed.
 _PROPOSABLE = [(m, re.compile(p)) for m, p in (
+    ("PUT", r"/api/v2/letters/settings"),
+    ("PUT", r"/api/v2/letters/outboxes/company/grants/(bot|person)/[^/]+"),
+    ("DELETE", r"/api/v2/letters/outboxes/company/grants/(bot|person)/[^/]+"),
+    ("PUT", r"/api/v2/letters/bots/[^/]+/settings"),
     ("POST", r"/api/v2/automations"), ("PATCH", r"/api/v2/automations/[^/]+"),
     ("POST", r"/api/v2/approvals/[^/]+"), ("POST", r"/api/v2/messages/[^/]+/answer"),
     ("POST", r"/api/v2/tasks"), ("POST", r"/api/v2/tasks/[^/]+"),
@@ -688,6 +698,9 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
     ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
     ("POST", r"/api/v2/postal/orders"),
+    ("PUT", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
+    ("DELETE", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
+    ("PUT", r"/api/v2/postal/settings"),
     ("POST", r"/api/v2/github/product-repos"), ("POST", r"/api/v2/tasks/[^/]+/requesters"), ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+"),
     ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"), ("POST", r"/api/v2/tasks/[^/]+/links"),
     ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),

@@ -219,7 +219,8 @@ def reconciliation(c, row, snapshots=None):
         # A fresh refusal can describe a newer head/check result than the cached link.
         # Only a subsequent GitHub observation may clear that uncertainty.
         for pr in review_gate.links(c, row):
-            if gate.get('pr') != pr['url']:
+            from . import pr_identity as PR
+            if not PR.same(gate.get('pr'), pr):
                 continue
             if snapshots is not None:
                 detail = snapshots.get(pr['id']) or {}

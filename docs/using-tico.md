@@ -198,7 +198,7 @@ back into the same pop-up. See [Support](support.md).
 
 Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). Counsel
 speaks only on its own private tasks and is not asked for updates. People report in the same shape.
-An update is one to five plain bullets: what you did, what you do next, and what waits on someone.
+An update is three plain bullets: what you did, what you do next, and what waits on someone, plus a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each suggestion the bot acted on. An update posted before this shape stays as it was written.
 
 **Updates roll up the org chart.** From 05:00 Pacific, Tico asks the bots one at a time, starting with those
 lowest on the chart. A bot that manages others is asked once each of its direct reports has posted, missed or been

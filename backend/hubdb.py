@@ -68,9 +68,11 @@ import os
 import re
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
+from typing import Any
 
 from .batch_work import isolated
 from . import delivery
@@ -201,8 +203,9 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit", "finance", "mail_alert", "letter")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
+                   "letter": ("letter_id", "approval_hash", "proof", "recipient", "return_address", "mail_class", "total_micros"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
                    "merge": ("repo", "pr"),
@@ -225,7 +228,7 @@ HELD_QUEUE_BYTES = int(os.environ.get("TICO_HELD_QUEUE_BYTES", "2097152"))
 HELD_QUEUE_SENDER_ITEMS = int(os.environ.get("TICO_HELD_QUEUE_SENDER_ITEMS", "50"))
 HELD_QUEUE_SENDER_BYTES = int(os.environ.get("TICO_HELD_QUEUE_SENDER_BYTES", "524288"))
 REVIEW_AT = 3                   # rule 8: refusals in a day that open a review task
-QUARANTINE_AT = 10              # rule 8: repeated refusals in a day that quarantine the bot
+QUARANTINE_AT = 10              # rule 8: repeated refusals in a day that hold the task/chat or quarantine the bot
 QUARANTINE_TOTAL_AT = 3 * QUARANTINE_AT   # rule 8: any refusals in a day, repeated or not (a loop over new targets)
 NOTICE_DAYS = 14                # how long a notice stays in the inbox
 
@@ -1089,7 +1092,7 @@ def person_sent(message):
     return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
-def _json(value, default=None):
+def _json(value, default=None) -> Any:
     """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
     name (row['refs'] is the dict), so a dict or list passes through."""
     if isinstance(value, (dict, list)):
@@ -1104,6 +1107,66 @@ def _json(value, default=None):
 
 def _dump(value):
     return json.dumps(value, sort_keys=True, default=str) if value is not None else None
+
+
+def sourced_text(text, sources=(), refs=None):
+    """Pair generated text with the identities it copies, for message refs or event/history data.
+
+    Keep the pair together when forwarding text to another store: its readers use readable_page_refs before
+    projecting away metadata. Existing refs survive, and repeated copies keep only one of each source.
+    """
+    refs = dict(refs or {})
+    kept = list(refs.get("body_sources") or [])
+    for source in sources:
+        if source and source not in kept:
+            kept.append(source)
+    if kept:
+        refs["body_sources"] = kept
+    return text, refs
+
+
+def answer_question(conn, target):
+    """The stored question behind either kind of structured answer target."""
+    if target.get("comment"):
+        return message(conn, target["comment"])
+    row = conn.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
+                       (target.get("file"), target.get("version"))).fetchone()
+    return message(conn, row[0]) if row and row[0] else None
+
+
+def answer_text(question, answers, *, text=None, other=None, passed=None, refs=None, file_subject=False):
+    """Pair answer prose with sources resolved from the stored question, never from the submitted picks.
+
+    A map names structured picks; a string quotes an option or the question's fallback. Callers may supply their
+    prose, but source resolution stays here for held, automatic, quoted and delivered answers alike.
+    """
+    asked = (question or {}).get("refs") or {}
+    questions = asked.get("questions") or []
+    passed = passed or {}
+    labels = {q["id"]: {o["label"]: o.get("source") or {"file": o["file"]}
+                         for o in q.get("options") or [] if o.get("source") or o.get("file")}
+              for q in questions}
+    labels = {qid: sources for qid, sources in labels.items() if sources}
+    if isinstance(answers, str):
+        wanted = answers.strip().casefold()
+        copied = {q["id"]: [o["label"] for o in q.get("options") or []
+                            if str(o["label"]).strip().casefold() == wanted] for q in questions}
+    else:
+        copied = answers or {}
+    sources = [source for qid, options in labels.items() for label, source in options.items()
+               if label in copied.get(qid, []) or label in passed.get(qid, [])]
+    default = asked.get("if_no_answer") or {}
+    if isinstance(answers, str) and answers.strip().casefold() == str(default.get("do") or "").strip().casefold():
+        sources.append(default.get("source"))
+    if file_subject and (asked.get("target") or {}).get("file"):
+        sources.append(asked["target"])
+    if text is None:
+        lines = [f"{qid}: {', '.join(picks)}" for qid, picks in sorted(copied.items()) if picks]
+        text = "\n".join([*lines, *([other] if other else [])])
+    refs = dict(refs or {})
+    if isinstance(answers, dict) and labels and refs.get("answer"):
+        refs["answer"] = {**refs["answer"], "label_sources": labels}
+    return sourced_text(text, sources, refs)
 
 
 def payload_hash(payload):
@@ -1692,12 +1755,24 @@ CLOSE_PROBE = contextvars.ContextVar("hub_close_probe", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `attempts.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
+# A task write made without a run token still attributes its refusal to the task being changed.
+REFUSAL_TASK = contextvars.ContextVar("hub_refusal_task", default=None)
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
 BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
 # A task filed from an outside reader's words (backend/company_page/readers.py) reaches a person and nothing else: no
 # webhook, automation or task rule hears the write, so no bot runs on it until a person passes it on.
 NO_TRIGGERS = contextvars.ContextVar("hub_no_triggers", default=False)
+
+
+@contextmanager
+def refusal_task(task_id):
+    """Attribute the whole mutation; refuse keeps its scope on the exception across rollback."""
+    token = REFUSAL_TASK.set(_task_ref(task_id) or REFUSAL_TASK.get())
+    try:
+        yield
+    finally:
+        REFUSAL_TASK.reset(token)
 
 
 def private_task_write(fn):
@@ -1720,6 +1795,7 @@ def private_task_write(fn):
                             private_tasks_default(conn, actor) or private_tasks_default(conn, target))
                            or parent and task_private(conn, parent))
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
+        task_token = REFUSAL_TASK.set((row or {}).get('id') or REFUSAL_TASK.get())
         from . import task_trigger_rules
         try:
             with task_trigger_rules.pending(conn):
@@ -1732,6 +1808,7 @@ def private_task_write(fn):
             exc.private = PRIVATE_WRITE.get()
             raise
         finally:
+            REFUSAL_TASK.reset(task_token)
             PRIVATE_WRITE.reset(token)
     return guarded
 
@@ -1796,18 +1873,21 @@ def writing_refusal(rule, detail):
         r'write a concrete human decision|write the ask in the first line|\d+ words outside the quoted draft)', detail))
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""
     if CLOSE_PROBE.get():
         raise Refused(rule, detail, severity, task)
+    from . import task_quarantine
+    scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
     row = {"id": new_id(), "created_at": now(), "actor": str(actor), "rule": rule,
            "detail": _dump({"detail": recorded, **({"context": context} if context else {}),
                                  **({"task": task} if task else {}),
+                                 **({"scope": scope} if scope else {}),
                                  **({"bulk": BULK_CALL.get()} if BULK_CALL.get() else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, created_at, actor, rule, detail, severity) "
                  "VALUES (:id, :created_at, :actor, :rule, :detail, :severity)", row)
@@ -1819,7 +1899,9 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
             pass
     if writing_refusal(rule, detail):
         detail += ". Rewrite the title/body to fix these writing errors and retry. Do not ask the human to waive formatting rules."
-    raise Refused(rule, detail, severity, task)
+    refused = Refused(rule, detail, severity, task)
+    refused.scope = scope           # survives the domain-write rollback (store.refused)
+    raise refused
 
 
 # ----------------------------------------------------------------------------- lint (rule 7)
@@ -2543,10 +2625,25 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(created_at) AS created_at FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("created_at") or "")
-    counted, last, total, calls, again = [], {}, 0, set(), False
+    from . import task_quarantine
+    held, released = set(), {}
+    for hold in conn.execute("SELECT task_id,conversation_id,max(released_at) AS released_at, "
+                             "max(released_at IS NULL) AS held FROM quarantine_holds "
+                             "WHERE bot_id=? AND (released_at IS NULL OR released_at>=?) "
+                             "GROUP BY task_id,conversation_id", (slug, since)):
+        scope = "task:" + hold["task_id"] if hold["task_id"] else "chat:" + hold["conversation_id"]
+        if hold["held"]:
+            held.add(scope)
+        elif hold["released_at"]:
+            released[scope] = hold["released_at"]
+    counted, last, total, calls, again, scopes = [], {}, 0, set(), False, set()
     for refused in _rows(conn.execute("SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY created_at, id", (actor, since))):
         facts = _json(refused["detail"], {}) or {}
+        scope = facts.get("scope")
+        # A scope's own hold contains its refusals, so its loop cannot stop unrelated work.
+        if scope in held or scope in released and refused["created_at"] < released[scope]:
+            continue
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
@@ -2554,7 +2651,10 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             if about in last and parse_ts(refused["created_at"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
                 continue
             last[about] = parse_ts(refused["created_at"])
-        key = refused["detail"]
+        # Attribution does not change whether the same refused action was retried.
+        key = _dump({k: v for k, v in facts.items() if k != "scope"})
+        # Every source matters even when several refusals count as one bulk try.
+        scopes.add(scope)
         if call := facts.get("bulk"):
             # One bulk change counts once, by its first counted refusal: a single call over 50 tasks the bot may not
             # change is one refused try, not 50. Its words count as a repeat of the same refusal made one by one.
@@ -2562,7 +2662,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                 again = again or call == BULK_CALL.get()
                 continue
             calls.add(call)
-            key = _dump({k: v for k, v in facts.items() if k != "bulk"})
+            key = _dump({k: v for k, v in facts.items() if k not in ("bulk", "scope")})
         total += 1
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.
@@ -2572,10 +2672,16 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
         # This bulk change's first refusal already counted, reviewed and quarantined as need be.
         return
     count, distinct = len(counted), len(set(counted))
+    def contain(reason, refusal):
+        if len(scopes) == 1 and None not in scopes:
+            task_quarantine.hold(conn, slug, next(iter(scopes)), reason, refusal)
+        else:
+            quarantine(conn, slug, reason, refusal=refusal)
+
     if rule == "target_inactive":
         # A sender retrying it in a loop still meets the day's backstop.
         if total >= QUARANTINE_TOTAL_AT:
-            quarantine(conn, slug, f"{total} refusals today", refusal={"rule": rule, "detail": _clip(detail)})
+            contain(f"{total} refusals today", {"rule": rule, "detail": _clip(detail)})
         return
     # Only a refusal the bot has already had (same rule, same words) counts toward the quarantine: retrying a
     # refused action is what the limit stops. A first try at something new that is refused is recorded, not counted.
@@ -2594,10 +2700,10 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
     stopped = {"rule": rule, "detail": said}       # what the bot is told when it is back (quarantine_lifted_note)
     if repeats >= QUARANTINE_AT:
-        quarantine(conn, slug, f"{repeats} repeated refusals today", refusal=stopped)
+        contain(f"{repeats} repeated refusals today", stopped)
     elif total >= QUARANTINE_TOTAL_AT:
         # The backstop: refusals that each name a new target are no repeats, but this many still mean a loop.
-        quarantine(conn, slug, f"{total} refusals today", refusal=stopped)
+        contain(f"{total} refusals today", stopped)
 
 
 def _review_exists(conn, title, day):
@@ -2679,10 +2785,11 @@ def quarantine_resumes(conn, slug):
 
 
 def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
-    """A refusal-count quarantine is a cooldown: after an hour the bot runs again, with its count
-    started over. Runs from the scheduler's tick. Returns the bots let out."""
+    """After an hour, release refusal-count holds and bot quarantines and start their counts over.
+    Runs from the scheduler's tick. Returns the bots whose work was let out; escapes still need a person."""
+    from . import task_quarantine
     cutoff = shift(now(), seconds=-cooldown)
-    lifted = []
+    lifted = task_quarantine.release(conn, KEEPER, cutoff=cutoff)
     for row in _rows(conn.execute("SELECT id FROM bots WHERE state='quarantined'")):
         with isolated(conn, "lift_cooled_quarantines", row["id"]):
             slug = row["id"]
@@ -2691,7 +2798,8 @@ def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
             if quarantine_is_escape(conn, slug) or not since or not since["created_at"] or since["created_at"] > cutoff:
                 continue
             status_set(conn, KEEPER, slug, state="active", reason="Cooldown over: the refusal count starts again.")
-            lifted.append(slug)
+            if slug not in lifted:
+                lifted.append(slug)
     return lifted
 
 
@@ -2747,8 +2855,8 @@ def _actor_exists(conn, actor):
     return False
 
 
-def _writer(conn, actor):
-    """Rule 1: the actor must be someone hubdb knows, and not a quarantined bot."""
+def _writer(conn, actor, task_id=None, attempt_id=None):
+    """Rule 1: the actor must be someone hubdb knows, outside a bot quarantine or a held turn."""
     if not actor_kind(actor):
         refuse(conn, str(actor), "identity", f"{actor!r} is not an actor")
     if not _actor_exists(conn, actor):
@@ -2760,7 +2868,21 @@ def _writer(conn, actor):
             at = parse_ts(timing.get("resumes_at"))
             release = "it resumes " + (at.strftime("%Y-%m-%d %H:%M UTC") if at else "after its cooldown")
         refuse(conn, actor, "quarantined", f"{actor_name(conn, actor)} is quarantined; {release}")
+    if is_bot(actor):
+        from . import task_quarantine
+        attempt_id = RUN.get() or attempt_id
+        hold = task_quarantine.for_attempt(conn, {"id": attempt_id}) if attempt_id else None
+        hold = hold or task_quarantine.for_task(conn, actor_id(actor), task_id or REFUSAL_TASK.get())
+        if hold:
+            refuse(conn, actor, "quarantined", "This task or chat is held after repeated refusals; it resumes after "
+                   "its cooldown or when a person clears quarantine. Other tasks can continue", task=task_id)
     return actor
+
+
+def _message_writer(conn, actor, msg, conv):
+    """A message's task reference cannot mask its thread's own task association."""
+    _writer(conn, actor, task_id=(conv or {}).get("task_id"))
+    _writer(conn, actor, task_id=message_task_id(msg, conv))
 
 
 def resolve_actor(conn: object, value: object) -> "str | None":
@@ -3115,9 +3237,18 @@ def _opener(conn, conversation_id):
 def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None,
         in_reply_to=None, wait_s=None):
     """The one write every message goes through: rules 1, 2, 3, 4, 7 and 8 all live here."""
+    on_task = message_task_id({"refs": refs}, conversation(conn, conversation_id) if conversation_id else None)
+    with refusal_task(on_task):
+        return _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s)
+
+
+def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s):
     _writer(conn, actor)
     if kind not in MESSAGE_KINDS:
         refuse(conn, actor, "kind", f"a message is {'|'.join(MESSAGE_KINDS)}, not {kind}")
+    if kind == "ask":
+        from . import ask_routing
+        to_actor, refs = ask_routing.resolve(conn, actor, to_actor, refs, conversation_id, in_reply_to)
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
     on_task = (refs or {}).get("task")
     path_mentioned(conn, actor, "task note" if on_task else "message", body, on_task)
@@ -3149,6 +3280,8 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     else:
         conv = _pair_conversation(conn, actor, target,
                                   {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=True)
+
+    _message_writer(conn, actor, {"refs": refs}, conv)
 
     if kind == "ask":
         _botops_only(conn, actor, target)
@@ -3446,6 +3579,9 @@ def unless_queue_full(conn, write):
 
 def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s,
                    expires_at=None, delivered_at=None, read_at=None, *, check_cap=False, decided=None):
+    if kind == "ask":
+        from . import ask_routing
+        target, refs = ask_routing.resolve(conn, actor, target, refs, conv["id"], in_reply_to)
     if actor == "bot:librarian":
         body = librarian_text(body)
     if conv and ("closed_at" not in conv or conv.get("closed_at")):
@@ -3588,6 +3724,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     asked = message(conn, message_id)
     if not asked:
         refuse(conn, actor, "not-found", f"no message {message_id}")
+    _message_writer(conn, actor, asked, conversation(conn, asked["conversation_id"]))
     task_reply = bool(comment_refs and (asked.get("refs") or {}).get("questions")
                       and comment_refs.get("task") == (asked.get("refs") or {}).get("task"))
     if (asked.get("refs") or {}).get("questions") and asked["sender_id"] == actor:
@@ -3596,6 +3733,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
         refuse(conn, actor, "identity", f"{message_id} was not addressed to {actor}")
     path_mentioned(conn, actor, "reply", body if classify_text is None else classify_text, (comment_refs or {}).get("task"))
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
+    body, refs = answer_text(asked, body if classify_text is None else classify_text, text=body, refs=refs)
     if unknown:
         refs["unknown"] = True
     if turn_id:
@@ -3620,10 +3758,10 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
                                                               "task_id": about}, actor, revision=0)
     if about and asked["sender_id"] == "bot:goal-manager" and is_human(actor):
         from . import strategy_merge
-        strategy_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
+        strategy_merge.on_reply(conn, actor, task(conn, about), body, text_sources=refs.get("body_sources", []))
     if about and is_human(actor):
         from . import ask_ingest
-        ask_ingest.on_reply(conn, actor, about, body)     # repeats the ask filter merged here hear the answer too
+        ask_ingest.on_reply(conn, actor, about, body, text_sources=refs.get("body_sources", []))
     return msg
 
 
@@ -3801,6 +3939,17 @@ def task_private_readable(conn, actor, row):
     if not row:
         return False
     row = dict(row)
+    from . import counsel, teammate_access
+    copied = counsel.page_copies(conn).get(row["id"])
+    if copied and (not copied["removed"] or copied["page"]["state"] == "deleted"):
+        # Native hub connections autocommit. A read gate must not leave their later writes in a new transaction.
+        outside = not conn.in_transaction
+        try:
+            if not counsel.page_copy_readable(conn, copied, teammate_access._viewer_for(conn, actor)):
+                return False
+        finally:
+            if outside and conn.in_transaction:
+                conn.rollback()
     if not task_private(conn, row):
         return True
     if "owner_id" not in row or "requester_id" not in row:
@@ -3812,6 +3961,9 @@ def task_private_readable(conn, actor, row):
     from .task_rights import private_subjects
     inherited = private_subjects(conn, actor)
     if any(row[k] in inherited for k in ("owner_id", "requester_id")):
+        return True
+    from .meeting_audience import participant_tasks
+    if row['id'] in participant_tasks(conn, actor):
         return True
     if "guest" not in row:
         row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
@@ -5040,7 +5192,7 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     `wake_once` arms (True) or disarms (False) one wake on a pull request link: the next time its checks
     finish, it gets an approving or change-requesting review, or a release ships it, the task's owner hears
     once, in the task's conversation. It never changes the task's status (`github.py`)."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -5062,9 +5214,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if kind == "pr" and match:
         # GitHub treats owner and repository names case-insensitively, so one pull request is one link.
         # A duplicate made before this matched by exact URL stays reachable through its own URL.
-        have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
-                          "ORDER BY url=? DESC, created_at LIMIT 1",
-                    (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url))
+        from . import pr_identity as PR
+        candidates = _rows(conn.execute(
+            "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
+            "ORDER BY url=? DESC, created_at",
+            (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url)))
+        have = next((p for p in candidates if PR.same(p, url)), None)
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
@@ -5292,7 +5447,7 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
 
 @private_task_write
 def task_unlink(conn, actor, task_id, link_id, mover=None):
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -5300,7 +5455,8 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
     if not have:
         refuse(conn, actor, "not-found", f"no link {link_id} on {task_id}")
     _task_link_allowed(conn, actor, row, mover, have["kind"])
-    if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail' in have:
+    from .worktrees import retired
+    if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail' in have and not retired(conn, have.get('computer_id')):
         detail = json.loads(have.get('detail') or '{}')
         detail['delete_requested'] = True
         detail.pop('restore_on_reopen', None)
@@ -5333,6 +5489,7 @@ def task_ancestor_party(conn, actor, row):
 
 
 def _task_parent(conn, actor, task_id, parent_id):
+    _writer(conn, actor, task_id=parent_id)
     parent = task(conn, parent_id)
     if not parent:
         refuse(conn, actor, "not-found", f"no task {parent_id} to file this under")
@@ -5488,12 +5645,13 @@ CHECK_MODEL_SQL = ("SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task
                    "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner_id=?")
 
 
-def _subtask_result_parent(conn, row):
-    """The bot-owned parent allowed to receive this child's result, without widening its readers."""
+def _subtask_result_parent(conn, row, *, bot_only=True):
+    """The parent allowed to receive this child's result, without widening its readers."""
     parent = task(conn, TR.parent_of(conn, row["id"]) or "")
-    if not parent or not is_bot(parent["owner_id"]):
+    if not parent or bot_only and not is_bot(parent["owner_id"]):
         return None
-    if not bot_reads_task(conn, parent["owner_id"], parent) or not task_private_readable(conn, parent["owner_id"], row):
+    if ((is_bot(parent["owner_id"]) and not bot_reads_task(conn, parent["owner_id"], parent))
+            or not task_private_readable(conn, parent["owner_id"], row)):
         return None
     if task_private(conn, row) and (not task_private(conn, parent) or not all(
             task_private_readable(conn, who, row) for who in (parent["owner_id"], parent["requester_id"]) if who)
@@ -5606,8 +5764,9 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     if resume_hint:
         text = ("Subtask result returned to this task's session. Continue this task here; the result needs "
                 "no relay, separate delivery turn or task run command.\n\n" + text)
-    _wake(conn, parent, parent["owner_id"], text, refs=refs, source=source or row["id"],
-          quiet_bots=silent, quiet=silent)
+    verdict_moves.forward(conn, parent, parent["owner_id"], text, refs,
+                          sources=[*(moved or {}).get("source_tasks", []), row["id"]], source=source,
+                          quiet_bots=silent, quiet=silent)
 
 
 def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
@@ -5691,7 +5850,8 @@ def _private_followups(conn, task_id):
 
 
 def task_links(conn, task_id):
-    return [_with_thread(link) for link in _rows(conn.execute(
+    from .worktrees import statuses
+    return [_with_thread(link) for link in statuses(conn, conn.execute(
         "SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))]
 
 
@@ -5706,14 +5866,27 @@ def bot_reads_task(conn, bot, row):
     return reads(conn, bot, row)
 
 
-def task_ask_recipient(conn, actor, row, ask):
+def task_ask_route(conn, actor, row, ask=None):
+    """One destination and its refs for task questions, including the system's real recipient."""
     directing = actor == row["requester_id"] or (
         actor not in (row["owner_id"], row["requester_id"]) and task_participant(conn, actor, row))
-    target = ask.get("who") or (row["owner_id"] if directing else row["requester_id"])
+    target = row["requester_id"] if ask is None else (
+        ask.get("who") or (row["owner_id"] if directing else row["requester_id"]))
     target = resolve_actor(conn, target)
-    if task_private(conn, row) and target not in (row["owner_id"], row["requester_id"]):
-        refuse(conn, actor, "private", "Only the requester and assignee can receive private task questions")
-    return target
+    from . import ask_routing
+    refs = {"task": row["id"], **(ask or {})}
+    if ask is not None:
+        refs["who"] = ask.get("who")
+    target, refs = ask_routing.resolve(conn, actor, target, refs, row["conversation_id"])
+    if task_private(conn, row) and (is_human(target) or is_bot(target)):
+        from .auth import actor_reads_task
+        if not actor_reads_task(conn, target, row):
+            refuse(conn, actor, "private", "Only someone who can read the task can receive its questions")
+    return target, refs
+
+
+def task_ask_recipient(conn, actor, row, ask):
+    return task_ask_route(conn, actor, row, ask)[0]
 
 
 @private_task_write
@@ -5721,7 +5894,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     """A comment on a task: one message in the task's conversation, tagged with the task, from
     whoever wrote it. It wakes the bot on the other side of the task when `wake` (a mover, the
     owner or the requester left it); otherwise it is saved for the bot's next turn on the task."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -5744,9 +5917,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if not conv:
         refuse(conn, actor, "not-found", f"task {task_id} has no conversation")
     if ask:
-        target = task_ask_recipient(conn, actor, row, ask)
-        refs.update(ask)
-        refs["who"] = ask.get("who")
+        target, routed = task_ask_route(conn, actor, row, {**refs, **ask})
+        refs.update(routed)
     if answer_to:
         # The answer goes back to the bot that asked, which may be neither the owner nor the requester.
         asker = (message(conn, answer_to) or {}).get("sender_id")
@@ -5785,10 +5957,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if is_human(actor) and row["owner_id"] == "bot:goal-manager":
         from . import strategy_merge
         # a person's answer to the Strategy Bot's merged item goes to each asker
-        strategy_merge.on_reply(conn, actor, row, text)
+        strategy_merge.on_reply(conn, actor, row, text, text_sources=refs.get("body_sources", []))
     if is_human(actor):
         from . import ask_ingest
-        ask_ingest.on_reply(conn, actor, task_id, text)     # repeats the ask filter merged here hear the answer too
+        ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
     return msg
 
 
@@ -5966,6 +6138,9 @@ def task_comments(conn, task_id, *, actor=None):
         if message_task_id(m, conv) == task_id and m.get("kind") in ("say", "ask", "answer"):
             if actor is not None and not privacy.message_readable(conn, actor, m, current=True):
                 continue
+            if m["kind"] == "ask" and m["refs"].get("rerouted_from"):
+                from . import ask_routing
+                m["rerouted"] = ask_routing.notice(conn, m)
             if m["kind"] == "ask" and m["refs"].get("questions"):
                 m["ask"] = {**{k: m["refs"].get(k) for k in ("questions", "who")}, "by": m["sender_id"]}
                 m["answers"] = review_answers(conn, m["id"], actor=actor)
@@ -6129,7 +6304,7 @@ def _refresh_comment_replies(conn, msg):
 
 def _own_comment(conn, actor, task_id, message_id):
     """The live comment `message_id` on this task, when `actor` wrote it; refused otherwise."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     readable = globals().get("task_private_readable")
     if row and row.get("private") and (not readable or not readable(conn, actor, row)):
@@ -6143,6 +6318,7 @@ def _own_comment(conn, actor, task_id, message_id):
                                     + ("; settle your open question with hub task ask-resolve" if msg.get("kind") == "ask" else ""))
     if msg["sender_id"] != actor:
         refuse(conn, actor, "identity", f"{actor_name(conn, msg['sender_id'])} wrote this comment; only they change it")
+    _message_writer(conn, actor, msg, conversation(conn, msg["conversation_id"]))
     return msg
 
 
@@ -6206,7 +6382,7 @@ ASK_QUOTE_MAX = 4000        # a quoted answer is what the person said, not a doc
 
 
 @private_task_write
-def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False):
+def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False, text_sources=()):
     """Settle an open question on a task that was answered somewhere else, or is no longer wanted.
 
     With `quote`, the person's words from where they answered (a chat, a call): the question's asker, or the task's
@@ -6216,7 +6392,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
 
     `relay` is the Strategy Bot passing on the answer a person gave once for several bots (backend/strategy_merge.py),
     never a route: the Strategy Bot records it on a task that is not its own, and the asker wakes to it."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -6224,6 +6400,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
     asked = comment_on(conn, row, message_id)
     if not asked or asked.get("deleted_at") or asked.get("kind") != "ask":
         refuse(conn, actor, "not-found", f"no question {message_id} on task {task_id}")
+    _message_writer(conn, actor, asked, conversation(conn, asked["conversation_id"]))
     asker, person = asked["sender_id"], asked["recipient_id"]
     if quote is None and not task_represents(conn, actor, asker):
         refuse(conn, actor, "identity", f"{actor_name(conn, asker)} asked this question; only they or their managers withdraw it")
@@ -6251,15 +6428,18 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
                 "quoted": True, "for": person}
         if relay:
             del refs["quiet"]
+        _, refs = sourced_text(quote, text_sources, refs)
+        text, refs = answer_text(asked, quote, text=f'{name(person)} (quoted by {name(actor)}): "{quote}"', refs=refs)
         if asked["refs"].get("questions"):
             # Read as any other structured answer (`task_answers`): the person's words are its free text.
             refs["answer"] = {"target": {"comment": message_id}, "other": quote, "dismiss": False,
                               "answers": {q["id"]: [] for q in asked["refs"]["questions"]},
                               "by": person, "quoted_by": actor, "at": ts, "quoted": True}
+            _, refs["answer"] = sourced_text(quote, refs.get("body_sources", []), refs["answer"])
         # The answer is the person's words, recorded by `actor`. A bot that asked hears it on its next turn (its inbox)
         # when someone else recorded it; an asker recording its own, or the keeper, needs no message.
         own = actor == asker or not is_bot(asker)
-        reply = _write_message(conn, actor, asker, f'{name(person)} (quoted by {name(actor)}): "{quote}"',
+        reply = _write_message(conn, actor, asker, text,
                                conversation(conn, asked["conversation_id"]), "answer", refs, message_id, None,
                                delivered_at=ts if own else None, read_at=ts if own else None)
     _task_event(conn, task_id, actor, "ask", message_id, "answered" if reply else "withdrawn")
@@ -6329,10 +6509,6 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent and review_gate.is_review(conn, parent, title):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
-    if parent:
-        review_gate.refuse_second(conn, actor, parent, title, review_prs)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -6357,10 +6533,17 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if visibility == 'public' and not public_title and not private:
         refuse(conn, actor, 'lint', 'Write a public title to publish this task; its internal title and body stay private')
     if requester_actor is not None:
-        # Only the server supplies a verified human origin for a bot's own work.
-        if not is_human(requester_actor) or target != actor or not human(conn, requester_actor):
+        # The keeper may attribute server-filed work to a person; a bot may attribute only its own verified work.
+        if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    if parent:
+        audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "guest": None}
+        body = review_gate.bind_prs(conn, actor, parent, title, body, child=audience)
+        if review_gate.is_review(conn, parent, title):
+            review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner,
+                              prs=review_gate.request_prs(conn, parent, title, body))
+        review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     title = str(title or "").strip()
     body = str(body or "")
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
@@ -6662,7 +6845,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
     """
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -7232,6 +7415,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, verdict_moves.skip, after)
         else:
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
+    elif row.get("blocked_since") and not after.get("blocked_since"):
+        from . import check_pools, verdict_moves
+        check_pools.safely(conn, verdict_moves.resumed, task_id)
     from . import task_check_backs
     task_check_backs.ensure(conn, after)
     if check_back_at is not None or check_back_note is not None:
@@ -7560,7 +7746,7 @@ def _check_task_close(conn, actor, row, note, mover=None, step=None, type=None, 
     """All close authority and state checks, shared by direct closes and descendant preflight."""
     token = CLOSE_PROBE.set(CLOSE_PROBE.get() or check_only)
     try:
-        _writer(conn, actor)
+        _writer(conn, actor, task_id=row["id"])
         _task_close_allowed(conn, actor, row, note, mover, step, type)
         return _task_state(conn, actor, row, status="closed", type=type, step=step)
     finally:
@@ -7669,7 +7855,7 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     is not acceptance. `mover` says whether a person may move any task (the caller knows the environment owner).
     Open descendants close with it. `with_parent` names the ancestor whose finish closes this task; that
     ancestor handles the rest of the tree, and its parties hear about the subtasks in its own notice."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -7827,10 +8013,10 @@ def wait_detail(conn, row, *, children=True):
     return None
 
 
-def task_ask(conn, actor, task_id, body, park=True):
+def task_ask(conn, actor, task_id, body, park=True, *, route=None):
     """Rule 5's one clarifying question: the owner gets one ask before an answer comes back. `park` False leaves the
     task's status as it is (a question ask ingest sends back, backend/ask_ingest.py)."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -7842,8 +8028,8 @@ def task_ask(conn, actor, task_id, body, park=True):
         if unanswered:
             refuse(conn, actor, "one-question",
                    "you already asked about this task; wait for the answer")
-    msg = say(conn, actor, row["requester_id"], body, conversation_id=row["conversation_id"],
-              kind="ask", refs={"task": task_id})
+    target, refs = route if route is not None else task_ask_route(conn, actor, row)
+    msg = say(conn, actor, target, body, conversation_id=row["conversation_id"], kind="ask", refs=refs)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))     # its question is part of it
     if park and row["status"] in ("open", "doing", "review"):
         task_update(conn, actor, task_id, status="waiting")
@@ -8186,7 +8372,8 @@ def next_run_tasks(conn, bot, exclude=None):
     """The next-run tasks waiting for `bot` (a slug), oldest first."""
     return _rows(conn.execute(
         f"SELECT t.* FROM {TASKS} t WHERE t.owner_id=? AND t.id IS NOT ? AND {NEXT_RUN_WAITING_SQL} "
-        "ORDER BY t.created_at,t.id", ("bot:" + bot, exclude)))
+        "AND NOT EXISTS(SELECT 1 FROM quarantine_holds qh WHERE qh.bot_id=? AND qh.task_id=t.id "
+        "AND qh.released_at IS NULL) ORDER BY t.created_at,t.id", ("bot:" + bot, exclude, bot)))
 
 
 def chunks(values, size=500):
@@ -8511,7 +8698,7 @@ def task_run_now(conn, actor, task_id):
     run of its own, as the task it is ("Run now" used to send a chat message
     in the person's name, so the run read as a chat and hid the task's own text). Returns (task, queued):
     queued is False when a run for this task was already waiting, so none is added."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -8598,6 +8785,10 @@ def note_cancel(conn, actor, note_id, human=False):
         refuse(conn, actor, "not-found", f"no note {note_id}")
     if actor != row["from_actor"] and not human and not is_human(actor):
         refuse(conn, actor, "note", f"{actor_name(conn, row['from_actor'])} left this note; only they or a person take it back")
+    if row.get("message_id"):
+        msg = message(conn, row["message_id"])
+        if msg:
+            _message_writer(conn, actor, msg, conversation(conn, msg["conversation_id"]))
     if row["canceled_at"]:
         return row
     if not note_waiting(conn, row):
@@ -8607,12 +8798,15 @@ def note_cancel(conn, actor, note_id, human=False):
     return note(conn, note_id)
 
 
-def notes_waiting(conn, bot, limit=50):
+def notes_waiting(conn, bot, limit=50, *, unheld=False):
     """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
     (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too."""
+    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too.
+    `unheld` selects notes deliverable now; the full pending list and its counts keep quarantined sources."""
+    from . import task_quarantine
+    available = " AND " + task_quarantine.notes_free_sql() if unheld else ""
     return _rows(conn.execute(
-        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} "
+        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL}{available} "
         f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?", ("bot:" + bot, KEEPER, limit)))
 
 
@@ -8752,7 +8946,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
 
     A request replaces the asker's older undecided one it names (`supersedes`), and any it has open on the same task
     for the same target (APPROVAL_TARGET): a re-cut release or a redrafted email is the same decision, asked again."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     if kind not in APPROVAL_KINDS:
         refuse(conn, actor, "kind", f"an approval is {'|'.join(APPROVAL_KINDS)}, not {kind}")
     text = json.dumps(payload, sort_keys=True, default=str)
@@ -8775,6 +8969,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         named = approval(conn, supersedes)
         if not named or named["requested_by_id"] != actor:
             refuse(conn, actor, "not-found", f"you have no approval {supersedes} to replace")
+        _writer(conn, actor, task_id=named["task_id"])
         if named["decision"] == "approved" and not named["consumed_at"]:
             # Withdrawing only the undecided would leave the old yes spendable next to the new ask.
             refuse(conn, actor, "lint", f"{supersedes} is already approved and not spent; use it, or ask on its "
@@ -8823,7 +9018,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
     return approval(conn, row["id"])
 
 
-def approval_decide(conn, actor, approval_id, decision, note=""):
+def approval_decide(conn, actor, approval_id, decision, note="", *, note_sources=()):
     """Rule 6. Only a human decides, and only once."""
     _writer(conn, actor)
     if not is_human(actor):
@@ -8842,7 +9037,8 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
     conn.execute("UPDATE approvals SET decision=?, decided_by_id=?, decided_at=?, decided_via=?, decided_for=? "
                  "WHERE id=?", (decision, actor, ts, "assistant" if delegated else None,
                                 _dump(delegated) if delegated else None, approval_id))
-    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note})
+    note, provenance = sourced_text(note, note_sources)
+    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note, **provenance})
     after = approval(conn, approval_id)
     if row.get("task_id"):
         from . import task_holds
@@ -8850,9 +9046,10 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
     if conv:
+        text, refs = sourced_text(f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
+                                  note_sources, {"approval": approval_id})
         _write_message(conn, KEEPER, row["requested_by_id"],
-                       f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
-                       conv, "notice", {"approval": approval_id}, None, None)
+                       text, conv, "notice", refs, None, None)
     _recount(conn, row["requested_by_id"])
     hook(conn, "approval.decided", approval_id, lambda: {**_approval_facts(row), "decision": decision, "decided_by_id": actor},
          actor, revision=decision)
@@ -8865,6 +9062,7 @@ def approval_consume(conn, actor, approval_id):
     row = approval(conn, approval_id)
     if not row:
         refuse(conn, actor, "not-found", f"no approval {approval_id}")
+    _writer(conn, actor, task_id=row["task_id"])
     if row["decision"] != "approved":
         refuse(conn, actor, "kind", f"{approval_id} is {row['decision'] or 'undecided'}, not approved")
     if row["consumed_at"]:
@@ -8883,7 +9081,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     `state="active"` is how a human clears a quarantine (deviation 5): it sets `bots.state`
     and leaves the live status `idle`.
     """
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if not bot(conn, slug):
         refuse(conn, actor, "not-found", f"no bot {slug}")
@@ -8902,6 +9100,9 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if quarantined and state == "active":
         event(conn, actor, "quarantine.lifted", bot_actor(slug), {"reason": reason})
         quarantine_lifted_note(conn, slug)
+    if state == "active" and (quarantined or is_human(actor) or lifting and actor != bot_actor(slug)):
+        from . import task_quarantine
+        task_quarantine.release(conn, actor, bot=slug)
     if quarantined and state not in ("active", "quarantined"):
         # Lease expiry and completion are routine keeper updates. Neither can clear or mask
         # the human review required by quarantine.
@@ -8909,6 +9110,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         focus = None
     ts = now()
     old = _one(conn, "SELECT * FROM bot_status WHERE bot=?", (slug,))
+    _writer(conn, actor, task_id=task_id if task_id is not None else (old or {}).get("task_id"))
     if old:
         conn.execute("INSERT INTO bot_status_history (id, bot, state, focus, task_id, started_at, ended_at, "
                      "reason, by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -9278,7 +9480,7 @@ def conversations_for(conn, actor, limit=100):
 
 
 def chats_with(conn, actor, bot_actor_id):
-    """The open chats (not task threads) that this actor and this bot are both in, newest first.
+    """The actor's open chat with this bot, or its readable Home after the bot's chats move, newest first.
     Found directly, not from the newest conversations: a bot's page opened a month after the last
     message still finds its chat (conversations_for scans a recent window only)."""
     out = []
@@ -9288,6 +9490,15 @@ def chats_with(conn, actor, bot_actor_id):
         row["participants"] = _json(row.get("participants"), []) or []
         if actor in row["participants"] and bot_actor_id in row["participants"]:
             out.append(row)
+    from . import bot_home_merge
+    home_id = bot_home_merge.home_for_chat(conn, actor, bot_actor_id, create=False)
+    if home_id:
+        home = _one(conn, "SELECT * FROM conversations WHERE id=?", (home_id,))
+        if home and all(row["id"] != home_id for row in out):
+            home["participants"] = _json(home.get("participants"), []) or []
+            out.append(home)
+            out.sort(key=lambda row: (row.get("last_message_at") or row.get("created_at") or "", row["id"]),
+                     reverse=True)
     return out
 
 
@@ -9365,6 +9576,9 @@ def message_view(conn, row):
     if row:
         row = dict(row)
         row["refs"] = _json(row.get("refs"), {}) or {}
+        if row["kind"] == "ask" and row["refs"].get("rerouted_from"):
+            from . import ask_routing
+            row["rerouted"] = ask_routing.notice(conn, row)
         if row["kind"] == "ask" and row["refs"].get("questions"):
             row["ask"] = {k: row["refs"].get(k) for k in ("questions", "who")}
             row["answers"] = review_answers(conn, row["id"])
@@ -9738,8 +9952,9 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
                              key=lambda row: (-sum(v for k, v in row.items() if k != "actor"), row["actor"]))}
 
 
-def task_history(conn, task_id):
-    return _rows(conn.execute(f"SELECT {TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
+def task_history(conn, task_id, *, provenance=False):
+    columns = TASK_EVENT_COLUMNS + (", data" if provenance else "")
+    return _rows(conn.execute(f"SELECT {columns} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
 
 
 def unanswered_ask(conn, task_row, *, actor=None):

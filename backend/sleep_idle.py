@@ -59,7 +59,8 @@ STREAM = "/api/v2/events"        # an open stream says nothing about a person be
 # Outgoing sends: a row waiting for its next try (`next_attempt_at`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
 SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
-         "webhook_sends": "state IN ('ready')"}
+         "webhook_sends": "state IN ('ready')",
+         "personal_alerts": "state='pending'"}
 NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
 now = time.time                  # tests' controlled clock
@@ -159,6 +160,9 @@ def routine_times(c, at):
     if table(c, "maintenance_runs") and (due := maintenance.next_due(c, when)) is not None:
         out.append(due.timestamp())
     out.extend(later_sends(c, at))
+    if table(c, "alert_preferences"):
+        from . import personal_alerts
+        out.extend(personal_alerts.future_deadlines(c, at))
     # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
     from . import delivery
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
@@ -186,7 +190,7 @@ def fixed_times(c, when):
         last = SR.last_started(c, list(SR.CONTROLS))
         for key, cfg in SR.config(c).items():
             if cfg["on"] and cfg["preset"] == SR.DAILY:
-                found = SR.next_night(c, cfg, when, key) if key in SR.NIGHT_CLAIMS else SR.next_due(cfg, last.get(key), when)
+                found = SR.next_due(cfg, last.get(key), when)
                 if found:
                     out.append(found.timestamp())
     except Exception:

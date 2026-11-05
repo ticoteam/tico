@@ -51,6 +51,8 @@ pub struct Runner {
     pub active: Mutex<HashSet<String>>,
     /// Workers preparing or running, including one whose lease lapsed while its process still runs.
     pub places: Mutex<HashSet<String>>,
+    /// Fresh Linux memory readings hold preparation at 85% until below 80%, independently of diagnostics.
+    pub(crate) memory_hold: Mutex<bool>,
     /// One push or history publish at a time on this computer.
     pub push_lock: tokio::sync::Mutex<()>,
     pub sign_in: crate::signin::SignIn,
@@ -156,6 +158,7 @@ impl Runner {
             socket: None,
             active: Mutex::new(HashSet::new()),
             places: Mutex::new(HashSet::new()),
+            memory_hold: Mutex::new(false),
             push_lock: tokio::sync::Mutex::new(()),
             sign_in: crate::signin::SignIn::new(&projects_dir),
             publish_notes: Mutex::new(HashMap::new()),
@@ -479,6 +482,7 @@ impl Runner {
             "mail_agent_instructions": readiness::mail_agent_instructions(&self.config, &assignments),
             "agent_instructions": agent_instructions,
         });
+        crate::device_id::report(&mut body);
         crate::readiness_extra::extend(&mut body["readiness"], &runtimes, &checks, &notes, &self.client, hosted).await;
         if let Some(follower) = crate::follow::shared() {
             // The server's release (the stream's word, else asked), and where this runner stands on it.
@@ -996,6 +1000,7 @@ impl Runner {
             if follower.blocks_claims(!workers.is_empty()).await {
                 return Ok(()); // an update is due or under way: the updater restarts this runner once nothing runs
             }
+            if !follower.draining() { self.drain.end(); } // a timed-out drain can release claims in this tick
         }
         // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
         let assignments = self.assignments_seen();
@@ -1069,6 +1074,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_runner_checks_in_with_a_server_from_before_isolation_reports_and_still_claims_work() {
         let (url, seen) = crate::client::tests::serve(vec![
+            (422, r#"{"error":{"code":"validation","detail":"body.device_id: Extra inputs are not permitted"}}"#),
             (422, BEFORE_ISOLATED),
             (200, r#"{"ok": true}"#),
             (200, r#"{"attempt": {"id": "att-1", "bot": "ops"}}"#),
@@ -1080,19 +1086,21 @@ mod tests {
         let config = Config::load(&path).unwrap();
         let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
-        let mut body = json!({"version": "test", "platform": "linux", "readiness": {"schema_version": 1, "isolated": true,
+        let mut body = json!({"version": "test", "platform": "linux", "device_id": "a".repeat(64), "readiness": {"schema_version": 1, "isolated": true,
                               "runtimes": {"pi": {"installed": true}}, "bots": {"ops": {"ready": true}}}});
         let (beat, tries) = runner.post_heartbeat(&mut body).await;
+        crate::lanes::release("device_id");
         crate::lanes::release("readiness.isolated");
-        assert_eq!((beat.is_ok(), tries), (true, 2));
+        assert_eq!((beat.is_ok(), tries), (true, 3));
         let claimed = runner.claim_next().await.unwrap();
         assert_eq!(claimed.attempt.unwrap()["id"], "att-1");
         let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("device_id") && !seen[1].contains("device_id"));
         assert!(seen[0].contains("\"isolated\":true"), "{}", seen[0]);
         // The same check-in again, less the one field the older server doesn't know: then the claim.
-        assert!(seen[1].starts_with("POST /api/v2/runners/heartbeat") && !seen[1].contains("isolated"), "{}", seen[1]);
-        assert!(seen[1].contains("\"ops\":{\"ready\":true}") && seen[1].contains("\"pi\":{\"installed\":true}"), "{}", seen[1]);
-        assert!(seen[2].starts_with("POST /api/v2/jobs/claim"), "{}", seen[2]);
+        assert!(seen[2].starts_with("POST /api/v2/runners/heartbeat") && !seen[2].contains("isolated"), "{}", seen[2]);
+        assert!(seen[2].contains("\"ops\":{\"ready\":true}") && seen[2].contains("\"pi\":{\"installed\":true}"), "{}", seen[2]);
+        assert!(seen[3].starts_with("POST /api/v2/jobs/claim"), "{}", seen[3]);
     }
 
     #[tokio::test]

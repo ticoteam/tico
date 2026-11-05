@@ -14,7 +14,7 @@ class Review(M.Contract):
     private: StrictBool | None = None
     # A bot to hand the meeting to once it is shared, as Send does ("auto" routes it).
     send_to: str | None = Field(default=None, min_length=1, max_length=200)
-    # Who may read it once shared: the Team, or only its participants (media.participants_only). Older Ticos refuse
+    # Who may read it once shared: the Team, or only its participants. Older Ticos refuse
     # the field, so a recorder asking for participants only never shares it wider by mistake.
     audience: Literal['team', 'participants', 'private'] | None = None
 
@@ -102,7 +102,7 @@ def install_meeting_review(app, store, auth, mutate):
         target = {'approve': 'live', 'dismiss': 'dismissed', 'restore': 'pending'}[action]
         if meta['review_state'] == target:
             # Approving again with another audience (the Recorder retrying a Save) re-files it for that audience.
-            current = meta.get('audience') or ('private' if meta.get('private') else 'team')
+            current = media.effective_audience(meta)
             # Without an audience (an older Recorder), private:false means the Team; private:true only narrows a
             # Team meeting, so it never undoes Participants only.
             wanted = audience or ('team' if private is False else 'private' if private and current == 'team' else None)
@@ -119,11 +119,14 @@ def install_meeting_review(app, store, auth, mutate):
                 c.execute('UPDATE media_control SET version=version+1 WHERE meeting_id=?', (rid,))
                 H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action, 'audience': audience})
             return media.view(c, who, rid, auth=auth)
+
         meta['review_state'] = target
         if action == 'approve':
             meta['reviewed_at'] = H.now()
         if action == 'approve' and private is not None:
             meta['private'] = private
+            if private is False and audience is None:
+                audience = 'team'
         if action == 'approve':
             set_audience(c, who, rid, record, meta, audience)
         media.save(c, meta, readable=record['transcript_readable'])

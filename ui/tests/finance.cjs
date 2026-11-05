@@ -315,7 +315,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
       ? json({accounts: [{id: 'm1', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000}, {id: 'm2', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000}],
         currency: 'USD', view_version: 'v1'}) : denied();
-    // The bills address: only an Email & Phone inbox's address has an inbox; any other is kept with inbox_id null.
+    // The bills address: only a Tico address has an inbox; any other is kept with inbox_id null.
     if (p === '/api/v2/finance/bills-address' && method === 'PUT') {
       if (body.address === 'nope@acme.example') return denied();
       billsEmail = body.address;

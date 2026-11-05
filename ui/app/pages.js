@@ -19,10 +19,12 @@ const pageBotName = x => {
   return bot && botRow(bot) ? botDisplayName(bot) : x.bot_name || bot || '';
 };
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
+const pageLockHTML = p => p.restricted ? '<span class="nav-icon pg-lock" aria-label="Restricted">lock</span> ' : '';
 function pageStatusHTML(p, {link = true} = {}) {
+  const lock = pageLockHTML(p);
   if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
-    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
+    return `<div class="pg-status pg-replaced">${lock}Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
   }
   const stale = Number.isInteger(p.stale_days);
   const by = String(p.updated_by || '');
@@ -32,7 +34,7 @@ function pageStatusHTML(p, {link = true} = {}) {
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
   if (p.cadence && p.cadence !== 'none') parts.push(esc(p.cadence));
   if (p.as_of) parts.push('data from ' + esc(pageDay(p.as_of)));
-  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${parts.join(' · ')}</div>`;
+  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${lock}${parts.join(' · ')}</div>`;
 }
 
 // ----------------------------------------------------------------- the card
@@ -127,9 +129,41 @@ function pageFullDraw(state) {
   const root = $('#pg-view');
   if (!root) return;
   const pinned = state.pinned.map(x => `<a href="${esc(pagePlaceHref(x.place))}">${esc(x.label)}</a>`).join(' · ');
-  root.innerHTML = `<header class="pg-head"></header><div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
+  root.innerHTML = `<header class="pg-head"></header>${state.can.manage ? `<div class="pg-access"><span>Who can see it</span><button class="ghost" type="button" data-pg-audience>${esc(pagesAudienceText(state.page.audience))}</button></div>` : ''}<div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
   pageFullHead(state);
+  const access = root.querySelector('[data-pg-audience]');
+  if (access) access.onclick = () => void pagesEditAudience(state);
   pageFullBody(state);
+}
+const pagesAudienceText = audience => !audience || audience.everyone ? "Everyone who can see where it's filed" : accessLevelText(audience);
+async function pagesEditAudience(state) {
+  try {
+    const result = await get('/v2/groups');
+    const level = state.page.audience || accessEveryone();
+    await accessEditor({name: state.page.title, singleAudience: true,
+      initialData: {see: level, read: level, write: level, teams: Array.isArray(result) ? result : result.groups || []},
+      save: audience => patch('/v2/pages/' + encodeURIComponent(state.id), {audience: audience.everyone ? null : audience}),
+      after: saved => { if (PG === state) { state.page = saved.page; pageFullDraw(state); } }});
+  } catch (error) { toast(error.message, true); }
+}
+function pagesAccessRefresh() {
+  getForget();
+  // Remove the held content immediately; each open surface reads again with current permissions.
+  document.querySelectorAll('.pg-card, .vcard[data-kind="page"]').forEach(card => card.remove());
+  for (const entry of VIEW_FILES.values()) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    else entry.promise.then(item => URL.revokeObjectURL(item.url)).catch(() => {});
+  }
+  VIEW_FILES.clear();
+  if (VIEW?.items.some(item => item.fileId && item.kind === 'html')) $('#doc-viewer')?.close();
+  if (PG) void pageFullView(PG.id);
+  if (LF) void lfLoad();
+  if (TASK_CHAT) {
+    const dialog = TASK_CHAT.dialog;
+    if (dialog.tpEl) { dialog.tpEl.tpCards = new Map(); void taskPagesLoad(dialog); }
+    taskChatLive(TASK_CHAT);
+  }
+  if (!PG && !LF && !TASK_CHAT) void route();
 }
 // A pin's place (backend/cards.py) as the app's address.
 function pagePlaceHref(place) {
@@ -162,7 +196,7 @@ async function pageFullBody(state) {
   if (current && card.querySelector('iframe')) { body.replaceChildren(card); return; }
   card.querySelector('.pg-open')?.remove();
   delete card.pageData;                         // this view draws its own frame again (nativeVisualRepaint)
-  if (!current) card.querySelector('.pg-status').textContent = `v${state.shown} · an older version`;
+  if (!current) card.querySelector('.pg-status').innerHTML = pageLockHTML(p) + `v${state.shown} · an older version`;
   const box = document.createElement('div');
   box.className = 'pg-box pg-preview';
   box.innerHTML = skelRows(4);

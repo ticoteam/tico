@@ -23,6 +23,7 @@ function taskDialogWire(d) {
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
+    taskLiveStop(d);
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -65,7 +66,7 @@ async function taskModalOpen(key, d) {
   }
   if (!it) return;
   if (it.kind === 'schedule') {
-    const d = taskModal();
+    const d = taskModal(); taskLiveStop(d);
     d.innerHTML = `<h2>${esc(it.title)}</h2><p>Scheduled for ${esc(fmt(it.schedule.next))}</p><button data-modal-close>Close</button>`;
     $('[data-modal-close]', d).onclick = () => d.close();
     if (!d.open) d.showModal();
@@ -73,7 +74,7 @@ async function taskModalOpen(key, d) {
   }
   if (it.kind === 'issue') {
     taskChatStop();
-    const d = taskModal();
+    const d = taskModal(); taskLiveStop(d);
     d.innerHTML = issueModalHTML(it.issue);
     $('[data-modal-close]', d).onclick = () => d.close();
     d.querySelectorAll('[data-modal-issue]').forEach(b => {
@@ -95,14 +96,15 @@ function taskModalRunsKeep(d, keep) {
 async function taskModalShow(task, d = taskModal(), opts = {}) {
   TASK_MODAL_LOAD++;
   if (!d) d = taskModal();
-  const peek = !!d.dataset.peek;
+  const peek = !!d.dataset.peek, sameTask = d.open && String(d.dataset.task) === String(task.id);
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
+    taskLiveStop(d);
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
-  const opening = d.taskOpening;
+  const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
   // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
   // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
   // instead of "Loading the conversation…" and a fresh read every time something on the task is saved.
@@ -123,7 +125,6 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // never draw an older copy of the task over the newer one a save returned
   else if (d.liveTask && Number(task.version) < Number(d.liveTask.version)) task = d.liveTask;
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
-  const typing = d.contains(document.activeElement) && document.activeElement.matches('.task-chat textarea');
   if (peek && TASKS_ST && TASKS_ST.peek !== 't' + task.id && tasksById(TASKS_ST).has(String(task.id))) {
     taskPeekOpen(TASKS_ST, 't' + task.id, {via: 'link'}); return;   // a parent or subtask opened from the peek: the list follows it
   }
@@ -133,17 +134,19 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   if (onProp) d.focusProp = onProp;
   // The detail is asked for at once; the first draw waits only for the CLI's manifest (session copy commands need it
   // even when Tasks is the first page opened), read once.
-  const reading = Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
+  const reading = Promise.all([opts.detail || v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
   if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
   opening.pending = false;
   taskModalRunsKeep(d, kept);
+  taskLiveFocusKeep(d);
+  const keptForm = sameTask ? taskFormCapture(d) : {fields: [], folds: []};
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
-  adopt();
+  adopt(); taskFormAdopt(d, keptForm);
   taskModalBind(d, task);
-  taskPropFocus(d);
+  taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
   if (!d.open) {
     // The peek sits beside the list: opening it leaves the focus on the row, so ↑/↓ keep moving through the list.
     const was = document.activeElement;
@@ -159,7 +162,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     if (d.open && d.matches(':modal')) $(d.classList.contains('thread') ? '.tthread-title' : '.tmodal-title', d)?.focus({preventScroll: true});
   }
   if (!peek) document.body.classList.add('task-modal-open');
-  d.scrollTop = 0;
+  d.scrollTop = scroll;
   // the list knows the task; the detail adds its parts, its parent and the comments
   const [detail] = await reading;
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
@@ -179,17 +182,19 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     : a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
   askDraftCapture(d);
   taskModalRunsKeep(d, kept);
+  taskLiveFocusKeep(d);
+  const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
-  adopt();
+  adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
-  taskPropFocus(d); d.focusProp = '';
+  taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d); taskFormRestore(d, fullForm);
+  taskLiveEdited(d, detail); taskLiveStart(d); d.scrollTop = scroll;
   void taskRailLoad(d, full, detail);
   if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
-  if (typing) { const box = $('.task-chat textarea', d); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length); }
 }
 // A task's own thread: the full modal showing only its header and its conversation, so what is typed there is plainly
 // said in the task (POST /v2/tasks/{id}/comments), never in the bot's main chat. Back returns to the chat.
@@ -211,6 +216,7 @@ function taskModalBind(d, task, full = false) {
   taskMeetingsAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
+  taskLiveBind(d, task);
   d.dataset.version = String(task.version ?? '');
   if (!d.liveTask || String(d.liveTask.id) !== String(task.id) || Number(task.version) >= Number(d.liveTask.version)) d.liveTask = task;
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
@@ -617,7 +623,7 @@ function reconnectCardHTML(m) {
   } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
   return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
 }
-// Reconnect Google: the person's own Connect, as Settings > Inbox starts it (ui/google-connect.js).
+// Reconnect Google: the person's own Connect, as Settings > Inboxes starts it (ui/google-connect.js).
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('[data-reconnect-google]');
   if (!button) return;
@@ -880,8 +886,9 @@ async function taskChatRead(state) {
     if ([403, 404].includes(e.status)) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
+      if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
+      else if (TASKS_ST) void tasksLoad(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
       return;
     }
     if (e.status === 400) {state.stopped = true; clearInterval(state.poll); state.liveOff?.();}
@@ -903,7 +910,7 @@ async function taskChatLoad(id, dialog, data = null) {
     if (document.hidden || !taskChatCurrent(state)) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});     // a new file or version, or an answer on one, without reopening
-  }, 8000);
+  }, 180000);
   if (state.poll) return;
   // A change to the task itself reaches taskChatLive from the page's task events (ui/app/refresh.js); its comments
   // are messages in its conversation.
@@ -1062,6 +1069,8 @@ function hubModalHTML(t, it, opts = {}) {
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
+    <div class="task-edit-meta muted"><span data-task-edited></span><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
+    <div class="muted" data-task-edit-current hidden></div>
     ${taskBuilderNotices(taskBuilderActors(t))}
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
@@ -1071,8 +1080,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
       ${taskDeferredHTML(t)}
-      ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
-        : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
+      ${taskEditBodyHTML(t, original, waitText)}
       ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       <div class="tsecs">

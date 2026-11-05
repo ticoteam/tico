@@ -11,6 +11,75 @@ converts the row first (`dict(row)`) or annotates the parameter and lets callers
 from typing import TypedDict
 
 
+class PageIdentityRow(TypedDict):
+    """An alias keeps its page's read provenance after the bytes are purged."""
+    identity: str
+    file_id: str
+
+
+class AlertPreferenceRow(TypedDict):
+    person_id: str
+    phone: str | None
+    phone_version: str
+    verified_at: str | None
+    revocation_pending: int
+    stall_after: str
+    call_consent: int
+    urgent_needs: int
+    legal_mail: int
+    bot_stuck: int
+    urgent_calls: int
+    timezone: str
+    quiet_start: str
+    quiet_end: str
+    emergency_exception: int
+    monthly_cap: int
+    updated_at: str
+
+
+class AlertCompanySettingRow(TypedDict):
+    id: int
+    monthly_cap: int
+
+
+class PersonalAlertRow(TypedDict):
+    id: str
+    person_id: str
+    incident_key: str
+    kind: str
+    subject_id: str
+    emergency: int
+    phone_version: str
+    state: str
+    month: str | None
+    reserved: int
+    send_id: str | None
+    channel: str | None
+    error: str
+    created_at: str
+    attempted_at: str | None
+    next_attempt_at: str | None
+
+
+class PostalMailGrantRow(TypedDict):
+    id: str
+    address_id: str
+    grantee_type: str
+    grantee_id: str
+    level: str
+    granted_by_id: str
+    created_at: str
+    updated_at: str
+
+
+class PostalMailSettingsRow(TypedDict):
+    id: int
+    legal_bot_id: str | None
+    updated_by_id: str | None
+    created_at: str
+    updated_at: str
+
+
 class MeetingTaskLinkRow(TypedDict):
     """A meeting/task pair; its references keep their independent read checks."""
     id: str
@@ -19,6 +88,26 @@ class MeetingTaskLinkRow(TypedDict):
     kind: str
     created_by: str
     created_at: str
+
+
+class SuggestionRow(TypedDict):
+    id: str
+    fingerprint: str
+    owner_role: str
+    owner_bot_id: str | None
+    title: str
+    body: str
+    condition: str
+    cooldown_days: int
+    status: str
+    update_batch_id: str | None
+    message_id: str | None
+    delivered_at: str | None
+    cooldown_until: str | None
+    outcome: str | None
+    outcome_reported_at: str | None
+    created_at: str
+    updated_at: str
 
 
 class TaskRow(TypedDict):
@@ -33,6 +122,7 @@ class TaskRow(TypedDict):
     check_back_at: str | None
     check_back_note: str | None
     conversation_id: str | None
+    live_meeting_id: str | None
     created_at: str | None
     updated_at: str | None
     done_at: str | None
@@ -76,6 +166,15 @@ class TaskRow(TypedDict):
     acceptance: str
 
 
+class PresenceRow(TypedDict):
+    """One open window at a task or meeting; expires without heartbeats."""
+    id: str
+    place: str
+    actor: str
+    session_id: str
+    seen_at: str
+
+
 class TaskCheckBackWakeRow(TypedDict):
     """A reminder occurrence; jobs and attempts retain all execution state."""
     task_id: str
@@ -96,6 +195,18 @@ class TaskHoldRow(TypedDict):
     from_status: str | None
     gate: str | None
     cleared_at: str | None
+    created_at: str
+    released_at: str | None
+
+
+class QuarantineHoldRow(TypedDict):
+    """One bot's refusal-count hold on a task or chat (migration 0094)."""
+    id: int
+    bot_id: str
+    task_id: str | None
+    conversation_id: str | None
+    reason: str
+    refusal: str
     created_at: str
     released_at: str | None
 
@@ -167,6 +278,7 @@ class RunnerRow(TypedDict):
     screen_default_pending: int
     performance: str
     turns_at_once: int | None
+    device_id: str | None
 
 
 class RunnerStateRow(TypedDict):
@@ -421,6 +533,95 @@ class BotSettingsRow(TypedDict):
     app_delivery: str | None
     extra: str
     updated_at: str | None
+
+
+class LetterOutboxRow(TypedDict):
+    id: str
+    mode: str
+    return_address: str | None
+    monthly_cap_micros: int | None
+    availability: str
+    checked_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class LetterOutboxGrantRow(TypedDict):
+    id: str
+    outbox_id: str
+    grantee_type: str
+    grantee_id: str
+    level: str
+    granted_by_id: str
+    created_at: str
+    updated_at: str
+
+
+class LetterBotSettingRow(TypedDict):
+    bot_id: str
+    mode: str | None
+    monthly_cap_micros: int | None
+    updated_by: str
+    updated_at: str
+
+
+class LetterRow(TypedDict):
+    id: str
+    outbox_id: str
+    requested_by: str
+    acting_bot_id: str | None
+    automation_id: str | None
+    task_id: str | None
+    thread_id: str | None
+    attempt_id: str | None
+    recipient: str
+    recipient_hash: str
+    return_address: str
+    mail_class: str
+    color: int
+    duplex: int
+    source_blob_id: str
+    original_blob_id: str | None
+    source_provenance: str
+    proof_blob_id: str | None
+    page_count: int | None
+    quote_id: str | None
+    quote_expires_at: str | None
+    approval_hash: str | None
+    approval_id: str | None
+    approved_hash: str | None
+    submission_quote_id: str | None
+    hq_letter_id: str | None
+    total_micros: int
+    currency: str
+    status: str
+    tracking: str
+    cancel_possible: int
+    always_ask: int
+    approval_reason: str
+    error: str
+    attempts: int
+    next_sync_at: str | None
+    submitted_at: str | None
+    accepted_at: str | None
+    charged_micros: int | None
+    spend_released: int
+    billing: str
+    created_at: str
+    updated_at: str
+
+
+class LetterSourceRow(TypedDict):
+    letter_id: str
+    source_type: str
+    source_id: str
+
+
+class LetterProofRow(TypedDict):
+    letter_id: str
+    blob_id: str
+    approval_hash: str
+    created_at: str
 
 
 class MaintenanceStepRow(TypedDict):

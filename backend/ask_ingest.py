@@ -662,7 +662,7 @@ def reconcile(c, start, end):
     return out
 
 
-def on_reply(c, actor, task_id, text):
+def on_reply(c, actor, task_id, text, *, text_sources=()):
     """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
     to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
     message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
@@ -684,14 +684,14 @@ def on_reply(c, actor, task_id, text):
         if not source_readable(c, row["asker"], item):
             continue
         on = f' on \u201c{item.get("title") or ""}\u201d' if item.get("title") else ""
-        said = f'{name} answered this{on}: "{answer}"'
+        said, refs = H.sourced_text(f'{name} answered this{on}: "{answer}"', text_sources)
         if row["kind"] == "loose":
-            H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={"ask_ingest": row["id"]})
+            H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={**refs, "ask_ingest": row["id"]})
         else:
             own = H.task(c, row["ref"])
             if not own or own["status"] not in H.ACTIVE_STATUSES:
                 continue
-            H.task_comment(c, H.KEEPER, own["id"], said, wake=True)
+            H.task_comment(c, H.KEEPER, own["id"], said, wake=True, extra_refs=refs)
         c.execute("UPDATE ask_ingest_items SET passed_at=? WHERE id=?", (H.now(), row["id"]))
 
 

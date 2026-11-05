@@ -217,6 +217,7 @@ def acl(c, settings):
 
 # ----------------------------------------------------------------------------- roster
 def _save_roster(c, roster):
+    before = _load_json(c, "people") or {}
     from .report_order import roster_saved
     roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
@@ -225,6 +226,12 @@ def _save_roster(c, roster):
     FA.revalidate_org(c)                           # Finance's view grants follow the org chart at once (spec 7.5)
     from . import people_mirror
     people_mirror.changed()                        # the Tico account gets the sign-in list again (backend/people_mirror.py)
+    def memberships(value):
+        return ({p["id"]: p.get("team") for p in value.get("people", [])},
+                {gid: g.get("parent") for gid, g in value.get("org_groups", {}).items()})
+    if memberships(before) != memberships(roster):
+        from . import pages
+        pages.group_access_changed(c)
 
 
 save_roster = _save_roster
