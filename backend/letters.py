@@ -562,7 +562,15 @@ def install(app, config, store, auth, mutate):
     service = app.state.letters = Letters(app, store, auth, config)
 
     @app.get("/api/v2/letters/settings")
-    def read_settings(request: Request):
+    def read_settings(request: Request, check: bool = False):
+        if check:
+            require_admin(auth, request.state.identity)
+            if not config.demo:
+                try:
+                    service.call("?limit=1")
+                except Problem as exc:
+                    if exc.code != "unconfigured":
+                        raise
         with store.read() as c:
             auth.domain(request.state.identity)
             return settings(c)

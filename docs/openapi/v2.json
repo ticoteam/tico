@@ -21909,6 +21909,18 @@
       "get": {
         "summary": "Company return address, mode, cap and setup state",
         "operationId": "getLettersSettings",
+        "parameters": [
+          {
+            "name": "check",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Check"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -21949,14 +21961,14 @@
         "summary": "Owner or admin sets company Letters out policy",
         "operationId": "setLettersSettings",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/backend__letters__Settings"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {

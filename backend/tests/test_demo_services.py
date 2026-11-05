@@ -72,6 +72,14 @@ def test_phone_requests_read_is_empty_in_the_demo_not_an_error(built):
         assert listed.json() == {"phone_requests": [], "next": None}
 
 
+def test_letters_out_keeps_a_local_proof_and_a_provider_receipt_in_the_demo(built):
+    with as_ana(built) as api:
+        row = api.get("/api/v2/letters").json()["items"][0]
+        assert row["status"] == "mailed" and row["hq_letter_id"] == "lt_demo"
+        assert api.get(row["proof"]).content.startswith(b"%PDF-")
+        assert api.get("/api/v2/letters/settings").json()["return_address"]
+
+
 def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
     with as_ana(built) as api:
         items = {row["external_id"]: row for row in api.get("/api/v2/postal/items").json()["items"]}
