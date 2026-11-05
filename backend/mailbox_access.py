@@ -70,7 +70,7 @@ def connector(targets):
 
 
 def connector_for(c, runner_id, named, owned=None):
-    """The connector principal of computer `runner_id`: the message-bot mailboxes it may act for, as
+    """The connector principal of computer `runner_id`: the mailboxes it may act for, as
     /api/v2/connectors/mail/targets lists them (`named`: it is a publisher)."""
     from . import google_rights
     return connector(google_rights.visible(c, runner_id, named, owned=owned))
