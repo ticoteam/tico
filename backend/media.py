@@ -18,7 +18,7 @@ from pydantic import Field, ValidationError
 
 from . import meetings as MS
 from . import models as M
-from . import note_outcomes, task_references
+from . import note_outcomes
 from .blobs import Blobs, brief, register
 from .files import is_file_id
 from clients import bot_files as BF
