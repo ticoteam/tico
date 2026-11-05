@@ -3055,21 +3055,28 @@ def create_app(settings=None):
             return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
         return place
 
-    def rule_check(who, operation, output, audience, obj="", context=None, place=None):
+    def rule_check(who, operation, output, audience, obj="", context=None, place=None, *, track_route=False):
         """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
         is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
-        place, or a function of (c, author, recipients) that reads it."""
-        if not output or not org_rule_check.author_of(who, settings.assistant_bot):
+        place, or a function of (c, author, recipients) that reads it. `track_route` keeps the audience even when
+        nothing matches, so a send cannot move to an unchecked recipient."""
+        author = org_rule_check.author_of(who, settings.assistant_bot)
+        if not track_route and (not output or not author):
             return None
         with store.read() as c:
-            if not org_rule_check.in_force(c):
+            in_force = org_rule_check.in_force(c)
+            if not track_route and not in_force:
                 return None             # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:
                 recipients = audience(c)
             except Problem as exc:
                 return org_rule_check.refused(exc)
-        return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
-                                        place=place)
+        verdict = (org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
+                                           place=place) if in_force and output and author else None)
+        if track_route and verdict is None:
+            return {"author": author or who.actor, "operation": operation, "outcome": "no_rules",
+                    "recipients": sorted({r for r in recipients if r and r != (author or who.actor)})}
+        return verdict
 
     def rule_public(body):
         """Whether a task write makes the task public: the whole company reads it."""
@@ -3280,7 +3287,7 @@ def create_app(settings=None):
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=H.refs_task_id(body.refs), in_reply_to=body.in_reply_to))
         rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
-                        place=place or rule_message_place(who, body))
+                        place=place or rule_message_place(who, body), track_route=True)
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
@@ -5196,7 +5203,7 @@ def create_app(settings=None):
             row = auth.task(c, who, auth.resolve_task(c, who, tid))
             target, _ = H.task_ask_route(c, who.actor, row)
             return [target]
-        rc = rule_check(who, "task_ask", body.text, recipients)
+        rc = rule_check(who, "task_ask", body.text, recipients, track_route=True)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
         return ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: task_ask_write(
             c, who, tid, body, ingest, rc)))
@@ -5406,7 +5413,7 @@ def create_app(settings=None):
                           422)
         rc = rule_check(who, "comment", body.text, lambda c: rule_comment_audience(
             c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text,
-            body.ask.model_dump() if body.ask else None), place=task_place(who, tid))
+            body.ask.model_dump() if body.ask else None), place=task_place(who, tid), track_route=True)
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))

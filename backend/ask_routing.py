@@ -9,12 +9,13 @@ from .auth import Auth, Identity
 from .store import Problem
 
 
-def readable(c, target):
+def readable(c, target, source=None):
     """A person still on the chart, or a bot with a queue that accepts questions."""
     if H.is_human(target):
         from .auth import standing
         return bool(H.human(c, target)) and not standing(c, H.actor_id(target))
-    if not H.is_bot(target) or (H.bot(c, target) or {}).get("state") != "active":
+    from . import lifecycle
+    if not H.is_bot(target) or not lifecycle.claims_message(c, H.actor_id(target), source or {}):
         return False
     from .enqueue import external_bot_sql
     from .harnesses import SYNCED_SQL
@@ -25,12 +26,13 @@ def readable(c, target):
         + external_bot_sql("?"), (H.actor_id(target), target))[0]
 
 
-def can_answer(c, target, refs=None, conversation_id=None, in_reply_to=None, source=None):
+def can_answer(c, target, refs=None, conversation_id=None, in_reply_to=None, source=None, *, sender=None):
     """The same full task read for people and bots, including every source of the question."""
     from .auth import actor_reads_task
-    if not readable(c, target):
+    message = source or {"sender_id": sender, "refs": refs or {}, "conversation_id": conversation_id,
+                         "in_reply_to": in_reply_to}
+    if not readable(c, target, message):
         return False
-    message = source or {"refs": refs or {}, "conversation_id": conversation_id, "in_reply_to": in_reply_to}
     try:
         return (all(actor_reads_task(c, target, H.task(c, tid))
                     for tid in task_privacy.message_tasks(c, message))
@@ -171,7 +173,7 @@ def require_recipient(c, who, target, refs=None, conversation_id=None, in_reply_
     Auth.require_bot_contact(c, who, to, conversation_id, H.refs_task_id(refs), kind="message")
     reach.check(c, who, to, "chat", task_id=H.refs_task_id(refs), conversation_id=conversation_id,
                 in_reply_to=body.in_reply_to, ctx=ctx)
-    if body.kind == "ask" and not can_answer(c, to, refs, conversation_id, body.in_reply_to, source):
+    if body.kind == "ask" and not can_answer(c, to, refs, conversation_id, body.in_reply_to, source, sender=who.actor):
         raise Problem("recipient", "Recipient cannot read or answer the question", 409)
     if conversation_id:
         from . import threads

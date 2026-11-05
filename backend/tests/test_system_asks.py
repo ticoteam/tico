@@ -212,6 +212,48 @@ def test_system_ask_rechecks_a_changed_route_after_a_nonblocking_verdict(ruled_a
     assert bodies(api, text) == []
 
 
+@pytest.mark.parametrize("kind", ["task", "comment", "message"])
+def test_system_ask_rechecks_a_route_that_matched_no_rules_before_ingest(ruled_asks, monkeypatch, kind):
+    from backend import ask_ingest
+    api, judge = ruled_asks
+    ana_rule = color_rule(api, text="Never ask Ana about the beta.", reviewer="ana", **{"with": {"people": ["ana"]}})
+    judge.needles["Never ask Ana about the beta."] = "beta"
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+    real = ask_ingest.preflight
+    checked = []
+
+    def then_move(*args, **kwargs):
+        verdict = real(*args, **kwargs)
+        checked.append(args[3])
+        assert judge.calls == []          # Ben has no matching rule and no rule verdict.
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+        return verdict
+
+    monkeypatch.setattr(ask_ingest, "preflight", then_move)
+    text = "Should this cover the beta?"
+    path, body = f"tasks/{task['id']}/ask", {"text": text}
+    if kind == "comment":
+        path = f"tasks/{task['id']}/comments"
+        body["ask"] = {"who": "keeper", "questions": [
+            {"id": "scope", "header": "Scope", "question": text, "options": []}]}
+    elif kind == "message":
+        path, body = "messages", {"to": "keeper", "kind": "ask", "text": text}
+    refused = post(api, path, body, token="ops-test", expected=409)
+    assert checked == ["human:ben"]
+    assert refused["error"]["code"] == "moved" and bodies(api, text) == []
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM org_rule_holds WHERE author='bot:ops'").fetchone()
+        assert not H.open_task_asks(c, H.task(c, task["id"]))
+        assert H.task(c, task["id"])["status"] == task["status"]
+    monkeypatch.setattr(ask_ingest, "preflight", real)
+    held = post(api, path, body, token="ops-test")["held"]
+    assert ana_rule["id"] in {r["id"] for r in held["rules"]}
+    assert "human:ana" in json.loads(hold_row(api, held["id"])["destinations"])
+    assert bodies(api, text) == []
+
+
 def test_held_direct_ask_routes_an_older_replay_recipient_for_rules_and_ingest(ruled_asks, monkeypatch):
     from backend import ask_ingest
     api, _ = ruled_asks
@@ -259,6 +301,55 @@ def test_inactive_manager_is_skipped_up_the_chain_when_reachable(api, monkeypatc
                   "VALUES('manager-line','bot:ops','human:ben',?,?,'human:ana','human:ana')", (H.now(), H.now()))
         msg = H.say(c, "bot:ops", H.KEEPER, "Should this cover the beta?", kind="ask")
         assert msg["recipient_id"] == "human:ben"
+
+
+@pytest.mark.parametrize("state,onboarding", [("active", "needs_setup"), ("active", "needs_onboarding"),
+                                             ("quarantined", "onboarded")])
+def test_routing_and_health_skip_a_manager_whose_state_holds_the_ask_at_claim(api, monkeypatch, state, onboarding):
+    from backend.tests.test_api import assign, claim, ready, runner
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "open")
+    computer = runner(api)
+    assign(api, computer, "cpo")
+    ready(api, computer, ["cpo"])
+    with api.app.state.store.transaction() as c:
+        task = system_task(c, "cpo")
+        c.execute("UPDATE bots SET state=? WHERE id='cpo'", (state,))
+        # Old installs can still carry the earlier onboarding state.
+        c.execute("PRAGMA ignore_check_constraints=ON")
+        c.execute("UPDATE bot_config SET onboarding_state=?,reports_to='human:ben' WHERE bot='cpo'", (onboarding,))
+        c.execute("PRAGMA ignore_check_constraints=OFF")
+        dead = H._write_message(c, "bot:ops", "bot:cpo", "Should this cover the beta?",
+                                H.conversation(c, task["conversation_id"]), "ask", {"task": task["id"]}, None, None)
+        H.task_update(c, "bot:ops", task["id"], status="waiting")
+        assert c.execute("SELECT 1 FROM jobs WHERE message_id=? AND state='queued'", (dead["id"],)).fetchone()
+        assert [(r["id"], r["recipient"]) for r in health.unreadable_waits(c)] == [(task["id"], "bot:cpo")]
+        with pytest.raises(Problem) as refused:
+            ask_routing.require_recipient(c, Identity("bot:ops", "bot"), "bot:cpo")
+        assert refused.value.code == "recipient"
+        second = system_task(c, "cpo")
+        msg = H.task_ask(c, "bot:ops", second["id"], "Should this cover the beta?")
+        assert msg["recipient_id"] == "human:ben"
+    assert claim(api, computer) is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE id='cpo'")
+        c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='cpo'")
+        assert not health.unreadable_waits(c)
+    assert claim(api, computer)["message"]["id"] == dead["id"]
+
+
+@pytest.mark.parametrize("sender", ["bot:ops", "human:ana"])
+def test_onboarding_claim_exceptions_still_take_questions(api, sender):
+    from backend.tests.test_api import assign, claim, ready, runner
+    computer = runner(api)
+    assign(api, computer, "cpo")
+    ready(api, computer, ["cpo"])
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup',reports_to='ops' WHERE bot='cpo'")
+        msg = H.say(c, sender, "bot:cpo", "Should this cover the beta?", kind="ask", refs={"task": task["id"]})
+        H.task_update(c, "bot:ops", task["id"], status="waiting")
+        assert not health.unreadable_waits(c)
+    assert claim(api, computer)["message"]["id"] == msg["id"]
 
 
 def test_keeper_ask_skips_an_active_manager_whose_contact_policy_refuses_it(api, monkeypatch):

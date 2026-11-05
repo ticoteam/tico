@@ -739,7 +739,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
     Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again.
     `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
-    belongs to the audience it checked, so a different one comes back as {"moved": True}. A refused verdict
+    belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
+    so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]

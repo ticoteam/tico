@@ -1501,7 +1501,7 @@ def unreadable_waits(c):
             if key in seen:
                 continue
             source = messages.get(row.pop("message_id"))
-            if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source):
+            if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source, sender=row["owner_id"]):
                 continue
             seen.add(key)
             found.append(row)

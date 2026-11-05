@@ -91,6 +91,22 @@ def is_onboarding(c, slug):
     return stage(onboarding_state(c, slug)) == ONBOARDING
 
 
+def claim_message_sql(bot="j.bot_id", message="m"):
+    """The bot states from which claim takes this message, including onboarding's sender exceptions."""
+    return (f"EXISTS(SELECT 1 FROM bots claim_bot LEFT JOIN bot_config claim_config ON claim_config.bot=claim_bot.id "
+            f"WHERE claim_bot.id={bot} AND claim_bot.state='active' AND (" + H.person_sent_sql(message) +
+            f" OR coalesce(claim_config.onboarding_state,'') NOT IN {statuses.PARKED_SQL} "
+            f"OR {message}.sender_id='bot:'||coalesce(claim_config.reports_to,'')))")
+
+
+def claims_message(c, slug, message):
+    """Use claim's state gate before a question has a queue row, and when Health reads an old one."""
+    from .read_cache import one
+    return bool(one(c, "SELECT " + claim_message_sql("candidate.bot") +
+                    " FROM (SELECT ? bot) candidate CROSS JOIN (SELECT ? sender_id,? refs) m",
+                    (slug, message.get("sender_id") or "", H._dump(message.get("refs") or {})))[0])
+
+
 def _bot_slug(actor):
     actor = str(actor or "")
     return actor[4:] if actor.startswith("bot:") else ""
