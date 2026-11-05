@@ -768,9 +768,8 @@ def install(app, store, auth, mutate):
                 actor = who.actor
             if not access.may(c, actor, body.mailbox.strip().lower())["send"]:
                 raise Problem("forbidden", "The sender cannot send from this inbox", 403)
-            policy = effective(c, body.mailbox.strip().lower(), H.actor_id(actor) if actor.startswith("bot:") else "")
         snap = snapshot(body.raw, body.mailbox.strip().lower())
-        classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": None, "status": "off"}
+        classification = classify(app, store, snap)
         via = who.via or ("agent:" + who.agent if who.agent else "")
         return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=via, operation_key=body.operation_id or request.headers.get("Idempotency-Key", ""))}, durable=True)
 
