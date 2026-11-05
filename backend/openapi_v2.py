@@ -59,6 +59,8 @@ EVENTS_DESCRIPTION = (
     "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
     "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
     "A `bulk: true` event without `id` means read task lists in full.\n"
+    "- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. "
+    "Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
@@ -331,7 +333,7 @@ STABLE = [
     ("/api/v2/events", "get", "Live events", "streamEvents",
      "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
      "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, "
-     "task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
+     "meeting=<ids> filters meeting_items, place=<places> filters presence (20 each); task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller, with its `version` and `count`; count=true for the number alone, version=<held> "
      "answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, "
@@ -3165,6 +3167,19 @@ SCHEMAS.update({
     "AssistantChangeList": obj({"changes": items({"type": "object"}), "next": {"type": ["string", "null"]}}),
     "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
 })
+
+
+STABLE.extend([
+    ("/api/v2/meetings/{rid}/items", "get", "Meetings", "listMeetingItems",
+     "Pending and sent items grouped by section; can_send for every reader of a live meeting, audience for a private meeting. Task references are redacted per viewer", None),
+    ("/api/v2/meetings/{rid}/items", "post", "Meetings", "addMeetingItem", "Add a pending item, or upload an already sent item with status=pushed and a result_ref for a task you requested", None),
+    ("/api/v2/meetings/{rid}/items/{iid}", "post", "Meetings", "editMeetingItem",
+     "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits", None),
+    ("/api/v2/meetings/{rid}/items/{iid}/push", "post", "Meetings", "sendMeetingItem",
+     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
+    ("/api/v2/presence", "get", "Live events", "getPresence", "Current actors aggregated across unexpired sessions at an authorized place", None),
+    ("/api/v2/presence", "post", "Live events", "heartbeatPresence", "Heartbeat one session every 15 seconds, or leave with gone=true; sessions expire after 30 seconds", None),
+])
 
 
 # Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
