@@ -17,7 +17,7 @@ const at = id => ({hash: `#/tools/mailbox/${id}`, ready: READY});
 const accessRows = page => page.$$eval('#mailbox-access tr[data-mb-access-row]', rows => rows.map(row => {
   const cells = [...row.querySelectorAll('td')];
   const picked = row.querySelector('[data-mb-level][aria-checked=true]');
-  return [cells[0].textContent.replace(/\s+/g, ' ').trim(), picked ? `[${picked.textContent}]` : cells[1].textContent.trim(),
+  return [cells[0].lastElementChild.textContent.replace(/\s+/g, ' ').trim(), picked ? `[${picked.textContent}]` : cells[1].textContent.trim(),
     !!row.querySelector('[data-mb-remove]')];
 }));
 const writes = (fake, method, path) => fake.writes.filter(w => w.method === method && w.path === path).map(w => w.body);
