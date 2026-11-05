@@ -18,6 +18,7 @@ use serde_json::{json, Map, Value};
 use crate::client::{ApiError, Client};
 use crate::env::Env;
 use crate::gitrun::{self, Fault, Out};
+use crate::regular_file::{self, CONTENT, SMALL};
 use crate::repositories::{self, GB};
 use crate::util::text_of;
 
@@ -154,6 +155,9 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
         Fault::Io(e) => WtErr::Os(format!("OSError ({e})")),
     })?;
     if check && !done.ok() {
+        if done.stderr.starts_with("repository copy needs attention:") {
+            return Err(WtErr::msg(done.stderr));
+        }
         let detail = ["push", "fetch", "ls-remote"].contains(&args[0]).then(|| if done.stderr.is_empty() { format!("exit {}", done.code) } else { done.stderr.clone() });
         return Err(WtErr::Msg(format!("Git {} failed (exit {}); check access, network, disk space and repository state", args[0], done.code), detail));
     }
@@ -161,7 +165,7 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
 }
 
 /// The task lock the hub CLI takes too: one worktree step at a time per task path on this computer.
-pub struct TaskLock(#[allow(dead_code)] std::fs::File);
+pub struct TaskLock(#[allow(dead_code)] crate::lock::FileLock);
 
 pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     let tasks = workspace.join("tasks");
@@ -174,13 +178,13 @@ pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     // Locks an older runner made as the supervisor (0.3.46) stay unopenable to the bot's `hub worktree` otherwise.
     adopt_task_state(workspace, ".locks");
     let name = &gitrun::sha256_hex(task.as_bytes())[..2];
-    let file = std::fs::OpenOptions::new().create(true).append(true).custom_flags(libc::O_NOFOLLOW).open(folder.join(name))?;
+    let file = regular_file::open(&folder.join(name), std::fs::OpenOptions::new().create(true).append(true), SMALL)?;
     crate::isolation::chown_file(&file)?;
     let file = tokio::task::spawn_blocking(move || {
         use std::os::fd::AsRawFd;
         // SAFETY: flock on a file this process holds open.
         let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc == 0 { Ok(file) } else { Err(std::io::Error::last_os_error()) }
+        if rc == 0 { Ok(crate::lock::FileLock::from_locked(file)) } else { Err(std::io::Error::last_os_error()) }
     })
     .await
     .map_err(|e| WtErr::Os(e.to_string()))??;
@@ -269,7 +273,7 @@ pub fn read_marker(workspace: &Path, link_id: &str) -> R<Option<Map<String, Valu
     if !marker.is_file() {
         return Err(WtErr::msg("Worktree initialization marker is not a regular file; left as it is"));
     }
-    let value: Value = std::fs::read_to_string(&marker)
+    let value: Value = regular_file::text(&marker, CONTENT)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .ok_or_else(|| WtErr::msg("Worktree initialization marker cannot be read; left as it is"))?;
@@ -287,9 +291,11 @@ pub fn write_marker(workspace: &Path, value: &Map<String, Value>) -> R<()> {
     let temp = marker.with_file_name(format!("{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
     let written = (|| -> std::io::Result<()> {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&temp)?;
+        let mut f = regular_file::open(&temp, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
         crate::isolation::chown_file(&f)?;
-        f.write_all(gitrun::compact_sorted(&Value::Object(value.clone())).as_bytes())?;
+        let bytes = gitrun::compact_sorted(&Value::Object(value.clone()));
+        if bytes.len() as u64 > CONTENT { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Worktree marker exceeds size limit")); }
+        f.write_all(bytes.as_bytes())?;
         f.flush()?;
         f.sync_all()?;
         std::fs::rename(&temp, &marker)
@@ -1097,7 +1103,7 @@ async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
 /// temp folder.
 fn rebuildable(dir: &Path) -> bool {
     let name = dir.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let tagged = std::fs::read(dir.join("CACHEDIR.TAG")).is_ok_and(|b| b.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"));
+    let tagged = regular_file::read(dir.join("CACHEDIR.TAG"), SMALL).is_ok_and(|b| b.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"));
     dir.join("pyvenv.cfg").is_file()
         || tagged
         || name == "node_modules"
@@ -1242,7 +1248,7 @@ impl Drop for Scratch {
 
 /// True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited.
 async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -> R<bool> {
-    let Ok(text) = std::fs::read_to_string(path.join(name)) else { return Ok(false) };
+    let Ok(text) = regular_file::text(path.join(name), 20 * CONTENT) else { return Ok(false) };
     let mut stages: HashMap<&str, String> = HashMap::new();
     for stage in ["1", "2", "3"] {
         let shown = git(path, env, &["show", &format!(":{stage}:{name}")], false).await?;
@@ -1260,9 +1266,9 @@ async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -
     let scratch = Scratch(gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple())));
     std::fs::create_dir_all(&scratch.0)?;
     let (o, b, t) = (scratch.0.join("ours"), scratch.0.join("base"), scratch.0.join("theirs"));
-    std::fs::write(&o, ours)?;
-    std::fs::write(&b, base)?;
-    std::fs::write(&t, theirs)?;
+    regular_file::write(&o, ours.as_bytes(), 20 * CONTENT, true)?;
+    regular_file::write(&b, base.as_bytes(), 20 * CONTENT, true)?;
+    regular_file::write(&t, theirs.as_bytes(), 20 * CONTENT, true)?;
     let (o, b, t) = (o.display().to_string(), b.display().to_string(), t.display().to_string());
     let shaped = marker_shape(&text);
     for flags in [vec![], vec!["--diff3"]] {
@@ -1448,7 +1454,7 @@ where
                 .filter(|n| {
                     let file = path.join(n);
                     let leaf = Path::new(n).file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
-                    secret_name(&leaf) || is_symlink(&file) || std::fs::metadata(&file).is_ok_and(|m| m.len() > 20 * 1024 * 1024)
+                    secret_name(&leaf) || std::fs::symlink_metadata(&file).is_ok_and(|m| !m.is_file() || m.len() > 20 * CONTENT)
                 })
                 .map(|n| n.to_string())
                 .collect();
@@ -1463,8 +1469,10 @@ where
             }
             let mut patch = git(&path, env, &["diff", "--no-ext-diff", "--no-textconv", "HEAD"], true).await?.stdout;
             for n in &names {
-                if path.join(n).is_file() {
-                    patch += &String::from_utf8_lossy(&std::fs::read(path.join(n)).unwrap_or_default());
+                match regular_file::read(path.join(n), 20 * CONTENT) {
+                    Ok(bytes) => patch += &String::from_utf8_lossy(&bytes),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(_) => return Err(WtErr::msg("Could not inspect changed or untracked file safely; kept worktree")),
                 }
             }
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -1870,6 +1878,31 @@ impl Worktrees {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn locks_markers_cache_tags_and_conflict_reads_refuse_special_files() {
+        if !regular_file::in_child("worktrees::tests::locks_markers_cache_tags_and_conflict_reads_refuse_special_files").await { return; }
+        let root = std::env::temp_dir().join(format!("tico-worktree-files-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let folder = Folder(root.canonicalize().unwrap());
+        let root = &folder.0;
+        let lock_dir = root.join("tasks/.locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        regular_file::fifo(&lock_dir.join(&gitrun::sha256_hex(b"task")[..2]));
+        assert!(locked(root, "task").await.is_err());
+        let marker = marker_path(root, "link", true).unwrap().unwrap();
+        regular_file::fifo(&marker);
+        assert!(read_marker(root, "link").is_err());
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::File::create(&marker).unwrap().set_len(CONTENT + 1).unwrap();
+        assert!(read_marker(root, "link").is_err());
+        let cache = root.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        regular_file::fifo(&cache.join("CACHEDIR.TAG"));
+        assert!(!rebuildable(&cache));
+        regular_file::fifo(&root.join("conflict"));
+        assert!(!untouched_conflict(root, root, "conflict", &Env::new()).await.unwrap());
+    }
 
     struct Folder(PathBuf);
     impl Drop for Folder {

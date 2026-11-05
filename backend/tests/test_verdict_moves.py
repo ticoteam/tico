@@ -309,6 +309,40 @@ def test_a_green_new_head_at_a_step_with_after_green_moves_on_to_the_next_check(
     assert step_events(api, task)[-1][0] == H.KEEPER
 
 
+@pytest.mark.parametrize('target', ['merge', 'In QA'])
+def test_shared_fixes_waits_for_a_head_newer_than_the_review_that_returned_it(api, target):
+    from backend import step_flow as F
+    task = ticket(api)
+    flow(api, task, 'Review 2', on_pass='Review 1 Fixes', on_fail='Review 1 Fixes')
+    flow(api, task, 'Review 1 Fixes', after_green=target)
+    verdict(api, check(api, task), 'approve')
+    assert step(api, task) == 'Review 1 Fixes'
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
+    receipt(api, task, NEW)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cpo', task['id'], step='Review 2')
+    verdict(api, check(api, task, title='Review 2: PR #412'), 'changes', head=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    with api.app.state.store.transaction() as c:
+        current = H.task(c, task['id'])
+        assert V._judged_by(c, current, F.step(c, current['step_id'])) == NEW
+        assert V.merge_ready(c, current) is None
+        c.execute('DELETE FROM jobs')
+    _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
+    assert step(api, task) == 'Review 1 Fixes'
+    assert not builder_jobs(api), 'green CI on the returned head must not skip its changes'
+
+    fixed = 'e' * 40
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': fixed}))
+    receipt(api, task, fixed)
+    _suite(api, 'github-actions', 'completed', 'success', sha=fixed)
+    if target == 'merge':
+        assert step(api, task) == 'Review 1 Fixes'
+        assert [m['refs'].get(V.HANDOFF) for m in builder_jobs(api)] == ['merge']
+    else:
+        assert step(api, task) == 'In QA'
+
+
 def test_on_the_dev_board_the_builder_moves_on_from_fixes_not_ci(api):
     task = ticket(api)
     verdict(api, check(api, task), "changes")
