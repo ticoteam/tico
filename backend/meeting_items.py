@@ -328,7 +328,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             result = dict(result)
             iid = result.pop('item_id', None) or result.pop('item')['id']
             result['item'] = task_references.redact(c, auth, request.state.identity, view(one(c, rid, iid)))
-            return result}
+            return result
 
     @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")
