@@ -18,7 +18,7 @@ import sqlite3
 import tempfile
 from collections import namedtuple
 from contextlib import ExitStack
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import Request
 from pydantic import Field
@@ -266,6 +266,8 @@ def page_blob_visible(c, auth, who, bid):
 
 def page_event_readable(c, auth, who, target, detail):
     data = H._json(detail, {}) if isinstance(detail, str) else detail
+    if page_ref_denials(c, auth, who, [target, data]):
+        return False
     names_audience = isinstance(data, dict) and ("before" in data or "after" in data)
     # Hard delete keeps the file tombstone and activity, while removing the page's row.
     row = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
@@ -273,25 +275,37 @@ def page_event_readable(c, auth, who, target, detail):
     cache = {}
     if row and not (file_visible(c, auth, who, row, cache) if auth else page_audience_visible(c, auth, who, row, cache)):
         return False
-    candidates = page_references(data) | ({target} if isinstance(target, str) else set())
-    for fid in candidates:
-        page = restricted_pages(c).get(fid)
-        if page and not (file_visible(c, auth, who, page, cache) if auth else
-                         page_audience_visible(c, auth, who, page, cache)):
-            return False
     if row and names_audience:
         from . import pages
         return pages.may_manage(c, auth, who, row)
     return True
 
 
+def page_reference(value):
+    """One file identity, versioned attachment, pin, page route or absolute app page URL."""
+    if not isinstance(value, str):
+        return None
+    try:
+        value = unquote(value)
+        url = urlsplit(value)
+        if url.scheme in ("http", "https"):
+            value = "#" + url.fragment if url.fragment else url.path
+        match = re.fullmatch(r"(?:page:|#/page/|/(?:api/(?:v2/)?)?pages/)?"
+                             r"(file-[^/?#@\s]{24})(?:@\d+)?(?:[?][^#]*)?", value)
+        return match[1] if match else None
+    except ValueError:
+        return None
+
+
 def page_references(value):
-    """Structured refs use file/file_id, page/page_id, item=page:<id>, and lists of those shapes."""
+    """Collect references with the same recognizer on every message, event and runner transport."""
     found = set()
     if isinstance(value, str):
-        fid = value.removeprefix("page:").split("@", 1)[0]
-        if is_file_id(fid):
+        fid = page_reference(value)
+        if fid:
             found.add(fid)
+        elif value.startswith(("{", "[")):
+            found.update(page_references(H._json(value, None)))
     elif isinstance(value, dict):
         for child in value.values():
             found.update(page_references(child))
@@ -301,26 +315,41 @@ def page_references(value):
     return found
 
 
+def page_ref_denials(c, auth, who, refs):
+    ids = page_references(refs)
+    if not ids:
+        return {}
+    pages, cache = restricted_pages(c), {}
+    # Deletion removes the pages row and its audience, but leaves a file tombstone.
+    deleted = read_cache.value(c, ("deleted_page_refs",), lambda: {
+        r[0] for r in c.execute("SELECT id FROM bot_files WHERE state='deleted'")}, shared=True)
+    return {fid: "A deleted page" if fid in deleted else "A page you can't open" for fid in ids
+            if fid in deleted or (fid in pages and not (
+                file_visible(c, auth, who, pages[fid], cache) if auth else
+                page_audience_visible(c, auth, who, pages[fid], cache)))}
+
+
 def readable_page_refs(c, auth, who, refs):
     """Remove the entire metadata object of a denied page, even on undecorated message transports."""
     original = refs
     refs = H._json(refs, {}) if isinstance(refs, str) else refs
-    pages, cache = restricted_pages(c), {}
-    denied = {fid for fid in page_references(refs) if fid in pages
-              and not (file_visible(c, auth, who, pages[fid], cache) if auth else
-                       page_audience_visible(c, auth, who, pages[fid], cache))}
+    denied = page_ref_denials(c, auth, who, refs)
     if not denied:
         return original
 
     def clean(value):
+        direct = page_references(value) & denied.keys() if isinstance(value, str) else set()
         if isinstance(value, dict):
-            if any(isinstance(v, str) and page_references(v) & denied for v in value.values()):
-                return {"removed": True, "label": "A page you can't open"}
+            direct = {fid for v in value.values() if (fid := page_reference(v)) in denied}
+            if direct:
+                return {"removed": True, "label": denied[sorted(direct)[0]]}
             return {k: clean(v) for k, v in value.items()}
         if isinstance(value, list):
             return [clean(v) for v in value]
-        if isinstance(value, str) and page_references(value) & denied:
-            return {"removed": True, "label": "A page you can't open"}
+        if isinstance(value, str) and value.startswith(("{", "[")):
+            return readable_page_refs(c, auth, who, value)
+        if direct:
+            return {"removed": True, "label": denied[sorted(direct)[0]]}
         return value
 
     shown = clean(refs)

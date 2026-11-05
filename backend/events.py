@@ -1332,8 +1332,9 @@ def _messages(view, rows, shared=None):
         if threads.message_readable(c, view.reader, message, thread_checked=True):
             shown = view.known.message(message)
             from .files import readable_page_refs
+            original_refs = refs
             refs = readable_page_refs(c, view.auth, view.who, refs)
-            if shown is not message or (isinstance(refs, dict) and refs.get("attachments")):
+            if shown is not message or refs != original_refs or (isinstance(refs, dict) and refs.get("attachments")):
                 out.append((row, {"id": subject, "conversation_id": cid, **place,
                                   "message": {**shown, "refs": refs, "thread_id": cid, "root_id": place["root_id"]}}))
             else:

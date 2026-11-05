@@ -245,6 +245,8 @@ class _Context:
 
     def names(self, level):
         if self.role == "bot":
+            if self.me in self.archived:
+                return False
             return A.names(level, bot=self.me, team=self.chain)
         return A.names(level, person=self.me, team=self.chain)
 

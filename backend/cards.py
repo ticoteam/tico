@@ -1023,26 +1023,26 @@ def place_view(ctx, place, timings=None):
     prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
     prep = (time.perf_counter() - started) * 1000
-    shown, costs = [], {}
+    shown, costs, total = [], {}, 0
     for pin in pins:
         began = time.perf_counter()
         view = pin_view(ctx, pin, cache)
         ms = (time.perf_counter() - began) * 1000
+        total += ms
         if not view:
-            # A pin the caller can't read still costs its access check.
-            name = "hidden"
-        elif "card" in view:
+            continue
+        if "card" in view:
             template = view["card"]["template"]
             # Only built-in kinds enter the header, never a card's title or id.
             template = template if template in TEMPLATES else "unknown"
             name = re.sub(r"[^a-z0-9-]+", "-", template.lower()).strip("-") or "unknown"
         else:
             name = "page"
-        if view:
-            shown.append(view)
+        view["position"] = len(shown)
+        shown.append(view)
         costs[name] = costs.get(name, 0) + ms
     if timings is not None:
-        timings.update(prep=prep, cards=sum(costs.values()), kinds=costs)
+        timings.update(prep=prep, cards=total, kinds=costs)
     if kind == "task":
         by_id = {p["id"]: p for p in pins}
         for pin in shown:

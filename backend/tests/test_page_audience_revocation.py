@@ -81,7 +81,7 @@ def test_native_copy_gate_preserves_autocommit_and_later_writes(api):
         assert c.execute("SELECT note FROM tasks WHERE id=?", (tid,)).fetchone()[0] == 'Native write survives close'
 
 
-def test_visual_token_keeps_both_principals_and_legacy_person_tokens(api):
+def test_visual_token_keeps_both_principals_and_rejects_legacy_tokens(api):
     fid, _ = promoted(api)
     api.app.state.store.settings.visual_origin = "https://visuals.acme.example"
     delegated = Identity("human:cara", "human", "cara@acme.example", task_actor="bot:finance")
@@ -101,15 +101,18 @@ def test_visual_token_keeps_both_principals_and_legacy_person_tokens(api):
     edit(api, fid, {"bots": ["finance"]})
     assert api.get(src).status_code == 404
     edit(api, fid, {"people": ["cara"]})
-    # An old five-field URL still describes its non-delegated person, never a delegated identity.
+    # Five-field URLs cannot prove whether a bot was acting for this person.
     import hashlib
     import hmac
     import time
     key = api.app.state.visual_key
     body = visuals._b64(json.dumps(["human:cara", fid, 1, "", int(time.time()) + 60]).encode())
     legacy = body + "." + visuals._b64(hmac.new(key, body.encode(), hashlib.sha256).digest())
-    assert visuals.read(key, legacy, principals=True)[-1] == ""
-    assert api.get("https://visuals.acme.example/visuals/" + legacy).status_code == 200
+    assert visuals.read(key, legacy, principals=True) is None
+    assert api.get("https://visuals.acme.example/visuals/" + legacy).status_code == 404
+    fresh = read(api, fid, "cara-test").json()["page"]["src"]
+    assert fresh and api.get(fresh).status_code == 200
+    assert len(json.loads(visuals._unb64(fresh.rsplit("/", 1)[-1].split(".")[0]))) == 6
 
 
 def test_deleted_group_cannot_regain_grants_when_legal_is_recreated(api):

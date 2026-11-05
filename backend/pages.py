@@ -110,7 +110,8 @@ def prime_views(c, rows):
 def may_manage(c, auth, who, row):
     """The maintainer bot and the people who may manage the page, shared with file visibility."""
     if who.role == "bot":
-        return H.actor_id(who.actor) == row["bot_id"]
+        bot = H.bot(c, H.actor_id(who.actor))
+        return bool(bot and bot.get("state") != "archived" and bot["id"] == row["bot_id"])
     if who.role == "owner":
         return True
     if who.role != "human":

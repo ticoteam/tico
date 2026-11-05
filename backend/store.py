@@ -2378,7 +2378,8 @@ class Store:
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
-                return result
+                from .files import readable_page_refs
+                return readable_page_refs(c, replay_auth, replay_principal, result)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
             c.execute("SAVEPOINT domain_write")

@@ -489,8 +489,54 @@ def revoke_page_copies(c, auth, fid=None):
     for tid, read in list(page_copies(c).items()):
         if fid and read["file_id"] != fid:
             continue
-        if not read["removed"] and not page_copy_readable(c, read, auth=auth):
-            c.execute("UPDATE tasks SET body=?,updated_at=? WHERE id=?", (REMOVED_PAGE, H.now(), tid))
+        if not page_copy_readable(c, read, auth=auth):
+            scrub_page_task(c, tid)
+
+
+def scrub_page_task(c, tid):
+    """A read task's prose is derived from its document, including edits, replies and run output."""
+    from .execution import Execution
+    task = H.task(c, tid)
+    messages = list(c.execute("SELECT m.id FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                              f"WHERE ({H.MESSAGE_TASK_SQL})=?", (tid,)))
+    attempts = list(c.execute("SELECT DISTINCT a.* FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+                              "LEFT JOIN messages m ON m.id=j.message_id "
+                              "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
+                              f"WHERE a.task_id=? OR ({H.MESSAGE_TASK_SQL})=?", (tid, tid)))
+    c.execute("UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,resume=NULL,acceptance='[]',updated_at=? WHERE id=?",
+              (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, H.now(), tid))
+    # Workflow changes keep their old/new identities; free text and arbitrary notes/data cannot keep page copies.
+    c.execute("UPDATE history_events SET old=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
+              "THEN ? ELSE old END,new=CASE WHEN kind IN ('body','title','note','checkpoint','resume','acceptance') "
+              "THEN ? ELSE new END,note=?,data=NULL WHERE subject_type='task' AND subject_id=?",
+              (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, tid))
+    for (mid,) in messages:
+        c.execute("UPDATE messages SET body=?,revision=revision+1 WHERE id=?", (REMOVED_PAGE, mid))
+    for attempt in attempts:
+        aid = attempt["id"]
+        Execution.forget_held_reply(c, attempt, aid, task["conversation_id"], REMOVED_PAGE)
+        c.execute("UPDATE attempts SET final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
+                  "WHERE id=?", (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, aid))
+        c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (json.dumps({"text": REMOVED_PAGE}), aid))
+        c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,))
+        c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
+    # Mutation receipts can contain the task or a claim's original context and must not replay its old prose.
+    ids = {tid, *(mid for (mid,) in messages), *(a["id"] for a in attempts)}
+    def clean(value):
+        if isinstance(value, dict):
+            return {k: (REMOVED_PAGE if k in {"title", "body", "text", "note", "summary", "checkpoint", "old", "new"}
+                        and isinstance(v, str) else clean(v)) for k, v in value.items()}
+        return [clean(v) for v in value] if isinstance(value, list) else value
+    for row in list(c.execute("SELECT actor,operation,key,response FROM idempotency WHERE binding IS NULL")):
+        if row["response"] and any(ident in row["response"] for ident in ids):
+            c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                      (json.dumps(clean(json.loads(row["response"]))), row["actor"], row["operation"], row["key"]))
+
+
+def revoked_page_run(c, aid):
+    read = attempt_read(c, aid)
+    copied = page_copies(c).get(read["task_id"]) if read else None
+    return bool(copied and (copied["removed"] or not page_copy_readable(c, read)))
 
 
 def private_suggestion(c, who, data):
@@ -574,6 +620,8 @@ def read_refused(store, auth, who, method, path, query):
         return None
     from .task_privacy import carried_tasks
     with store.read() as c:
+        if method not in GET and revoked_page_run(c, who.attempt_id):
+            return READ_SCOPE
         if kind == "tasks":
             try:
                 refused = auth.resolve_task(c, who, ident) not in carried_tasks(c, who.attempt_id)

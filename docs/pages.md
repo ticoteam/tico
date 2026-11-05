@@ -44,9 +44,11 @@ MCP uses `hub_page_publish`'s `audience` and `hub_page_access`. A new version ke
 one. `PATCH /api/v2/pages/{id}` accepts the access audience object, or `null` to clear it. Everyone still needs access
 to where the page is filed. Restricted pages use a per-reader visual address, never the shared hosted copy.
 
-Narrowing access removes revoked page text from Counsel's read task, including queued work. Counsel rechecks the
-asker and its run on later reads. Signed visuals also recheck the person and any bot acting for them. Messages keep
-only “A page you can't open” for a page outside the reader's audience. Group membership changes refresh open pages;
+Narrowing access removes revoked page text from Counsel's read task, its edit history, comments, notes and saved run
+output, including queued work. Counsel rechecks the asker and its run on later reads. Signed visuals also recheck
+the person and any bot acting for them; old five-field addresses expire immediately and reloading gets a new one.
+Archived bots match no audience. Messages and runner context keep only “A page you can't open” for a page outside
+the reader's audience, or “A deleted page” after deletion. Group membership changes refresh open pages;
 deleting a group or person, or archiving a bot, removes their explicit page grants. An empty audience leaves access
 to the page's managers.
 

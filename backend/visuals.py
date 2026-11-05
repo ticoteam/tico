@@ -371,9 +371,9 @@ def read(key, token, now=None, *, principals=False):
             return None
         fields = json.loads(_unb64(body))
         actor, fid, version, part, expires = fields[:5]
-        if len(fields) not in (5, 6):
+        if len(fields) != 6:
             return None
-        task_actor = fields[5] if len(fields) == 6 else ""
+        task_actor = fields[5]
         if not isinstance(task_actor, str):
             return None
     except (ValueError, TypeError):
@@ -673,7 +673,8 @@ def token_reader(c, auth, actor):
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)
-        return Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
+        bot = H.bot(c, H.actor_id(actor)) if actor.startswith("bot:") else None
+        return Identity(actor, "bot") if bot and bot.get("state") != "archived" else None
     except Problem:
         return None
 
