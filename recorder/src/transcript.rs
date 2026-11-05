@@ -76,6 +76,8 @@ pub fn without_echo(me: &[Word], them: &[Word]) -> Vec<Word> {
 
 /// Utterances in time order: runs of words from one chunk and speaker without a long pause.
 pub fn utterances(record: &Recording) -> Vec<Line> {
+    let named = crate::speaker_names::named(record);
+    let record = &named;
     let heard = Heard::chunks(record);
     let echo =
         |chunk: &Chunk, start: u64, text: &str| chunk.channel == "me" && heard.echo(start, text);
@@ -268,12 +270,18 @@ pub fn live_turns(
         let speaker = if me {
             "Me".to_owned()
         } else {
-            partial
-                .words
+            let names = crate::speaker_names::Names::new(record, streamed);
+            let mut words = partial.words.clone();
+            names.streamed(&partial.channel, &mut words);
+            let fallback = record.meeting_speakers.at(partial.start_ms, partial.end_ms);
+            words
                 .iter()
                 .rev()
                 .find(|word| !word.speaker.is_empty())
-                .map_or_else(|| "Meeting audio".to_owned(), |word| word.speaker.clone())
+                .map_or_else(
+                    || fallback.unwrap_or_else(|| "Speaker 1".to_owned()),
+                    |word| word.speaker.clone(),
+                )
         };
         out.push(LiveTurn {
             speaker,
@@ -304,6 +312,8 @@ pub fn chunk_texts(record: &Recording) -> BTreeMap<String, String> {
 /// Each chunk's words without echo, as `chunk_texts` has them. `speaker` is kept only where
 /// diarization named a meeting-audio voice. A chunk without word timings is one word spanning it.
 pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
+    let named = crate::speaker_names::named(record);
+    let record = &named;
     let heard = Heard::chunks(record);
     let mut out = BTreeMap::new();
     for chunk in record

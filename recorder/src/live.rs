@@ -272,6 +272,10 @@ impl Tico {
         for words in streamed.values_mut() {
             words.retain(|word| !excluded(&context.paused_windows, word.start_ms, word.end_ms));
         }
+        let names = crate::speaker_names::Names::new(&record, &streamed);
+        for (channel, words) in &mut streamed {
+            names.streamed(channel, words);
+        }
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         scrub_pending(
@@ -286,7 +290,7 @@ impl Tico {
             queue.streamed(&transaction, &record, &streamed)?;
             queue.finished(&transaction, &record)?;
         }
-        queue.corrections(&transaction, &record)?;
+        queue.corrections(&transaction, &record, &streamed)?;
         transaction.commit()?;
         if live {
             let mut query=db.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0 ORDER BY seq")?;
@@ -1195,45 +1199,75 @@ impl<'a> Queue<'a> {
             if chunk.end_ms > watermark || !["done", "silence"].contains(&chunk.status.as_str()) {
                 break;
             }
-            let overflow_ms = self
+            let mut overflow_ms = self
                 .spans
                 .iter()
                 .filter(|span| span.channel == chunk.channel)
                 .map(|span| span.end_ms)
                 .max()
                 .unwrap_or(0);
-            let turn = if overflow_ms == 0 {
-                texts.get(&chunk.id).map(|text| Turn {
-                    speaker: chunk.speaker.clone(),
-                    start_ms: chunk.start_ms,
-                    end_ms: chunk.end_ms,
-                    text: text.clone(),
-                })
-            } else {
-                let rest: Vec<&Word> = words
+            if !record.meeting_speakers.intervals.is_empty() {
+                // Named speech must keep the turns inside a long chunk, including when the
+                // streaming provider is unavailable. Spans let later voice clustering correct
+                // these names through the same revision path as streamed speech.
+                let fresh: Vec<Word> = words
                     .get(&chunk.id)
                     .into_iter()
                     .flatten()
-                    .filter(|word| midpoint(word) >= overflow_ms)
+                    .filter(|word| overflow_ms == 0 || midpoint(word) >= overflow_ms)
+                    .cloned()
                     .collect();
-                rest.first().map(|first| Turn {
-                    speaker: chunk.speaker.clone(),
-                    start_ms: first.start_ms,
-                    end_ms: chunk.end_ms,
-                    text: rest
-                        .iter()
-                        .map(|word| word.text.trim())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                })
-            };
-            if let Some(turn) = turn.filter(|turn| !turn.text.trim().is_empty()) {
-                // Mixed with streamed turns a late chunk is placed at the end; alone, it is a fault.
-                ensure!(
-                    !self.spans.is_empty() || turn.start_ms >= self.last_start,
-                    "A late transcript turn precedes the shared transcript. Local audio is safe."
-                );
-                self.push(transaction, Some(&chunk.id), &turn)?;
+                for (index, turn) in streamed_turns(&chunk.channel, &fresh).iter().enumerate() {
+                    let key = if index == 0 {
+                        chunk.id.clone()
+                    } else {
+                        format!("{}:speaker:{index}", chunk.id)
+                    };
+                    let seq = self.push(transaction, Some(&key), turn)?;
+                    transaction.execute("INSERT INTO live_spans(recording_id,destination_id,seq,channel,start_ms,end_ms) VALUES(?,?,?,?,?,?)",
+                        rusqlite::params![self.id,self.destination,seq,chunk.channel,turn.start_ms,turn.end_ms])?;
+                    self.spans.push(Span {
+                        seq,
+                        channel: chunk.channel.clone(),
+                        start_ms: turn.start_ms,
+                        end_ms: turn.end_ms,
+                    });
+                }
+                overflow_ms = chunk.end_ms;
+            } else {
+                let turn = if overflow_ms == 0 {
+                    texts.get(&chunk.id).map(|text| Turn {
+                        speaker: chunk.speaker.clone(),
+                        start_ms: chunk.start_ms,
+                        end_ms: chunk.end_ms,
+                        text: text.clone(),
+                    })
+                } else {
+                    let rest: Vec<&Word> = words
+                        .get(&chunk.id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|word| midpoint(word) >= overflow_ms)
+                        .collect();
+                    rest.first().map(|first| Turn {
+                        speaker: chunk.speaker.clone(),
+                        start_ms: first.start_ms,
+                        end_ms: chunk.end_ms,
+                        text: rest
+                            .iter()
+                            .map(|word| word.text.trim())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    })
+                };
+                if let Some(turn) = turn.filter(|turn| !turn.text.trim().is_empty()) {
+                    // Mixed with streamed turns a late chunk is placed at the end; alone, it is a fault.
+                    ensure!(
+                        !self.spans.is_empty() || turn.start_ms >= self.last_start,
+                        "A late transcript turn precedes the shared transcript. Local audio is safe."
+                    );
+                    self.push(transaction, Some(&chunk.id), &turn)?;
+                }
             }
             transaction.execute(
                 "INSERT INTO live_sources(recording_id,destination_id,chunk_id,channel,end_ms,overflow_ms) VALUES(?,?,?,?,?,?)",
@@ -1257,7 +1291,12 @@ impl<'a> Queue<'a> {
     }
     /// Queues a correction for each streamed turn whose finished words differ from what Tico has.
     /// A turn is settled once every chunk under it is used.
-    fn corrections(&self, transaction: &rusqlite::Transaction, record: &Recording) -> Result<()> {
+    fn corrections(
+        &self,
+        transaction: &rusqlite::Transaction,
+        record: &Recording,
+        streamed: &BTreeMap<String, Vec<Word>>,
+    ) -> Result<()> {
         if self.spans.is_empty() {
             return Ok(());
         }
@@ -1279,7 +1318,7 @@ impl<'a> Queue<'a> {
         // What Tico has for each streamed turn: the original, then the latest correction.
         let mut sent: HashMap<i64, (Value, i64)> = HashMap::new();
         let mut query = transaction.prepare(
-            "SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND chunk_id LIKE 'stream:%'",
+            "SELECT o.seq,o.payload_json FROM live_outbox o JOIN live_spans s USING(recording_id,destination_id,seq) WHERE o.recording_id=? AND o.destination_id=?",
         )?;
         for row in query.query_map([self.id, self.destination], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
@@ -1348,10 +1387,22 @@ impl<'a> Queue<'a> {
                 let Some((shown, revision)) = sent.get(&span.seq) else {
                     continue;
                 };
-                if !settled(span) {
-                    continue;
-                }
-                let (speaker, text) = corrected(words, shown["speaker"].as_str().unwrap_or(""));
+                let (speaker, text) = if settled(span) {
+                    corrected(words, shown["speaker"].as_str().unwrap_or(""))
+                } else {
+                    let words: Vec<Word> = streamed
+                        .get(channel)
+                        .into_iter()
+                        .flatten()
+                        .filter(|w| midpoint(w) >= span.start_ms && midpoint(w) <= span.end_ms)
+                        .cloned()
+                        .collect();
+                    let (speaker, _) = corrected(words, shown["speaker"].as_str().unwrap_or(""));
+                    if !record.meeting_speakers.participants.contains(&speaker) {
+                        continue;
+                    }
+                    (speaker, shown["text"].as_str().unwrap_or("").to_owned())
+                };
                 if shown["speaker"] == speaker.as_str() && shown["text"] == text.as_str() {
                     continue;
                 }

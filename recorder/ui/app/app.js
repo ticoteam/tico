@@ -834,10 +834,11 @@
     }
     // A recording problem worth knowing about, in plain words; closing it keeps it closed.
     const notice = st.notice && rec ? `<div class="dock-notice" role="status">${icon('alert', 14)}<span class="grow">${esc(st.notice)}</span><button class="icon-btn" data-act="dismiss-notice" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>` : '';
+    const speakerPermission = st.speaker_permission && rec ? `<div class="dock-notice" role="status"><span class="grow">Allow Accessibility to show who's speaking</span><button class="link" data-act="allow-speaker-names">Allow</button><button class="icon-btn" data-act="dismiss-speaker-names" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>` : '';
     const toast = foot ? `<div class="toast">${esc(foot)}</div>` : '';
-    if (!bar && !notice && !toast) return '';
+    if (!bar && !notice && !toast && !speakerPermission) return '';
     const style = side === 'left' ? `style="right:${S.ui.hideSide ? 0 : 'min(400px, 46%)'}"` : '';
-    return `<div class="dock ${side}" ${style}>${notice}${toast}${bar}</div>`;
+    return `<div class="dock ${side}" ${style}>${speakerPermission}${notice}${toast}${bar}</div>`;
   }
 
   // ---- Share live: nothing reaches Tico until Share live or Copy link ----
@@ -1764,6 +1765,8 @@
     'open-url': (el) => act('open_url', { url: el.dataset.url }),
     'dismiss-error': () => act('dismiss_error'),
     'dismiss-notice': () => act('dismiss_notice'),
+    'allow-speaker-names': () => act('allow_speaker_names'),
+    'dismiss-speaker-names': () => act('dismiss_speaker_names'),
     'connect-ok': () => act('confirm_connect'),
     'connect-cancel': () => act('dismiss_connect'),
     signin: () => { const address = model('signin').trim(); if (address) { S.ui.signingDesktop = ''; act('sign_in', { address }); } },

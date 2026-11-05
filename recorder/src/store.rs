@@ -118,6 +118,9 @@ pub struct Recording {
     /// Speaker labels for meeting audio: "" (not run), "running", "done" or the error.
     #[serde(default)]
     pub speakers: String,
+    /// Local AX evidence; loaded from separate tables, never copied into provider metadata.
+    #[serde(default, skip_serializing)]
+    pub meeting_speakers: crate::speaker_names::Timeline,
 }
 /// One recognised word, in recording time. `speaker` is set when diarization named a voice;
 /// `turn` is the transcription service's own speaker label, which only holds within one chunk.
@@ -260,6 +263,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS live_edits(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
           destination_id TEXT NOT NULL,seq INTEGER NOT NULL,
           PRIMARY KEY(recording_id,destination_id,seq));")?;
+        crate::speaker_names::migrate(&db)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -365,6 +369,7 @@ impl Store {
             chunks: vec![],
             deliveries: vec![],
             speakers: String::new(),
+            meeting_speakers: Default::default(),
         };
         self.db()?.execute(
             "INSERT INTO recordings VALUES(?,?)",
@@ -471,6 +476,7 @@ impl Store {
             .query_map([id], |r| r.get::<_, String>(0))?
             .map(|text| Ok(serde_json::from_str(&text?)?))
             .collect::<Result<_>>()?;
+        value.meeting_speakers = self.meeting_speakers(id)?;
         Ok(value)
     }
     pub fn mutate(
@@ -860,6 +866,7 @@ impl Store {
         chunk.text = text.trim().into();
         // Edited text replaces the provider's words, and with them any diarized speakers.
         chunk.words.clear();
+        chunk.provider["source"] = serde_json::json!("edit");
         save_chunk(&transaction, &chunk)?;
         transaction.commit()?;
         Ok(())

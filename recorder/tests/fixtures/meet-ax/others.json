@@ -1,0 +1,43 @@
+{
+  "role": "AXGroup",
+  "children": [
+    {
+      "role": "AXGroup",
+      "label": "4 others",
+      "children": [
+        {
+          "role": "AXImage",
+          "label": "Ben Example is speaking"
+        }
+      ]
+    },
+    {
+      "role": "AXList",
+      "label": "Participants",
+      "children": [
+        {
+          "role": "AXListItem",
+          "label": "Ana Example"
+        },
+        {
+          "role": "AXListItem",
+          "label": "Ben Example"
+        },
+        {
+          "role": "AXListItem",
+          "label": "Casey Example (You)"
+        }
+      ]
+    },
+    {
+      "role": "AXGroup",
+      "label": "In-call messages",
+      "children": [
+        {
+          "role": "AXImage",
+          "label": "Private message is speaking"
+        }
+      ]
+    }
+  ]
+}

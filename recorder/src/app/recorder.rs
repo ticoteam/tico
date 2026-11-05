@@ -150,7 +150,11 @@ type Signature = (String, String, usize, usize, usize);
 fn signature(record: &Recording) -> Signature {
     (
         record.id.clone(),
-        record.speakers.clone(),
+        format!(
+            "{}:{}",
+            record.speakers,
+            network::hash(&json!(record.meeting_speakers))
+        ),
         record.chunks.len(),
         record.chunks.iter().map(|chunk| chunk.text.len()).sum(),
         record
@@ -2864,6 +2868,8 @@ impl Recorder {
             "sending": self.send_step().map(|(id, label)| json!({"id": id, "label": label})),
             "profile": synthetic_input(),
             "notice": self.input_notice().filter(|notice| *notice != self.notice_dismissed),
+            "speaker_permission": self.active.is_some()
+                && tico_recorder_native::speaker_names::permission_pending(),
             "speech": speech::view(&self.config, self.key_saved("transcription"),
                 self.streaming() && self.key_saved(stream::KEY_NAME)),
         })

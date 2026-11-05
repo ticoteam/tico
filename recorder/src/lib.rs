@@ -12,6 +12,7 @@ pub mod notices;
 pub mod qos;
 pub mod settings;
 pub mod signin;
+pub mod speaker_names;
 pub mod speech;
 pub mod store;
 pub mod stream;
