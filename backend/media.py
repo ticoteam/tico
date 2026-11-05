@@ -764,6 +764,13 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
         ask["task_question"] = True
         if review:
+            # A generated pick label keeps its source even after its review attachment is projected away.
+            if body.pick:
+                sources = {e["label"]: {"file": e["file"], "version": e["version"]} for e in review}
+                for question in ask["questions"]:
+                    for option in question["options"]:
+                        if option["label"] in sources:
+                            option["source"] = sources[option["label"]]
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments
         if spend:
