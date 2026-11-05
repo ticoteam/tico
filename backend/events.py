@@ -179,11 +179,26 @@ _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
 _PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
 
+
+def _letters_for_task(task):
+    """A finished letter still needs a row patch when current source access changes."""
+    return ("INSERT INTO changes(topic,kind,subject_id,created_at) "
+            f"SELECT 'letters','access',l.id,{_NOW} FROM letters l WHERE l.task_id={task} OR "
+            f"EXISTS(SELECT 1 FROM json_each(l.source_provenance,'$.tasks') t WHERE t.value={task}) OR "
+            "EXISTS(SELECT 1 FROM conversations cv LEFT JOIN conversations root ON root.id=cv.root_id "
+            f"WHERE (cv.task_id={task} OR root.task_id={task}) AND (cv.id=l.thread_id OR "
+            "EXISTS(SELECT 1 FROM json_each(l.source_provenance,'$.threads') t WHERE t.value=cv.id)));")
+
+
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
 TRIGGERS = [
     ("changes_letters_insert", "INSERT", "letters", None, _row("letters", "insert", "NEW.id")),
     ("changes_letters_update", "UPDATE", "letters", None, _row("letters", "update", "NEW.id")),
+    ("changes_task_letters_access", "UPDATE", "tasks", _changed("private", *_PARTIES), _letters_for_task("NEW.id")),
+    ("changes_task_letters_delete", "DELETE", "tasks", None, _letters_for_task("OLD.id")),
+    ("changes_roles_letters_insert", "INSERT", "task_roles", None, _letters_for_task("NEW.task_id")),
+    ("changes_roles_letters_delete", "DELETE", "task_roles", None, _letters_for_task("OLD.task_id")),
     ("changes_meeting_items_insert", "INSERT", "meeting_items", None,
      _row("meeting_items", "items", "NEW.id", ref="NEW.meeting_id")),
     ("changes_meeting_items_update", "UPDATE", "meeting_items", _ANY_COLUMN,
@@ -661,6 +676,11 @@ for _name in ("changes_proposal_task_access", "changes_proposal_roles_insert", "
     NEEDS[_name] = ("meeting_items.proposed_task_id",)
 for _name in ("changes_item_task_access", "changes_item_roles_insert", "changes_item_roles_delete"):
     NEEDS[_name] = ("meeting_items",)
+
+
+for _name in ("changes_task_letters_access", "changes_task_letters_delete", "changes_roles_letters_insert",
+              "changes_roles_letters_delete"):
+    NEEDS[_name] = ("letters.source_provenance", "conversations.root_id", "conversations.task_id")
 
 
 def ensure(c):
