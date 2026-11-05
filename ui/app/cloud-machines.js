@@ -94,3 +94,26 @@ function cloudMachineRun(slug, body, control) {
   const path = control?.dataset.cloudScope === 'shared' ? '/v2/cloud-machines/shared' : `/v2/bots/${encodeURIComponent(slug)}/cloud-machine`;
   return async rev => { await post(path, body); return rev; };
 }
+// Tico support on cloud machines (GET /v2/cloud-machines/support): HQ's switch for the company and each machine's
+// support helper, read once per page load. Off Tico Cloud, or when the read fails, `view` stays null and nothing shows.
+const CLOUD_SUPPORT = {view: null, read: null};
+function cloudSupportRead() {
+  CLOUD_SUPPORT.read ??= get('/v2/cloud-machines/support')
+    .then(view => { CLOUD_SUPPORT.view = view?.available ? view : null; }, () => {})
+    .then(() => CLOUD_SUPPORT.view);
+  return CLOUD_SUPPORT.read;
+}
+// The answer to a change is the whole state again; it replaces what was read.
+function cloudSupportSet(view) {
+  CLOUD_SUPPORT.view = view?.available ? view : null;
+  CLOUD_SUPPORT.read = Promise.resolve(CLOUD_SUPPORT.view);
+}
+// "Tico support: on", "off" or "offline" for a computer that is a cloud machine, matched by HQ's key (the shared
+// machine's `_shared`, else its bot); '' for a helper that is not there, any other computer, or before the read.
+function cloudSupportWords(machine) {
+  const m = machine?.cloud_machine;
+  if (!m || !CLOUD_SUPPORT.view) return '';
+  const key = m.shared ? '_shared' : m.bot;
+  const helper = CLOUD_SUPPORT.view.machines.find(row => row.key === key)?.helper;
+  return ['on', 'off', 'offline'].includes(helper) ? `Tico support: ${helper}` : '';
+}
