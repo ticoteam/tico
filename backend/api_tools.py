@@ -649,12 +649,14 @@ def add_key(c, who, vault, tool_id, body):
     return _key_view(c, who, vault.row(c, brief["id"]), True, vault.admins)
 
 
-def ensure_tool(c, who, credential_id):
+def ensure_tool(c, who, credential_id, from_computer=False):
     """Put a key stored outside Tools (Settings' vault, a chat's credential card, a computer's file migration) on a
     tool, in the caller's transaction, so every tool key shows on Tools: the first tool of its service that has no Read
     and write key yet takes it as that key, else a new tool is made for it, on the proxy when its service's address is
     known and on computers otherwise. The same rule as the data migration (`TS.is_tool_key`). A key Tools stored
-    itself (`tool:` source) already has its tool; anything else is left alone. The tool id, or None."""
+    itself (`tool:` source) already has its tool; anything else is left alone. `from_computer`: a key a bot already
+    uses from its computer's files (the file migration) stays on computers, on a computer tool, like the data
+    migration's: moving it to the proxy unasked would change a working bot. The tool id, or None."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
     if not row or row["tool_id"] or str(row["source"] or "").startswith("tool:"):
         return None
@@ -667,9 +669,10 @@ def ensure_tool(c, who, credential_id):
     service = TS.match(env=row["env"], name=row["name"])
     free = service and c.execute(
         "SELECT id FROM tools t WHERE service=? AND NOT EXISTS (SELECT 1 FROM credentials k WHERE k.tool_id=t.id"
-        " AND k.access_level='read_write') ORDER BY created_at, id LIMIT 1", (service,)).fetchone()
-    tid = free["id"] if free else TS.insert_tool(c, service, row["name"],
-                                                 "proxy" if TS.defaults(service).get("base_url") else "computer",
+        " AND k.access_level='read_write')" + (" AND delivery='computer'" if from_computer else "") +
+        " ORDER BY created_at, id LIMIT 1", (service,)).fetchone()
+    proxy = not from_computer and TS.defaults(service).get("base_url")
+    tid = free["id"] if free else TS.insert_tool(c, service, row["name"], "proxy" if proxy else "computer",
                                                  who.actor, H.now())
     c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
     H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": "read_write"})

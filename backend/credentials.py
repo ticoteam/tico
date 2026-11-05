@@ -695,7 +695,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                           (gid,cid,subject,who.actor,now))
                 H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
                 from . import api_tools
-                api_tools.ensure_tool(c,who,cid)
+                api_tools.ensure_tool(c,who,cid,from_computer=True)   # already in use from the computer
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(pending),FILE_MIGRATION))

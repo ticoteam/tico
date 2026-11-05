@@ -7,6 +7,7 @@ Ana owns the company and Ben is an admin (both credential administrators); Cara 
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -213,3 +214,10 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
     assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"
+    # A key a bot already uses from its computer's files (the file migration) stays on computers, known service or not.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,"
+                  "updated_by) VALUES('c-file','STRIPE_API_KEY (ops)','api_key','STRIPE_API_KEY','',x'01',x'01',"
+                  "'Computer migration','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z','runner:r1')")
+        filed = api_tools.ensure_tool(c, SimpleNamespace(actor="runner:r1"), "c-file", from_computer=True)
+        assert tuple(c.execute("SELECT service, delivery FROM tools WHERE id=?", (filed,)).fetchone()) == ("stripe", "computer")
