@@ -222,6 +222,11 @@
         "recipient_id": "human:ana",
         "recipient_name": "Ana",
         "refs": {
+          "body_sources": [
+            {
+              "task": "<task>"
+            }
+          ],
           "news": "assignment",
           "task": "<task>",
           "trigger": "status_or_relation"
@@ -250,6 +255,11 @@
         "recipient_id": "bot:ops",
         "recipient_name": "ops",
         "refs": {
+          "body_sources": [
+            {
+              "task": "<task>"
+            }
+          ],
           "caused_by": "human:ana",
           "news": "assignment",
           "rule": "person_message",
@@ -280,6 +290,11 @@
         "recipient_id": "bot:ops",
         "recipient_name": "ops",
         "refs": {
+          "body_sources": [
+            {
+              "task": "<task>"
+            }
+          ],
           "caused_by": "human:ana",
           "news": "task_done",
           "rule": "person_message",
@@ -310,6 +325,11 @@
         "recipient_id": "bot:ops",
         "recipient_name": "ops",
         "refs": {
+          "body_sources": [
+            {
+              "task": "<task>"
+            }
+          ],
           "caused_by": "human:ana",
           "news": "task_done",
           "rule": "person_message",
