@@ -1,7 +1,7 @@
 """Small, content-free context lists, rebuilt with current rights for each task read and claim."""
 from fastapi import Request
 
-from . import bot_access, context_search, media, threads
+from . import context_search, media, teammate_access, threads
 from .files import file_visible
 from .store import H, Problem
 
@@ -22,9 +22,20 @@ def page_limited(c, row):
         if not conversation:
             return True
         room = threads.root_of(c, conversation)
-        return room.get("audience") != "company"
-    config = c.execute("SELECT access FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
-    return not bot_access.document(config[0] if config else None)["read"]["everyone"]
+        audience = threads.audience_of(room)
+        if audience == "company":
+            return False
+        if audience == "task":
+            return H.task_private(c, H.task(c, room.get("task_id")))
+        if audience == "home":
+            owner = threads.home_owner(room)
+            return not owner or not teammate_access.document(c, owner)["read"]["everyone"]
+        if audience == "meeting":
+            meeting = c.execute("SELECT visibility FROM live_meetings WHERE id=?",
+                                ((room.get("room_key") or "").removeprefix("live-meeting:"),)).fetchone()
+            return not meeting or meeting[0] != "team"
+        return True
+    return not teammate_access.document(c, "bot:" + row["bot_id"])["read"]["everyone"]
 
 
 def listing(c, auth, who, tid):

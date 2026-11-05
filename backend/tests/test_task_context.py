@@ -1,7 +1,7 @@
 """Task context is bounded metadata, filtered by the caller's ordinary source permissions."""
 import json
 
-from backend import blobs, meetings
+from backend import blobs, meetings, threads
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
@@ -80,6 +80,12 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
     hidden = seed_page(api, 'cpo', task=t['id'])
     personal = page(api, attempt).json()['page']['file_id']
     post(api, 'pins', {'place': 'task:' + t['id'], 'item': 'page:' + personal}, token='ben-test')
+    shared_home = seed_page(api, 'ops')
+    with api.app.state.store.transaction() as c:
+        home = threads.home(c, 'bot:ops')
+        c.execute('UPDATE bot_files SET scope=?,conversation_id=? WHERE id=?',
+                  ('conversation:' + home['id'], home['id'], shared_home))
+    pin(api, t['id'], shared_home)
     pinned = seed_page(api, 'ops')
     private_task = task(api, title='Review the private budget', owner='bot:ops', private=True)
     private_page = seed_page(api, 'ops', task=private_task['id'])
@@ -90,7 +96,7 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
             c.execute('UPDATE pages SET audience=? WHERE file_id=?', (encode({'bots': bots}), fid))
     before = get(api, 'tasks/' + t['id'] + '/context', token)
     shown = {p['id']: p for p in before['pages']}
-    assert set(shown) == {filed, limited, personal, pinned, private_page}
+    assert set(shown) == {filed, limited, personal, shared_home, pinned, private_page}
     assert {fid for fid, p in shown.items() if p['limited']} == {limited, personal, private_page}
     pin(api, private_task['id'], pinned)
     private_context = get(api, 'tasks/' + private_task['id'] + '/context', token)
@@ -113,8 +119,12 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
         c.execute('UPDATE pages SET audience=? WHERE file_id=?', (encode({'bots': ['finance']}), limited))
         c.execute('UPDATE pages SET archived=1 WHERE file_id=?', (pinned,))
     after = get(api, 'tasks/' + t['id'] + '/context', token)
-    assert {p['id'] for p in after['pages']} == {filed, personal, private_page}
+    assert {p['id'] for p in after['pages']} == {filed, personal, shared_home, private_page}
     get(api, 'pages/' + limited, token, expected=404)
+    with api.app.state.store.transaction() as c:
+        restrict(c, 'ops', people=['ana'])
+    restricted_home = get(api, 'tasks/' + t['id'] + '/context', token)
+    assert next(p for p in restricted_home['pages'] if p['id'] == shared_home)['limited']
 
 
 def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(api):

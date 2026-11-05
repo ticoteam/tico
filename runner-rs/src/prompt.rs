@@ -291,11 +291,11 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
         }
         put(&mut lines, Part::Standing, format!("{head}\n{}", py_dumps(&Value::Object(learned))));
     }
-    // Asked from the Updates chat: only that turn is handed the updates (backend/updates_chat.py for_turn).
     let context = task_context(&attempt["task_context"]);
     if !context.is_empty() {
         put(&mut lines, Part::Turn, context);
     }
+    // Asked from the Updates chat: only that turn is handed the updates (backend/updates_chat.py for_turn).
     if attempt["updates"].is_object() {
         put(&mut lines, Part::Turn, format!("{UPDATES_HEADER}\n{}", py_dumps(&attempt["updates"])));
     }
