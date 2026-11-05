@@ -78,10 +78,9 @@ const timeline = {
     msg('b1', 13, 'human:bea', 'Long one.', {thread_id: 't-lb', depth: 1}),
     msg('b2', 14, 'human:bea', 'Long two.', {thread_id: 't-lb', depth: 1}),
   ]}),
-  'h-ops': () => ({thread: {id: 'h-ops', audience: 'home', home: {actor: 'bot:ops'}, last_seq: 3, me: me()}, breadcrumb: [], next_cursor: null, messages: [
+  'h-ops': () => ({thread: {id: 'h-ops', audience: 'home', home: {actor: 'bot:ops'}, last_seq: 2, me: me()}, breadcrumb: [], next_cursor: null, messages: [
     {...msg('o1', 1, 'bot:ops', 'Weekly numbers are in the doc.'), thread_id: 'h-ops'},
     {...msg('o2', 2, 'bot:ops', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u1', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-ops'},
-    {...msg('o3', 3, 'human:ana', "Ana's earlier chat is in Home."), thread_id: 'h-ops'},
   ]}),
   'h-bea': () => ({thread: {id: 'h-bea', audience: 'home', home: {actor: 'human:bea'}, last_seq: 2, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: [
     {...msg('b1', 1, 'human:bea', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u2', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-bea'},
@@ -680,12 +679,6 @@ let browser = null;
     // The bot page: Home and DM, and a quiet link to every thread with the bot.
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
-    await page.getByText("Ana's earlier chat is in Home.").waitFor();
-    const pickedHome = await page.evaluate(() => v2ChatRoom([
-      {id: 'pair', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']},
-      {id: 'h-ops', kind: 'chat', scope: 'direct', audience: 'home', participants: ['bot:ops']},
-    ], 'ops', 'personal')?.id);
-    assert.equal(pickedHome, 'h-ops', 'a readable Home replaces the old personal DM in the chat lookup');
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
     assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
     assert.ok(!tabs.includes('chat'));

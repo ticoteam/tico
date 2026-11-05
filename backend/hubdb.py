@@ -9387,7 +9387,7 @@ def chats_with(conn, actor, bot_actor_id):
     home_id = bot_home_merge.home_for_chat(conn, actor, bot_actor_id, create=False)
     if home_id:
         home = _one(conn, "SELECT * FROM conversations WHERE id=?", (home_id,))
-        if home:
+        if home and all(row["id"] != home_id for row in out):
             home["participants"] = _json(home.get("participants"), []) or []
             out.append(home)
             out.sort(key=lambda row: (row.get("last_message_at") or row.get("created_at") or "", row["id"]),

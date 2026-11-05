@@ -308,6 +308,22 @@ def test_chat_with_lists_a_moved_bots_readable_home_and_keeps_unmoved_dms(api, o
     assert [row["id"] for row in unchanged.json()["conversations"]] == [finance]
 
 
+def test_chat_with_lists_a_moved_shared_room_home_once_for_a_member(api):
+    auth = api.app.state.auth
+    with store(api).transaction() as c:
+        shared = rooms.sync_shared_room(c, auth, "cpo", create=True)["id"]
+        old_dm = room(c, "human:ana", "cpo")
+        say(c, "human:ana", "bot:cpo", "A legacy question", old_dm)
+    merge(api)
+
+    with store(api).read() as c:
+        assert "human:ana" in H.conversation(c, shared)["participants"]
+
+    listed = api.get("/api/v2/conversations", params={"chat_with": "cpo"}, headers=headers("ana-test"))
+    assert listed.status_code == 200, listed.text
+    assert [row["id"] for row in listed.json()["conversations"]] == [shared]
+
+
 def test_a_moved_rooms_read_marks_are_discarded_for_root_and_sub_threads(api):
     """Finding 4: after the move, every reader of the Home has read the moved history, root and sub-threads alike."""
     with store(api).transaction() as c:
