@@ -389,19 +389,25 @@ class Cli(Stage2):
         self.assertEqual(len(seen), 2)
         self.assertTrue(all("answer.pdf" in body for body in seen), seen)
 
-    def test_an_owner_message_sends_attached_mail_with_sending_off_and_a_reviewer_no(self):
+    def test_an_owner_message_sends_attached_mail_with_sending_off(self):
         pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": False, "forward_to": []}
         hub(owner_order())
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
-        with mock.patch.object(cli.rv, "review", return_value={"available": True, "ok": False,
-                                                             "backend": "fake", "problems": ["Check the file"]}):
-            rc, p, err = self.run_json("draft", "--as", "inbox", "--to", STRANGER, "--subject", "Support question",
-                                       "--body-file", self.body_file(BODY), "--attach", "answer.pdf", "--issue", "1", "--json")
-            self.assertEqual(rc, 0, err)
-            rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
-                                       "--approval-issue", ORDER)
-        self.assertEqual((rc, out["sent"]), (0, True), out)
-        self.assertIn("Check the file", out["review_advisory"])
+        for ok in (True, False):
+            with self.subTest(reviewer_ok=ok), mock.patch.object(
+                    cli.rv, "review", return_value={"available": True, "ok": ok, "backend": "fake",
+                                                    "problems": [] if ok else ["The owner never mentioned a file"]}):
+                rc, p, err = self.run_json("draft", "--as", "inbox", "--to", STRANGER, "--subject", "Support question",
+                                           "--body-file", self.body_file(BODY), "--attach", "answer.pdf", "--issue", "1",
+                                           "--json")
+                self.assertEqual(rc, 0, err)
+                rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                           "--approval-issue", ORDER)
+                # The owner's message covers the file; the reviewer, which sees that message, still blocks
+                # anything beyond it (#2560).
+                self.assertEqual(out["sent"], ok, out)
+                if not ok:
+                    self.assertEqual(out["gate"], "review")
 
     def test_the_same_text_with_another_file_is_a_new_draft_the_approval_does_not_cover(self):
         f = self.root / "emp-inbox" / "answer.pdf"
