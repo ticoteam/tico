@@ -689,6 +689,10 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
+        from . import turn_scope
+        pending_reads = {}
+        reads_reset = turn_scope.READS.set(pending_reads)
+        scope_auth_reset = turn_scope.AUTH.set(auth)
         via_reset = delegation_reset = run_reset = cause_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
@@ -998,6 +1002,9 @@ def create_app(settings=None):
                         # act from the app would (backend/wake_rules.py ALWAYS_WAKE "person", wake presets).
                         wake_rules.CAUSE.set(lent)
             response = early or await call_next(request)
+            if response.status_code < 400 and pending_reads:
+                turn_scope.READS.set(None)
+                await asyncio.to_thread(turn_scope.flush, store, auth, pending_reads)
             if response.status_code >= 500:
                 from .diagnostics import request_failure
                 request_failure(request, response.status_code)
@@ -1086,6 +1093,8 @@ def create_app(settings=None):
             telemetry.capture("request", exc, 500, route=error_route(request))
             raise
         finally:
+            turn_scope.READS.reset(reads_reset)
+            turn_scope.AUTH.reset(scope_auth_reset)
             if via_reset is not None:
                 H.VIA.reset(via_reset)
             if delegation_reset is not None:
@@ -8520,6 +8529,8 @@ def create_app(settings=None):
     install_meeting_items(app, store, mutate, task_create, auth)
     from .meeting_task_links import install as install_meeting_task_links
     install_meeting_task_links(app, store, auth, mutate)
+    from . import task_context
+    task_context.install(app, store, auth)
     from .connectors import install_connectors
     install_connectors(app, store, execution, mutate)
     from .imports import install_imports

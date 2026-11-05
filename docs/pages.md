@@ -11,7 +11,7 @@ other file.
 ## Publishing
 
     hub page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
-        [--task ID] [--replaces PAGE]
+        [--task ID] [--replaces PAGE] [--page PAGE --base-version N]
 
 - **The same path again** adds a version of the same page.
 - **`--cadence`** says how often the bot means to update it: `none`, `daily`, `weekly` or `monthly`.
@@ -22,8 +22,21 @@ other file.
 - **`--replaces`** names an older page of the same bot that this one takes over. The older page then says
   **Replaced by** and links here.
 
-A bot writes only its own pages. Over MCP the same tools are `hub_page_publish`, `hub_page_list`, `hub_page_show` and
+A bot may add a version to another bot's page with `--page ID --base-version N` when the page is filed on its turn's
+only task. The maintainer and scope stay the same, and the version names the bot that published it. A stale base
+version returns 409; pinning a page to the task alone grants no version rights.
+
+Over MCP the same tools are `hub_page_publish`, `hub_page_list`, `hub_page_show` and
 `hub_page_archive`.
+
+Task turns receive up to ten pages and ten linked Team meetings as titles, dates and ids, never content.
+`hub task context ID` (`hub_task_context`, `GET /api/v2/tasks/{id}/context`) reads that list. Bots read the content
+with `hub file read ID` and `hub meeting read ID`; `--notes` reads only the saved meeting notes.
+Each read checks current access and whether every reader of every carried task may read the source. A bot-wide or
+team-pinned page does not qualify merely because the bot can open it; a person's Dashboard or Growth pin can make
+a page shared context. A page filed on a task with a bot party qualifies for that task, without making it context for
+other tasks. Several carried tasks get their intersection. Access changes apply to the next read, including direct
+file and blob addresses. Outside task turns, a bot attached by a private meeting's owner may read that saved meeting.
 
 **What a page may hold.** One `.html` file, up to 10 MB. It runs no script and loads nothing from elsewhere. Tico
 removes scripts and outside addresses when the page is published, and the answer lists what it removed

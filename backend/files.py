@@ -165,6 +165,14 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
 
 
 def file_visible(c, auth, who, row, cache):
+    from . import turn_scope
+    if not turn_scope.allowed(c, auth, who, "file", row) or not _file_visible(c, auth, who, row, cache):
+        return False
+    turn_scope.record(c, who, "file", row["id"])
+    return True
+
+
+def _file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
     to the Counsel run a person asked to read it (asked_to_read)."""
@@ -182,7 +190,8 @@ def file_visible(c, auth, who, row, cache):
                                                                   memo=cache):
             return False
     if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
-        return False
+        from .turn_scope import public_pin
+        return public_pin(c, row["id"])
     # A bot-wide file is its bot's: one cache serves files of many bots (a card's latest pages).
     key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]
     if key not in cache:
@@ -442,7 +451,8 @@ class Files:
             return fields, data
         return dict(query), raw
 
-    def publish(self, request, who, fields, data, *, imported=False, extra=None, extra_body=None):
+    def publish(self, request, who, fields, data, *, imported=False, extra=None, extra_body=None,
+                version_page="", base_version=None):
         """Bytes into the blob store, then one idempotent transaction that lists them. `extra(c, row, changed)` adds
         to the same write (a page's row, backend/pages.py) and its answer; `extra_body` is what it adds to the
         request a retry must repeat."""
@@ -484,6 +494,19 @@ class Files:
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
             actor = self.actor_of(who, bot)
+            maintainer, file_identity = bot, identity
+            if version_page:
+                previous = c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id=?",
+                                     (version_page,)).fetchone()
+                if not previous or previous["state"] == "deleted" or not self.visible(c, who, previous, {}):
+                    raise Problem("not_found", "Page not found", 404)
+                if (not task or scope != "task:" + task or previous["scope"] != scope
+                        or not attempt or privacy.attempt_tasks(c, attempt) != {task}):
+                    raise Problem("forbidden", "A page version must be filed on the turn's only task", 403)
+                if base_version != previous["current_version"]:
+                    raise Problem("conflict", "The page has a newer version", 409)
+                maintainer, file_identity = previous["bot_id"], previous["identity"]
+                task, conversation = previous["task_id"], previous["conversation_id"]
             if failed:
                 row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                              title=str(fields.get("title") or name), kind=BF.kind_of(name), mime=mime,
@@ -492,8 +515,8 @@ class Files:
                 return {"file": self.brief(c, row), "created": created, "synced": False}
             item = register(c, Identity("bot:" + bot, "bot"), digest, size, name, mime)
             row, created, changed = self.add_version(
-                c, bot=bot, actor=actor, scope=scope, task=task, conversation=conversation, attempt=attempt,
-                identity=identity, title=str(fields.get("title") or ""), name=name, mime=mime, blob_id=item["id"],
+                c, bot=maintainer, actor=actor, scope=scope, task=task, conversation=conversation, attempt=attempt,
+                identity=file_identity, title=str(fields.get("title") or ""), name=name, mime=mime, blob_id=item["id"],
                 digest=digest, size=size, source_digest=str(fields.get("etag") or "") or None,
                 commit=str(fields.get("commit") or "")[:64] if re.fullmatch(r"[0-9a-f]{7,64}", str(fields.get("commit") or "")) else "",
                 repo_path=relative, explicit_title=bool(fields.get("title")))

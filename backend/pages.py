@@ -229,6 +229,14 @@ class Pages:
         as_of = check_as_of(fields.get("as_of"))
         replaces = str(fields.get("replaces") or "").strip()
         task = str(fields.get("task") or "").strip()
+        version_page = str(fields.get("page") or "").strip()
+        base = fields.get("base_version")
+        if version_page:
+            if isinstance(base, bool) or not str(base or "").isdigit() or int(base) < 1:
+                raise Problem("validation", "base_version is the page version you read", 422)
+            base = int(base)
+        elif base is not None:
+            raise Problem("validation", "base_version requires page", 422)
         cleaned, unembedded = visuals.clean(data, "page", base=False)
         if len(cleaned) > visuals.LIMITS["page"]:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
@@ -257,7 +265,9 @@ class Pages:
                                                               (row["id"],)).fetchone(), {}),
                     "unembedded": unembedded}
         return self.files.publish(request, who, fields, cleaned, extra=extra,
-                                  extra_body={"cadence": cadence or "", "as_of": as_of or "", "replaces": replaces})
+                                  version_page=version_page, base_version=base,
+                                  extra_body={"cadence": cadence or "", "as_of": as_of or "", "replaces": replaces,
+                                              "page": version_page, "base_version": base})
 
     @staticmethod
     def pin_to_task(c, row, task):
@@ -328,6 +338,8 @@ def install_pages(app, store, auth, files):
             "name": {"type": "string"}, "text": {"type": "string"}, "content_base64": {"type": "string"},
             "title": {"type": "string"}, "cadence": {"enum": list(CADENCES)}, "as_of": {"type": "string"},
             "task": {"type": "string"}, "replaces": {"type": "string"}, "path": {"type": "string"},
+            "page": {"type": "string", "description": "Add a version to this page filed on the turn's only task"},
+            "base_version": {"type": "integer", "minimum": 1},
             "scope": {"enum": ["task", "bot"]}}}}}}}
 
     @app.post("/api/v2/pages", openapi_extra=publish_doc)

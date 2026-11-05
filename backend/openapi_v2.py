@@ -2849,6 +2849,8 @@ STABLE.extend([
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
      'Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap', 'TaskMeetings'),
+    ('/api/v2/tasks/{tid}/context', 'get', 'Tasks', 'getTaskContext',
+     'Up to 10 pages and 10 meetings shared by the task readers, filtered by current access; metadata only', 'TaskContext'),
 ])
 SCHEMAS.update({
     'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
@@ -2857,6 +2859,9 @@ SCHEMAS.update({
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),
+    'TaskContextPage': obj({'id': 's', 'title': 's', 'version': 'i', 'updated_at': 's'}),
+    'TaskContextMeeting': obj({'id': 's', 'title': 's', 'date': 's'}),
+    'TaskContext': obj({'pages': items(ref('TaskContextPage')), 'meetings': items(ref('TaskContextMeeting'))}),
     'MeetingTaskRemoved': obj({'ok': 'b'}),
 })
 

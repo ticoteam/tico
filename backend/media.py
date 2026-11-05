@@ -264,18 +264,23 @@ def shared_meeting(record, who):
     return bool(email) and any(str(a).strip().lower() == email for a in attendees)
 
 
-def authorized(c, who, rid, *, include_deleted=False, write=False):
+def authorized(c, who, rid, *, include_deleted=False, write=False, auth=None):
     record = MS.get(rid, c)
     if not record:
         raise Problem("not_found", "Note or meeting not found", 404)
+    from . import turn_scope
+    turn_scope.require_meeting(c, who, record, auth)
     state = c.execute("SELECT * FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
     if state and state["deleted_at"] and not include_deleted:
         raise Problem("not_found", "Note or meeting not found", 404)
     if record.get("review_state", "live") != "live" and not MS.filed_for(record, who):
         raise Problem("not_found", "Note or meeting not found", 404)
     if may_write(who, record):
+        if not write:
+            turn_scope.record(c, who, "meeting", rid)
         return record
     if not write and who.role in ("human", "owner") and shared_meeting(record, who):
+        turn_scope.record(c, who, "meeting", rid)
         return record
     raise Problem("forbidden", "This source belongs to another person", 403)
 
@@ -430,6 +435,12 @@ def blob_for(c, auth, who, bid):
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
         raise Problem("not_found", "File not found", 404)
+    from .turn_scope import blob_allowed
+    scoped = blob_allowed(c, auth, who, bid)
+    if scoped is not None:
+        if not scoped:
+            raise Problem("not_found", "File not found", 404)
+        return row
     # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)

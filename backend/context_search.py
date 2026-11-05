@@ -24,18 +24,24 @@ def excerpt(text, words, size=400):
     return ("…" if start else "") + text[start:start + size] + ("…" if start + size < len(text) else "")
 
 
-def readable(c, who, rid):
+def readable(c, who, rid, *, auth=None):
     """Bots may read explicitly shared meetings, never inherit their operator's private access."""
     if who.role != "bot":
-        row = media.authorized(c, who, rid)
+        row = media.authorized(c, who, rid, auth=auth)
         if row.get("review_state", "live") != "live":
             raise Problem("not_found", "Meeting not found or unavailable", 404)
         return row
     row = meetings.get(rid, c)
     deleted = c.execute("SELECT deleted_at FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
+    attached = c.execute("SELECT 1 FROM live_meetings l JOIN live_meeting_bots b ON b.meeting_id=l.id "
+                         "WHERE l.imported_meeting_id=? AND b.bot=? AND b.joined_by=l.owner_actor LIMIT 1",
+                         (rid, who.actor.removeprefix("bot:"))).fetchone()
     if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0]) or row["metadata"].get("kind") != "meeting"
-            or row["metadata"].get("private") is not False):
+            or row["metadata"].get("private") is not False and not attached):
         raise Problem("not_found", "Meeting not found or unavailable", 404)
+    from . import turn_scope
+    turn_scope.require_meeting(c, who, row, auth)
+    turn_scope.record(c, who, "meeting", rid)
     return row
 
 
@@ -148,7 +154,7 @@ def install_context_search(app, store, auth):
         with store.read() as c:
             for item in c.execute("SELECT id FROM meetings ORDER BY created_at DESC,id"):
                 try:
-                    row = readable(c, who, item[0])
+                    row = readable(c, who, item[0], auth=auth)
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
@@ -183,11 +189,13 @@ def install_context_search(app, store, auth):
     @app.get("/api/v2/recordings/transcript", include_in_schema=False)
     @app.get("/api/v2/meetings/transcript")
     def transcript(request: Request, id: str = Query(min_length=1, max_length=200),
-                   offset: int = Query(default=0, ge=0), limit: int = Query(default=20000, ge=1, le=50000)):
+                   offset: int = Query(default=0, ge=0), limit: int = Query(default=20000, ge=1, le=50000),
+                   notes: bool = False):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            row = readable(c, who, id)
-            text = transcript_text(row)
+            row = readable(c, who, id, auth=auth)
+            text = (row["notes"] or "") if notes else transcript_text(row)
             return {**meeting_info(row), "text": text[offset:offset + limit], "offset": offset,
+                    **({"notes": (row["notes"] or "")[:50000]} if offset == 0 else {}),
                     "next_offset": offset + limit if offset + limit < len(text) else None}

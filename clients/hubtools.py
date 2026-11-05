@@ -534,6 +534,13 @@ def task_meetings(api, args):
     return _as_person(api).get(f"tasks/{args['id']}/meetings", **{k: args[k] for k in ('limit', 'cursor') if k in args})
 
 
+@tool("hub_task_context", "Task context: up to 10 pages and 10 meetings, titles and ids only. Read content with "
+      "hub file read or hub meeting read. Each source is checked against the task's readers and your own access.",
+      {"id": TASK_ID}, required=("id",))
+def task_context(api, args):
+    return api.get(f"tasks/{args['id']}/context")
+
+
 @tool("hub_meeting_pending", "List your own Pending meetings, before sharing with the Team.", {})
 def meeting_pending(api, args):
     return _as_person(api).get("meetings", review="pending")
@@ -586,7 +593,8 @@ def meetings_search(api, args):
 
 @tool("hub_meeting_read", "Read a meeting transcript. Follow next_offset to read the complete text; access matches meetings search.",
       {"id": _s("Meeting id"), "offset": {"type": "integer", "minimum": 0},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 50000}}, required=("id",))
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50000},
+       "notes": {"type": "boolean", "description": "Read only the meeting's notes"}}, required=("id",))
 def meetings_transcript(api, args):
     return api.get("meetings/transcript", **args)
 
@@ -3051,7 +3059,8 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "How o
 
 
 def _page_fields(args):
-    return {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    return {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope", "page", "base_version")
+            if args.get(k) is not None and args.get(k) != ""}
 
 
 @tool("hub_page_publish", "Publish a page: one self-contained .html file (inline CSS, SVG charts, no scripts; "
@@ -3062,6 +3071,8 @@ def _page_fields(args):
        "as_of": _s("The date the data is from (YYYY-MM-DD) when it differs from today"),
        "task": _s("The task it is for; it shows at the top of that task"),
        "replaces": _s("The id of an older page of yours this one takes the place of"),
+       "page": _s("Add a version to this page filed on your turn's only task; keeps its maintainer"),
+       "base_version": {"type": "integer", "minimum": 1, "description": "The current version you read"},
        "scope": {"enum": ["task", "bot"]}, "path": _s("The file's path in your repository")},
       required=("name", "text"), writes=True)
 def pages_publish(api, args):
