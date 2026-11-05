@@ -302,7 +302,8 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
         assert len(retry_uploads) == 2 and retry_uploads[0] == retry_uploads[1]
         retry = get(api, f"meetings/{out['retry_meeting']}/items")['sections']['task'][0]
         assert retry['text'] == 'Current retry title' and retry['version'] == 2
-        assert retry['detail'] == {'owner': 'human:ben', 'body': 'Current retry details', 'due': '2026-12-01T12:00:00Z'}
+        assert {key: retry['detail'][key] for key in ('owner', 'body', 'due')} == {
+            'owner': 'human:ben', 'body': 'Current retry details', 'due': '2026-12-01T12:00:00Z'}
         with api.app.state.store.read() as c:
             assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 46
             assert c.execute('SELECT count(*) FROM meetings').fetchone()[0] == 2

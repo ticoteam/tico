@@ -909,12 +909,23 @@ impl Tico {
                     } else {
                         &baseline
                     };
-                    let changed = if !upload.is_null() {
-                        upload["text"] != payload["text"] || upload["detail"] != payload["detail"]
+                    let fields = if section == "doc" {
+                        ["document", "change", "why"]
                     } else {
-                        !baseline["text"].is_null()
-                            && (baseline["text"] != payload["text"]
-                                || baseline["detail"] != payload["detail"])
+                        ["owner", "due", "body"]
+                    };
+                    // Responses also include display names; only the person's writable fields are edits.
+                    let differs = |saved: &Value| {
+                        saved["text"] != payload["text"]
+                            || fields.iter().any(|key| {
+                                saved["detail"][key].as_str().unwrap_or("")
+                                    != payload["detail"][key].as_str().unwrap_or("")
+                            })
+                    };
+                    let changed = if !upload.is_null() {
+                        differs(&upload)
+                    } else {
+                        !baseline["text"].is_null() && differs(&baseline)
                     };
                     if changed {
                         let version = expected["version"].as_u64().unwrap_or(1);

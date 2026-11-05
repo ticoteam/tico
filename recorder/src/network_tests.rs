@@ -3894,3 +3894,52 @@ fn recorder_picker_and_link_queue_accept_tasks_without_a_number() {
     );
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
+
+#[test]
+fn recorder_save_ignores_display_names_when_detecting_local_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Display fields on retry");
+    store
+        .update_context(&record.id, |c| {
+            c.items.push(crate::workspace::Item {
+                id: "a".into(),
+                kind: "task".into(),
+                title: "Original title".into(),
+                owner: "human:test".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let original = json!({"id":"server-a","version":1,"section":"task","status":"proposed","text":"Original title","detail":{"owner":"human:test","owner_name":"Test"}});
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "filed".into(),
+                status: "failed".into(),
+                error: String::new(),
+                receipt: json!({"audience":"team","approved":true,"items":{"a":original}}),
+            },
+        )
+        .unwrap();
+    let current = json!({"id":"server-a","version":2,"section":"task","status":"proposed","text":"Another reader's title","detail":{"owner":"human:test","owner_name":"Test"}});
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"sections":{"task":[current]}})),
+    ]);
+    tico.send_to(&store, &record.id, false, "team").unwrap();
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert!(
+        store.context(&record.id).unwrap().items[0]
+            .closed_draft
+            .is_none()
+    );
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["items"]["a"]["version"],
+        2
+    );
+}
