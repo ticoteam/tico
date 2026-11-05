@@ -58,13 +58,16 @@ def test_participant_permission_is_never_reused_for_another_tasks_content(api, m
         a, b = H.task(c, allowed), H.task(c, denied)
         assert [a[k] for k in ('owner_id','requester_id','guest','private')] == [b[k] for k in ('owner_id','requester_id','guest','private')]
         room = H.open_conversation(c, 'human:ana', ['human:ben','bot:ops'], kind='chat', subject='Provenance probes')
+        root = H.say(c, 'human:ana', 'bot:ops', 'Public run root', conversation_id=room['id'])
+        c.execute('UPDATE jobs SET message_id=? WHERE id=?', (root['id'], attempt['job_id']))
+        c.execute('UPDATE attempts SET message_id=? WHERE id=?', (root['id'], attempt['id']))
         for tid in (allowed, denied):
             payload = {'nested':{'source':'task:' + tid}}
             msg = H.say(c, 'human:ana', 'bot:ops', 'Provenance probe', conversation_id=room['id'])
             c.execute('UPDATE messages SET refs=? WHERE id=?', (encode(payload), msg['id']))
             child = H.say(c, 'human:ana', 'bot:ops', 'Inherited probe', conversation_id=room['id'])
             c.execute('UPDATE messages SET refs=? WHERE id=?', (encode({'answers':[msg['id']]}), child['id']))
-            H.event(c, 'human:ana', 'participant.probe', 'probe-' + tid, payload)
+            H.event(c, 'human:ben', 'participant.probe', 'probe-' + tid, payload)
             c.execute("INSERT INTO linked_docs(id,title,url,kind,added_by,created_at,updated_at) VALUES(?,?,?,'website','human:ana',?,?)",
                       (tid, 'Probe', 'https://acme.example/#/task/' + tid, H.now(), H.now()))
             c.execute("INSERT INTO docs(id,path,title,body,created_by_id,created_at,updated_by_id,updated_at) VALUES(?,?,'Probe',?,'human:ana',?,'human:ana',?)",
