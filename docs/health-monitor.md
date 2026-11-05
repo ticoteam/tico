@@ -27,7 +27,8 @@ that nothing is set to move, the tasks Task Manager lists as stalled. Settings >
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
 move it is: the author fixes conflicts or review changes, merges after approval, or moves the ticket on;
-an open check names its reviewer even after a push. Completed human subtasks do not count as check verdicts.
+an open check names its reviewer even after a push. Health uses the same check-step evidence as the merge rule:
+a QA title filed at a recorded Build step cannot approve a later QA step. Completed human subtasks do not count as check verdicts.
 Health keeps private check owners and verdicts hidden. When it cannot see all check evidence, it asks for a
 review status check instead of recommending a merge or move on. These clocks start when the existing GitHub sync
 first observes the condition, survive repeated refreshes, and clear when it resolves. A new head starts a new

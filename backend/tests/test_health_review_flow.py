@@ -66,6 +66,32 @@ def test_approval_that_satisfies_merge_ready_names_the_builder_to_merge(environm
     assert 'bot:builder: merge PR #206' in item['fix']
 
 
+def test_a_qa_title_filed_at_build_cannot_approve_a_later_qa_step(environment):
+    from backend import step_flow as F, verdict_moves as V
+    api = setup(environment)
+    task = ticket(api, step='Build')
+    with api.app.state.store.transaction() as c:
+        H._task_event(c, task['id'], H.KEEPER, 'step', None, task['step_id'], '')
+    early = child(api, task, title='QA: PR #206', verdict='pass')
+    with api.app.state.store.transaction() as c:
+        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (task['type_id'],)).fetchone()[0]
+        c.execute("UPDATE tasks SET step_id=?,status='review' WHERE id=?", (qa, task['id']))
+        H._task_event(c, task['id'], H.KEEPER, 'step', task['step_id'], qa, '')
+        current = H.task(c, task['id'])
+        assert F.check_step(c, H.task(c, early['id']), current) is None
+        assert V.merge_ready(c, current) is None
+    [item] = items(api)
+    assert item['whose_move'] == 'In QA pool'
+    assert 'no reviewer filed yet' in item['fix']
+    assert 'merge PR' not in item['fix'] and 'move PR' not in item['fix']
+
+    # An actual check at QA can approve this same head; the earlier pass supplies no evidence for it.
+    child(api, task, title='QA: PR #206', verdict='pass')
+    with api.app.state.store.read_transaction() as c:
+        assert V.merge_ready(c, H.task(c, task['id'])) is not None
+    assert 'bot:builder: merge PR #206' in items(api)[0]['fix']
+
+
 def test_approval_on_a_feedback_step_names_the_builder_to_move_on(environment):
     api = setup(environment)
     task = ticket(api)

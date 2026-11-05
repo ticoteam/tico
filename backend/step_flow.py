@@ -277,27 +277,42 @@ def at_or_past(c, row, target):
                            or here["status"] in ("done", "closed", "declined"))
 
 
-def check_step(c, check, ticket=None):
-    """The step a check subtask was filed for: where its ticket was when the check was made."""
+def check_step(c, check, ticket=None, *, evidence=None):
+    """The step a check subtask was filed for: where its ticket was when the check was made.
+
+    Health supplies set-read evidence (steps, step, boards, events, filed) to use the same rule without per-child SQL.
+    Events are in created_at,rowid order; a title never turns a recorded work step into a check step.
+    """
     from . import task_relations as TR
-    ticket_id = (ticket or {}).get("id") or TR.parent_of(c, check["id"])
-    if not ticket_id:
-        return None
-    found = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at<=? "
-                      "ORDER BY created_at DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created_at") or "")).fetchone()
-    s = step(c, found[0]) if found else None
+    if evidence is None:
+        ticket_id = (ticket or {}).get("id") or TR.parent_of(c, check["id"])
+        if not ticket_id:
+            return None
+        found = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at<=? "
+                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (ticket_id, check.get("created_at") or "")).fetchone()
+        step_id = found[0] if found else None
+    else:
+        step_id = next((e["new"] for e in reversed(evidence["events"])
+                        if e["kind"] == "step" and e["created_at"] <= (check.get("created_at") or "")), None)
+    s = None
+    if step_id is not None:
+        s = evidence["steps"].get(step_id) if evidence is not None else step(c, step_id)
     if s is None:
-        parent = H.task(c, ticket_id)
-        s = step(c, (parent or {}).get("step_id"))
+        if evidence is None:
+            parent = H.task(c, ticket_id)
+            s = step(c, (parent or {}).get("step_id"))
+        else:
+            s = evidence["step"]
     if not s or not is_check(s):
         return None
     # Ordinary subtasks made during a check are independent work, never checks to expire or consume.
     from .check_pools import is_security
     title = str(check.get("title") or "").strip()
-    filed = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed' "
-                      "AND new=? LIMIT 1",
-                      (ticket_id, check["id"])).fetchone()
-    return s if (filed or titled(c, s["type_id"], title) or is_security(title)
+    filed = (check["id"] in evidence["filed"] if evidence is not None else
+             c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_filed' "
+                       "AND new=? LIMIT 1", (ticket_id, check["id"])).fetchone())
+    board = evidence["boards"].get(s["type_id"], []) if evidence is not None else None
+    return s if (filed or titled(c, s["type_id"], title, board=board) or is_security(title)
                  or title.lower() == label(s).lower() or title.lower().startswith(label(s).lower() + ":")) else None
 
 

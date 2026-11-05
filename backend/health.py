@@ -1561,6 +1561,7 @@ def _review_actors(c, who, auth, tickets):
         step = dict(raw)
         steps[step["id"]] = step
         boards.setdefault(step["type_id"], []).append(step)
+    check_boards = {type_id: [s for s in board if F.check_kind(s)] for type_id, board in boards.items()}
     for ticket in tickets:
         states.setdefault(ticket["task_id"], {"ticket": ticket, "children": [], "prs": [], "waits": [], "events": [], "tags": [],
                                              "complete": True})
@@ -1594,19 +1595,19 @@ def _review_actors(c, who, auth, tickets):
             events.setdefault(raw["subject_id"], []).append(dict(raw))
     for tid, state in states.items():
         ticket = state["ticket"]
-        board = [s for s in boards.get(ticket["type_id"], []) if F.check_kind(s)]
+        board = check_boards.get(ticket["type_id"], [])
         state["step"] = steps.get(ticket["step_id"])
         state["events"] = events.get(tid, [])
         filed = {e["new"] for e in state["events"] if e["kind"] == "check_filed"}
+        evidence = {"steps": steps, "step": state["step"], "boards": check_boards, "events": state["events"], "filed": filed}
         children = []
         for child in state["children"]:
+            check_step = F.check_step(c, child, evidence=evidence)
             titled = F.titled(c, ticket["type_id"], child["title"], board=board)
-            if not (titled or child["id"] in filed or child["verdict"] or P.is_security(child["title"])):
+            if not (check_step or titled or child["id"] in filed or child["verdict"] or P.is_security(child["title"])):
                 continue
-            at = next((steps.get(e["new"]) for e in reversed(state["events"])
-                       if e["kind"] == "step" and e["created_at"] <= child["created_at"]), state["step"])
             # Pool filing and verdict data survive a check being renamed after it was filed.
-            child["check_step"] = at if F.is_check(at) else titled
+            child["check_step"] = check_step
             child["judged_head"] = next((e["new"] for e in reversed(events.get(child["id"], []))
                                          if e["kind"] == "review_head"), "")
             children.append(child)
