@@ -43,7 +43,10 @@ What waits on you from elsewhere comes at the end of the DM as cards: a Confirm 
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
 task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question in your words (`hub
-question answer --on-behalf-of turn`, below). A Confirm card always needs your own tap.
+question answer --on-behalf-of turn`, below). It answers only when your words give what the question asks, such as a
+price, a pick, a yes or no, or a date. Words that give none of that, such as "just add it like the others" when BotOps
+asked for a price, answer nothing: the question stays open, and the Assistant comments on the task or asks you one short
+question. A Confirm card always needs your own tap.
 
 ## Helpers through the Assistant
 
