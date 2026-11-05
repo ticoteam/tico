@@ -35,6 +35,31 @@ use crate::env::Env;
 
 pub type Events = UnboundedSender<Value>;
 
+/// A host may prepare threads without a process. Only a successful spawn or reuse of a live process
+/// crosses memory admission; the turn keeps that boundary through host shutdown and fallback.
+#[derive(Default)]
+pub struct Allocation(std::sync::Mutex<AllocationState>);
+
+#[derive(Default)]
+struct AllocationState {
+    allocated: bool,
+    turn: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Allocation {
+    fn track(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        let mut state = self.0.lock().unwrap();
+        if state.allocated { turn.store(true, std::sync::atomic::Ordering::SeqCst); }
+        state.turn = Some(turn);
+    }
+
+    fn mark(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.allocated = true;
+        if let Some(turn) = &state.turn { turn.store(true, std::sync::atomic::Ordering::SeqCst); }
+    }
+}
+
 #[derive(Debug)]
 pub enum HostError {
     /// The runtime refused a call, or died while answering one.
@@ -807,6 +832,20 @@ pub enum Host {
 }
 
 impl Host {
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        match self {
+            Host::Claude(h) => h.track_allocation(turn),
+            Host::Codex(h) => h.track_allocation(turn),
+            Host::Gemini(h) => h.track_allocation(turn),
+            Host::Antigravity(h) => h.track_allocation(turn),
+            Host::MuseCode(h) => h.track_allocation(turn),
+            Host::Pi(h) => h.track_allocation(turn),
+            Host::Cursor(h) => h.track_allocation(turn),
+            Host::Grok(h) => h.track_allocation(turn),
+            Host::AppDriver(h) => h.track_allocation(turn),
+        }
+    }
+
     /// Record this harness's raw stream into `capture`; false for a harness the runner does not capture yet.
     pub fn set_capture(&self, capture: &std::sync::Arc<crate::capture::Capture>) -> bool {
         match self {

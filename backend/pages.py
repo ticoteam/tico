@@ -264,6 +264,7 @@ class Pages:
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
+                H._writer(c, "bot:" + row["bot_id"], task_id=old["task_id"])
                 c.execute("UPDATE pages SET replaced_by_id=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
                 self.files.activity(c, old["id"], "bot:" + row["bot_id"], "modified", now=now,
                                     detail={"replaced_by": row["id"]})
@@ -309,6 +310,7 @@ class Pages:
                 raise Problem("not_found", "Page not found", 404)
             if not self.may_manage(c, who, r):
                 raise Problem("forbidden", "Only the page's bot, its managers, the owner and admins change a page", 403)
+            H._writer(c, who.actor, task_id=r["task_id"])
             fields = {}
             if body.cadence is not None:
                 fields["cadence"] = check_cadence(body.cadence)
