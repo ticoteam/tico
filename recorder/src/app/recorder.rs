@@ -793,7 +793,10 @@ impl Recorder {
             })
             .map(|entry| (entry.destination_id.clone(), entry.meeting_id.clone()))
     }
-    pub fn shared_items_reply(&mut self, data: Value) {
+    pub fn shared_items_reply(&mut self, mut data: Value) {
+        if data["browser_url"].is_null() {
+            data["browser_url"] = self.saved_items["browser_url"].clone();
+        }
         self.saved_items = data;
         self.items_generation += 1;
         self.bump();
@@ -863,6 +866,7 @@ impl Recorder {
         let generation = self.items_generation;
         let config = self.config.clone();
         let initial = self.saved_items.is_null();
+        let browser = self.saved_items["browser_url"].as_str().map(str::to_owned);
         self.job("items", move || {
             let tico = Tico::saved(&config, &destination)?;
             let mut cursor = after;
@@ -876,6 +880,7 @@ impl Recorder {
             }
             let mut data = tico.call(&format!("/api/v2/meetings/{remote}/items"), None, "")?;
             data["presence"] = tico.call(&format!("/api/v2/presence?place=meeting:{remote}"), None, "")?;
+            data["browser_url"] = json!(browser.or_else(|| tico.browser_url().ok()));
             data["cursor"] = json!(cursor);
             data["generation"] = json!(generation);
             Ok(data)
@@ -2642,7 +2647,13 @@ impl Recorder {
             .iter()
             .any(|item| !item.task_url.is_empty() && item.task_url == url)
             && settings::safe_url(url.split('#').next().unwrap_or("")).is_ok();
+        let shared_url = self.saved_target().is_some()
+            && self.saved_items["browser_url"]
+                .as_str()
+                .and_then(|base| settings::safe_url(base).ok())
+                .is_some_and(|base| url.starts_with(&format!("{base}/#/task/")));
         let allowed = known_item
+            || shared_url
             || self.config.destinations.iter().any(|row| {
                 settings::safe_url(&row.base_url)
                     .is_ok_and(|base| url.starts_with(&format!("{base}/")))
@@ -3074,7 +3085,7 @@ impl Recorder {
             "actor": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.actor),
             "saved": self.saved_target().is_some(),
             "shared": self.saved_items,
-            "shared_url": self.config.destinations.iter().find(|d| d.id == self.router()).map(|d| &d.base_url),
+            "shared_url": self.saved_items["browser_url"],
             "shared_scope": format!("{}:{}", self.router(), self.items_epoch),
             "mode": mode,
             "org": org,

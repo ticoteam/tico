@@ -393,7 +393,7 @@
     const here = (data.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
     return `<section class="section"><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
       Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
-        if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent${it.result_ref ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
+        if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
         const draft = sharedDraft(it.id), current = mergeShared(mergeShared(it, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
         if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...document.querySelectorAll('[data-shared-item]')].find(n=>n.dataset.sharedItem===it.id)?.contains(document.activeElement)) { draft.version = it.version; draft.base = it; }
         const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];

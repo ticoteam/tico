@@ -1,7 +1,7 @@
 """Shared editing, current authorization and per-window presence."""
 from concurrent.futures import ThreadPoolExecutor
 
-from backend import events, meeting_items
+from backend import events, meeting_items, meeting_audience
 from backend.tests.test_api import api, headers, get, restrict, unrelated_task_managers  # noqa: F401
 from backend.tests.test_meeting_items import record, add, change, push, items
 
@@ -292,8 +292,9 @@ def test_live_participant_grants_end_with_removal_narrowing_and_discard(api):
         assert get(api, 'tasks/'+tid, 'cara-test')['task']['id'] == tid
         with store.read() as c:
             assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'",(tid,)).fetchone()
-            assert tid not in __import__('backend.meeting_audience', fromlist=['participant_tasks']).participant_tasks(c,'human:ben')
+            assert tid not in meeting_audience.participant_tasks(c,'human:ben')
             assert not c.execute('SELECT id FROM tasks WHERE id=? AND ('+auth.task_sql(c,who)+')',(tid,)).fetchone()
+        with store.read() as c:
             changes = events.read(c,auth,who,after,topics=('tasks',),tasks=(tid,),watch=watch)
         assert watch.drain() == [('tasks',{'task_id':tid,'gone':True})]
         assert not any(data.get('title') for _,_,data in changes[0])
@@ -341,3 +342,19 @@ def test_participant_queries_recheck_source_even_if_a_historical_grant_remains(a
         who = api.app.state.auth.identity_for_actor(c,'human:ben')
         assert not c.execute('SELECT id FROM tasks WHERE id=? AND ('+api.app.state.auth.task_sql(c,who)+')',(tid,)).fetchone()
     assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
+
+
+def test_deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_guests(api):
+    rid = record(api, {'private':True,'participants':['ben@acme.example','cara@acme.example']})
+    iid = add(api,rid,{'section':'task','text':'Saved source','detail':{'owner':'human:ana'}})['item']['id']
+    tid = push(api,rid,iid)['item']['result_ref']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?",(tid,))
+    assert get(api,'tasks/'+tid,'ben-test')['task']['id'] == tid
+    response = api.post(f'/api/v2/meetings/{rid}/delete',json={},headers=headers())
+    assert response.status_code == 200, response.text
+    assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)
+    assert get(api,'tasks/'+tid)['task']['id'] == tid
+    assert get(api,'tasks/'+tid,'cara-test')['task']['id'] == tid
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND actor='human:ben' AND role='participant'",(tid,)).fetchone()

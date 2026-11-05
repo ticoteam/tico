@@ -793,6 +793,9 @@ impl Tico {
                     .as_str()
                     .unwrap_or("")
                     .to_owned();
+                let mut item_version = delivery.receipt["items"][&item.id]["version"]
+                    .as_u64()
+                    .unwrap_or(1);
                 if item_id.is_empty() {
                     if let Some(existing) = listing["sections"][section]
                         .as_array()
@@ -807,6 +810,7 @@ impl Tico {
                         })
                     {
                         item_id = existing["id"].as_str().unwrap_or("").into();
+                        item_version = existing["version"].as_u64().unwrap_or(1);
                     }
                 }
                 if item_id.is_empty() {
@@ -815,21 +819,22 @@ impl Tico {
                         Some(&payload),
                         &format!("recorder:{id}:{}:item:{}", item.id, hash(&payload)),
                     )?;
+                    item_version = reply["item"]["version"].as_u64().unwrap_or(1);
                     item_id = reply["item"]["id"]
                         .as_str()
                         .context("Tico did not return an item ID")?
                         .into();
                 }
                 delivery.receipt["items"][&item.id] = if item.task_id.is_empty() {
-                    json!({"id":item_id,"status":"proposed"})
+                    json!({"id":item_id,"status":"proposed","version":item_version})
                 } else {
-                    json!({"id":item_id,"status":"pushed","result_ref":item.task_id})
+                    json!({"id":item_id,"status":"pushed","result_ref":item.task_id,"version":item_version})
                 };
                 store.delivery(id, &delivery)?;
                 if push_items && item.task_id.is_empty() {
                     let reply = self.call_meeting(
                         &format!("{path}/{item_id}/push"),
-                        Some(&json!({})),
+                        Some(&json!({"version":item_version})),
                         &format!("recorder:{id}:{}:push:{item_id}", item.id),
                     )?;
                     ensure!(
@@ -956,7 +961,7 @@ impl Tico {
                     "/api/v2/meetings/{}/items/{server_item}/push",
                     entry.meeting_id
                 ),
-                Some(&json!({"text":item.title,"detail":{"owner":owner}})),
+                Some(&json!({"version":entry.receipt["items"][item_id]["version"].as_u64().unwrap_or(1),"text":item.title,"detail":{"owner":owner}})),
                 &format!("recorder:{id}:push:{server_item}:{}", hash(&body)),
             )?;
             json!({"task":{"id":result["item"]["result_ref"]}})
