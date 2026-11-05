@@ -1568,12 +1568,16 @@ read it, as before; they are not listed. A company task is seen by everyone.
   one (a person, bot or team).
 - Anyone who may change the task changes its readers: its requester, owner, their managers and delegates, a party
   above it, or a task mover. Each add and remove is in the task's history.
+- A bot adds people and bots within its reach, and from a private run only those who read every private task the run
+  carries. Only a person adds a group. Taking a reader off has no such check.
 - `hub task create --private --reader X` (repeat for more; `group:<id>` for a group) files it with readers.
   `hub task readers list|add|remove <id> [X ...]` reads and changes them (MCP: `hub_task_readers_list`,
   `hub_task_readers_add`, `hub_task_readers_remove`).
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with `{"readers": [...]}`
   replaces the list. A task create takes `readers` too. Each answers `{private, requester_id, owner_id, readers}`.
-- Readers go only on a private task: a company task refuses them. A task lists at most 50; add a group instead.
+- Readers go only on a private task: a company task refuses them and lists none. Making a task company-visible takes
+  its readers off (each in its history), so making it private again starts from its requester and owner.
+  A task lists at most 50; add a group instead.
 - A reader reads that task only: not the task above it or its other subtasks. Reading a task's thread follows the task.
 
 ### A private task with no person on it: the person it reaches

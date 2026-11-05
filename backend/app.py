@@ -1247,8 +1247,8 @@ def create_app(settings=None):
             H.hydrate_task_tags(c, [row])
         value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
                  "labels": H.task_labels(row), "lane": row.get("lane") or "company",
-                 "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None,
-                 "readers": H.task_readers(row)}
+                 "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
+        value["readers"] = H.task_readers(row) if value["private"] else []
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
         if c is not None and (deferred := quiet_work.view(c, row)):
@@ -4622,7 +4622,8 @@ def create_app(settings=None):
             own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
         if body.readers:
             # Who else sees it, before a meeting's audience is checked against everyone who will.
-            H.set_task_readers(c, who.actor, row["id"], add=body.readers, mover=mover(c, who) or None)
+            H.set_task_readers(c, who.actor, row["id"], add=body.readers, mover=mover(c, who) or None,
+                               check=lambda added: privacy.require_readers(c, who, row["id"], added, shared=parent_id))
         if body.live_meeting_id:
             meeting_audience.check(c, auth, who, owner, live_id=body.live_meeting_id,
                                    roles=body.roles, readers=H.task_readers(H.task(c, row["id"])),
@@ -5519,8 +5520,9 @@ def create_app(settings=None):
 
     def readers_answer(c, who, task_id):
         row = H.task(c, task_id)
-        view = teammate_access.Known(c, who, auth).task({**row, "readers": H.task_readers(row)})
-        return {"private": H.task_private(c, row), "requester_id": view["requester_id"], "owner_id": view["owner_id"],
+        private = H.task_private(c, row)
+        view = teammate_access.Known(c, who, auth).task({**row, "readers": H.task_readers(row) if private else []})
+        return {"private": private, "requester_id": view["requester_id"], "owner_id": view["owner_id"],
                 "readers": view["readers"]}
 
     @app.get("/api/v2/tasks/{tid}/readers")
@@ -5542,7 +5544,8 @@ def create_app(settings=None):
                 return app.state.botops_propose(c, who, request.method, f"/api/v2/tasks/{tid}/readers",
                                                 body.model_dump(exclude_none=True),
                                                 what + " “" + H.task(c, task_id)["title"] + "”")
-            H.set_task_readers(c, who.actor, task_id, mover=mover(c, who) or None, **change)
+            H.set_task_readers(c, who.actor, task_id, mover=mover(c, who) or None,
+                               check=lambda added: privacy.require_readers(c, who, task_id, added, task_id), **change)
             return readers_answer(c, who, task_id)
         return mutate(request, body, work)
 

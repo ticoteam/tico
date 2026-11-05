@@ -4035,6 +4035,16 @@ def _reader_target(conn, actor, value):
     return who
 
 
+def new_readers(conn, actor, row, names):
+    """The readers `names` would add to task `row`: not on its list yet, and not its requester or owner, who read it
+    already. A bot adds people and bots only: a group may be the whole company, which only a person opens it to."""
+    have = set(task_readers(row)) | {row.get("owner_id"), row.get("requester_id")}
+    added = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in names) if r not in have]
+    if is_bot(actor) and any(r.startswith("group:") for r in added):
+        refuse(conn, actor, "identity", "Only a person adds a group to Who can see")
+    return added
+
+
 def may_change_readers(conn, actor, row, mover=None):
     """Whoever may change the task (task_update's identity rule) changes its readers: its parties, their managers and
     delegates, a party above it, or a task mover."""
@@ -4043,9 +4053,9 @@ def may_change_readers(conn, actor, row, mover=None):
     return actor == KEEPER or _task_party(conn, actor, row) or bool(task_mover(conn, actor, row, mover))
 
 
-def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, mover=None):
+def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, mover=None, check=None):
     """Add and remove readers of private task `task_id` (or `replace` the whole list); each change is a task event.
-    Returns the list as it is now."""
+    `check(added)` may refuse the readers being added (task_privacy.require_readers). Returns the list as it is now."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -4058,14 +4068,16 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
                                         "private task")
     before = task_readers(row)
     if replace is not None:
-        wanted = list(dict.fromkeys(_reader_target(conn, actor, v) for v in replace))
+        kept = [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in replace) if r in before]
+        fresh = new_readers(conn, actor, row, replace)
     else:
         gone = {_reader_target(conn, actor, v) if str(v).startswith("group:") else resolve_actor(conn, v) or v
                 for v in remove}
-        wanted = [r for r in before if r not in gone]
-        wanted += [r for r in dict.fromkeys(_reader_target(conn, actor, v) for v in add) if r not in wanted]
-    # The parties read it already: listing them changes nothing.
-    wanted = [r for r in wanted if r not in (row["owner_id"], row["requester_id"])]
+        kept = [r for r in before if r not in gone]
+        fresh = [r for r in new_readers(conn, actor, row, add) if r not in kept]
+    wanted = kept + fresh
+    if fresh and check:
+        check(fresh)
     if len(wanted) > MAX_TASK_READERS:
         refuse(conn, actor, "lint", f"A private task lists at most {MAX_TASK_READERS} readers: add a group instead")
     if wanted == before:
@@ -7203,6 +7215,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("private=:private")
         args["private"] = int(private)
         _task_event(conn, task_id, actor, "private", int(task_private(conn, row)), int(private), "")
+        if not private and task_readers(row):
+            # Everyone sees a company task: its reader list goes, so making it private again starts from its parties.
+            sets.append("readers=NULL")
+            for reader in task_readers(row):
+                _task_event(conn, task_id, actor, "reader", reader, None, "")
     # Who it waits on goes with the wait as said: a new status or owner starts with nobody waited on unless this
     # update names the person again. A note alone keeps the person: it is detail beneath the wait, which only
     # clearing it or answering ends (backend/task_holds.py).

@@ -282,6 +282,7 @@ def task_dry_run(c, auth, who, body):
             parent = auth.resolve_task(c, who, parents[0]) if parents else None
         except Problem:        # an unknown parent is the create's own refusal, not reach's
             parent = None
+        parent_id = parent
         try:
             reach.check(c, who, target, "task", task_id=parent)
         except reach.Refused as exc:
@@ -327,6 +328,17 @@ def task_dry_run(c, auth, who, body):
                                    related=related)
         except Problem as exc:
             problems.append(exc.detail)
+        if body.readers:
+            # The create's reader refusals (hubdb.new_readers, task_privacy.require_readers), none of them counted.
+            probe = H.CLOSE_PROBE.set(True)
+            try:
+                parties = {"owner_id": target, "requester_id": who.actor, "readers": None}
+                privacy.require_readers(c, who, None, H.new_readers(c, who.actor, parties, body.readers),
+                                        parent_id)
+            except (Problem, H.Refused) as exc:
+                problems.append(exc.detail)
+            finally:
+                H.CLOSE_PROBE.reset(probe)
     if body.roles:
         from . import task_roles as TRo
         try:

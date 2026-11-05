@@ -310,3 +310,70 @@ def test_create_a_private_task_with_readers(api):
     r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Draft the offer letter again", "body": "Again.",
                                         "private": False, "readers": ["ben"]}, headers=headers())
     assert r.status_code == 422 and "make it private" in r.text, r.text
+
+
+def test_a_bot_adds_readers_within_its_reach_and_never_a_group(api):
+    gid = post(api, "groups", {"name": "Payroll desk", "add": {"people": ["cara"]}})["id"]
+    row = task(api, "human:ana", "bot:ops", "Payroll review")
+    token = bot_token(api)
+    r = change(api, row["id"], {"add": ["group:" + gid]}, token)
+    assert r.status_code == 403 and "Only a person adds a group to Who can see" in r.text, r.text
+    r = api.put("/api/v2/reach/settings/bot:ops", json={"mode": "closed"}, headers=headers())
+    assert r.status_code == 200, r.text
+    r = change(api, row["id"], {"add": ["cara"]}, token)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
+    r = change(api, row["id"], {"readers": ["cara"]}, token, method="put")
+    assert r.status_code == 409, r.text
+    # A person adds both; the bot may still take a reader off.
+    assert change(api, row["id"], {"add": ["cara", "group:" + gid]}).status_code == 200
+    r = change(api, row["id"], {"remove": ["cara"]}, token)
+    assert r.status_code == 200 and r.json()["readers"] == ["group:" + gid], r.text
+
+
+def test_a_private_run_adds_only_readers_who_read_what_it_carries(api):
+    own = task(api, "human:ana", "bot:ops", "Zip triage")
+    theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
+    attempt = run_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], theirs["id"]))
+    r = change(api, own["id"], {"add": ["ben"]}, attempt["token"])
+    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
+    words = r.json()["error"]["detail"]
+    problems = dry_run(api, {"owner": "ops", "title": "Zip triage follow-up", "body": "Next step.", "private": True,
+                             "readers": ["ben"]}, attempt["token"])
+    assert words in problems, problems
+    with api.app.state.store.read() as c:
+        assert not H.task_readers(H.task(c, own["id"]))
+    # Once Ben reads every task the run carries, the same add goes through.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (theirs["id"],))
+    assert change(api, own["id"], {"add": ["ben"]}, attempt["token"]).json()["readers"] == ["human:ben"]
+
+
+def test_a_task_made_public_then_private_again_has_no_readers(api):
+    row = task(api, "human:ana", "bot:ops", "Payroll review")
+    change(api, row["id"], {"add": ["ben", "cara"]})
+    current = get(api, "tasks/" + row["id"])["task"]
+    post(api, "tasks/" + row["id"], {"version": current["version"], "private": False})
+    assert who_sees(api, row["id"])["readers"] == [] and get(api, "tasks/" + row["id"])["task"]["readers"] == []
+    removed = {e["old"] for e in get(api, "tasks/" + row["id"])["events"] if e["field"] == "reader" and e["new"] is None}
+    assert removed == {"human:ben", "human:cara"}
+    current = get(api, "tasks/" + row["id"])["task"]
+    post(api, "tasks/" + row["id"], {"version": current["version"], "private": True})
+    assert who_sees(api, row["id"])["readers"] == [] and readers(api, row["id"]) == {"ana"}
+    # A company task lists nobody, even one with an old reader list.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0, readers=json_array('human:ben') WHERE id=?", (row["id"],))
+    assert get(api, "tasks/" + row["id"])["task"]["readers"] == [] and who_sees(api, row["id"])["readers"] == []
+
+
+def test_a_reader_who_becomes_owner_stays_listed(api):
+    row = task(api, "human:ana", "bot:ops", "Payroll review")
+    change(api, row["id"], {"add": ["ben"]})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (row["id"],))
+    assert change(api, row["id"], {"add": ["cara"]}).json()["readers"] == ["human:ben", "human:cara"]
+    assert change(api, row["id"], {"readers": ["ben"]}, method="put").json()["readers"] == ["human:ben"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (row["id"],))
+    assert readers(api, row["id"]) == {"ana", "ben"}

@@ -1020,6 +1020,17 @@ def require_wait(c, who, row, waiting_on):
     require_destination(c, who, person, None, {}, reach=reach)
 
 
+def require_readers(c, who, task_id, readers, shared):
+    """A bot adds readers within its reach (reach.check), and a private run only those who read every private task it
+    carries, the task they are added to counted as read (as require_wait). `readers` are the ones being added;
+    `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent."""
+    from . import reach
+    for reader in readers:
+        reach.check(c, who, reader, "task", task_id=shared)
+        if private_execution(c, who):
+            require_destination(c, who, reader, None, {}, reach=(task_id, reader) if task_id else None)
+
+
 def public_message(c, message):
     """External channel audiences have no task participant authority."""
     if not message or dict(message).get("deleted_at") or dict(message).get("deleted"):
