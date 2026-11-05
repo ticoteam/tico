@@ -554,6 +554,8 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     try:
         child = H.task_create(c, actor, title, body, "bot:" + slug, parent_id=ticket["id"],
                               review_prs=snapshots, wake_refs={"check_pool": step["name"]})
+        for field, text in (("title", title), ("body", body)):
+            H.remember_sourced_text(c, "task", child["id"], field, text, [{"task": ticket["id"]}])
     except H.Refused as exc:
         c.execute("ROLLBACK TO check_pool_file")
         c.execute("RELEASE check_pool_file")

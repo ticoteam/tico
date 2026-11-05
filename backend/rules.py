@@ -878,6 +878,8 @@ def _ask(conn, decision, row, actor, body):
     card = H.task_create(conn, H.KEEPER, f"A rule needs you: {row['title']}"[:300],
                          f"The rule {decision.rule} asked for a person on {row['title']} ({row['id']}).\n\n"
                          f"From {sender}: {text}", who, lint=False, deduplicate=False, private=True if private else None)
+    for field in ('title', 'body'):
+        H.remember_sourced_text(conn, 'task', card['id'], field, card[field], [{'task': row['id']}])
     H.event(conn, H.KEEPER, ASKED, card["id"], {"rule": decision.rule, "task": row["id"]})
 
 
@@ -1238,6 +1240,9 @@ def _event_ask(conn, row, name, params, values, ctx):
     heading = " ".join(text.split())[:80]
     card = H.task_create(conn, H.KEEPER, f"A rule needs you: {heading}"[:300],
                          f"The rule {row['id']} asked for a person.\n\n{text}", who, lint=False, deduplicate=False)
+    from .scope_projection import body_sources
+    for field in ('title', 'body'):
+        H.remember_sourced_text(conn, 'task', card['id'], field, card[field], [body_sources(values), body_sources(ctx)])
     H.event(conn, H.KEEPER, ASKED, card["id"], {"rule": row["id"], "event": name})
     return True, "asked"
 

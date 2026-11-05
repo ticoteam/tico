@@ -1133,7 +1133,7 @@ def action_sources(c, path, body):
         message = H.message(c, m[1]) or {}
         sources.extend([{"message": m[1]}, body_sources(message.get("refs") or {})])
     elif m := re.match(r"/api/v2/tasks/([^/]+)(?:/|$)", path):
-        sources.append({"task": m[1]})
+        sources.extend([{"task": m[1]}, *H.sourced_record_sources(c, 'task', m[1])])
     elif m := re.fullmatch(r"/api/v2/approvals/([^/]+)", path):
         sources.append(body_sources((H.approval(c, m[1]) or {}).get("payload") or {}))
     return [source for source in sources if source]

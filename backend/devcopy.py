@@ -144,7 +144,7 @@ KEEP = frozenset((
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_settings", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_task_tabs", "bot_tool_requests", "cards", "deferrals", "pin_places", "pins", "bot_transition_checkpoints", "bot_transitions", "bots", "strategy_actions",
-    "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "changes", "chat_goals",
+    "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "sourced_text_records", "changes", "chat_goals",
     "cloud_migrations", "schema_migrations", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",

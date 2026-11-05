@@ -56,7 +56,7 @@ def _children(c, task_id, owner):
                              "ORDER BY created_at", (task_id, owner)))
 
 
-def _row(it, actor):
+def _row(it, actor, c):
     """One item as a front end presents it: the whole question, never a clipped title."""
     key = ("approval:" if it["kind"] == "approval" else "task:") + str(it["id"])
     row = {"key": key, "kind": it["kind"], "title": _clip(it.get("title") or it.get("first_line"), 160)}
@@ -100,6 +100,11 @@ def _row(it, actor):
         row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner_id")),
                                             ("ask", _clip(f.get("person_ask") or f.get("note"), 300))) if v}
                          for f in it["folded"]]
+    from .scope_projection import body_sources
+    if it.get("folded"):
+        row['folded'] = [H.sourced_text(None, [body_sources(source)], copy)[1]
+                         for source, copy in zip(it['folded'], row['folded'])]
+    _, row = H.sourced_text(None, [body_sources(it), *H.sourced_record_sources(c, 'task', it['id'])], row)
     return row
 
 
@@ -152,11 +157,11 @@ def relevant(c, actor, items):
                     if kid["ask"]:
                         kid["kind"] = "question"
                     kid["pressing"] = pressing(kid)
-                    row = _row(kid, actor)
+                    row = _row(kid, actor, c)
                     if row["key"] not in seen and row["key"] not in snoozed:
                         seen.add(row["key"]); out.append(row)
                 continue
-        row = _row(it, actor)
+        row = _row(it, actor, c)
         if row["key"] in seen or row["key"] in snoozed:
             continue
         seen.add(row["key"]); out.append(row)
@@ -243,6 +248,8 @@ def _pending(c, person):
             continue
         if not privacy.message_readable(c, person, reply):
             continue
+        from .turn_scope import message_view
+        reply = message_view(c, dict(reply))
         items = json.loads(sent["items"] or "[]")
         parts = MARKER.split(reply["body"] or "")
         answers, loose = {}, parts[0].strip()
@@ -252,8 +259,11 @@ def _pending(c, person):
                 answers[items[idx]["key"]] = body.strip()
             else:
                 loose += ("\n" if loose else "") + body.strip()
-        reports.append({"message": sent["id"], "reply": reply["id"], "batch": sent["batch"],
-                        "to": sent["recipient_id"], "answers": answers, "loose": loose})
+        from .scope_projection import body_sources
+        _, report = H.sourced_text(None, [{'message': reply['id']}, body_sources(reply.get('refs') or {})],
+                                   {"message": sent["id"], "reply": reply["id"], "batch": sent["batch"],
+                                    "to": sent["recipient_id"], "answers": answers, "loose": loose})
+        reports.append(report)
     return reports, awaiting
 
 
@@ -298,10 +308,13 @@ def candidates(c, actor, items):
         if row["key"] in shown:
             row["answer"] = _clip(shown[row["key"]][0], 4000)
             row["_report"] = shown[row["key"]][1]["message"]
+            _, provenance = H.sourced_text(None, shown[row['key']][1].get('body_sources', []), row)
+            row.update(provenance)
         elif row["key"] in awaiting:
             row["awaiting"] = awaiting[row["key"]]
     notes = [{"key": f"report:{r['message']}", "kind": "report", "title": "Notes from your last batch",
-              "from": r["to"], "body": _clip(r["loose"], 4000), "_report": r["message"]}
+              "from": r["to"], "body": _clip(r["loose"], 4000), "_report": r["message"],
+              'body_sources': r.get('body_sources', [])}
              for r in reports if r["loose"]]
     return rows, notes, reports
 
@@ -348,8 +361,16 @@ def _responses(batch):
     return json.loads(batch["responses"] or "{}")
 
 
+def _shown_items(c, batch):
+    from . import turn_scope
+    from .files import readable_page_refs
+    from .teammate_access import _viewer_for
+    items = readable_page_refs(c, None, _viewer_for(c, batch['person']), _items(batch))
+    return turn_scope.project(c, turn_scope.scope(c), items)
+
+
 def view(c, batch, resumed=False):
-    items, responses = _items(batch), _responses(batch)
+    items, responses = _shown_items(c, batch), _responses(batch)
     cursor = int(batch["cursor"] or 0)
     out = {"id": batch["id"], "state": batch["state"], "total": len(items), "responded": len(responses),
            "alerts": json.loads(batch["alerts"] or "[]"), "resumed": resumed,
@@ -362,7 +383,7 @@ def view(c, batch, resumed=False):
             item["response"] = responses[item["key"]]
         out.update({"position": f"{cursor + 1} of {len(items)}", "item": item})
     else:
-        out.update({"end": True, "summary": summary(batch),
+        out.update({"end": True, "summary": summary(batch, items),
                     "note": "The list is done. Say the summary and ask whether to commit."})
     from .files import readable_page_refs
     from .teammate_access import _viewer_for
@@ -443,9 +464,9 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
             "responded": len(responses), "total": len(items)}
 
 
-def summary(batch):
+def summary(batch, items=None):
     """What the commit will do, counted, approvals named: the read-back before a yes."""
-    items = {it["key"]: it for it in _items(batch)}
+    items = {it["key"]: it for it in (_items(batch) if items is None else items)}
     responses = _responses(batch)
     counts, total = {}, 0
     approving, declining = [], []
@@ -605,6 +626,9 @@ def _deliver(c, who, batch_id, outbox, record, send):
         text = _brief(person, [line for _, line in done], [line for _, line in lines])
         refs = {"live": {"kind": "batch", "batch": batch_id, "items": keys,
                          **({"via": who.token_label} if getattr(who, "token_label", "") else {})}}
+        saved = _items(_load(c, who.actor, batch_id))
+        text, refs = H.sourced_text(text, [source for item in saved if item['key'] in keys
+                                          for source in item.get('body_sources', [])], refs)
         if not lines:
             refs["quiet"] = True
         try:

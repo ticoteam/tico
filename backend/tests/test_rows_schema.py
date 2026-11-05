@@ -12,6 +12,7 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.SourcedTextRecordRow: "sourced_text_records",
     rows.EmailSendingPolicyRow: "email_sending_policies",
     rows.EmailSendRow: "email_sends",
     rows.EmailSuppressedRecipientRow: "email_suppressed_recipients",

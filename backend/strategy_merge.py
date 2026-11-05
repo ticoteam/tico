@@ -157,15 +157,17 @@ def merge(c, actor, person, title, question, task_ids):
     # Its own task with one open question to the person, as `hub task question` files one: every way they answer a
     # bot (a reply, "answer" in Needs you) closes that question and reaches `on_reply`.
     item = H.task_create(c, STRATEGY_BOT, title, body, STRATEGY_BOT, lane="company", lint=False)
+    H.remember_sourced_text(c, "task", item["id"], "body", body, [{"task": row["id"]} for row, _ in found])
     H.task_comment(c, STRATEGY_BOT, item["id"], question, ask={"who": person})
     H.task_update(c, STRATEGY_BOT, item["id"], status="waiting", waiting_on=person, note=question[:1000])
     at = H.now()
     for row, how in found:
         c.execute("INSERT INTO strategy_merges (merged_into, original, person, asker, how, ask_id, created_at) "
                   "VALUES (?,?,?,?,?,?,?)", (item["id"], row["id"], person, how[1], how[0], how[2], at))
-        H.task_comment(c, STRATEGY_BOT, row["id"],
-                       f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
-                       "Their answer comes back to this task; nothing to do until then.", wake=False)
+        said, refs = H.sourced_text(
+            f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
+            "Their answer comes back to this task; nothing to do until then.", [{"task": item["id"]}])
+        H.task_comment(c, STRATEGY_BOT, row["id"], said, wake=False, extra_refs=refs)
     H.event(c, actor, "strategy_bot.merged", item["id"], {"person": person, "originals": [r["id"] for r, _ in found]})
     H.recount(c, [how[1] for _, how in found])
     return {"task": H.task(c, item["id"]), "originals": originals(c, item["id"])}
@@ -183,7 +185,8 @@ def _pass_on(c, person, link, item, text, text_sources=()):
         # Answered there already, or asked something else since: this answer was for what was merged, not that.
         return "it no longer waits on them for what was merged"
     said, refs = H.sourced_text(
-        f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"', text_sources)
+        f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"',
+        [*text_sources, {'task': item['id']}, *H.sourced_record_sources(c, 'task', item['id'])])
     if link["how"] == "asked":
         H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources)
         return None

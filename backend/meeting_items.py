@@ -244,6 +244,8 @@ def push_task(c, settings, task_create, who, record, row, detail, private=False)
                                               due=detail.get("due") or None,
                                               private=bool(private or record['metadata'].get('private')
                                                            or media.effective_audience(record['metadata']) != 'team')))
+    for field, text in (('title', row['text'][:300]), ('body', body)):
+        H.remember_sourced_text(c, 'task', created['task']['id'], field, text, [{'meeting': record['id']}])
     return created["task"]["id"]
 
 
@@ -256,6 +258,8 @@ def push_doc(c, settings, task_create, who, record, row, detail):
     ] if part)
     created = task_create(c, who, M.TaskCreate(title=("Doc update: " + row["text"])[:300], body=body,
                                                owner="bot:" + DOC_BOT))
+    for field, text in (('title', ('Doc update: ' + row['text'])[:300]), ('body', body)):
+        H.remember_sourced_text(c, 'task', created['task']['id'], field, text, [{'meeting': record['id']}])
     return created["task"]["id"]
 
 
@@ -329,6 +333,8 @@ def push_feature(c, settings, task_create, who, record, row, detail, force, auth
     # A feature request is a backlog item (a bug, a feature), not an ask, so rule 7 does not shape it.
     created = task_create(c, who, M.TaskCreate(title=fields["title"], body=fields["body"], owner=feature_owner(c),
                                                labels=fields["labels"]), lint=False)
+    for field in ('title', 'body'):
+        H.remember_sourced_text(c, 'task', created['task']['id'], field, fields[field], [{'meeting': record['id']}])
     return created["task"]["id"]
 
 

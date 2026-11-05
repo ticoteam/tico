@@ -691,6 +691,9 @@ class PostalMail:
             file_id, number = self.app.state.files.attach_task(c, KEEPER, task_id, item, digest, bot)
             c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (task_id, item["id"]))
             file_added(c, KEEPER, task_id, item, number)
+            task = H.task(c, task_id)
+            for field in ('title', 'body'):
+                H.remember_sourced_text(c, 'task', task_id, field, task[field], [{'file': file_id}])
         status = "filed" if task_id else "archived"
         c.execute("UPDATE mail_items SET status=?,kind=?,summary=?,sender=?,deadline=?,task_id=?,file_id=?,blob_id=?,"
                   "error='',next_try_at=NULL,updated_at=? WHERE id=?",

@@ -414,6 +414,9 @@ def finish_delivery(c, auth, who, rid):
             "- " + a["name"] + ": " + a["url"] for a in linked)
     task = H.task_create(c, who.actor, meta["title"] or "Review note", text, "bot:" + slug,
                          conversation_id=rooms.task_conversation_id(c, auth, "bot:" + slug, who.actor))
+    for field, copied in (('title', meta['title'] or 'Review note'), ('body', text)):
+        H.remember_sourced_text(c, 'task', task['id'], field, copied,
+                               [{'meeting': rid}, *({'blob_id': item['id']} for item in linked)])
     for item in linked:
         c.execute("INSERT INTO task_assets VALUES(?,?)", (task["id"], item["id"]))
     c.execute("UPDATE meeting_deliveries SET status='delivered',task_id=?,delivered_at=?,error=NULL WHERE meeting_id=?",
@@ -729,6 +732,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 review_prs=snapshots, same=file_reviews.same_versions(review) if review else None,
                 rule=org_rule_check.decided(rule))
             tid = made["task"]["id"]
+            if review:
+                for field in ('title', 'body'):
+                    H.remember_sourced_text(c, 'task', tid, field, made['task'].get(field),
+                                           [{'file': entry['file'], 'version': entry['version']}
+                                            for entry in review['files']])
         # The person must be able to read the task by every rule a read checks, or the question would reach
         # them (Slack, mail) while the task stays hidden from them.
         try:
