@@ -3,7 +3,7 @@
   "info": {
     "title": "Tico API (v2)",
     "version": "2.0.0",
-    "description": "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same key and body returns the first answer). Errors are `{\"error\": {code, detail, retryable}}`. See docs/custom-frontend.md."
+    "description": "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. Task-scoped bot turns and Make-page attempts use the method/path allowlist in backend/scoped_routes.py; all other routes return 403, including SQL, CSV/exports, saved run history, admin and event streams. Downloads require an in-scope source id. Allowed JSON responses project structured source references only; free text, unknown references and task/conversation references stay unchanged. Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same key and body returns the first answer). Errors are `{\"error\": {code, detail, retryable}}`. See docs/custom-frontend.md."
   },
   "tags": [
     {
@@ -12051,7 +12051,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "Task-scoped bot turns and Make-page attempts receive 403; the runner work stream uses its separate runner identity. text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. A `bulk: true` event without `id` means read task lists in full.\n- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md \u00a79); an `activity` one also carries `counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` (how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as `GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged (keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\n- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "x-task-event-schema": {
               "$ref": "#/components/schemas/TaskEvent"
             },
@@ -25657,6 +25657,16 @@
               "default": 20000,
               "title": "Limit"
             }
+          },
+          {
+            "name": "notes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Notes"
+            }
           }
         ],
         "responses": {
@@ -28026,6 +28036,14 @@
                   },
                   "path": {
                     "type": "string"
+                  },
+                  "page": {
+                    "type": "string",
+                    "description": "Add a version to this page filed on the turn's only task"
+                  },
+                  "base_version": {
+                    "type": "integer",
+                    "minimum": 1
                   },
                   "scope": {
                     "enum": [
@@ -38004,6 +38022,58 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/context": {
+      "get": {
+        "summary": "Up to 10 pages and 10 meetings shared by the task readers, filtered by current access; metadata only",
+        "operationId": "getTaskContext",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskContext"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
     "/api/v2/tasks/{tid}/delete": {
       "post": {
         "summary": "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in as themselves, whatever bots did on it: that work stays in place, hidden until a restore",
@@ -38460,6 +38530,127 @@
                 ],
                 "title": "TaskFile",
                 "type": "object"
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/make-page": {
+      "post": {
+        "summary": "Ask the caller's own Assistant to make and pin a page from the task's shared context; 409 at 60 pins",
+        "operationId": "makeTaskPage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakePage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "get": {
+        "summary": "The caller's latest Make page request on this task, or null; making, made or failed",
+        "operationId": "getTaskMakePage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMakePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           }
@@ -50409,6 +50600,26 @@
       "Config": {
         "type": "object",
         "properties": {
+          "features": {
+            "type": "object",
+            "properties": {
+              "task_files_multipart": {
+                "type": "boolean"
+              },
+              "file_media_stream": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file_media_stream",
+              "task_files_multipart"
+            ],
+            "additionalProperties": true
+          },
+          "upload_max_bytes": {
+            "type": "integer",
+            "description": "Scoped turns receive only this limit and features; ordinary clients also receive installation settings."
+          },
           "company_name": {
             "type": "string"
           },
@@ -50460,13 +50671,8 @@
           }
         },
         "required": [
-          "app_name",
-          "assistant_bot",
-          "assistant_name",
-          "company_name",
-          "owner_email",
-          "public_url",
-          "version"
+          "features",
+          "upload_max_bytes"
         ],
         "additionalProperties": true
       },
@@ -62406,6 +62612,22 @@
         "title": "MaintenanceUpdate",
         "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
       },
+      "MakePage": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "MakePage"
+      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -72060,6 +72282,72 @@
         ],
         "additionalProperties": true
       },
+      "TaskContext": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextPage"
+            }
+          },
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskContextMeeting"
+            }
+          }
+        },
+        "required": [
+          "meetings",
+          "pages"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextMeeting": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "TaskContextPage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at",
+          "version"
+        ],
+        "additionalProperties": true
+      },
       "TaskCreate": {
         "properties": {
           "live_meeting_id": {
@@ -73068,6 +73356,46 @@
           "cursor",
           "next_offset",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMakePage": {
+        "type": "object",
+        "properties": {
+          "make_page": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "conversation_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "making",
+                      "made",
+                      "failed"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation_id",
+                  "message_id",
+                  "state"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "make_page"
         ],
         "additionalProperties": true
       },

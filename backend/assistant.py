@@ -867,6 +867,8 @@ def groups(c, steps):
 def describe(c, method, path, body):
     """A one-line, server-derived description of what confirming would do (never the bot's words), and
     for a task update the exact field changes."""
+    from . import turn_scope
+    scoped = turn_scope.scope(c)
     def bot(slug):
         row = H.bot(c, slug) or {}
         return row.get("display_name") or row.get("slug") or slug
@@ -917,14 +919,14 @@ def describe(c, method, path, body):
             return f"{verb} approval {aid}"
         # What the person says yes to: the amount and target first, each field cleaned, capped and quoted on its own,
         # so a long or crafted field (padding, "card; amount: 9") can't push a later one out or pose as it.
-        payload = row.get("payload") or {}
+        payload = turn_scope.project(c, scoped, row.get("payload") or {}) or {}
         detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
         return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by_id'])}"
                 + (f" ({detail})" if detail else "") + f", {age(row['created_at'])}"
                 + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else ""))
 
     def answer_line(mid):
-        asked = H.message(c, mid) or {}
+        asked = turn_scope.message_view(c, H.message(c, mid)) or {}
         return (f"Answer {who(asked.get('sender_id'))}'s question “{preview(asked.get('body'), 80)}”"
                 + (f", {age(asked['created_at'])}" if asked.get("created_at") else "") + f": {preview(body.get('text'), 120)}")
     diff = []

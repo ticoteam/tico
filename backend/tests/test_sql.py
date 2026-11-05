@@ -412,11 +412,6 @@ def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api,
         # Exercise the SQL gates even when the stored provenance index has not caught up yet.
         c.execute('DELETE FROM read_index')
 
-    query(api, 'SELECT 1', world['attempt']['token'], expected=403)
-    # A task turn cannot query SQL; the bot's independent credential still exercises the row gates.
-    from backend.tests.test_org_rules import as_bot
-    as_bot(api, 'ops', 'ops-sql-gates')
-
     callbacks, create_function = [], S.ReadConnection.create_function
 
     def register(conn, name, arity, fn, **kwargs):
@@ -428,8 +423,12 @@ def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api,
             return create_function(conn, name, arity, counted, **kwargs)
         return create_function(conn, name, arity, fn, **kwargs)
 
+    # Moving the input onto a task makes the turn scoped; SQL still tests fast gates for ordinary readers.
+    query(api, 'SELECT count(*) FROM messages', world['attempt']['token'], expected=403)
+    from backend.tests.test_org_rules import as_bot
+    as_bot(api, 'ops', 'ops-fast-sql')
     monkeypatch.setattr(S.ReadConnection, 'create_function', register)
-    for token in ('ops-sql-gates', 'ben-test'):
+    for token in ('ops-fast-sql', 'ben-test'):
         callbacks.clear()
         assert query(api, 'SELECT count(*) FROM messages WHERE id IN (?,?,?)', token,
                      params=messages)['rows'] == [[3]]

@@ -35,7 +35,8 @@ def source(c, v, message_id):
     if not row:
         raise Problem("not_found", "Message not found", 404)
     root = threads.thread_row(c, row.get("root_id") or row["id"]) or row
-    return message, row, root
+    from .turn_scope import message_view
+    return message_view(c, message, who=v.who, auth=v.auth), row, root
 
 
 def private(message, root):

@@ -36,9 +36,12 @@ def show(c, auth, who, ref):
         return bool(views._readable_task_ids(c, auth.task_sql(c, who), [task_id]))
     if kind == "task":
         made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item, see)
-        title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
+        title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause, see=see)
         task_id = item["id"]
     elif kind == "message":
+        # Origins copies message prose, so project the whole message with its body provenance before taking an excerpt.
+        from . import turn_scope
+        item = turn_scope.message_view(c, item, who=who, auth=auth)
         made_by, created, title, task_id = item["sender_id"], item["created_at"], (item["body"] or "")[:80], None
         row = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
         cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}
@@ -55,7 +58,8 @@ def show(c, auth, who, ref):
 def resolve(c, auth, who, ref):
     """(kind, row) for the one thing `ref` names that the caller may read; 404 when none does."""
     if len(ref) >= 8:
-        rows = [dict(r) for r in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))]
+        visible = auth.task_sql(c, who)
+        rows = [dict(r) for r in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE (id=? OR id LIKE ?) AND ({visible}) LIMIT 2", (ref, ref + "%"))]
         if len(rows) == 1:
             visible = auth.task_sql(c, who)
             if views._readable_task_ids(c, visible, [rows[0]["id"]]):
@@ -64,11 +68,16 @@ def resolve(c, auth, who, ref):
     if message and threads.message_readable(c, threads.viewer(auth, who), message):
         return "message", message
     approval = H.approval(c, ref)
-    if approval and (who.actor in (approval.get("requested_by_id"), approval.get("decision_owner"))
-                     or (approval.get("task_id") and views._readable_task_ids(
-                         c, auth.task_sql(c, who), [approval["task_id"]]))):
+    if approval and approval_readable(c, auth, who, approval):
         return "approval", approval
     raise Problem("not_found", f"no task, message or approval {ref} that you can read", 404)
+
+
+def approval_readable(c, auth, who, approval):
+    """The same approval visibility for origins and duplicate detection."""
+    return (who.actor in (approval.get("requested_by_id"), approval.get("decision_owner"))
+            or bool(approval.get("task_id") and views._readable_task_ids(
+                c, auth.task_sql(c, who), [approval["task_id"]])))
 
 
 def approval_run(c, approval_id):
@@ -124,7 +133,7 @@ def automation_info(c, aid):
             "enabled": bool(row["enabled"])}
 
 
-def siblings_and_stops(c, task, cause):
+def siblings_and_stops(c, task, cause, *, see=lambda tid: True):
     """(siblings, stops) for a task: the same cause's items made in the window, how many of them are open, and stops."""
     since = H.shift(H.now(), days=-WINDOW_DAYS)
     if cause["type"] in ("automation", "rule"):
@@ -145,6 +154,7 @@ def siblings_and_stops(c, task, cause):
     else:
         made = {r["id"] for r in c.execute("SELECT id FROM tasks WHERE requester_id=? AND title=? AND created_at>=?",
                                            (task["requester_id"], task["title"], since))}
+    made = {tid for tid in made if see(tid)}
     open_now = 0
     for part in H.chunks(sorted(made)):
         marks = ",".join("?" * len(part))

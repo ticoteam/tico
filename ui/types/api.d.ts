@@ -1068,14 +1068,19 @@ export type ComputerSubscriptionResult = {
 
 export type Config = {
   administration_url?: string;
-  app_name: string;
-  assistant_bot: string;
-  assistant_name: string;
-  company_name: string;
-  owner_email: string;
-  public_url: string;
+  app_name?: string;
+  assistant_bot?: string;
+  assistant_name?: string;
+  company_name?: string;
+  features: {
+  file_media_stream: boolean;
+  task_files_multipart: boolean;
+};
+  owner_email?: string;
+  public_url?: string;
   s3_view_urls?: Record<string, string>;
-  version: string;
+  upload_max_bytes: number;
+  version?: string;
   visual_files?: string;
   visual_origin?: string;
   visuals?: "full" | "hosted" | "media";
@@ -3455,6 +3460,10 @@ export type MaintenanceUpdate = {
   steps?: Array<MaintenanceStepChange> | null;
 };
 
+export type MakePage = {
+  text: string;
+};
+
 export type MarketAnswers = {
   buyers?: string;
   competitors?: string;
@@ -5325,6 +5334,24 @@ export type TaskComments = {
   comments: Array<Message>;
 };
 
+export type TaskContext = {
+  meetings: Array<TaskContextMeeting>;
+  pages: Array<TaskContextPage>;
+};
+
+export type TaskContextMeeting = {
+  date: string;
+  id: string;
+  title: string;
+};
+
+export type TaskContextPage = {
+  id: string;
+  title: string;
+  updated_at: string;
+  version: number;
+};
+
 export type TaskCreate = {
   acceptance_criteria?: Array<string>;
   blocker?: TaskBlocker | null;
@@ -5468,6 +5495,14 @@ export type TaskList = {
   next_offset: number | null;
   reset?: boolean;
   tasks: Array<Task>;
+};
+
+export type TaskMakePage = {
+  make_page: {
+  conversation_id: string;
+  message_id: string;
+  state: "making" | "made" | "failed";
+} | null;
 };
 
 export type TaskMeeting = {
@@ -8004,6 +8039,7 @@ export type GetMeetingReviewSettingsResponse = MeetingReviewPreferences;
 export type GetMeetingTranscriptParams = {
   id: string;
   limit?: number;
+  notes?: boolean;
   offset?: number;
 };
 export type GetMeetingTranscriptBody = never;
@@ -8252,6 +8288,20 @@ export type GetTaskResponse = TaskDetail;
 export type GetTaskCapsParams = Record<string, never>;
 export type GetTaskCapsBody = never;
 export type GetTaskCapsResponse = TaskCaps;
+
+/** GET /api/v2/tasks/{tid}/context */
+export type GetTaskContextParams = {
+  tid: string;
+};
+export type GetTaskContextBody = never;
+export type GetTaskContextResponse = TaskContext;
+
+/** GET /api/v2/tasks/{tid}/make-page */
+export type GetTaskMakePageParams = {
+  tid: string;
+};
+export type GetTaskMakePageBody = never;
+export type GetTaskMakePageResponse = TaskMakePage;
 
 /** GET /api/v2/task-manager */
 export type GetTaskManagerParams = Record<string, never>;
@@ -9640,6 +9690,14 @@ export type MakeTaskFromMessageParams = {
 export type MakeTaskFromMessageBody = MessageTask;
 export type MakeTaskFromMessageResponse = TaskResult;
 
+/** POST /api/v2/tasks/{tid}/make-page */
+export type MakeTaskPageParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type MakeTaskPageBody = MakePage;
+export type MakeTaskPageResponse = AssistantSent;
+
 /** POST /api/v2/bots/{bot}/onboarded */
 export type MarkBotOnboardedParams = {
   "Idempotency-Key": string;
@@ -9799,9 +9857,11 @@ export type PublishPageParams = {
 export type PublishPageBody = {
   as_of?: string;
   audience?: AccessAudience | null;
+  base_version?: number;
   cadence?: "none" | "daily" | "weekly" | "monthly";
   content_base64?: string;
   name?: string;
+  page?: string;
   path?: string;
   replaces?: string;
   scope?: "task" | "bot";

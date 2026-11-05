@@ -1109,11 +1109,16 @@ def _dump(value):
     return json.dumps(value, sort_keys=True, default=str) if value is not None else None
 
 
+SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "preview",
+                       "note", "old", "new", "recommend", "question")
+
+
 def sourced_text(text, sources=(), refs=None):
     """Pair generated text with the identities it copies, for message refs or event/history data.
 
     Keep the pair together when forwarding text to another store: its readers use readable_page_refs before
-    projecting away metadata. Existing refs survive, and repeated copies keep only one of each source.
+    projecting away metadata. SOURCED_TEXT_FIELDS names the copied prose covered by this provenance wherever the
+    pair is carried. Existing refs survive, and repeated copies keep only one of each source.
     """
     refs = dict(refs or {})
     kept = list(refs.get("body_sources") or [])
@@ -5739,9 +5744,16 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     if source:
         original = message(conn, source)
         if original:
+            from .turn_scope import message_view
+            from .scope_projection import body_sources
+            shown = message_view(conn, original)
+            if text == original.get("body"):
+                text = shown.get("body") or ""
             # Preserve the review's references and run inputs when readers' access changes later.
             refs["inputs"] = [source]
-            refs.update({k: v for k, v in original["refs"].items() if k in ("turn_id", "run")})
+            sources = shown["refs"].get("body_sources") or [body_sources(shown["refs"])]
+            text, refs = sourced_text(text, sources, refs)
+            refs.update({k: v for k, v in shown["refs"].items() if k in ("turn_id", "run")})
     silent = quiet or parent["status"] in ("done", "closed", "declined")
     # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes
     # step or a merge to do, which goes first in the builder's queue (backend/verdict_moves.py).
@@ -6180,13 +6192,16 @@ def prime_review_answers(conn, messages):
 
 def review_answers(conn, message_id, *, actor=None):
     from . import task_privacy as privacy
+    from .turn_scope import message_view
     from .read_cache import rows
     out = []
     for row in rows(conn, REVIEW_ANSWERS_SQL, (message_id, message_id)):
         if actor is not None and not privacy.message_readable(conn, actor, row, current=True):
             continue
-        refs = _json(row["refs"], {}) or {}
-        out.append(refs.get("answer") or {"by": row["sender_id"], "text": row["body"], "at": row["created_at"]})
+        shown = message_view(conn, dict(row))
+        refs = _json(shown["refs"], {}) or {}
+        out.append(refs.get("answer") or {"by": shown["sender_id"], "text": shown["body"], "at": shown["created_at"],
+                   **({"refs": {"body_sources": refs["body_sources"]}} if refs.get("body_sources") else {})})
     return out
 
 
@@ -6758,8 +6773,12 @@ def _same_title(conn, sql, args, title, keep=None):
     """The first row `sql` reads (id, title) whose title is `title` by title_key, or None. `keep(conn, task_id)`, when
     given, also has to say it is the same work: a file review asks the same words about other versions."""
     key = title_key(title)
+    from . import turn_scope, views
+    scoped = turn_scope.scope(conn)
+    visible = turn_scope.AUTH.get().task_sql(conn, scoped.who) if scoped else None
     return next((r for r in _rows(conn.execute(sql, args))
-                 if title_key(r["title"]) == key and (keep is None or keep(conn, r["id"]))), None)
+                 if title_key(r["title"]) == key and (visible is None or views._readable_task_ids(conn, visible, [r["id"]]))
+                 and (keep is None or keep(conn, r["id"]))), None)
 
 
 AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn
@@ -7536,7 +7555,8 @@ def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
     latest wording and options, and the earlier asks listed under it. The ask is rewritten in place, so nothing new is
     sent: no second Needs-you item, no Slack or mail line, no run. Its clock restarts (ask_clock), so the person gets
     the team's days from the latest wording before a default goes ahead. Returns the ask as it now reads."""
-    card, asked = found["task"], found["ask"]
+    from .turn_scope import message_view
+    card, asked = found["task"], message_view(conn, found["ask"])
     old = asked.get("refs") or {}
     was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
     earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
@@ -8953,7 +8973,12 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         refuse(conn, actor, "lint", "the text doesn't match content_sha256; send the exact text that will be published",
                severity)
     digest = payload_hash(payload)
-    dup = _one(conn, "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,))
+    from . import turn_scope
+    from .why_here import approval_readable
+    scoped = turn_scope.scope(conn)
+    dup = next((dict(r) for r in conn.execute("SELECT * FROM approvals WHERE payload_hash=? AND decision IS NULL",
+                                             (digest,))
+                if scoped is None or approval_readable(conn, turn_scope.AUTH.get(), scoped.who, dict(r))), None)
     if dup:
         refuse(conn, actor, "duplicate", f"{dup['id']} already asks for exactly this")
     if supersedes:
@@ -8978,11 +9003,15 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         owner = actor
     owner = to or owner or human_actor(default_human(conn))     # `to`: a redesign proposal's decider
     ts = now()
-    ask = ("Send this to Tico support? " + _clip(payload["message"], 200) if kind == "support"
-           else f"Approve this {kind}: " + _clip(text, 200))
+    shown = turn_scope.project(conn, scoped, payload) or {}
+    ask = ("Send this to Tico support? " + _clip(shown.get("message", ""), 200) if kind == "support"
+           else f"Approve this {kind}: " + _clip(json.dumps(shown, sort_keys=True, default=str), 200))
+    from .scope_projection import body_sources
+    sources = body_sources(shown)
+    ask, notice_refs = sourced_text(ask, [sources], {"approval": "pending", "task": task_id})
     msg = _write_message(conn, actor, owner, ask,
                          _pair_conversation(conn, actor, owner, "notice"), "notice",
-                         {"approval": "pending", "task": task_id}, None, None)
+                         notice_refs, None, None)
     row = {"id": new_id(), "kind": kind, "task_id": task_id, "message_id": msg["id"],
            "payload": _dump(payload), "payload_hash": digest, "requested_by_id": actor,
            "decided_by_id": None, "decision": None, "decided_at": None, "consumed_at": None,
@@ -8993,7 +9022,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
                  "VALUES (:id, :kind, :task_id, :message_id, :payload, :payload_hash, :requested_by_id, "
                  ":decided_by_id, :decision, :decided_at, :consumed_at, :created_at, :ready_since, :decision_owner)", row)
     conn.execute("UPDATE messages SET refs=? WHERE id=?",
-                 (_dump({"approval": row["id"], "task": task_id}), msg["id"]))
+                 (_dump({**notice_refs, "approval": row["id"]}), msg["id"]))
     event(conn, actor, "approval.request", row["id"], {"kind": kind, "to": owner})
     replaced = {supersedes} if supersedes else set()
     target = approval_target(kind, payload)

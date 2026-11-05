@@ -66,6 +66,8 @@ A page starts with **Everyone who can see where it's filed**. Its maintainer bot
 choose **Who can see it** in the full view: humans, groups (including their nested groups and bots) and bots.
 This only narrows the file's inherited visibility. A pin, task link, live block or embed never widens past it.
 The maintainer and page managers always pass the audience check. Only managers see the chosen names and lock icon.
+Task bot turns also require the page to be readable by every reader of their carried tasks; the bot's own page
+grant cannot widen that task audience ceiling.
 
 `hub page publish report.html --audience ben,group:legal,bot:analyst` sets it when publishing.
 `hub page access ID` shows it to managers; `hub page access ID --audience everyone` clears it.

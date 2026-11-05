@@ -14,6 +14,7 @@ from .store import H, Problem
 
 READS = ContextVar("attempt_reads", default=None)
 AUTH = ContextVar("turn_scope_auth", default=None)
+WHO = ContextVar("turn_scope_who", default=None)
 
 
 @dataclass(frozen=True)
@@ -25,9 +26,10 @@ class Scope:
     who: Identity | None = None
 
 
-def scope(c, who):
+def scope(c, who=None):
     """None for an ordinary turn; a malformed make-page reference instead gets an empty, closed scope."""
-    if not who.attempt_id:
+    who = who or WHO.get()
+    if who is None or not who.attempt_id:
         return None
     privacy.snapshot(c)
 
@@ -55,6 +57,19 @@ def project(c, scoped, payload, *, auth=None):
     """Project the reviewed task/source schemas; ordinary text and unknown references stay opaque."""
     from .scope_projection import project as project_sources
     return project_sources(c, scoped, payload, auth=auth)
+
+
+def message_view(c, message, *, who=None, auth=None):
+    """A message's content before copying any of it into prose or another stored record.
+
+    Use the same structured scrubber as the message read route, while refs still describe the body.
+    Stored rows and decorated messages both occur here; never change the source row in place.
+    """
+    scoped = scope(c, who)
+    if message is None or scoped is None:
+        return message
+    message = {**message, "refs": H._json(message.get("refs"), {}) or {}}
+    return project(c, scoped, message, auth=auth)
 
 
 def project_attempt(c, auth, aid, payload):
@@ -137,7 +152,7 @@ def meeting_contained(c, row):
 
 
 def file_contained(c, auth, row, task, who=None):
-    from .files import VERSIONS_SQL, _file_visible
+    from .files import VERSIONS_SQL, _file_visible, page_audience_visible
     if row["state"] == "deleted":
         return False
     audience = readers(c, auth, task)
@@ -148,6 +163,8 @@ def file_contained(c, auth, row, task, who=None):
         # Other task readers still need their independent grants; no source check recurses into this scope.
         return all(_file_visible(c, auth, who if who and reader.actor == who.actor else reader, row, {})
                    for reader in audience)
+    if not all(page_audience_visible(c, auth, reader, row, {}) for reader in audience):
+        return False
     # A file filed on this task follows that task's own full access check, including its bot parties.
     if row["scope"] != "task:" + task["id"]:
         if row["scope"].startswith("conversation:"):
@@ -243,18 +260,14 @@ def require_meeting(c, who, row, auth=None):
 
 
 def postal_allowed(c, auth, who, bid):
-    """A scan grant is an independent source right for every reader of every carried task."""
+    """An exact scan keeps its letter's audience ceiling as well as the principal's own read rights."""
     from . import postal_mail
     if not read_cache.rows(c, postal_mail.SCANS_SQL, (bid,)):
         return None
     scoped = scope(c, who)
     if scoped is None:
         return None
-    carried = tasks(c, auth, who, scoped)
-    if scoped.make_page or not carried or postal_mail.scan_access(c, auth, who, bid) is not True:
-        return False
-    return all(postal_mail.scan_access(c, auth, who if reader.actor == who.actor else reader, bid) is True
-               for task in carried for reader in readers(c, auth, task))
+    return postal_mail.scan_access(c, auth, who, bid) is True
 
 
 def blob_allowed(c, auth, who, bid):

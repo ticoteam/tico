@@ -54,6 +54,7 @@ async function serverNotice(browser) {
     note: 'The condition holds.', set_at: t(1, 0), updated_at: t(9, 5), ended_at: t(9, 5)};
   for (const [viewport, touch, name] of [[{width: 1280, height: 860}, false, 'desktop'], [{width: 390, height: 844}, true, 'phone']]) {
     const api = await open(browser, viewport, touch, {messages, goal, theme: 'dark'}), {page} = api;
+    await page.waitForFunction(() => V2C?.goal?.id === 'g9' && V2C.goal.status === 'met');
     await page.locator('#conv-thread .chat-goal-line').waitFor();
     const thread = page.locator('#conv-thread');
     assert.equal(await thread.locator('.chat-goal-line').count(), 1, 'one line, not the notice and a line');

@@ -707,6 +707,7 @@ def create_app(settings=None):
         pending_reads = {}
         reads_reset = turn_scope.READS.set(pending_reads)
         scope_auth_reset = turn_scope.AUTH.set(auth)
+        scope_who_reset = turn_scope.WHO.set(None)
         via_reset = delegation_reset = run_reset = cause_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
@@ -1062,6 +1063,7 @@ def create_app(settings=None):
                         # What BotOps does with a person's rights is that person's act: its notices wake as the same
                         # act from the app would (backend/wake_rules.py ALWAYS_WAKE "person", wake presets).
                         wake_rules.CAUSE.set(lent)
+            turn_scope.WHO.set(getattr(request.state, "identity", None))
             response = early or await call_next(request)
             response = await project_response(request, response)
             if pending_reads:
@@ -1163,6 +1165,7 @@ def create_app(settings=None):
         finally:
             turn_scope.READS.reset(reads_reset)
             turn_scope.AUTH.reset(scope_auth_reset)
+            turn_scope.WHO.reset(scope_who_reset)
             if via_reset is not None:
                 H.VIA.reset(via_reset)
             if delegation_reset is not None:
@@ -1718,7 +1721,12 @@ def create_app(settings=None):
         """Everything a client needs to name this environment and reach its runner."""
         from .onboarding import config_view
         with store.read_transaction() as c:
-            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True, "file_media_stream": True}}
+            from . import turn_scope
+            capabilities = {"features": {"task_files_multipart": True, "file_media_stream": True},
+                            "upload_max_bytes": settings.upload_max_bytes}
+            if turn_scope.scope(c, request.state.identity) is not None:
+                return capabilities
+            return {**config_view(c, settings, request.state.identity), **capabilities}
 
     def updater_only(who, what):
         """The owner, or an `update` service key (backend/service_keys.py) held by a release bot on another install."""
@@ -3464,6 +3472,8 @@ def create_app(settings=None):
                 auth.conversation(c, who, row["conversation_id"])
             from .mail_settings import message_sender_can_approve_send
             row["sender_can_approve_send"] = message_sender_can_approve_send(c, auth, row)
+            from .turn_scope import message_view
+            row = message_view(c, row, who=who, auth=auth)
             return visual_view(c, who, [row])[0]
 
     @app.post("/api/v2/chat/{bot}")

@@ -144,12 +144,16 @@ def decode_cursor(cursor, key):
 
 def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_key):
     """(rows, next cursor): the newest `bot_files` rows (aliased `f`) matching `where` that `keep` accepts, at most
-    `limit`, looked at in chunks. After SCAN_MAX rows it answers with what it has and a cursor where it stopped, so a
-    list of files the viewer mostly may not see stays bounded and still pages on. `budget(row)` may stop a page early
+    `limit`, looked at in chunks. After SCAN_MAX rows it resumes from the last returned row, or an encrypted scan
+    position when none qualified, so rejected files never supply a public cursor. `budget(row)` may stop a page early
     (bytes), returning False for the row that would not fit."""
     from .files import prime_visible
     out, last, scanned = [], None, 0
     position = decode_cursor(cursor, cursor_key) if cursor else None
+
+    def continuation():
+        last_returned = out[-1] if out else last
+        return encode_cursor(last_returned["last_activity_at"], last_returned["id"], cursor_key) if last_returned else None
     while True:
         clauses = list(where)
         args = list(params)
@@ -158,20 +162,20 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_k
             args += [position[0], position[0], position[1]]
         sql = select + (" WHERE " + " AND ".join(clauses) if clauses else "") + \
             " ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?"
-        batch = c.execute(sql, (*args, SCAN_CHUNK)).fetchall()
+        window = min(SCAN_CHUNK, SCAN_MAX - scanned)
+        batch = c.execute(sql, (*args, window)).fetchall()
         prime_visible(c, batch)
         for r in batch:
             if keep(r):
                 if len(out) == limit or (budget and not budget(r)):
-                    return out, encode_cursor(out[-1]["last_activity_at"], out[-1]["id"], cursor_key) if out else \
-                        encode_cursor(last["last_activity_at"], last["id"], cursor_key) if last else None
+                    return out, continuation()
                 out.append(r)
             last = r
         scanned += len(batch)
-        if len(batch) < SCAN_CHUNK:
+        if len(batch) < window:
             return out, None
         if scanned >= SCAN_MAX:
-            return out, encode_cursor(last["last_activity_at"], last["id"], cursor_key)
+            return out, continuation()
         position = (last["last_activity_at"], last["id"])
 
 

@@ -11,8 +11,36 @@ from .store import H, Problem
 
 # These fields belong to source/reference schemas, never prose or arbitrary JSON strings.
 REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meeting", "meeting_id",
-                        "digest", "source_digest", "ref", "item", "url", "file_url", "href", "src", "path"})
-SOURCE_LISTS = frozenset({"files", "attachments", "pages", "meetings", "reviewed", "citations", "body_sources"})
+                        "task", "task_id", "message", "message_id", "comment", "comment_id",
+                        "digest", "source_digest", "sha256", "content_sha256", "body_sha256",
+                        "ref", "item", "url", "file_url", "href", "src", "path"})
+SOURCE_LISTS = frozenset({"files", "attachments", "pages", "page_files", "meetings", "reviewed", "citations", "body_sources", "sources"})
+SOURCE_ID = re.compile(r"(?:file-[0-9a-f]{24}|[0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|"
+                       r"(?:file|page|task|message|meeting):[A-Za-z0-9_-]+)(?:@[0-9]+)?")
+
+
+def object_refs(value):
+    """Structured identities belong to their object, regardless of its enclosing field's name."""
+    return ((key, item) for key, item in value.items() if key in REF_FIELDS or key == "id" or
+            key not in H.SOURCED_TEXT_FIELDS and isinstance(item, str) and SOURCE_ID.fullmatch(item))
+
+
+def body_sources(value, parent=""):
+    """Keep structured source refs beside generated prose, without duplicating the payload's ordinary text."""
+    if isinstance(value, dict):
+        out = {}
+        identities = dict(object_refs(value))
+        for key, item in value.items():
+            if key in identities:
+                out[key] = item
+            elif isinstance(item, (dict, list)):
+                refs = body_sources(item, key)
+                if refs:
+                    out[key] = refs
+        return out
+    if isinstance(value, list):
+        return [refs for item in value if (refs := body_sources(item, parent))]
+    return value if parent in SOURCE_LISTS and isinstance(value, str) else None
 
 
 def project(c, scoped, payload, *, auth=None):
@@ -28,10 +56,10 @@ def project(c, scoped, payload, *, auth=None):
         if not isinstance(value, str):
             return None
         value = unquote(value)
-        # Task/conversation refs belong to another namespace, including /origins/<task>.
-        if value.startswith(("task:", "conversation:")) or "/origins/" in value:
+        # Conversation and opaque origin links keep their existing namespace rules.
+        if value.startswith("conversation:") or "/origins/" in value:
             return None
-        match = re.search(r"(?:page:|file:|meeting:|/pages?/|/files/|/meetings/|[?&]page=)([A-Za-z0-9_-]+)", value)
+        match = re.search(r"(?:page:|file:|meeting:|task:|message:|/pages?/|/files/|/meetings/|/tasks/|/messages/|[?&]page=)([A-Za-z0-9_-]+)", value)
         return match[1] if match else value.rsplit("@", 1)[0]
 
     names, task_ids, event_ids, event_sources = set(), set(scoped.tasks), set(), {}
@@ -46,11 +74,11 @@ def project(c, scoped, payload, *, auth=None):
                 task_ids.add(value["task_id"])
                 if value.get("field") == "file" and isinstance(value.get("id"), str):
                     event_ids.add(value["id"])
+            for _, item in object_refs(value):
+                ref = reference(item)
+                if ref:
+                    names.add(ref)
             for key, item in value.items():
-                if key in REF_FIELDS or key == "id" and parent in SOURCE_LISTS:
-                    ref = reference(item)
-                    if ref:
-                        names.add(ref)
                 if key != "refs_json":
                     collect(item, key)
         elif isinstance(value, (list, tuple)):
@@ -65,7 +93,8 @@ def project(c, scoped, payload, *, auth=None):
     for chunk in H.chunks(sorted(event_ids)):
         marks = ','.join('?' * len(chunk))
         for row in c.execute(f"SELECT id,data FROM history_events WHERE id IN ({marks}) AND kind='file'", chunk):
-            source = H._json(row['data'], {}).get('source')
+            data = H._json(row['data'], {})
+            source = data.get('body_sources') or data.get('source') or body_sources(data)
             if source:
                 event_sources[row['id']] = source
                 collect(source)
@@ -96,13 +125,15 @@ def project(c, scoped, payload, *, auth=None):
             if reset is not None:
                 turn_scope.READS.reset(reset)
 
-    files, blobs, meetings, live, versions = {}, {}, set(), {}, []
+    files, blobs, meetings, live, versions, tasks, messages = {}, {}, set(), {}, [], {}, {}
     for chunk in H.chunks(sorted(names)):
         marks = ','.join('?' * len(chunk))
         files.update((r['id'], r) for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({marks})", chunk))
         blobs.update((r['id'], r) for r in c.execute(f"SELECT id,digest FROM blobs WHERE id IN ({marks}) OR digest IN ({marks})", (*chunk, *chunk)))
         meetings.update(r[0] for r in c.execute(f"SELECT id FROM meetings WHERE id IN ({marks})", chunk))
         live.update(c.execute(f"SELECT id,imported_meeting_id FROM live_meetings WHERE id IN ({marks})", chunk))
+        tasks.update((r['id'], r) for r in c.execute(f"SELECT * FROM tasks WHERE id IN ({marks})", chunk))
+        messages.update(H.prime_messages(c, chunk))
         versions.extend(c.execute(f"SELECT file_id,digest,source_digest FROM bot_file_versions WHERE digest IN ({marks}) "
                                   f"OR source_digest IN ({marks})", (*chunk, *chunk)))
     for chunk in H.chunks(sorted({v['file_id'] for v in versions} - files.keys())):
@@ -112,6 +143,35 @@ def project(c, scoped, payload, *, auth=None):
     visible = {fid: not row['archived'] and checking(fid, lambda row=row: file_visible(c, auth, scoped.who, row, {}))
                for fid, row in files.items()}
     denied = {fid for fid, ok in visible.items() if not ok}
+    from . import task_privacy as privacy
+    content_denied = set()
+    # Message access walks stored reply ancestry, whose decorators also call the projector. Read that ancestry
+    # without projecting it recursively; this pass still projects every object in the outgoing payload.
+    reset = turn_scope.WHO.set(None)
+    try:
+        for tid, row in tasks.items():
+            try:
+                auth.task_row(c, scoped.who, dict(row))
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+                content_denied.add(tid)
+        for mid, row in messages.items():
+            try:
+                # The message read route admits a bot's addressed legacy messages outside its own room.
+                native = bool((H.conversation(c, row['conversation_id']) or {}).get('audience'))
+                party = scoped.who.actor in (row['sender_id'], row['recipient_id'])
+                if not (scoped.who.role == 'bot' and party and not native):
+                    auth.conversation(c, scoped.who, row['conversation_id'])
+                if not privacy.message_readable(c, privacy.actor(scoped.who), row, current=True):
+                    content_denied.add(mid)
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+                content_denied.add(mid)
+    finally:
+        turn_scope.WHO.reset(reset)
+    denied.update(content_denied)
     digest_access = {}
     for bid, row in blobs.items():
         ok = checking(bid, lambda bid=bid: turn_scope.blob_allowed(c, auth, scoped.who, bid)) is True
@@ -161,9 +221,9 @@ def project(c, scoped, payload, *, auth=None):
     def attached_titles(value, parent=''):
         found = set()
         if isinstance(value, dict):
+            for _, item in object_refs(value):
+                found.update(titles_by_source.get(reference(item), set()))
             for key, item in value.items():
-                if key in REF_FIELDS or key == 'id' and parent in SOURCE_LISTS:
-                    found.update(titles_by_source.get(reference(item), set()))
                 found.update(attached_titles(item, key))
         elif isinstance(value, list):
             for item in value:
@@ -191,7 +251,8 @@ def project(c, scoped, payload, *, auth=None):
         if isinstance(value, list):
             return any(has_denied(item) for item in value)
         if isinstance(value, dict):
-            return any(has_denied(item) for key, item in value.items() if key in REF_FIELDS or key == 'id')
+            return (any(has_denied(item) for _, item in object_refs(value)) or
+                    any(has_denied(item) for item in value.values() if isinstance(item, (dict, list))))
         return False
 
     def walk(value, parent='', legacy_titles=None):
@@ -213,9 +274,9 @@ def project(c, scoped, payload, *, auth=None):
                     value.get('id') not in event_sources and any(value.get(k) in legacy_titles for k in ('old', 'new'))):
                 return gone
             alias = scan_alias(value)
-            if any(rejected(item) for key, item in value.items() if key in REF_FIELDS and not (alias and key == 'file_id')):
-                return gone
-            if parent in SOURCE_LISTS and rejected(value.get('id')):
+            direct_denied = {reference(item) for key, item in object_refs(value)
+                             if not (alias and key == 'file_id')} & denied
+            if direct_denied - content_denied:
                 return gone
             if has_denied(value.get('source')) or has_denied(value.get('ref')):
                 return gone
@@ -231,23 +292,35 @@ def project(c, scoped, payload, *, auth=None):
             # The answer map holds selected labels as strings, with their provenance next to the map.
             if isinstance(value.get('answers'), dict):
                 sources = value.get('label_sources', {})
+                sources = sources if isinstance(sources, dict) else {}
                 for key in ('answers', 'not'):
-                    if isinstance(value.get(key), dict):
-                        out[key] = {qid: [label for label in picks if not (
-                            has_denied(sources.get(qid, {}).get(label)) or
-                            label not in sources.get(qid, {}) and label in legacy_titles)]
-                                    for qid, picks in value[key].items()}
+                    if isinstance(value.get(key), dict) and isinstance(out.get(key), dict):
+                        for qid, picks in value[key].items():
+                            if qid not in out[key] or not isinstance(picks, list) or not all(isinstance(pick, str) for pick in picks):
+                                continue
+                            labels = sources.get(qid, {})
+                            labels = labels if isinstance(labels, dict) else {}
+                            out[key][qid] = [label for label in picks if not (
+                                has_denied(labels.get(label)) or label not in labels and label in legacy_titles)]
             # Generated prose is removed only on its stored provenance or a rejected legacy answer label.
             refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
-            shown_refs = out.get('refs', {})
-            answer, shown_answer = refs.get('answer', {}), shown_refs.get('answer', {})
-            hidden_body = (has_denied(refs.get('body_sources', [])) or has_denied(answer.get('target')) or
+            shown_refs = out.get('refs') if isinstance(out.get('refs'), dict) else {}
+            answer = refs.get('answer') if isinstance(refs.get('answer'), dict) else {}
+            shown_answer = shown_refs.get('answer') if isinstance(shown_refs.get('answer'), dict) else {}
+            hidden_body = (bool(direct_denied) or any(has_denied(container.get(key)) for container in (value, refs)
+                               for key in ('body_sources', 'sources')) or has_denied(answer.get('target')) or
                            answer.get('answers') != shown_answer.get('answers') or
                            answer.get('not') != shown_answer.get('not'))
             if hidden_body:
-                for key in ('body', 'text'):
-                    if key in out:
-                        out[key] = ''
+                for container in (out, out.get('answer'), shown_answer):
+                    if isinstance(container, dict):
+                        for key in H.SOURCED_TEXT_FIELDS:
+                            if key in container:
+                                container[key] = ''
+                # Generated asks keep their wording in both the message body and the structured question.
+                for container in (out.get('refs'), out.get('ask')):
+                    if isinstance(container, dict) and isinstance(container.get('questions'), list):
+                        container['questions'] = [{**q, 'question': ''} for q in container['questions']]
             if 'refs_json' in value:
                 # Keep the original bytes when the named wire copy does not change.
                 if shown_refs == refs:
