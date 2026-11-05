@@ -233,7 +233,7 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
     from backend.tests.test_api import post
     targets = [post(api, 'tasks', {'title': f'Review pricing {n}', 'body': 'Review pricing and report back.', 'owner': 'human:ana', **({'number': 42} if n == 0 else {})}, 'ana-test')['id']
                for n in range(45)]
-    batches, uploads = [], []
+    batches, uploads, sent_tasks_before_delete = [], [], {}
     lost_item = False
     sock = socket.socket()
     sock.bind(('127.0.0.1', 0))
@@ -257,6 +257,12 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
                 return await receive()
             delivered = True
             return {'type': 'http.request', 'body': body, 'more_body': False}
+        if path.endswith('/delete') and '/meetings/' in path:
+            rid = path.split('/')[-2]
+            with api.app.state.store.read() as c:
+                sent_tasks_before_delete.update({row['id']: dict(row) for row in c.execute(
+                    'SELECT * FROM tasks WHERE id IN (SELECT task_id FROM meeting_task_links WHERE meeting_id=?)',
+                    (rid,))})
         fail = False
         if path.endswith('/tasks') and '/meetings/' in path:
             batches.append((payload['task_ids'], dict(scope['headers']).get(b'idempotency-key')))
@@ -298,7 +304,9 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
         assert {row['task_id'] for row in linked} == {*targets, out['created']}
         for target in (targets[0], targets[-1], out['created']):
             assert out['meeting'] in {row['meeting_id'] for row in get(api, f'tasks/{target}/meetings')['meetings']}
-        assert get(api, f"meetings/{out['pending']}")['review_state'] == 'dismissed'
+        get(api, f"meetings/{out['pending']}", expected=404)
+        assert out['local']['live_discarded'] and out['local']['live_removed']
+        assert out['local']['task_link_operations'] == []
         retry_uploads = [row for row in uploads if row[0]['text'] == 'Original retry title']
         assert len(retry_uploads) == 2 and retry_uploads[0] == retry_uploads[1]
         retry = get(api, f"meetings/{out['retry_meeting']}/items")['sections']['task'][0]
@@ -308,13 +316,20 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
         with api.app.state.store.read() as c:
             assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 46
             assert c.execute('SELECT count(*) FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id '
-                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 3
-            assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 0
-            assert c.execute('SELECT review_state FROM meetings WHERE id=?', (out['pending'],)).fetchone()[0] == 'dismissed'
-            assert 'I will send the proposal' in c.execute('SELECT transcript_original FROM meetings WHERE id=?', (out['pending'],)).fetchone()[0]
+                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 2
+            assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 1
+            assert c.execute('SELECT deleted_at FROM media_control WHERE meeting_id=?', (out['pending'],)).fetchone()[0]
+            assert c.execute('SELECT discarded_at FROM live_meetings WHERE id=?', (out['live'],)).fetchone()[0]
             for table in ('live_meeting_chunks', 'live_meeting_chunk_versions', 'live_meeting_chat', 'live_meeting_events'):
-                assert c.execute(f'SELECT count(*) FROM {table} WHERE meeting_id=?', (out['live'],)).fetchone()[0] > 0
-            assert c.execute('SELECT task_id FROM meeting_task_links WHERE meeting_id=?', (out['pending'],)).fetchone()[0] == out['created']
+                rows = c.execute(f'SELECT * FROM {table} WHERE meeting_id=?', (out['live'],)).fetchall()
+                if table == 'live_meeting_events':
+                    assert len(rows) == 1 and json.loads(rows[0]['payload'])['action'] == 'discard'
+                else:
+                    assert not rows
+            assert not c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=?', (out['pending'],)).fetchone()
+            assert out['created'] in sent_tasks_before_delete
+            for tid, before in sent_tasks_before_delete.items():
+                assert dict(c.execute('SELECT * FROM tasks WHERE id=?', (tid,)).fetchone()) == before
             proposal = c.execute("SELECT * FROM meeting_items WHERE proposed_task_id IS NOT NULL").fetchone()
             assert proposal['status'] == 'pushed' and proposal['result_ref'] == targets[0]
             assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == 0

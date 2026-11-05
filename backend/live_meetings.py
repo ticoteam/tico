@@ -1714,6 +1714,10 @@ def install_live_meetings(app, store, auth, write):
                           (H.now(), H.now(), rid))
                 _end_open_turns(c, rid)
             c.execute("UPDATE live_meetings SET discarded_at=? WHERE id=?", (H.now(), rid))
+            # A deleted recording kept on its computer leaves no task associations in Tico.
+            c.execute("DELETE FROM meeting_task_links WHERE meeting_id=? AND EXISTS "
+                      "(SELECT 1 FROM media_control WHERE meeting_id=? AND deleted_at IS NOT NULL)",
+                      (row["imported_meeting_id"], row["imported_meeting_id"]))
             from . import meeting_audience
             meeting_audience.revoke_live(c, rid)
             for table in ("live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_chat_routes",

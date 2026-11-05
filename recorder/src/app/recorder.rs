@@ -2271,7 +2271,7 @@ impl Recorder {
         }
         self.send_meeting_to(id, destination, paused_confirmed, audience);
     }
-    /// Stops the recording and dismisses pending review without removing shared content.
+    /// Keeps the recording here and removes its live share and pending meeting from Tico.
     pub fn keep_local(&mut self, id: &str) {
         self.screen.stop_meeting(id);
         if self.active.as_ref().is_some_and(|(active, _)| active == id) {

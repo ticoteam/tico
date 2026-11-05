@@ -127,10 +127,24 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
         "This Mac drops queued links"
     );
     ensure!(
-        store.get(&local)?.deliveries[0].receipt["dismissed"] == true,
-        "This Mac retains its dismissed receipt"
+        store.get(&local)?.deliveries.is_empty()
+            && store.context(&local)?.live_discarded
+            && store.context(&local)?.live_removed
+            && store.context(&local)?.task_link_operations.is_empty(),
+        "This Mac removes the delivery and pending links after discard"
     );
 
+    let reopened_local = Store::open(store.root())?;
+    tico.flush_saved_links(&reopened_local, &local)?;
+    ensure!(
+        tico.finish_live(&reopened_local, &local).is_err(),
+        "Recovery must not finalize a discarded live share"
+    );
+    ensure!(
+        tico.queue_links(&reopened_local, &local, &tasks[..1])
+            .is_err(),
+        "A discarded live share cannot queue new links"
+    );
     ensure!(
         store
             .get(&local)?

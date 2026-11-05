@@ -86,8 +86,10 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
 - `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
   removes its transcript, chat and events from Tico; the recording stays on their computer.
-  Recorder **This Mac** uses pending-review dismissal instead: the recording, transcript, meeting, live
-  transcript, chat, history, sent tasks and existing links remain. Queued links and Link proposals are cleared.
+  Recorder **This Mac** uses this path and deletes a meeting already filed for review, removing its delivery
+  receipt and task links. The local recording and transcript stay, and tasks already sent remain unchanged.
+  Queued links and Link proposals are cleared; recovery cannot finalize the discarded live share or send its links.
+  An older Tico without discard ends the meeting and reports that its live transcript remains until Tico is updated.
 - `POST /api/v2/meetings/{id}/review` with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a

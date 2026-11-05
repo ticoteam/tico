@@ -106,6 +106,7 @@ impl Store {
              AND d.destination_id=json_extract(w.document,'$.live_destination')
              WHERE json_array_length(w.document,'$.task_link_operations')>0
              AND COALESCE(json_extract(w.document,'$.kept_on_mac'),0)=0
+             AND COALESCE(json_extract(w.document,'$.live_discarded'),0)=0
              AND json_extract(d.document,'$.status')!='sending'
              AND (json_extract(d.document,'$.status')='sent'
                   OR json_extract(d.document,'$.receipt.approved')=1)",
@@ -179,7 +180,7 @@ impl Tico {
     /// The selection is cached per meeting and org, but its titles and permissions are never cached in the prompt.
     pub fn draft_tasks(&self, store: &Store, id: &str) -> Result<Vec<Task>> {
         let context = store.context(id)?;
-        if context.kept_on_mac {
+        if context.kept_on_mac || context.live_discarded {
             return Ok(vec![]);
         }
         let now = chrono::Utc::now().timestamp();
@@ -228,23 +229,30 @@ impl Tico {
     }
 
     pub fn queue_links(&self, store: &Store, id: &str, ids: &[String]) -> Result<()> {
+        let _guard = store.live_lock();
         ensure!(
             !ids.is_empty() && ids.len() <= MAX_ITEMS,
             "Choose up to {MAX_ITEMS} tasks"
+        );
+        let context = store.context(id)?;
+        ensure!(
+            !context.kept_on_mac && !context.live_discarded,
+            "This meeting stays on this Mac"
+        );
+        ensure!(
+            context.live_destination.is_empty() || context.live_destination == self.destination.id,
+            "This meeting belongs to another Tico"
         );
         let found = self.readable_tasks(ids)?;
         ensure!(
             ids.iter().all(|id| found.iter().any(|task| &task.id == id)),
             "A task is no longer available"
         );
-        let context = store.context(id)?;
-        ensure!(!context.kept_on_mac, "This meeting stays on this Mac");
-        ensure!(
-            context.live_destination.is_empty() || context.live_destination == self.destination.id,
-            "This meeting belongs to another Tico"
-        );
         store.update_context(id, |c| {
-            ensure!(!c.kept_on_mac, "This meeting stays on this Mac");
+            ensure!(
+                !c.kept_on_mac && !c.live_discarded,
+                "This meeting stays on this Mac"
+            );
             ensure!(
                 c.task_link_operations.len() < MAX_ITEMS,
                 "Too many pending link actions"
@@ -274,8 +282,12 @@ impl Tico {
     }
 
     pub fn queue_unlink(&self, store: &Store, id: &str, task: &str) -> Result<()> {
+        let _guard = store.live_lock();
         store.update_context(id, |c| {
-            ensure!(!c.kept_on_mac, "This meeting stays on this Mac");
+            ensure!(
+                !c.kept_on_mac && !c.live_discarded,
+                "This meeting stays on this Mac"
+            );
             ensure!(
                 c.live_destination.is_empty() || c.live_destination == self.destination.id,
                 "This meeting belongs to another Tico"
@@ -314,7 +326,10 @@ impl Tico {
     pub fn flush_saved_links(&self, store: &Store, id: &str) -> Result<()> {
         let _drain = store.task_links_lock();
         let context = store.context(id)?;
-        if context.kept_on_mac || context.live_destination != self.destination.id {
+        if context.kept_on_mac
+            || context.live_discarded
+            || context.live_destination != self.destination.id
+        {
             return Ok(());
         }
         if let Some(mut delivery) = store.get(id)?.deliveries.into_iter().find(|d| {
@@ -328,8 +343,12 @@ impl Tico {
     }
 
     pub fn accept_task_link(&self, store: &Store, id: &str, item_id: &str) -> Result<()> {
+        let _guard = store.live_lock();
         let context = store.context(id)?;
-        ensure!(!context.kept_on_mac, "This meeting stays on this Mac");
+        ensure!(
+            !context.kept_on_mac && !context.live_discarded,
+            "This meeting stays on this Mac"
+        );
         ensure!(
             context.live_destination.is_empty() || context.live_destination == self.destination.id,
             "This meeting belongs to another Tico"
@@ -392,6 +411,9 @@ impl Tico {
         // Older local rows and tasks created before Save join the same durable outbox.
         let _drain = store.task_links_lock();
         store.update_context(id, |c| {
+            if c.kept_on_mac || c.live_discarded {
+                return Ok(());
+            }
             for kind in ["linked", "sent"] {
                 let mut ids: Vec<String> = context
                     .items
@@ -433,7 +455,11 @@ impl Tico {
         id: &str,
         delivery: &mut Delivery,
     ) -> Result<()> {
-        for op in store.context(id)?.task_link_operations {
+        let context = store.context(id)?;
+        if context.kept_on_mac || context.live_discarded {
+            return Ok(());
+        }
+        for op in context.task_link_operations {
             for batch in op.task_ids.chunks(20) {
                 let key = format!("recorder:{id}:links:{}:{}", op.id, hash(&json!(batch)));
                 let reply = if op.kind == "unlink" {
@@ -491,4 +517,50 @@ fn tasks(reply: &Value) -> Result<Vec<Task>> {
         task.title = task.title.chars().take(200).collect();
     }
     Ok(tasks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discarded_meetings_stay_out_of_the_drainer_even_with_a_stale_delivery() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let record = store.create("Kept here").unwrap();
+        store
+            .update_context(&record.id, |c| {
+                c.live_destination = "synthetic".into();
+                c.task_link_operations.push(TaskLinkOperation {
+                    id: "pending".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task".into()],
+                });
+                Ok(())
+            })
+            .unwrap();
+        store
+            .delivery(
+                &record.id,
+                &Delivery {
+                    destination_id: "synthetic".into(),
+                    meeting_id: "deleted".into(),
+                    status: "sent".into(),
+                    error: String::new(),
+                    receipt: json!({"approved":true}),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store.pending_task_links().unwrap(),
+            vec![(record.id.clone(), "synthetic".into())]
+        );
+        store
+            .update_context(&record.id, |c| {
+                c.live_discarded = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(store.pending_task_links().unwrap().is_empty());
+    }
 }

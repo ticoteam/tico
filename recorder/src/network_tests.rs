@@ -2408,35 +2408,73 @@ fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_onl
 }
 
 #[test]
-fn keeping_a_live_share_local_dismisses_review_and_restores_the_same_meeting_later() {
+fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let kept = transcript(&store, "Kept here");
-    live_delivery(&store, &kept.id, "partial", json!({"source":"live"}));
+    let older = transcript(&store, "Older Tico");
+    for (id, state) in [(&kept.id, "ended"), (&older.id, "live")] {
+        store
+            .update_context(id, |c| {
+                c.live_id = format!("live-{state}");
+                c.live_destination = "synthetic".into();
+                c.live_state = state.into();
+                Ok(())
+            })
+            .unwrap();
+    }
+    // Finish had already filed the shared transcript for review.
+    store
+        .delivery(
+            &kept.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "pending-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
     let (tico, seen, worker) = server(vec![
-        Some(json!({"review_state":"dismissed"})),
+        Some(json!({"ok":true})),
+        Some(json!({"id":"live-ended","state":"ended","discarded":true})),
         Some(json!({"actor":"human:test"})),
-        Some(json!({"review_state":"pending"})),
-        Some(json!({"review_state":"live","title":"Kept here"})),
+        Some(json!({"id":"local-fixture"})),
+        Some(json!({"status":404})),
+        Some(json!({"id":"live-live","state":"ended"})),
     ]);
     tico.keep_local(&store, &kept.id).unwrap();
     let context = store.context(&kept.id).unwrap();
-    assert!(context.kept_on_mac && !context.live_discarded && !context.live_removed);
-    let delivery = &store.get(&kept.id).unwrap().deliveries[0];
-    assert_eq!(delivery.receipt["dismissed"], true);
+    assert!(context.live_discarded && context.live_removed);
+    assert!(store.get(&kept.id).unwrap().deliveries.is_empty());
+    // Saved to Tico later, it is a meeting recorded on this computer.
     assert_eq!(
         tico.send_to(&store, &kept.id, false, "team").unwrap(),
-        format!("filed-{}", kept.id)
+        "local-fixture"
     );
+    let error = tico.keep_local(&store, &older.id).unwrap_err().to_string();
+    assert!(error.contains("keeps the live transcript"), "{error}");
+    let context = store.context(&older.id).unwrap();
+    assert!(context.live_discarded && !context.live_removed);
+    assert_eq!(context.live_state, "ended");
+    assert!(tico.send_to(&store, &older.id, false, "team").is_err());
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert!(calls[0].0.contains("/review "));
-    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
-    assert_eq!(calls[2].1, json!({"action":"restore"}));
-    assert_eq!(calls[3].1, json!({"action":"approve","private":false}));
-    assert!(!calls.iter().any(|call| call.0.contains("/delete")
-        || call.0.contains("/discard")
-        || call.0.contains("/import")));
+    assert!(
+        calls[0]
+            .0
+            .contains("/api/v2/meetings/pending-fixture/delete")
+    );
+    assert!(
+        calls[1]
+            .0
+            .contains("/api/v2/live-meetings/live-ended/discard")
+    );
+    assert!(calls[3].0.contains("meetings/import"));
+    assert_eq!(calls[3].1["external_id"], json!(kept.id));
+    assert!(calls[5].0.contains("/live-meetings/live-live/control"));
+    assert_eq!(calls[5].1, json!({"action":"end"}));
 }
 
 fn live_delivery(store: &Store, id: &str, status: &str, receipt: Value) {
@@ -2511,7 +2549,7 @@ fn a_retried_save_applies_the_audience_chosen_now_and_sends_a_title_changed_here
 }
 
 #[test]
-fn this_mac_after_a_save_failed_before_approval_dismisses_review() {
+fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let failed = transcript(&store, "Failed save");
@@ -2523,7 +2561,10 @@ fn this_mac_after_a_save_failed_before_approval_dismisses_review() {
         "failed",
         json!({"source":"live","approved":true}),
     );
-    let (tico, seen, worker) = server(vec![Some(json!({"ok":true}))]);
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"ok":true})),
+        Some(json!({"id":"live","state":"ended","discarded":true})),
+    ]);
     tico.keep_local(&store, &failed.id).unwrap();
     let error = tico
         .keep_local(&store, &approved.id)
@@ -2535,15 +2576,11 @@ fn this_mac_after_a_save_failed_before_approval_dismisses_review() {
     assert!(
         calls[0]
             .0
-            .contains(&format!("/meetings/filed-{}/review", failed.id))
+            .contains(&format!("/meetings/filed-{}/delete", failed.id))
     );
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
-    assert_eq!(
-        store.get(&failed.id).unwrap().deliveries[0].receipt["dismissed"],
-        true
-    );
-    assert!(store.context(&failed.id).unwrap().kept_on_mac);
+    assert!(calls[1].0.contains("/discard"));
+    assert!(store.get(&failed.id).unwrap().deliveries.is_empty());
+    assert!(store.context(&failed.id).unwrap().live_removed);
 }
 
 #[test]
@@ -3055,7 +3092,7 @@ fn recorder_saves_approval_notes_and_proposal_before_sent_links() {
 }
 
 #[test]
-fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued_links() {
+fn recorder_this_mac_deletes_a_finalized_pending_meeting_and_drops_only_queued_links() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let record = transcript(&store, "This Mac");
@@ -3072,6 +3109,12 @@ fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued
                     ..Default::default()
                 });
             }
+            c.task_link_operations
+                .push(crate::workspace::TaskLinkOperation {
+                    id: "queued-link".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task-queued".into()],
+                });
             c.items.push(crate::workspace::Item {
                 id: "proposal".into(),
                 title: "Follow up".into(),
@@ -3093,22 +3136,95 @@ fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued
             },
         )
         .unwrap();
-    let (tico, seen, worker) = server(vec![Some(json!({}))]);
+    let sent = serde_json::to_value(&store.context(&record.id).unwrap().items[1]).unwrap();
+    let stale = store.context(&record.id).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({})), Some(json!({}))]);
     tico.keep_local(&store, &record.id).unwrap();
+    // Both direct drain and Save's stale snapshot must leave the dropped links alone.
+    tico.flush_saved_links(&store, &record.id).unwrap();
+    let mut stale_delivery = Delivery {
+        destination_id: "synthetic".into(),
+        meeting_id: "pending".into(),
+        status: "sent".into(),
+        error: String::new(),
+        receipt: json!({"approved":true}),
+    };
+    tico.save_links(&store, &record.id, &stale, &mut stale_delivery)
+        .unwrap();
+    assert!(
+        tico.queue_links(&store, &record.id, &["task-queued".into()])
+            .is_err()
+    );
+    assert!(
+        tico.accept_task_link(&store, &record.id, "proposal")
+            .is_err()
+    );
+    assert!(tico.finish_live(&store, &record.id).is_err());
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].0.contains("/pending/review"));
-    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].0.contains("/pending/delete"));
+    assert!(calls[1].0.contains("/live-fixture/discard"));
     let context = store.context(&record.id).unwrap();
-    assert!(context.kept_on_mac && !context.live_removed && !context.live_discarded);
+    assert!(context.kept_on_mac && context.live_removed && context.live_discarded);
+    assert!(context.task_link_operations.is_empty());
     assert_eq!(context.items.len(), 2);
-    assert_eq!(context.items[0].task_id, "task-sent");
+    assert_eq!(serde_json::to_value(&context.items[0]).unwrap(), sent);
     assert!(context.items[1].proposed_task_id.is_empty());
     let after = store.get(&record.id).unwrap();
     assert_eq!(after.chunks[0].text, record.chunks[0].text);
-    assert_eq!(after.deliveries[0].meeting_id, "pending");
-    assert_eq!(after.deliveries[0].receipt["dismissed"], true);
+    assert!(after.deliveries.is_empty());
+}
+
+#[test]
+fn this_mac_with_a_lost_discard_reply_blocks_save_and_links_until_cleanup_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Kept here");
+    live_delivery(&store, &record.id, "partial", json!({"source":"live"}));
+    store
+        .update_context(&record.id, |c| {
+            c.task_link_operations
+                .push(crate::workspace::TaskLinkOperation {
+                    id: "pending".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task".into()],
+                });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({})),
+        None,
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"discarded":true})),
+    ]);
+    assert!(tico.keep_local(&store, &record.id).is_err());
+    let context = store.context(&record.id).unwrap();
+    assert!(context.live_discarded && !context.live_removed);
+    assert!(context.task_link_operations.is_empty());
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+    assert!(
+        tico.send_to(&store, &record.id, false, "team")
+            .unwrap_err()
+            .to_string()
+            .contains("discarded")
+    );
+    tico.flush_saved_links(&store, &record.id).unwrap();
+    assert!(
+        tico.queue_links(&store, &record.id, &["task".into()])
+            .is_err()
+    );
+    tico.keep_local(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert!(calls[0].0.contains("/delete"));
+    assert!(calls[1].0.contains("/discard"));
+    assert!(calls[2].0.starts_with("GET "));
+    assert!(calls[3].0.contains("/discard"));
+    assert_eq!(calls[1].2, calls[3].2);
+    assert!(store.context(&record.id).unwrap().live_removed);
 }
 
 #[test]

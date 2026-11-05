@@ -688,15 +688,6 @@ impl Tico {
         let result = (|| -> Result<String> {
             let live_source = ["live", "legacy-live"]
                 .contains(&delivery.receipt["source"].as_str().unwrap_or(""));
-            if live_source && delivery.receipt["dismissed"] == true {
-                self.call(
-                    &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
-                    Some(&json!({"action":"restore"})),
-                    &format!("recorder:{id}:restore-local"),
-                )?;
-                delivery.receipt["dismissed"] = json!(false);
-                store.delivery(id, &delivery)?;
-            }
             let chosen = delivery.receipt["audience"].as_str().unwrap_or("") == audience;
             if !live_source && (delivery.meeting_id.is_empty() || !chosen) {
                 let reply = self
