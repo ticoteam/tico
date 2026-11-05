@@ -79,7 +79,7 @@ DECISIONS = (
 )
 # Medium and High serve the same typed contract from a language model, at that model's price.
 
-# The services, as HQ lists them (GET /v1/gateway/catalog). `details` are label/value pairs Settings > Gateway shows under a
+# The services, as HQ lists them in its catalog. `details` are label/value pairs Settings > Gateway shows under a
 # service; an older HQ's rows have none.
 SERVICES = (
     {"id": "decide", "name": "Decide", "for": "Answer yes/no, choice and score questions about a state",
