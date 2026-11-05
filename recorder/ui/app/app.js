@@ -559,9 +559,10 @@
   }
   function task(it) {
     const n = taskNumber(it);
-    const open = it.task_url ? `<button class="link" data-act="open-url" data-url="${esc(it.task_url)}">Open</button>` : '';
+    // The whole row opens the task in Tico, where it is edited.
+    const open = it.task_url ? ` open" role="button" tabindex="0" title="Open in Tico" data-act="open-url" data-url="${esc(it.task_url)}` : '';
     const sub = [it.pending ? 'Linking' : it.status, it.owner_name, it.sent_to].filter(Boolean).map(esc).join(' · ');
-    return `<li class="item task"><span class="check ${it.pending ? '' : 'done'}">${it.pending ? '<span class="spin"></span>' : icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}${sub && open ? ' · ' : ''}${open}</div>${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
+    return `<li class="item task${open}"><span class="check ${it.pending ? '' : 'done'}">${it.pending ? '<span class="spin"></span>' : icon(it.kind === 'link' ? 'link' : 'check', 11)}</span><div class="content"><div class="title selectable">${n ? `<span class="num">#${esc(n)}</span> ` : ''}${esc(it.title)}</div><div class="sub">${sub}</div>${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>${it.kind === 'link' ? `<button class="icon-btn tiny" data-act="unlink-item" data-id="${esc(it.id)}" aria-label="Unlink" title="Unlink">${icon('close', 12)}</button>` : ''}</li>`;
   }
   function proposal(it) {
 
@@ -580,7 +581,7 @@
     const link = it.proposed_task_id && it.can_link ? `<button class="btn small" data-act="accept-link-item" data-id="${id}">Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>` : '';
     return `<li class="item proposal ${picking ? 'picking' : ''}">
       <span class="check dashed"></span>
-      <div class="content"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Task">${esc(it.title)}</span><div class="sub">${at}${owner}${doc}<button class="link" data-act="task-detail" data-id="${id}">Details</button></div>${anyway ? `<div class="error">May quote paused speech</div>` : ''}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
+      <div class="content"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Task">${esc(it.title)}</span><div class="sub">${at}${owner}${doc}</div>${anyway ? `<div class="error">May quote paused speech</div>` : ''}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
       <div class="item-tail">${link || create}<button class="icon-btn tiny" data-act="remove-item" data-id="${id}" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>
     </li>`;
   }
@@ -644,26 +645,6 @@
     const count = p.picks.length;
     return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><div class="task-search"><label class="search-box">${icon('search', 13)}<input class="field" data-model="taskQuery" placeholder="Search or #number" spellcheck="false" aria-label="Search tasks">${p.loading ? '<span class="spin"></span>' : ''}</label>${filter}</div><div class="pop-list ${p.loading ? 'stale' : ''}" aria-busy="${!!p.loading}">${rows.map(row).join('')}</div>${!p.loading && !rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? `<button class="link" data-act="task-picker-more" ${p.loading ? 'disabled' : ''}>More</button>` : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!count ? 'disabled' : ''}>${count ? `Link ${count}` : 'Link'}</button></div></div>`;
   }
-  function taskDueDay(value) {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-    const when = new Date(value);
-    return Number.isNaN(when.getTime()) ? '' : new Date(when.getTime() - when.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  }
-  function taskDueTimestamp(value) {
-    if (!value) return '';
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    if (!match) return null;
-    const [year, month, day] = match.slice(1).map(Number), when = new Date(year, month - 1, day, 17, 0);
-    // Match the task editor: the end of the working day in the person's local time.
-    if (year < 2000 || year > 2200 || when.getMonth() !== month - 1 || when.getDate() !== day) return null;
-    return when.toISOString();
-  }
-  function taskDetailSheet() {
-    const item = S.ui.taskDetail;
-    if (!item || !S.meeting?.actions.items.some((i) => i.id === item)) return '';
-    return `<div class="scrim" data-act="task-detail-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Task details"><h2>Details</h2><label>Due<input class="field" type="date" data-model="detailDue" aria-label="Due"></label><label>Details<textarea class="field" data-model="detailBody" rows="6" aria-label="Details"></textarea></label><div class="sheet-foot"><button class="btn quiet" data-act="task-detail-close">Cancel</button><button class="btn primary" data-act="task-detail-save">Save</button></div></div>`;
-  }
-
   // ---- Transcript sidebar ----
   function speakerColors(blocks) {
     const colors = {};
@@ -1290,7 +1271,7 @@
     const first = S.status.first_run && !S.library?.rows?.length;
     if (first && S.page === 'library') S.page = 'signin';
     else if (!first && S.page === 'signin') S.page = 'library';
-    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet() + taskDetailSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
+    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
     const active = document.activeElement;
     const key = active?.dataset?.key || active?.dataset?.model;
     const selection = key && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
@@ -1490,7 +1471,7 @@
 
   // ---- Navigation ----
   async function openMeeting(id) {
-    S.ui.taskPicker = null; S.ui.taskDetail = null;
+    S.ui.taskPicker = null;
     S.ui.pop = null;
     S.ui.share = null;
     S.ui.finish = null;
@@ -1517,7 +1498,7 @@
     await act('open_meeting', { id });
   }
   async function back() {
-    S.ui.taskPicker = null; S.ui.taskDetail = null;
+    S.ui.taskPicker = null;
     S.ui.pop = null;
     S.ui.share = null;
     if (S.page === 'settings') {
@@ -1797,16 +1778,6 @@
     'accept-link-item': (el) => act('accept_link_item', { id: el.dataset.id }),
     'unlink-item': (el) => act('unlink_item', { id: el.dataset.id }),
     'more-task-links': () => act('more_task_links'),
-    'task-detail': (el) => {
-      const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.id); if (!it) return;
-      S.ui.taskDetail = it.id; S.ui.detailDue = it.due ? taskDueDay(it.due) : ''; S.ui.detailBody = it.body || ''; render();
-    },
-    'task-detail-close': () => { S.ui.taskDetail = null; render(); },
-    'task-detail-save': () => {
-      const id = S.ui.taskDetail, due = taskDueTimestamp(S.ui.detailDue);
-      if (due === null) return;
-      S.ui.taskDetail = null; act('edit_task_detail', { id, due, body: S.ui.detailBody });
-    },
     'shared-retry': el => sharedSave(el.dataset.id),
     'shared-copy': el => sharedClose(el.dataset.id, true),
     'shared-close': el => sharedClose(el.dataset.id, false),
@@ -2063,8 +2034,8 @@
     if (S.ui.pop) {
       S.ui.pop = null;
       render();
-    } else if (S.ui.taskPicker || S.ui.taskDetail) {
-      S.ui.taskPicker = null; S.ui.taskDetail = null; render();
+    } else if (S.ui.taskPicker) {
+      S.ui.taskPicker = null; render();
     } else if (S.ui.share || S.ui.finish || S.ui.screen) {
       S.ui.share = null; S.ui.finish = null; S.ui.screen = null; render();
     } else if (S.status.connect) {
