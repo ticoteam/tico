@@ -215,6 +215,7 @@ function approvalTitle(it) {
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
   if (it.what === 'mail_alert') return `Mail sending: ${approvalWho(p.bot)}`;
+  if (it.what === 'letter') return 'Send letter';
   return it.title || '';
 }
 function approvalFacts(what, p, it = {}) {
@@ -222,7 +223,19 @@ function approvalFacts(what, p, it = {}) {
   const shown = v => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
   const plain = v => typeof v === 'string' || typeof v === 'number';
   let rows, named;
-  if (what === 'publish') {
+  if (what === 'letter') {
+    const address = a => a && typeof a === 'object' ? [a.name, a.line1, a.line2, [a.city, a.state, a.postal_code].filter(Boolean).join(' ')].filter(Boolean).join('\n') : '';
+    const link = document.createElement('a');
+    link.textContent = 'Open PDF proof';
+    if (/^\/api\/v2\/files\/[A-Za-z0-9_-]+$/.test(String(p.proof || ''))) {
+      link.href = p.proof; link.target = '_blank'; link.rel = 'noopener';
+    }
+    rows = [['Proof', link], ['Recipient', address(p.recipient)], ['Return address', address(p.return_address)],
+      ['Class', shown(p.mail_class).replaceAll('_', ' ')], ['Print', `${p.color ? 'Color' : 'Black and white'} · ${p.duplex ? 'Duplex' : 'Single sided'}`],
+      ['Pages', shown(p.page_count)], ['Total', '$' + (Number(p.total_micros) / 1000000).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6})]];
+    if (p.reason) rows.push(['Why an OK is needed', shown(p.reason)]);
+    named = Object.keys(p);
+  } else if (what === 'publish') {
     const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
     rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url, p.title) : shown(p.url)],
       text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]

@@ -1844,6 +1844,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
+        if row["kind"] == "letter":
+            try:
+                auth.approval(c, who, row["id"])
+            except Problem:
+                continue
         msg = H.message(c, row["message_id"])
         if msg and msg["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
@@ -2164,6 +2169,8 @@ def pending_rows(c, auth, who, task_view):
         if not row or not msg or msg["recipient_id"] != who.actor:
             continue
         try:
+            if row["kind"] == "letter":
+                auth.approval(c, who, aid)
             privacy.require_payload(c, who, row)
             privacy.require_message(c, who, msg)
         except Problem:
@@ -2225,6 +2232,8 @@ def history_rows(c, auth, who, status, from_actor, before, since, need):
                    "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
                    "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
             try:
+                if row["kind"] == "letter":
+                    auth.approval(c, who, row["id"])
                 if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
                     continue
                 privacy.require_payload(c, who, row)

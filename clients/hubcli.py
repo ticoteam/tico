@@ -1059,6 +1059,18 @@ def parser():
     item = connections.add_parser('list'); item.set_defaults(fn='connections list')
     item.add_argument('--cursor'); item.add_argument('--limit', type=int)
 
+    letters = sub.add_parser('letter', help='quote and send physical letters through the Gateway').add_subparsers(dest='sub')
+    item = letters.add_parser('quote', help='quote a PDF or text; never prints until send and approval')
+    item.set_defaults(fn='letter quote')
+    item.add_argument('--file-id'); item.add_argument('--text')
+    item.add_argument('--recipient', required=True, type=json.loads, help='US address as JSON: name, line1, city, state, postal_code')
+    item.add_argument('--mail-class', choices=['first_class', 'certified', 'certified_return_receipt'])
+    item.add_argument('--color', action='store_true'); item.add_argument('--duplex', action='store_true')
+    item.add_argument('--task-id'); item.add_argument('--thread-id')
+    item = letters.add_parser('list'); item.set_defaults(fn='letter list')
+    item.add_argument('--before'); item.add_argument('--limit', type=int)
+    for action in ('send', 'show', 'cancel'):
+        item = letters.add_parser(action); item.set_defaults(fn='letter ' + action); item.add_argument('letter_id')
     mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
     item = mail.add_parser('list'); item.set_defaults(fn='mail list')
     item.add_argument('--status', choices=('new','filed','archived','failed'))

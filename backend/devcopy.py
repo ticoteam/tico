@@ -37,6 +37,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Provider jobs and send grants never become actionable in a rehearsal copy.
+    "letter_sources", "letter_proofs", "letters", "letter_outbox_grants",
     # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
     "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
@@ -133,6 +135,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "email_sending_policies", "email_suppressed_recipients",   # retain the team's send restrictions
+    "letter_outboxes", "letter_bot_settings",
     "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
     "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
     "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings

@@ -112,6 +112,26 @@ async function phonePublish(browser) {
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
+async function letterProof(browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
+  const shown = await page.evaluate(() => {
+    const address = {name: '<img src=x onerror="window.pwned=1">', line1: '2 Main St', city: 'Dover', state: 'DE', postal_code: '19901'};
+    const payload = {letter_id: 'letter-1', approval_hash: 'a'.repeat(64), proof: '/api/v2/files/proof-1',
+      recipient: address, return_address: {...address, name: 'Acme', line1: '1 Main St'}, mail_class: 'certified',
+      total_micros: 1500123, page_count: 2, color: false, duplex: true};
+    const node = approvalPayloadNode({what: 'letter', payload});
+    const host = document.createElement('div'); host.style.width = '350px'; host.append(node); document.body.replaceChildren(host);
+    return {text: node.textContent, href: node.querySelector('a').getAttribute('href'), markup: node.querySelectorAll('img').length,
+      fits: [...node.querySelectorAll('dd')].every(dd => dd.scrollWidth <= dd.clientWidth)};
+  });
+  assert.equal(shown.href, '/api/v2/files/proof-1');
+  assert.ok(shown.text.includes('2 Main St') && shown.text.includes('1 Main St') && shown.text.includes('certified'));
+  assert.ok(shown.text.includes('$1.500123') && shown.text.includes('Open PDF proof'));
+  assert.equal(shown.markup, 0); assert.ok(shown.fits);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
 const REPORT = 'hub task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
   'Tried: hub task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
 const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester_id: 'bot:support',
@@ -285,6 +305,7 @@ async function frozenEmailPreview(browser) {
     await phonePublish(browser);
     await phoneSupport(browser);
     await phoneRedesignKinds(browser);
+    await letterProof(browser);
     console.log('Needs you approvals: one line each; the card shows the send payload readable, files open, HTML stays text, Approve posts; publish, support, task cap and spend limit readable at 390px');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

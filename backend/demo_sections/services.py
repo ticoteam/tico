@@ -125,6 +125,7 @@ def seed(b):
         c.execute("UPDATE postal_mail_settings SET created_at=?,updated_at=? WHERE id=1", (H.now(), H.now()))
     b.write(mail_clock)
     _letters(b)
+    _letters_out(b)
     _gateway(b)
     _runners(b)
     _move_gateway_bots(b)
@@ -219,6 +220,35 @@ def _letters(b):
             def handoff(c, actor=actor, to=to, note=note, ident=ident):
                 hubdb.task_update(c, actor, _letter_row(c, ident)["task_id"], owner=to, note=note)
             b.write(handoff)
+
+
+def _letters_out(b):
+    """A saved provider receipt and proof, without asking HQ or submitting anything to a printer."""
+    from .. import letters
+    address = {"name": "Acme", "line1": "1200 Example Way", "city": "Dover", "state": "DE", "postal_code": "19901"}
+    recipient = {**address, "name": "Acme Customer", "line1": "1202 Example Way"}
+    owner = Identity(CONTENT["owner"]["id"], "owner", CONTENT["owner"]["email"])
+    b.at(days=2)
+    proof = letters.render("Acme Customer\n1202 Example Way\nDover DE 19901\n\nThank you for choosing Acme.")
+    digest = b.app.state.blobs.put(proof, "application/pdf")
+
+    def keep(c):
+        # A provider receipt has its own stable IDs, so adding it does not renumber the demo's conversations.
+        ident = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://acme.example/demo/letter-out"))
+        blob_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://acme.example/demo/letter-proof"))
+        now = H.now()
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,'application/pdf',?)",
+                  (blob_id, owner.actor, digest, len(proof), "letter-proof.pdf", now))
+        c.execute("UPDATE letter_outboxes SET return_address=?,availability='ready',checked_at=?,created_at=?,updated_at=? WHERE id='company'",
+                  (letters.dump(address), now, now, now))
+        c.execute("INSERT INTO letters(id,outbox_id,requested_by,recipient,recipient_hash,return_address,mail_class,"
+            "color,duplex,source_blob_id,proof_blob_id,page_count,quote_id,quote_expires_at,approval_hash,total_micros,"
+            "hq_letter_id,status,submitted_at,created_at,updated_at) VALUES(?,'company',?,?,?,?,'first_class',0,0,?,?,1,"
+            "'lq_demo',?,?,1500000,'lt_demo','mailed',?,?,?)",
+            (ident, owner.actor, letters.dump(recipient), hashlib.sha256(letters.dump(recipient).encode()).hexdigest(),
+             letters.dump(address), blob_id, blob_id, now, digest, now, now, now))
+        c.execute("INSERT INTO letter_proofs VALUES(?,?,?,?)", (ident, blob_id, digest, now))
+    b.write(keep)
 
 
 def _letter_row(c, external_id):

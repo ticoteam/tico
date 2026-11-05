@@ -73,6 +73,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Feedback | A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
+| Letters out | Physical letters sent through the Gateway; approvals bind the saved proof and price. |
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
 | Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
 | Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |

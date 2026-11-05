@@ -130,6 +130,28 @@ def standing(c, pid):
     return ""
 
 
+def bot_identity(c, actor, *, attempt_id=""):
+    """Resolve current bot standing from its registry, without minting a credential or a lease."""
+    from . import agents
+    bot = H.actor_id(actor) if H.is_bot(actor) else None
+    record = H.bot(c, bot) if bot else None
+    config = read_cache.one(c, BS.ONE_SQL, (bot,)) if record else None
+    if not record or record["state"] != "active" or not config:
+        raise Problem("identity", "This bot is no longer available", 403)
+    external = agents.external_harness(c, bot)
+    credential = agents.row(c, bot)
+    active_agent = credential is not None and not credential["revoked_at"]
+    # Authentication still marks an active agent credential external while its configured harness changes.
+    if external or active_agent:
+        if not active_agent or not credential["harness"] or (external and credential["harness"] != external):
+            raise Problem("identity", "This external bot has no current credential", 403)
+        return Identity(actor, "bot", agent=credential["harness"])
+    attempt = read_cache.one(c, "SELECT runner_id FROM attempts WHERE id=? AND bot_id=?", (attempt_id, bot)) if attempt_id else None
+    if attempt_id and not attempt:
+        raise Problem("identity", "This bot's source execution is no longer available", 403)
+    return Identity(actor, "bot", attempt_id=attempt_id, runner_id=attempt["runner_id"] if attempt else "")
+
+
 def validate_identity(c, who):
     if who.support:
         # No roster row: the session it came in with must still be live.
@@ -1098,6 +1120,14 @@ class Auth:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
             allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
+        if row["kind"] == "letter":
+            from . import letters
+            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
+            allowed = False
+            if letter:
+                may_decide = who.role in ("owner", "human") and (letters.admin(self, who) or (
+                    letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"])))
+                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row

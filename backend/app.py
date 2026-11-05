@@ -394,6 +394,7 @@ def create_app(settings=None):
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
         postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
+        letters_task = asyncio.create_task(app.state.letters.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
         sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
         # Bots' own cloud machines (backend/cloud_machines.py): started for work, stopped when idle; Tico Cloud only.
@@ -440,6 +441,8 @@ def create_app(settings=None):
                 await hook_relay_task
             if postal_mail_task:
                 await postal_mail_task
+            if letters_task:
+                await letters_task
             if sleep_idle_task:
                 await sleep_idle_task
             if cloud_machines_task:
@@ -5846,6 +5849,7 @@ def create_app(settings=None):
                 finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
         result = mutate(request, body, work, durable=True)     # approving a payment moves money: durable, like every decision
+        app.state.letters.decided(aid)
         from .company_page import editions
         for board in boards:
             editions.release_board(store, board)                 # after the commit: the rebuild takes its own transaction
@@ -8675,6 +8679,8 @@ def create_app(settings=None):
     install_hook_relay(app, settings, store, auth)
     from .postal_mail import install as install_postal_mail
     install_postal_mail(app, settings, store, auth)
+    from .letters import install as install_letters
+    install_letters(app, settings, store, auth, mutate)
     from .sleep_idle import install as install_sleep_idle
     install_sleep_idle(app, settings, store, auth)
     from .cloud_machines import install as install_cloud_machines
