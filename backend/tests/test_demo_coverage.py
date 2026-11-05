@@ -122,6 +122,14 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
 
 
+def test_demo_task_has_an_editor_for_the_live_task_page(api):
+    meetings = api.get('/api/v2/meetings').json()['meetings']
+    task = next(row['task_id'] for meeting in meetings for row in
+                api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks'])
+    detail = api.get(f'/api/v2/tasks/{task}').json()
+    assert any(event['field'] == 'due' and event['actor'] == 'human:ana' for event in detail['events'])
+
+
 def test_task_pages_have_demo_data(api):
     pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()

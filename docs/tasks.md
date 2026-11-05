@@ -92,6 +92,22 @@ new title as its subject.
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
+Click the title, or focus it and press Enter, to edit it; **Edit** opens the details editor.
+The task window saves title, details and public text edits on blur or after 700 ms without typing, one write at a time.
+Due date and size changes use the same field revisions. Leaving an unchanged field never saves it.
+Only changed fields are sent with the revision their displayed text came from, including a focused field held
+through a live change. A conflict keeps the draft and adopts the current values for untouched fields; **Not saved · Retry** retries the edited fields against that version. Live changes
+keep every form's input, focus and caret. Edited fields keep their base revision across reloads
+and reopening, scoped to the signed-in org and person. A clean window cannot clear another window’s unsaved draft.
+Sign-out clears local drafts; sign-in recovery restores text only for the same org and person.
+A reworded question clears its earlier answer note and ticks. A pending or failed save prompts before leaving the page. The editor line
+names the latest title, details, owner or due-date change.
+
+Other viewers appear beside the editor line. Each visible window heartbeats every 15 seconds; closing or hiding
+one leaves only that window's session, and sessions expire after 30 seconds. Task and presence events use current
+task read permissions. Losing access closes the task window within 60 seconds, including bot-access revocation.
+The open task refetches on invalidations, with a three-minute safety refresh.
+
 ## Managers acting on tasks
 
 A bot or person above a task's owner or requester on the org chart inherits that

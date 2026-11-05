@@ -64,7 +64,7 @@ function taskPropsHTML(t, opts = {}) {
   rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
   if (roadmapTask(t)) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
-    rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
+    rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size data-task-field="size" min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
   }
   // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due_at);
@@ -76,7 +76,7 @@ function taskPropsHTML(t, opts = {}) {
   const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
-      extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
+      extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date data-task-field="due" tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
   if (t.check_back_at && t.check_back?.enabled !== false) {
     const when = fmt(t.check_back_at);
@@ -331,26 +331,14 @@ function taskPropsBind(d, task, change) {
         }});
     }
   };
-  const publication = $('[data-task-public]', box), size = $('[data-task-size]', box);
+  const publication = $('[data-task-public]', box);
   if (publication) publication.onchange = () => save('publication', {visibility: publication.checked ? 'public' : 'private'});
-  if (size) size.onchange = () => { if (size.checkValidity()) void save('size', {size: size.value === '' ? null : Number(size.value)}); };
   // A date saves only when it is whole and sensible. With the native picker that is its change; typed by hand (the
   // fallback field), only on Enter or leaving the field, so a half-typed year like 0002 never saves.
   const date = $('[data-prop-date]', d);
-  const saveDate = () => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.value || '');
-    if (!m) return;
-    const [y, mo, day] = m.slice(1).map(Number), when = new Date(y, mo - 1, day, 17, 0);
-    if (y < 2000 || y > 2200 || when.getMonth() !== mo - 1 || when.getDate() !== day) {
-      d.propsErrs = {id: String(task.id), map: new Map([['due', 'That date is not valid.']])}; taskPropsMsgPaint(d); return;
-    }
-    void save('due', {due: when.toISOString()});   // the end of that working day, local time
+  if (date) date.onkeydown = ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); date.dispatchEvent(new Event('change')); }
   };
-  if (date) {
-    date.onchange = () => { if (!date.classList.contains('shown')) saveDate(); };
-    date.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); saveDate(); } };
-    date.onblur = () => { if (date.classList.contains('shown')) saveDate(); };
-  }
   // the "…" menu in the header: what used to be links and buttons under the task
   const more = $('[data-task-more]', d);
   if (more) more.onclick = () => {
