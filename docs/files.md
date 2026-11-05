@@ -110,6 +110,9 @@ archive it; the attachment is detached from the task and the action is recorded.
 
 ## Visibility
 
+- A page's **Who can see it** audience can narrow its inherited visibility for humans and bots; pins and task links
+  never bypass it. The maintainer and page managers always pass this audience check ([Pages](pages.md#who-can-see-it)).
+
 A file inherits the visibility of where it came from:
 
 - made for a **task**: whoever can see the task;
@@ -155,7 +158,8 @@ the bot's page, so a file you may not read adds no row, name or count.
   address (`#/library/files?kind=page&bot=…`). On a phone they scroll sideways.
 - **Rows:** title, kind, bot, last updated, and where a page is pinned. A page opens full size; another stored file
   opens in the file viewer; a link opens at its provider.
-- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total.
+- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total. Cursors are
+  encrypted and authenticated; a scan can return an empty page with a continuation past hidden rows.
 
 `GET /api/v2/files?kind=&bot=&team=&task=&since=&until=&pinned=&archived=&limit=&cursor=`.
 
@@ -185,7 +189,8 @@ confirm first.
   places, and Tico file hosting. Bytes anything else still uses stay: another file, a task or thread attachment, a
   meeting's recording, market evidence, the team icon. Bytes this server wrote in the last two minutes (the same
   bytes, uploaded again) go on a later pass, within a few minutes.
-- Its search text, page settings and pins go.
+- Its search text and pins go. A page keeps a tombstone with its audience and identity provenance, so deleting it
+  never reopens copied content. Saved page references and citations show **A deleted page** for everyone.
 - One row stays, titled **Deleted file**, and its activity records who deleted it, when and how many versions,
   without the name or the content. Publishing the same path again makes a new file.
 - The backup (`TICO_BACKUP_URL`) keeps its copy: files there are only ever added. Remove them there by hand if they

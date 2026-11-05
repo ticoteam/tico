@@ -1716,6 +1716,8 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     declared.pop("branch_previous_status", None)
     declared["status"] = "archived"
     c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
+    from . import pages
+    pages.forget_audience_member(c, actor, "bots", bot)
     BS.write(c, bot, declared, ts)
     c.execute("UPDATE bot_config SET revision=revision+1,definition_updated_at=?,"
               "definition_updated_by=? WHERE bot=?", (ts, actor, bot))

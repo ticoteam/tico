@@ -156,6 +156,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            (docs/pages.md)
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    hub page access <id> [--audience everyone|ben,group:legal,bot:analyst]
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
     hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
                                            or person:me (My dashboard)
@@ -1472,6 +1473,7 @@ def parser():
     s.add_argument("--page", help="add a version to a page filed on this turn's task")
     s.add_argument("--base-version", type=int, help="the current page version you read")
     s.add_argument("--scope", choices=["task", "bot"])
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
@@ -1483,6 +1485,10 @@ def parser():
     s = page.add_parser("show", help="one page's status")
     s.add_argument("id")
     s.set_defaults(fn="page show")
+    s = page.add_parser("access", help="show or change who can see a page")
+    s.add_argument("id")
+    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.set_defaults(fn="page access")
     s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
     s.add_argument("id")
     s.add_argument("--restore", action="store_true", default=None)

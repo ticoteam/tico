@@ -176,17 +176,18 @@ def _settle(c, merged_into, original, state, note):
               (state, H.now(), note[:500], merged_into, original))
 
 
-def _pass_on(c, person, link, item, text):
+def _pass_on(c, person, link, item, text, text_sources=()):
     """The person's answer to one original, as the bot that asked reads it. Returns why it couldn't be, or None."""
     row = H.task(c, link["original"])
     if not _current(c, link, row):
         # Answered there already, or asked something else since: this answer was for what was merged, not that.
         return "it no longer waits on them for what was merged"
-    said = f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"'
+    said, refs = H.sourced_text(
+        f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"', text_sources)
     if link["how"] == "asked":
-        H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True)
+        H.task_ask_resolve(c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources)
         return None
-    H.task_comment(c, STRATEGY_BOT, row["id"], said)
+    H.task_comment(c, STRATEGY_BOT, row["id"], said, extra_refs=refs)
     if link["how"] == "waiting":
         # The person has answered: the next move is the bot's, as when they reply on its task themselves.
         c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (row["id"],))
@@ -194,7 +195,7 @@ def _pass_on(c, person, link, item, text):
     return None
 
 
-def on_reply(c, actor, row, text):
+def on_reply(c, actor, row, text, *, text_sources=()):
     """A person's reply on a merged item they were asked (hubdb.task_comment, hubdb.answer): passed to every original,
     then the item is done; called again for the same reply, it finds nothing left to pass on. An original it can't
     reach is back in their Needs you, with the reason kept."""
@@ -208,7 +209,7 @@ def on_reply(c, actor, row, text):
     for link in links:
         c.execute("SAVEPOINT strategy_merge_answer")
         try:
-            why = _pass_on(c, actor, link, row, text)
+            why = _pass_on(c, actor, link, row, text, text_sources)
         except H.Refused as exc:
             c.execute("ROLLBACK TO strategy_merge_answer")
             why = exc.detail or str(exc.rule)

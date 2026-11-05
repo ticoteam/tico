@@ -11,6 +11,12 @@ converts the row first (`dict(row)`) or annotates the parameter and lets callers
 from typing import TypedDict
 
 
+class PageIdentityRow(TypedDict):
+    """An alias keeps its page's read provenance after the bytes are purged."""
+    identity: str
+    file_id: str
+
+
 class AlertPreferenceRow(TypedDict):
     person_id: str
     phone: str | None

@@ -140,7 +140,7 @@ def meeting_contained(c, row):
 
 
 def file_contained(c, auth, row, task, who=None):
-    from .files import VERSIONS_SQL, _file_visible
+    from .files import VERSIONS_SQL, _file_visible, page_audience_visible
     if row["state"] == "deleted":
         return False
     audience = readers(c, auth, task)
@@ -151,6 +151,8 @@ def file_contained(c, auth, row, task, who=None):
         # Other task readers still need their independent grants; no source check recurses into this scope.
         return all(_file_visible(c, auth, who if who and reader.actor == who.actor else reader, row, {})
                    for reader in audience)
+    if not all(page_audience_visible(c, auth, reader, row, {}) for reader in audience):
+        return False
     # A file filed on this task follows that task's own full access check, including its bot parties.
     if row["scope"] != "task:" + task["id"]:
         if row["scope"].startswith("conversation:"):

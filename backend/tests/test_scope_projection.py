@@ -24,13 +24,14 @@ def no_sources(value, secrets):
         assert secret not in wire, (secret, wire[:4000])
 
 
-def sources(api, title="Restricted source"):
+def sources(api, title="Restricted source", maintainer="ops"):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     t = post(api, "tasks", {"owner": "ops", "title": "Review source context", "body": "Review the sources.", "private": False})
     publisher = claim(api, machine, "ops", key="source-publish")
-    hidden = published(api, publisher, task=t["id"], name="restricted.html", title=title,
+    source_publisher = publisher if maintainer == "ops" else turn(api, maintainer)[1]
+    hidden = published(api, source_publisher, task=t["id"], name="restricted.html", title=title,
                        data=HTML + b"<p>Restricted unique bytes</p>")
     allowed = published(api, publisher, task=t["id"], name="allowed.html", title="Allowed source")
     made = ask(api, publisher["token"], [{"file": hidden}, {"file": allowed}], pick=True,
@@ -218,6 +219,56 @@ def assert_file_metadata_hidden(api, fid, token):
         get(api, "files/" + fid + suffix, token, expected=404)
 
 
+@pytest.mark.parametrize("excluded", ["bot", "task"], ids=["page-denies-bot", "page-denies-task-readers"])
+def test_page_audience_and_task_ceiling_intersect_on_real_paths(api, monkeypatch, excluded):
+    from backend import files
+    from backend.auth import Identity
+    from backend.tests.test_page_audience import edit
+    data = sources(api, maintainer="finance")
+    _, attempt = scoped(api, data, False)
+    token, fid, tid = attempt["token"], data["hidden"], data["task"]["id"]
+    assert get(api, "pages/" + fid, token)["page"]["file_id"] == fid
+    # The page remains filed on the public task. Only its audience changes after the real review/answer writes.
+    edit(api, fid, {"people": ["cara"]} if excluded == "bot" else {"bots": ["ops"]})
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        auth = api.app.state.auth
+        assert row["scope"] == "task:" + tid
+        assert files.page_audience_visible(c, auth, Identity("bot:ops", "bot"), row, {}) is (excluded == "task")
+        assert files.page_audience_visible(c, auth, Identity("human:cara", "human"), row, {}) is (excluded == "bot")
+    # A plain bot can use its own page grant; a scoped turn also needs the carried task's readers to have access.
+    from backend.tests.test_org_rules import as_bot
+    as_bot(api, "ops", "page-audience-reader")
+    get(api, "pages/" + fid, "page-audience-reader", expected=200 if excluded == "task" else 404)
+    paths = ["tasks", "tasks/" + tid, "tasks/" + tid + "/context", "tasks/" + tid + "/files",
+             "tasks/" + data["made"]["task"]["id"] + "/comments",
+             "tasks/" + data["made"]["task"]["id"] + "/answers",
+             "messages/" + data["made"]["question"]["id"],
+             "messages/" + data["answered"]["comment"]["id"],
+             "origins/" + data["answered"]["comment"]["id"],
+             "pages", "pages?task=" + tid, "files/search?q=source", "bots/finance/files"]
+    for path in paths:
+        no_sources(get(api, path, token), secrets(data))
+    get(api, "pages/" + fid, token, expected=404)
+    assert_file_metadata_hidden(api, fid, token)
+    for ident in (fid, data["bid"]):
+        for suffix in ("", "/thumb", "/poster"):
+            for method in ("GET", "HEAD"):
+                response = api.request(method, "/api/v2/files/" + ident + suffix, headers=headers(token))
+                assert response.status_code == 403, (method, ident, suffix, response.text)
+    get(api, "files/" + fid + "/versions/1", token, expected=403)
+    # Each boundary independently matters: removing its guard must make the denial assertion fail.
+    with monkeypatch.context() as patch:
+        if excluded == "bot":
+            patch.setattr(files, "page_audience_visible", lambda *a, **kw: True)
+        else:
+            patch.setattr(turn_scope, "allowed", lambda *a, **kw: True)
+        with pytest.raises(AssertionError):
+            get(api, "pages/" + fid, token, expected=404)
+    edit(api, fid, None)
+    assert get(api, "pages/" + fid, token)["page"]["file_id"] == fid
+
+
 def test_origins_projects_the_message_before_copying_its_title(api):
     data = sources(api)
     _, attempt = scoped(api, data, False)
@@ -362,7 +413,9 @@ def test_empty_page_cursor_does_not_name_the_last_rejected_source(api):
     mixed = get(api, "pages?bot=ops&limit=2", token)
     assert [p["file_id"] for p in mixed["pages"]] == [allowed]
     from backend.file_library import decode_cursor
-    assert decode_cursor(mixed["next_cursor"]) == ("2099-01-01", allowed)
+    from backend.visuals import key_for
+    assert decode_cursor(mixed["next_cursor"], key_for(api.app, api.app.state.store.settings)) == ("2099-01-01", allowed)
+    assert_cursor_hides_rejected_rows(mixed["next_cursor"], (seed, stamp, "file-rejected-"))
 
 
 def test_archived_scoped_files_are_rejected_before_metadata_and_cursor_creation(api, monkeypatch):
@@ -382,7 +435,7 @@ def test_archived_scoped_files_are_rejected_before_metadata_and_cursor_creation(
 
 
 def test_new_leak_matrix_detects_each_disabled_guard(api, hq, mail, monkeypatch):
-    from backend import files, list_cursors, postal_mail
+    from backend import files, postal_mail
     data = sources(api)
     _, attempt = scoped(api, data, False)
     narrow(api, data)
@@ -420,7 +473,8 @@ def test_new_leak_matrix_detects_each_disabled_guard(api, hq, mail, monkeypatch)
         c.execute("UPDATE bot_files SET last_activity_at='2099-01-01' WHERE id=?", (data["hidden"],))
     with monkeypatch.context() as patch:
         patch.setattr(file_library, "SCAN_MAX", 1)
-        patch.setattr(list_cursors, "seal", lambda c, ns, pos: file_library.encode_cursor(*pos))
+        patch.setattr(file_library, "encode_cursor", lambda stamp, ident, key:
+                      base64.urlsafe_b64encode(f"{stamp}|{ident}".encode()).decode())
         with pytest.raises(AssertionError):
             page = get(api, "pages?bot=ops&limit=1", attempt["token"])
             assert_cursor_hides_rejected_rows(page["next_cursor"], (data["hidden"], "2099-01-01"))

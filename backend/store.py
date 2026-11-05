@@ -2390,6 +2390,8 @@ class Store:
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
                     result = redact(c, replay_principal, replay_auth, result)
+                from .files import readable_page_refs
+                result = readable_page_refs(c, replay_auth, replay_principal, result)
                 from . import turn_scope
                 if identity.role == "runner" and replay_principal.attempt_id:
                     result = turn_scope.project_attempt(c, replay_auth, replay_principal.attempt_id, result)

@@ -180,7 +180,8 @@ class Computer:
     def calls(self):
         if not self.log_path.exists():
             return []
-        return [json.loads(line) for line in self.log_path.read_text().splitlines() if line.strip()]
+        # A running fake can be midway through appending its last JSONL record.
+        return [json.loads(line) for line in self.log_path.read_text().split("\n")[:-1] if line.strip()]
 
     def prompts(self):
         return [call for call in self.calls() if "prompt" in call]
@@ -199,6 +200,23 @@ class Computer:
     def keys(self):
         with self.api.app.state.store.read() as c:
             return {r[0] for r in c.execute("SELECT key FROM idempotency")}
+
+
+def test_live_call_log_waits_for_complete_records(tmp_path):
+    computer = Computer.__new__(Computer)
+    computer.log_path = tmp_path / "harness.jsonl"
+    started = {"method": "turn/start", "turn": "first"}
+    completed = {"method": "turn/completed", "turn": "first"}
+    tail = json.dumps(completed)
+    computer.log_path.write_text(json.dumps(started) + "\n" + tail[:-2])
+    assert computer.calls() == [started]
+    with computer.log_path.open("a") as log:
+        log.write(tail[-2:] + "\n")
+    assert computer.calls() == [started, completed]
+    with computer.log_path.open("a") as log:
+        log.write("not JSON\n")
+    with pytest.raises(json.JSONDecodeError):
+        computer.calls()
 
 
 @pytest.fixture(params=["claude", "codex", "gemini", "antigravity", "musecode", "pi", "cursor", "grok"])

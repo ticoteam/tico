@@ -336,11 +336,12 @@ async function hostedHandshake(browser, current) {
   // wait queues a clear this fake shell would never answer. Before the ACK a same-origin page src is refused.
   assert.equal(await page.evaluate(() => visualPageSrc('/visuals/' + 'YQ.' + 'a'.repeat(43))), null,
     'no frame before the shell follows it');
-  const hostedRead = current ? page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/visuals/')) : null;
+  const loaded = current ? page.waitForResponse(r => new URL(r.url()).pathname === '/visuals/' + TOKEN && r.status() === 200) : null;
   await page.evaluate(accepted => window.__pending[1](accepted), current);
   if (current) {
     await page.locator('figure.vcard[data-state="ready"] iframe.vcard-frame[src]').waitFor();
-    await hostedRead; // WebKit can insert the frame before dispatching its navigation.
+    // The frame element exists before its request necessarily starts.
+    await loaded;
     assert.equal(await page.evaluate(() => NATIVE_VISUAL_FILES), FILES);
     assert.ok(reads.length > 0);
   } else {

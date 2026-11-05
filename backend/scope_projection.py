@@ -83,7 +83,8 @@ def project(c, scoped, payload, *, auth=None):
     for chunk in H.chunks(sorted(event_ids)):
         marks = ','.join('?' * len(chunk))
         for row in c.execute(f"SELECT id,data FROM history_events WHERE id IN ({marks}) AND kind='file'", chunk):
-            source = H._json(row['data'], {}).get('source')
+            data = H._json(row['data'], {})
+            source = data.get('body_sources') or data.get('source')
             if source:
                 event_sources[row['id']] = source
                 collect(source)

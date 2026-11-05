@@ -356,7 +356,7 @@ def test_scoped_visuals_filter_live_files_and_tasks_and_recheck_current_scope(ap
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='waiting',waiting_on='bot:ops' WHERE id=?", (other["id"],))
     src = get(api, "pages/" + fid, attempt["token"])["page"]["src"]
-    assert visuals.read(api.app.state.visual_key, src.rsplit("/", 1)[1])[-1] == attempt["id"]
+    assert visuals.read(api.app.state.visual_key, src.rsplit("/", 1)[1], scoped=True)[-1] == attempt["id"]
     shown = api.get(src)
     assert shown.status_code == 200, shown.text
     assert "Allowed page title" in shown.text
@@ -376,7 +376,7 @@ def test_make_page_visuals_log_secondary_reads_and_fail_closed_when_logging_fail
     _, attempt = assistant_turn(api, "ana-test")
     make_scope(api, attempt, t["id"])
     src = get(api, "pages/" + viewer, attempt["token"])["page"]["src"]
-    assert visuals.read(api.app.state.visual_key, src.rsplit("/", 1)[1])[-1] == attempt["id"]
+    assert visuals.read(api.app.state.visual_key, src.rsplit("/", 1)[1], scoped=True)[-1] == attempt["id"]
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("DELETE FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))

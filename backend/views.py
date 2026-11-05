@@ -1346,7 +1346,9 @@ def recommendation(ask, me):
     if len(questions) == 1 and not questions[0].get("multi"):
         option = next((o["label"] for o in questions[0].get("options") or []
                        if str(o.get("label") or "").strip().casefold() == do.casefold()), None)
-    return {"do": do, "ask": ask["id"], "option": option, "kind": default.get("kind")}
+    source = default.get("source")
+    return {"do": do, "ask": ask["id"], "option": option, "kind": default.get("kind"),
+            **({"source": source} if source else {})}
 
 
 def _whole_card(c, task, asked, me):
@@ -1388,7 +1390,8 @@ def take_recommendation(c, auth, who, asked, version=None):
         raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
     if not c.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}", (asked["id"],)).fetchone():
         raise Problem("answered", "This question was already answered", 409)
-    text = "Yes, do what you recommend: " + rec["do"]
+    text, text_refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
+    state_text = "Accepted the recommendation." if rec.get("source") else text
     task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
     task = H.task(c, task_id) if task_id else None
     if task and version is not None and task["version"] != version:
@@ -1401,20 +1404,21 @@ def take_recommendation(c, auth, who, asked, version=None):
         answer_task(c, auth, who, task_id, M.TaskAnswer(target=target,
                                                         answers={question["id"]: [rec["option"]]}), wake=True)
     else:
-        H.answer(c, who.actor, asked["id"], text)
+        H.answer(c, who.actor, asked["id"], text, comment_refs=text_refs)
     task = H.task(c, task_id) if task_id else None
     if task and task["status"] in H.ACTIVE_STATUSES:
         if finish:
-            H.task_update(c, who.actor, task_id, status="done", note=text)
+            H.task_update(c, who.actor, task_id, status="done", note=state_text)
         waits = [t for t in [task, *(H.task(c, a) for a in TR.ancestors(c, task_id))]
                  if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
                  and (t is task or t["owner_id"] == asked["sender_id"] and not _another_card_under(c, t, task_id, who.actor))]
         for t in waits:
             c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
-            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, text)
+            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, state_text)
         if waits:
             H._recount(c, who.actor)
-    return {"did": rec["do"], "task": task_id, "done": finish}
+    return {"did": rec["do"], "task": task_id, "done": finish,
+            **({"source": rec["source"]} if rec.get("source") else {})}
 
 
 def _quoted(text, n=90):
@@ -1906,7 +1910,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         if item["kind"] in ("question", "ask"):
             item["why"] = card_why(item)
         item["tier"] = decide_tier(item, at, own)
-    return sorted(items, key=needs_key)
+    from .files import readable_page_refs
+    return sorted(readable_page_refs(c, auth, who, items), key=needs_key)
 
 
 def _readable(auth, c, who, task_id):

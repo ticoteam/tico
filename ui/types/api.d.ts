@@ -3675,12 +3675,14 @@ export type Origin = {
 export type Page = {
   archived: boolean;
   as_of: string | null;
+  audience?: AccessAudience | null;
   bot_id: string;
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
   replaced_by_id: string | null;
   replaced_by_title?: string | null;
+  restricted?: boolean;
   src: string | null;
   stale_days: number | null;
   task_id: string | null;
@@ -3694,6 +3696,7 @@ export type Page = {
 export type PageEdit = {
   archived?: boolean | null;
   as_of?: string | null;
+  audience?: AccessAudience | null;
   cadence?: string | null;
   replaced_by?: string | null;
 };
@@ -9601,6 +9604,7 @@ export type PublishPageParams = {
 };
 export type PublishPageBody = {
   as_of?: string;
+  audience?: AccessAudience | null;
   base_version?: number;
   cadence?: "none" | "daily" | "weekly" | "monthly";
   content_base64?: string;
