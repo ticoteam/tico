@@ -17,7 +17,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import mailbox_access as access
-from .models import Contract
+from .models import Contract, Empty
 from .store import H, Problem
 
 DEFAULTS = {"mode": "ask_first", "what": "replies_only", "to": "anyone", "daily_cap": 50,
@@ -154,6 +154,9 @@ def update_policy(c, who, scope, body):
         c.execute("DELETE FROM email_sending_policies WHERE scope=?", (scope,))
     else:
         current = {k: v for k, v in saved(c, scope).items() if k in DEFAULTS}
+        for key in body.model_fields_set:
+            if key in DEFAULTS and getattr(body, key) is None:
+                current.pop(key, None)
         c.execute("INSERT INTO email_sending_policies VALUES(?,?,?,?) ON CONFLICT(scope) DO UPDATE SET "
                   "settings=excluded.settings,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
                   (scope, dump({**current, **values}), H.now(), who.actor))
@@ -216,6 +219,13 @@ def can_ok(c, auth, actor, mailbox, bot, policy):
     return False
 
 
+def approver(c, auth, row, policy):
+    """Route the approval card to a person who may actually decide it under the effective rule."""
+    facts = access._Facts(c)
+    candidates = list(policy["approvers"]) if policy["who_can_ok"] == "named_people" else list(facts.people)
+    return next(("human:" + pid for pid in candidates if can_ok(c, auth, "human:" + pid, row["mailbox"], row["bot"], policy)), None)
+
+
 def approved(c, auth, row, policy):
     aid = row["approval_id"]
     if not aid:
@@ -224,6 +234,7 @@ def approved(c, auth, row, policy):
     if ap:
         payload = ap.get("payload") or {}
         if (ap.get("kind") != "send" or ap.get("decision") != "approved"
+                or ap.get("requested_by_id") != row["actor"]
                 or not can_ok(c, auth, ap.get("decided_by_id"), row["mailbox"], row["bot"], policy)):
             return False
         def addresses(value):
@@ -328,10 +339,10 @@ def decision(c, auth, row, *, dispatch=False):
     if policy["to"] == "internal" and any(not access.inside(a, access.company_domains(c)) for a in recipients):
         blocked.append("internal_only")
     if row["automation_action_id"]:
-        found = c.execute("SELECT a.*,m.owner_id,m.enabled,m.deleted_at FROM automation_mail_actions a "
+        found = c.execute("SELECT a.*,m.owner_id,m.enabled,m.deleted_at,m.flow FROM automation_mail_actions a "
                           "JOIN automations m ON m.id=a.automation_id WHERE a.id=?", (row["automation_action_id"],)).fetchone()
-        from .automation_actions import actor_of, send_on
-        if (not found or found["deleted_at"] or actor_of(found["owner_id"]) != row["actor"]
+        from .automation_actions import acts_as, send_on
+        if (not found or found["deleted_at"] or acts_as(c, {"flow": json.loads(found["flow"])}) != row["actor"]
                 or not send_on(c, row["mailbox"])):
             blocked.append("automation_revoked")
     if c.execute("SELECT 1 FROM email_suppressed_recipients WHERE mailbox=? AND address IN ("
@@ -422,7 +433,7 @@ def enqueue(c, auth, actor, body, classification):
                    "body_sha256": snap["body_sha256"], "content_sha256": snap["content_sha256"],
                    "attachments": snap["attachments"], "email_send_id": ident}
         # Existing approval cards expose only the proof metadata, never the MIME payload.
-        approval = H.approval_request(c, actor, "send", payload)
+        approval = H.approval_request(c, actor, "send", payload, to=approver(c, auth, row, found["policy"]))
         c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (approval["id"], ident))
     H.event(c, actor, "email.queued", ident, {"mailbox": mailbox, "state": row["state"]})
     return public(c.execute("SELECT * FROM email_sends WHERE id=?", (ident,)).fetchone())
@@ -507,8 +518,9 @@ def install(app, store, auth, mutate):
     def reader(c, who, mailbox):
         from . import google_rights
         runner = google_rights.runner_of(app.state.execution, c, who)
-        principal = access.connector_for(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner))
-        if mailbox not in principal.targets:
+        google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
+        published = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
+        if published and published["runner_id"] and published["runner_id"] != runner["id"]:
             raise Problem("forbidden", "Another computer reads this inbox", 403)
         return runner
 
@@ -568,13 +580,13 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             if body.automation_action_id:
                 runner = reader(c, who, body.mailbox.strip().lower())
-                action = c.execute("SELECT a.*,m.owner_id FROM automation_mail_actions a JOIN automations m "
+                action = c.execute("SELECT a.*,m.owner_id,m.flow FROM automation_mail_actions a JOIN automations m "
                                    "ON m.id=a.automation_id WHERE a.id=?", (body.automation_action_id,)).fetchone()
                 if (not action or action["claimed_by"] != runner["id"] or action["state"] != "claimed"
                         or action["mailbox"] != body.mailbox.strip().lower() or action["action"] not in ("send", "forward")):
                     raise Problem("forbidden", "No send action leased to this computer", 403)
-                from .automation_actions import actor_of
-                actor = actor_of(action["owner_id"])
+                from .automation_actions import acts_as
+                actor = acts_as(c, {"flow": json.loads(action["flow"])})
             else:
                 actor = who.actor
             if not access.may(c, actor, body.mailbox.strip().lower())["send"]:
@@ -636,7 +648,7 @@ def install(app, store, auth, mutate):
             c.execute("DELETE FROM email_suppressed_recipients WHERE mailbox=? AND address=?", (box, address.lower()))
             H.event(c, request.state.identity.actor, "email.unsuppressed", box, {"address": address.lower()})
             return {"ok": True}
-        return mutate(request, {}, work)
+        return mutate(request, Empty(), work)
 
     @app.post("/api/v2/email/sends/{sid}/approve")
     def bind_approval(request: Request, sid: str, body: SendApproval):
@@ -664,7 +676,7 @@ def install(app, store, auth, mutate):
             settle_automation(c, row, "canceled")
             H.event(c, request.state.identity.actor, "email.canceled", sid, {})
             return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
-        return mutate(request, {}, work)
+        return mutate(request, Empty(), work)
 
     @app.post("/api/v2/connectors/email/sends/claim")
     def claim(request: Request, body: Claim):
@@ -672,9 +684,11 @@ def install(app, store, auth, mutate):
             mailbox, now = body.mailbox.strip().lower(), H.now()
             runner = reader(c, request.state.identity, mailbox)
             # A provider may have accepted an unreported send. Preserve its receipt as unknown; never resend it.
-            c.execute("UPDATE email_sends SET state='unknown',detail='The connector did not confirm delivery',"
-                      "finished_at=?,raw='' WHERE state='dispatching' AND claimed_at<?",
-                      (now, H.shift(now, minutes=-5)))
+            for stale in c.execute("SELECT * FROM email_sends WHERE state='dispatching' AND claimed_at<? LIMIT 100",
+                                   (H.shift(now, minutes=-5),)).fetchall():
+                c.execute("UPDATE email_sends SET state='unknown',detail='The connector did not confirm delivery',"
+                          "finished_at=?,raw='' WHERE id=?", (now, stale["id"]))
+                settle_automation(c, stale, "unknown")
             rows = c.execute("SELECT * FROM email_sends WHERE mailbox=? AND state IN ('pending','waiting_approval') "
                              "ORDER BY created_at,rowid LIMIT 100", (mailbox,)).fetchall()
             for row in rows:
@@ -720,7 +734,8 @@ def install(app, store, auth, mutate):
                 settle_automation(c, row, "blocked", ", ".join(found["reasons"]))
                 return {"send": None}
             c.execute("UPDATE email_sends SET provider_attempted_at=? WHERE id=?", (H.now(), sid))
-            return {"send": {"id": sid, "raw": row["raw"], "thread_id": row["thread_id"]}}
+            return {"send": {"id": sid, "raw": row["raw"], "thread_id": row["thread_id"], "actor": row["actor"],
+                             "recipients": json.loads(row["recipients"]), "subject": row["subject"]}}
         return mutate(request, body, work)
 
     @app.post("/api/v2/connectors/email/sends/{sid}/result")

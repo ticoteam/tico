@@ -211,11 +211,32 @@ def test_named_approvers_and_private_inbox_boundaries(inbox):
     queued = queue(inbox)
     response = inbox.post("/api/v2/approvals/" + queued["approval_id"], json={"decision": "approved"}, headers=headers())
     assert response.status_code == 403
+
     approved(inbox, queued, token="cara-test")
     response = inbox.get("/api/v2/email/sends", params={"mailbox": BOX}, headers=headers("cara-test"))
     assert response.status_code == 403
     response = inbox.put("/api/v2/email/sending-policy", json={"mode": "never"}, headers=headers("cara-test"))
     assert response.status_code == 403
+
+
+def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(inbox):
+    machine = runner(inbox)
+    with inbox.app.state.store.transaction() as c:
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,updated_at) "
+                  "VALUES('auto','Auto','person:ana','manual',1,?,1,?,'person:ana',?)",
+                  (json.dumps({"owner": "person:ana", "steps": []}), H.now(), H.now()))
+        c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,claimed_by) "
+                  "VALUES('action','auto',NULL,?,'inbound','send','{}','claimed',?,?)", (BOX, H.now(), machine["id"]))
+    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(), "thread_id": "thread",
+                                       "reply_to_id": "inbound", "automation_action_id": "action"}, token=machine["token"])
+    queued = result["send"]
+    assert queued["state"] == "waiting_approval" and queued["actor"] == "human:ana"
+    post(inbox, "automations/mail-actions/action/result", {"ok": True, "send_queue_id": queued["id"]}, token=machine["token"])
+    approved(inbox, queued)
+    policy(inbox, mode="never")
+    assert claim(inbox, machine["token"]) is None
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM automation_mail_actions WHERE id='action'").fetchone()[0] == "failed"
 
 
 def test_migration_snapshots_existing_authorizations_without_granting_new_ones():

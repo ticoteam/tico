@@ -104,6 +104,23 @@
 .pm-grant-form select,.pm-pick select{width:100%;min-width:0}
 
 /* Sending (ui/app/inboxes-sending.js) */
+.ib-send-form fieldset{border:0;padding:0;margin:0;min-width:0}
+.ib-send-form select,.ib-send-form input:not([type=checkbox]){width:100%;max-width:390px;min-width:0;box-sizing:border-box}
+.ib-send-checks{display:flex;flex-direction:column;gap:10px}
+.ib-send-checks label{display:flex;gap:8px;align-items:center}
+.ib-send-effective,.ib-send-rule{font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
+.ib-send-effective{padding:12px 0}.ib-send-rule{display:block;padding-top:4px}
+.ib-send-bots{width:100%;border-collapse:collapse;table-layout:fixed}
+.ib-send-bots th,.ib-send-bots td{text-align:left;padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere;vertical-align:top}
+.ib-send-bots select{width:100%;max-width:220px;min-width:0}
+.ib-send-pending,.ib-send-audit{list-style:none;padding:0;margin:0}
+.ib-send-pending li{display:flex;justify-content:space-between;align-items:start;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.ib-send-pending li>div{min-width:0}
+.ib-send-pending span,.ib-send-audit span,.ib-send-audit code{display:block;font-size:var(--t-sm);overflow-wrap:anywhere}
+.ib-send-pending span{color:var(--muted)}
+.ib-send-audit li{padding:12px 0;border-top:1px solid var(--line);min-width:0}
+@media(max-width:760px){.ib-send-bots th:first-child,.ib-send-bots td:first-child{width:35%}.ib-send-pending button{flex-shrink:0}}
+
 
 /* Alerts (ui/app/inboxes-alerts.js) */
 

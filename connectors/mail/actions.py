@@ -210,7 +210,8 @@ def _dispatch(ctx, ident):
     raw, thread = action["raw"], action.get("thread_id", "")
     made = ctx.gmail.create_draft(raw, thread)
     draft_id = made.get("id", "")
-    db.claim_send(ctx.conn, key, "connector", ctx.mailbox, ident, [], "", thread, draft_id,
+    db.claim_send(ctx.conn, key, str(action["actor"]).partition(":")[2], ctx.mailbox, ident,
+                  action["recipients"], action["subject"], thread, draft_id,
                   datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"), source="email-queue")
     try:
         sent = ctx.gmail.send_draft(draft_id)
