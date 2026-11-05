@@ -4999,13 +4999,7 @@ fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
         tico.push_live(&store, &id).unwrap();
         assert_eq!(tico.call(path, None, "").unwrap()["seq"], 0);
         if release != "completion" {
-            store
-                .mutate(&id, |r| {
-                    r.started_at =
-                        (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
-                    Ok(())
-                })
-                .unwrap();
+            recording_clock(&store, &id, PAST_PENDING_WAIT_S);
             tico.push_live(&store, &id).unwrap();
         }
         store
@@ -5028,9 +5022,9 @@ fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
         finished_chunk(
             &store,
             &id,
-            6000,
-            7000,
-            vec![word(6200, 6500, "Afterwards", "")],
+            46_000,
+            47_000,
+            vec![word(46_200, 46_500, "Afterwards", "")],
         );
         tico.push_live(&store, &id).unwrap();
         let view = tico.call(path, None, "").unwrap();
