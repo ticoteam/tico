@@ -107,6 +107,13 @@ a.th-status-act:hover{text-decoration:none}
 .th-update:hover{text-decoration:none;border-color:var(--g4)}
 .th-update-k{color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
 
+/* a daily update request and the bot's turn that writes it: one quiet line, their messages under it while it is open */
+.th-upd{display:flex;align-items:center;gap:var(--s2);padding:4px 6px}
+.th-upd::before{content:"";width:18px;height:1px;background:var(--line)}
+.th-upd-btn{padding:2px 0;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.th-upd-btn:hover{color:var(--ink)}
+.th-upd-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+
 /* sending, held, failed */
 .th-pending .th-body{color:var(--muted)}
 .th-state{color:var(--muted);font-size:var(--t-xs)}
@@ -248,9 +255,10 @@ button.ths-link:hover .ths-val{color:var(--ink)}
   /* no room beside the title and actions, so the audience takes a line of its own under them */
   .thv-titleline{flex-wrap:wrap}
   .thv-aud{order:1;flex:0 0 100%;font-size:var(--t-xs)}
-  .th-msg,.th-status,.th-fold{padding-left:4px;padding-right:4px}
-  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply */
+  .th-msg,.th-status,.th-fold,.th-upd{padding-left:4px;padding-right:4px}
+  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply, an update line */
   .th-quote{min-height:44px}
+  .th-upd-btn{min-height:44px;display:inline-flex;align-items:center}
   .th-react{height:36px;padding:0 10px}
   .th-status-act{min-height:44px;display:inline-flex;align-items:center}
   .thv-replying-x{width:44px;height:44px}
