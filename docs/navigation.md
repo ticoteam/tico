@@ -52,7 +52,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
-(the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any other page (not during setup or when signed out) as **Tico Assistant**, `#/assistant`
+(the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any page except the Assistant page, setup and the signed-out screens, as **Tico Assistant**, `#/assistant`
 opens it full page, and the Assistant hands BotOps what needs BotOps;
 the Strategy Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.

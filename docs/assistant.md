@@ -311,7 +311,7 @@ Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
 ## On the Updates page
 
 Updates has no Assistant chat beside the feed. To talk to your Assistant, press **Ask Tico** at the bottom of the sidebar
-(⌘J; the middle tab on a phone). It opens over any other page, and the full page (`#/assistant`) shows the same thread. While
+(⌘J; the middle tab on a phone). It opens from any page except the Assistant page, setup and the signed-out screens, and the full page (`#/assistant`) shows the same thread. While
 the Assistant is off, the owner sees one line with **Turn on** there; anyone else sees the same line without the button,
 telling them to ask the owner.
 

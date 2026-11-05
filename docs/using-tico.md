@@ -14,7 +14,7 @@ it through Tico's MCP. Each task shows who added it: you, another human, or a bo
 
 **Where are the built-in bots?**
 **Assistant** and **BotOps** have no rail entry. **Ask Tico**, at the bottom of the sidebar (⌘J), opens your private
-Assistant DM over any other page, and the Assistant hands BotOps what needs BotOps. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
+Assistant DM from any page except the Assistant page, setup and the signed-out screens, and the Assistant hands BotOps what needs BotOps. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
