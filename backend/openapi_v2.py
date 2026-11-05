@@ -2199,7 +2199,7 @@ STABLE.extend([
 ])
 TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
      'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
      'company\'s they may read. Paged with cursor','ConnectionList'),
 ])
@@ -3167,7 +3167,7 @@ SCHEMAS.update({
 })
 
 
-# Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
 TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
 _MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
 _MAILBOX_REF = obj({"id": "s", "name": "s"})

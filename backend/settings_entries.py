@@ -14,10 +14,10 @@ from .settings_catalog import Setting as S
 SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
-     "settings-mail.js", "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
+     "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
      "settings-repositories.js", "settings-storage.js", "settings-webhooks.js", "subscriptions.js",
-     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
-     "cloud-machines.js"])
+     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js",
+     "inboxes-texts.js", "inboxes-letters.js", "cloud-machines.js"])
 
 
 def _card(tab, card=""):
@@ -26,8 +26,8 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
-MAIL = "Settings > Mail"
+INBOXES, STRATEGY = "Settings > Inboxes", "Settings > System > Strategy bot"
+INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > Models"
 
 _RULE_NAMES = {
@@ -337,31 +337,31 @@ ENTRIES = TEAM_RULES + [
       card=_card("tasks")),
     S("tasks.tag", "Task tag", TASKS + " > Task tags", "anyone", "direct", "POST", "tags/{id}", value="json",
       card=_card("tasks")),
-    # Email & Phone
+    # Inboxes
     S("inbound.company_connection", "Email & phone company connection", INBOUND, "admin", "person", "POST",
-      "inbound/company-connection", value="json", card=_card("inbound", "set-inbound"),
+      "inbound/company-connection", value="json", card=_card("inboxes", "settings/email"),
       why="Only a person signed in themselves connects company email and phone"),
-    S("inbound.inbox.create", "New inbox", INBOUND, "anyone", "direct", "POST", "inbound/inboxes", value="json",
-      card=_card("inbound", "set-inbound")),
-    S("inbound.inbox", "Inbox", INBOUND, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
-      card=_card("inbound", "set-inbound")),
-    S("inbound.inbox.audience", "Inbox readers", INBOUND, "admin", "confirm", "PUT", "inbound/inboxes/{id}/audience",
-      value="json", card=_card("inbound", "set-inbound"), words="audience readers group who reads"),
-    S("inbound.inbox.release", "Release an inbox", INBOUND, "admin", "confirm", "POST", "inbound/inboxes/{id}/release",
-      value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request", "Ask for a phone number", INBOUND, "admin", "confirm", "POST",
-      "inbound/phone-requests", value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request.accept", "Accept a phone number's price", INBOUND, "admin", "confirm", "POST",
-      "inbound/phone-requests/{id}/accept", value="json", card=_card("inbound", "set-inbound")),
-    S("inbound.phone_request.cancel", "Cancel a phone request", INBOUND, "admin", "direct", "POST",
-      "inbound/phone-requests/{id}/cancel", value="json", card=_card("inbound", "set-inbound")),
-    # Usage
+    S("inbound.inbox.create", "New inbox", INBOXES + " > Add inbox", "anyone", "direct", "POST", "inbound/inboxes",
+      value="json", card=_card("inboxes")),
+    S("inbound.inbox", "Inbox", INBOXES, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
+      card=_card("inboxes")),
+    S("inbound.inbox.audience", "Inbox readers", INBOXES + " > Who can use it", "admin", "confirm", "PUT",
+      "inbound/inboxes/{id}/audience", value="json", card=_card("inboxes"), words="audience readers group who reads"),
+    S("inbound.inbox.release", "Release an inbox", INBOXES + " > Stop using in Tico", "admin", "confirm", "POST",
+      "inbound/inboxes/{id}/release", value="json", card=_card("inboxes")),
+    S("inbound.phone_request", "Ask for a phone number", TEXTS, "admin", "confirm", "POST",
+      "inbound/phone-requests", value="json", card=_card("inboxes", "settings/texts")),
+    S("inbound.phone_request.accept", "Accept a phone number's price", TEXTS, "admin", "confirm", "POST",
+      "inbound/phone-requests/{id}/accept", value="json", card=_card("inboxes", "settings/texts")),
+    S("inbound.phone_request.cancel", "Cancel a phone request", TEXTS, "admin", "direct", "POST",
+      "inbound/phone-requests/{id}/cancel", value="json", card=_card("inboxes", "settings/texts")),
     S("mail.address.order", "Get an address", MAIL + " > Addresses", "admin", "confirm", "POST", "postal/orders",
-      value="json", card=_card("mail", "settings-mail-addresses"),
+      value="json", card=_card("inboxes", "settings/letters-in"),
       words="physical mail mailbox postal address registered agent form 1583"),
     S("mail.intake", "Mail-intake inbox", MAIL + " > Bring your own", "admin", "direct", "PUT", "postal/intake",
-      value="json", card=_card("mail", "settings-mail-intake"), read="postal/intake#intake",
+      value="json", card=_card("inboxes", "settings/letters-in"), read="postal/intake#intake",
       words="physical mail scans email in postal provider"),
+    # Usage
     S("team.limit.usd", "Company spend limit", "Usage > Company", "admin", "confirm", "PUT", "usage/limits",
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",

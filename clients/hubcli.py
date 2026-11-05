@@ -171,7 +171,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub connections list [--cursor C] [--limit N]
                                            every connection you may see: status, scope, who reads it, its bots
     hub inbound audience <inbox-id> company|team [--group G]
-                                           who reads an Email & Phone inbox (owner or admin)
+                                           who reads a Tico address or number (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
     hub pin update <pin-id> [--size S] [--position N]
     hub pin remove <pin-id>

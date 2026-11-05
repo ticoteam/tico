@@ -65,7 +65,7 @@ Rules run before any model. Marketing (unsubscribe links), notification senders,
 `registry/mail-rules.yaml` `skip:` addresses/domains are filed and never opened by the bot.
 Each mailbox can add its own rules under that address after `common`.
 
-Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.py; Settings > Mailboxes):
+Who may use a mailbox is Tico's answer, never the run's (backend/mailbox_access.py; Settings > Inboxes):
 - a person has Read and write on their own mailbox, and admins on a shared inbox;
 - a person's Assistant has exactly that person's access;
 - everyone else, bots included, needs a grant: Read, or Read and write (organize, draft, send). Only the mailbox's
@@ -277,7 +277,7 @@ reading, drafting or sending. The equivalent shell commands are `hub calendar li
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
 change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
-mailboxes on its mail token list (the ones Tico gives it, Settings > Mailboxes) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
+mailboxes on its mail token list (the ones Tico gives it, Settings > Inboxes) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
 Tool entry with the required verbs. The private Google service-account setup must also be working
 on that computer. These commands do not expand the MCP/API rule above:
 
@@ -428,12 +428,12 @@ See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
 ### Set up Google in Settings
 
-Settings > Google first asks an admin **How do you want to connect Google?**, until one way is set up:
+Settings > Inboxes > Settings first asks an admin **How do you want to connect Google?**, until one way is set up:
 
 - **One account at a time**: each person signs in with Google, starting with you.
 - **Whole Workspace**: a Google admin connects every mailbox in the domain at once.
 
-Only the way picked shows; **Use the other way** switches. Once a way is set up, Settings > Google opens on it, and
+Only the way picked shows; **Use the other way** switches. Once a way is set up, Settings > Inboxes > Settings opens on it, and
 **Also set up …** adds the other. With both set up, Whole Workspace shows first, since it covers the mailboxes. Someone
 who isn't an admin never sees the question or the setup: only **Connect your account**, or, before an admin has set
 Google up, a line asking them to.
@@ -496,7 +496,7 @@ To change the key later, click **Replace key**. **Disconnect** stops Tico readin
    3. Open **Create a client**, choose Web application, and add the redirect URI that Tico shows.
    4. Copy the client ID and client secret from the dialog Google shows after Create (it shows the secret only once), paste them, then click **Save**.
 2. **Connect your account**: **Connect Google** for your own mailbox.
-3. **Your team**: everyone else with a mailbox, as Connected, Not connected, Connecting, Failing or Covered by Workspace. **Copy link** copies the link to Settings > Google to send them yourself; Tico sends nothing. Each person connects their own mailbox.
+3. **Your team**: everyone else with a mailbox, as Connected, Not connected, Connecting, Failing or Covered by Workspace. **Copy link** copies the link to Settings > Inboxes > Settings to send them yourself; Tico sends nothing. Each person connects their own mailbox.
 
 Choose the audience in step 1:
 - **Internal**: only accounts in your domain. Gmail needs no Google verification. It needs a project in your organization.
@@ -554,9 +554,9 @@ the account that signed in and cannot reach anyone else in the Workspace.
 
 ![Google tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
 
-*Synthetic Acme example with Google not configured. Your personal Google connection is in Settings > Google.*
+*Synthetic Acme example with Google not configured. Your personal Google connection is in Settings > Inboxes > Settings.*
 
-1. In Tico, the person opens **Settings > Google** and chooses **Connect Google**. Tico names the mailbox it will connect:
+1. In Tico, the person opens **Settings > Inboxes > Settings** and chooses **Connect Google**. Tico names the mailbox it will connect:
    the one their message bot manages.
 2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. With Tico's shared app,
    nothing that writes or sends is asked for. With the company's own Google app, see below.
@@ -573,7 +573,7 @@ read-only grant cannot do those at Google, so Tico refuses them before calling G
 read-only at Google"). Sending stays off ([Turning sending on](#turning-sending-on)). Tico never asks Google for more on
 its own.
 
-**With the company's own Google app.** An admin can set the company's own Google app in Settings > Google (its OAuth client
+**With the company's own Google app.** An admin can set the company's own Google app in Settings > Inboxes > Settings (its OAuth client
 ID and secret, with the redirect address Settings shows). Then Connect Google also asks Google for `gmail.modify`, which
 labels, archives and drafts mail, and for `calendar.events`, which adds calendar events. Google shows them on the same
 consent screen, and the grant keeps only what Google gave. A person whose grant is read only is offered the upgrade in
@@ -592,7 +592,7 @@ Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
   later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
-- **Disconnect** in Settings > Google revokes the grant at Google and deletes it from the computer that holds it.
+- **Disconnect** in Settings > Inboxes > Settings revokes the grant at Google and deletes it from the computer that holds it.
   A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
   already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
   holds nothing, and Settings shows that instead of "disconnected". If that computer stays offline for 15 minutes,
@@ -650,7 +650,7 @@ that blocks apps usually blocks IMAP as well.
 
 The key can act as any mailbox in the team, so bots must not be able to read it.
 
-- **Key set in Settings > Google**: the key is sealed on the Tico server, and no computer gets it. A computer gets short-lived tokens for the mailboxes it may use, and nothing else.
+- **Key set in Settings > Inboxes > Settings**: the key is sealed on the Tico server, and no computer gets it. A computer gets short-lived tokens for the mailboxes it may use, and nothing else.
 - **Docker runner with the two-user layout** (the current `runner.compose.yaml`) with a key you made yourself: the key is in the runner's state directory,
   closed to the bots' user. The `connectors` job reads it there. A message bot's run gets, from the runner over its credential
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
@@ -719,7 +719,7 @@ Use these instead of the Settings steps above when you make the Google key yours
 
 **Tico's Google app on a server you run**
 
-The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Google can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
+The server's operator can set Tico's OAuth client in its environment, `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, as a Web application client whose redirect URI is `<TICO_PUBLIC_URL>/api/v2/mail/google/callback`. Settings > Inboxes > Settings can set the same client under **One account at a time**. When the environment sets it, the card says Set on the server and can't change it. Until one of them is set, Connect Google isn't set up on this server. A self-hosted team may use its own client the same way, or connect from the runner with `scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`, `google revoke` and `doctor` list, remove and check grants there.
 
 ## Turning sending on
 

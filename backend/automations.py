@@ -3029,7 +3029,7 @@ def install(app, store, auth, mutate):
                     break                  # the rest stay queued for the next claim
                 spent += size
                 rows.append(dict(r))
-            # The company's What Tico may do (Settings > Google) covers automations too: with Send mail off a send is
+            # The company's What Tico may do (Settings > Inboxes) covers automations too: with Send mail off a send is
             # claimed as a draft, as with the inbox's own switch off. The connector checks each write itself, from
             # GET /connectors/mail/targets (connectors/mail/policy.py runner_company), not from the action.
             from .google_workspace import permissions

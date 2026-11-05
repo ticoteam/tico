@@ -1,6 +1,6 @@
 # Physical mail
 
-> **Unreleased**: the install side and Settings > Mail are built; Tico Gateway's mailboxes are not on sale yet. The API
+> **Unreleased**: the install side and Settings > Inboxes' Letters in are built; Tico Gateway's mailboxes are not on sale yet. The API
 > below may change.
 
 Tico Mail brings the company's paper mail into Tico. Each scanned letter is saved as a file, read, sorted by kind and
@@ -14,7 +14,7 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 
   Prices: shared $10 a month per recipient, private from $25 a month; scans $1 a letter for up to 10 pages, then
   $0.25 a page. Tico doesn't deposit checks: ask Tico support to forward one, or deposit it yourself.
-- **Your own provider, by email.** An owner or admin names one company email inbox (Email & Phone) as the mail-intake
+- **Your own provider, by email.** An owner or admin names one Tico address as the mail-intake
   address and who sends it scans: `PUT /api/v2/postal/intake` with `{"inbox_id": "...", "senders":
   ["scans@provider.com", "@provider.com"]}` (at least one address or `@domain`), or `{"inbox_id": null}` to stop.
   Have your mail provider send its scans there. Each PDF or image attached to a message from a listed sender becomes a
@@ -67,11 +67,13 @@ A letter whose scan or reading fails is marked `failed` and tried again after 1 
 last try a scan that still cannot be read is filed for the owner unread, so nobody misses it. A retry never makes a
 second task.
 
-## Settings > Mail
+## Settings > Inboxes
 
-Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as
-Pending; Get an address (owner or admin: state, kind, monthly and scan prices); Bring your own (the intake
-inbox); Recent letters, with Retry on a failed one for an owner or admin.
+Each address is a Letters in row in Settings > Inboxes (`#/settings/inboxes`), with open orders as Pending and the
+email-in inbox as Mail by email. An address's page shows its Form 1583 progress until it is active, who reads it, its
+automations and its letters (date, sender, kind, scan, the task it went to, status), with Retry on a failed one for an
+owner or admin. Inboxes > Settings > Letters in has the addresses with Get an address (owner or admin: state, kind,
+monthly and scan prices) and Bring your own (the intake inbox).
 
 ## API, CLI and MCP
 

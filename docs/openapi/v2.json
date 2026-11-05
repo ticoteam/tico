@@ -8465,7 +8465,7 @@
     },
     "/api/v2/connections": {
       "get": {
-        "summary": "Slack, GitHub, mail bots, Email & Phone inboxes, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
+        "summary": "Slack, GitHub, mail bots, Tico addresses and numbers, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
         "operationId": "listConnections",
         "parameters": [
           {
