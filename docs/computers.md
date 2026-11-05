@@ -41,8 +41,9 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
 picker until it updates.
 
-Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
+Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until
+that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the
+reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
 restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
 old one. The page asks first and says how many.
 
