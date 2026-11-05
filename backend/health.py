@@ -76,6 +76,7 @@ def _queue_items(rows, full, bot_reader):
         why = ("Quarantined: queued work waits for the quarantine to clear."
                if row["reason"] == "quarantined" else row["why"])
         items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
+                      "quarantine_held": row.get("quarantine_held", 0),
                       "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
                       "text": f"{row['name'][:120]} ({row['slug']}): {_queue_words(row, minutes)}; {why}",
                       "fixes": fixes,
@@ -85,7 +86,7 @@ def _queue_items(rows, full, bot_reader):
 
 def _queue_words(row, minutes):
     """A bot's queue in one phrase, split as Pipeline splits it: jobs that can start, jobs an interrupted run fences,
-    and jobs held on purpose. The age is the oldest job named first."""
+    jobs held on purpose, and refusal-count holds. The age is the oldest job named first."""
     words = []
     if row["queued"]:
         words.append(f"{_plural(row['queued'], 'job')} queued, oldest {minutes} min")
@@ -94,6 +95,8 @@ def _queue_words(row, minutes):
         words.append(f"{_plural(row['dead'], 'job')} behind an interrupted run awaiting review{age}")
     if row.get("held"):
         words.append(f"{row['held']} held on purpose")
+    if row.get("quarantine_held"):
+        words.append(f"{_plural(row['quarantine_held'], 'job')} held after repeated refusals; resumes after cooldown")
     return "; ".join(words) or "nothing queued"
 
 
@@ -102,6 +105,8 @@ def _silent_words(computer):
     words = [f"{_plural(computer['queued'], 'job')} queued"] if computer["queued"] else []
     if computer["dead"]:
         words.append(f"{_plural(computer['dead'], 'job')} behind an interrupted run awaiting review")
+    if computer.get("quarantine_held"):
+        words.append(f"{_plural(computer['quarantine_held'], 'job')} held after repeated refusals; resumes after cooldown")
     return " and ".join(words)
 
 
@@ -519,14 +524,19 @@ def _rejected_summary(rows):
 
 def silent_computers(c, minutes=SILENT_MINUTES):
     """Computers that have not checked in for `minutes` while work is queued for their active bots, longest silence
-    first: [{id, label, operator, last_seen, minutes, queued, dead, bots}]. `queued` can start and `dead` waits behind an
-    interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this. A
+    first: [{id, label, operator, last_seen, minutes, queued, dead, quarantine_held, bots}]. `queued` can start,
+    `dead` waits behind an interrupted run nobody reviewed, and `quarantine_held` waits for refusal cooldown, as
+    Pipeline splits them. A computer that never checked in is setup, not this. A
     cloud machine stopped when idle is not silent: it starts when its work can run (cloud_machines.resting)."""
     from .cloud_machines import resting as resting_machines
-    from .execution import unfenced_sql
+    from .execution import queued_task_sql, unfenced_sql
+    from .task_quarantine import free_sql
     resting = resting_machines(c)
+    quarantine_free = free_sql(queued_task_sql())
     rows = c.execute(
-        f"SELECT r.id, r.label, r.owner_id, r.last_seen_at, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        f"SELECT r.id, r.label, r.owner_id, r.last_seen_at, "
+        f"sum(CASE WHEN ({quarantine_free}) AND NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        f"sum(CASE WHEN NOT ({quarantine_free}) THEN 1 ELSE 0 END) quarantine_held, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
         "FROM runners_with_state r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot_id=a.bot AND j.state='queued' AND j.held=0 "
@@ -534,7 +544,8 @@ def silent_computers(c, minutes=SILENT_MINUTES):
         "WHERE r.revoked_at IS NULL AND r.last_seen_at < ? GROUP BY r.id ORDER BY r.last_seen_at",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
     return [{"id": r["id"], "label": r["label"], "owner_id": r["owner_id"], "last_seen_at": r["last_seen_at"],
-             "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
+             "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"] - r["quarantine_held"],
+             "dead": r["dead"], "quarantine_held": r["quarantine_held"],
              "bots": sorted(r["bots"].split(","))} for r in rows if r["id"] not in resting]
 
 
@@ -576,7 +587,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
     # Each bot's queue is shown as Pipeline splits it (pipeline_stats.queue_counts), so the counts match `hub pipeline`:
-    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `held` waits on purpose
+    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `quarantine_held` waits for refusal
+    # cooldown, and `held` waits on purpose
     # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
     # held job behind an interrupted run as dead, and work held on purpose is not stuck.
     split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
@@ -651,8 +663,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         where = assigned.get(slug)
         shown = split.get(slug, {})
         row = {"bot": slug, "slug": bot["slug"], "name": bot["display_name"] or bot["slug"], "queued": shown.get("queued", 0),
-               "dead": shown.get("dead", 0), "held": shown.get("held", 0),
-               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at"),
+               "dead": shown.get("dead", 0), "held": shown.get("held", 0), "quarantine_held": shown.get("quarantine_held", 0),
+               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at") or shown.get("oldest_quarantine_at"),
                "computer": where[1] if where else ""}
         if bot["state"] != "active":
             if count:
@@ -829,6 +841,7 @@ HELD = {
                   RUNS),
     "handed_back": ("{computer} handed its last try back before starting it: it tries again in a moment", RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    "task_quarantine": ("Held after repeated refusals; resumes after cooldown or quarantine clear", RUNS),
     # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
     "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
     # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
@@ -966,7 +979,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "slug", "name", "queued", "oldest", "computer", "reason")}
-                   | {"dead": row.get("dead", 0), "held": row.get("held", 0),
+                   | {"dead": row.get("dead", 0), "held": row.get("held", 0), "quarantine_held": row.get("quarantine_held", 0),
                        "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
                        **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
@@ -2033,7 +2046,7 @@ def view(c, who, settings, auth, github, config):
             + ([f"{_plural(asleep, 'cloud machine')} stopped until work comes."] if asleep else []))))
 
     from .performance import load_statuses, recent_overloads
-    from .start_places import NOT_REPORTING, computer_hold, hold_rows
+    from .start_places import MEMORY_HOLD, NOT_REPORTING, computer_hold, hold_rows
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     rows = hold_rows(c, [computer["id"] for computer in computers])          # and their runner rows, once
     for computer in computers:
@@ -2041,6 +2054,12 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
         hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
+        if not hold:
+            # Runner-local memory admission still reports a wait when diagnostics are off.
+            local_memory = next((w['reason'] for w in computer['turn_counts']['waits']
+                                 if w['reason'].startswith(MEMORY_HOLD)), None)
+            if local_memory:
+                hold = local_memory, local_memory
         if hold and not (computer["resting"] and hold[0] == NOT_REPORTING):    # a stopped cloud machine reports nothing
             words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
                      else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING
@@ -2185,7 +2204,7 @@ def view(c, who, settings, auth, github, config):
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
         bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_next_run", "task_cap", "auto_start_off", "handed_back",
-                                      "scoped", "company_limit", "backoff", "bot_limit")
+                                      "scoped", "task_quarantine", "company_limit", "backoff", "bot_limit")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),

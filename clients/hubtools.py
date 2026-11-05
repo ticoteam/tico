@@ -5736,6 +5736,7 @@ def turns(api, args):
       "- queues.<bot>.running / stalled: runs out now / of those, silent for 5+ minutes.\n"
       "- queues.<bot>.queued / oldest_queued_hours: jobs that will be handed out when a turn is free / the oldest one's wait.\n"
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
+      "- queues.<bot>.quarantine_held: jobs held after repeated refusals; resume after cooldown or quarantine clear.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
       "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"

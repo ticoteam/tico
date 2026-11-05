@@ -445,9 +445,10 @@ def settle_sent(c, row):
     job = c.execute("SELECT j.state, a.state attempt_state FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                     "WHERE j.message_id=?", (row["message_id"],)).fetchone()
     age = (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds()
+    if job and job["state"] == "completed":
+        learning_feedback(c, row)
     if job and job["state"] == "completed" and _delivery_only(row):
         # A delivery turn writes no update by design: its turn ending is the delivery. Never asked again.
-        learning_feedback(c, row)
         _finish(c, row, "delivered_without_update")
         return False
     if job and job["state"] in ("completed", "canceled", "uncertain", "held"):
@@ -469,12 +470,17 @@ def settle_sent(c, row):
 
 def learning_feedback(c, row, posted=None):
     """Use this bot's batch receipt, or its own completed turn's final reply."""
-    from . import learnings
+    from . import learnings, suggestions
     saved, attempt = None, None
     if posted is not None:
         if posted["delivery_batch_id"] not in (None, row["id"]):
             return
         saved = posted["learnings_saved"]
+    seen = posted["suggestions_seen"] if posted is not None else []
+    if isinstance(seen, str):
+        seen = json.loads(seen)
+    if "redo" not in row.keys() or not row["redo"]:
+        suggestions.feedback(c, row["bot"], row["id"], seen or (), settled=posted is not None)
     if saved is None:
         attempt = c.execute("SELECT a.final_text FROM learning_deliveries d "
                             "JOIN jobs j ON j.message_id=coalesce(d.feedback_message_id,d.message_id) AND j.bot_id=d.recipient "
@@ -488,6 +494,7 @@ def learning_feedback(c, row, posted=None):
         learnings.record_saved(c, row["bot"], row["id"], saved)
     if attempt:
         learnings.settle_delivery(c, row["bot"], row["id"])
+    suggestions.settle_delivery(c, row["bot"], row["id"])
 
 
 def settle_learnings(c):
@@ -499,13 +506,25 @@ def settle_learnings(c):
                      "ORDER BY d.sent_at DESC LIMIT 100").fetchall()
     for row in rows:
         learning_feedback(c, row)
+    # Suggestions bound to a request whose turn completed and never got a post: delivered.
+    from . import suggestions
+    for row in c.execute("SELECT DISTINCT s.update_batch_id AS id,s.owner_bot_id AS bot FROM suggestions s "
+                         "JOIN jobs j ON j.message_id=s.message_id AND j.bot_id=s.owner_bot_id "
+                         "WHERE j.state='completed' AND s.status='sent' AND s.outcome IS NULL LIMIT 100").fetchall():
+        suggestions.settle_delivery(c, row["bot"], row["id"])
 
 
-def request_slots(c, bot):
+def request_slots(c, bot, suggestion_items=None):
     """What later steps put in a bot's request, each a list of one-line strings: quiet tasks (Find stuck), learnings
     to keep (Learn, at most LEARNINGS_MAX) and suggestions (Suggest)."""
-    from . import learnings
-    return {"quiet_tasks": [], "learnings": [i["line"] for i in learnings.pending(c, bot)], "suggestions": []}
+    from . import learnings, suggestions
+    return {"quiet_tasks": [], "learnings": [i["line"] for i in learnings.pending(c, bot)],
+            "suggestions": [suggestion_line(i) for i in
+                            (suggestions.pending(c, bot) if suggestion_items is None else suggestion_items)]}
+
+
+def suggestion_line(item):
+    return f"{item['id']}: {item['title']} — {item['body']}"
 
 
 def _hidden_for(c, bot):
@@ -514,7 +533,7 @@ def _hidden_for(c, bot):
     return [H.bot_actor(slug) for slug in sorted(restricted_bots(c)) if slug != bot]
 
 
-def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=None, batch_id=None):
+def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=None, batch_id=None, suggestion_items=None):
     """What the bot is asked, with its facts: done since its last update, open work, what waits on
     a person, its goals, and the slots for quiet tasks, learnings and suggestions. It writes from these, so the turn is
     short and says only what happened. A redo of a past week takes that week's finished work and the bot's old update
@@ -522,9 +541,16 @@ def request_text(c, bot, kind, day, redo=False, delivery=False, learning_items=N
     Task facts are the ones every member may read (`shared_tasks_sql`): this request is in the bot's main session."""
     actor = H.bot_actor(bot)
     week = kind == "weekly"
-    slots = request_slots(c, bot)
+    slots = (request_slots(c, bot) if suggestion_items is None and not redo
+             else request_slots(c, bot, [] if redo else suggestion_items))
     if learning_items is not None:
         slots["learnings"] = [i["line"] for i in learning_items]
+    if redo:
+        slots["suggestions"] = []
+    elif slots["suggestions"]:
+        slots["suggestions"] = [*slots["suggestions"],
+                                "When posting an update, pass suggestions_seen with only the ids you acted on and "
+                                "delivery_batch_id=" + str(batch_id or "the request id") + "."]
     learning_block = []
     if slots["learnings"] and not redo:
         learning_block = ["", "Learnings for you:",
@@ -866,17 +892,20 @@ def send_request(c, row, assistant=None, delivery=False):
         c.execute("UPDATE update_queue SET state='sent', message_id=NULL, sent_at=? WHERE id=?", (H.now(), row["id"]))
         return None
     delivery = bool(delivery) and not redo
-    from . import learnings
+    from . import learnings, suggestions
     items = [] if redo else learnings.pending(c, row["bot"], row["id"])
+    suggestion_items = [] if redo else suggestions.pending(c, row["bot"], row["id"])
     refs = {"update_request": row["id"], "wake": "update", **({"delivery_only": True} if delivery else {})}
     message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]),
                     request_text(c, row["bot"], row["kind"], row["day"], redo, delivery=delivery,
-                                 learning_items=items, batch_id=row["id"]),
+                                 learning_items=items, batch_id=row["id"], suggestion_items=suggestion_items),
                     kind="notice", refs=run_triggers.stamp(refs, "schedule", row["id"], purpose="write update"))
     c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=?, delivery_only=? WHERE id=?",
               (message["id"], H.now(), int(delivery), row["id"]))
     if items:
         learnings.mark_sent(c, row["bot"], row["id"], message["id"], items)
+    if suggestion_items:
+        suggestions.mark_sent(c, row["bot"], row["id"], message["id"], suggestion_items)
     return message
 
 
@@ -888,6 +917,8 @@ def dispatch(c, at=None, assistant=None, build=True):
     is sent as the Update step decided it (backend/maintenance_steps/update.py): a delivery-only turn when its row
     says so, and a bot with no work is skipped on the row before it gets here."""
     settle_learnings(c)
+    from . import suggestions
+    suggestions.expire(c)
     local = local_now(at)
     day = local.date().isoformat()
     if build and local.hour >= START_HOUR:
@@ -1245,12 +1276,13 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         # The update's card in its author's Home (backend/thread_cards.py): one per new update; an edit keeps it.
         from . import thread_cards
         thread_cards.post_card(c, uid, bot, kind, day)
-    if learnings_saved is not None and not is_person(bot):
+    if (learnings_saved is not None or suggestions_seen is not None) and not is_person(bot):
         batch = c.execute("SELECT * FROM update_queue WHERE bot=? AND " +
                           ("id=?" if delivery_batch_id else "kind=? AND day=? AND state='sent'"),
                           (bot, delivery_batch_id) if delivery_batch_id else (bot, kind, day)).fetchone()
         if batch:
-            learning_feedback(c, batch, {"learnings_saved": learnings_saved, "delivery_batch_id": delivery_batch_id})
+            learning_feedback(c, batch, {"learnings_saved": learnings_saved, "delivery_batch_id": delivery_batch_id,
+                                          "suggestions_seen": suggestions_seen})
     H.event(c, H.bot_actor(drafted_by) if drafted_by else author_actor(bot), "update.post", uid, {"kind": kind, "day": day, **({"warning": problem} if problem else {})})
     posted = with_inputs(c, one(c, uid), meetings=is_person(bot) and reader)
     return {**posted, "warning": problem} if problem else posted

@@ -189,6 +189,41 @@ stay readable.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.
 
+## Suggest
+
+Suggest is a free Maintenance step: no billing or model calls. The owner opts in with **Share stats for suggestions**
+under Settings > General > Privacy. It starts off and cannot be enabled on a plain open-source install; a hosted
+install or Tico Gateway connection is required, and fetching also needs the install's Gateway key. Demo and rehearsal
+installs send nothing. This consent is separate from the anonymous usage count.
+
+At most once every 24 hours, Suggest posts `snapshot_version: 1`, active bot counts (total and by BotOps, Goal Manager,
+Engineering Lead and Finance template), the open task count and enabled custom automation count to the Gateway's
+`/v1/suggestions`. Spend is never sent: when a company monthly usage pool cap is set, its spend and cap are read only by the
+local condition check at delivery.
+The saved model Gateway's `/v1/gateway` suffix is removed to reach this service route. Unknown facts are omitted.
+Names, messages, task text and credentials are never in the JSON; the install key authenticates
+the request. A timeout or invalid response fails the step without storing suggestions.
+
+Suggestions wait in a hidden install-owned table. Update resolves each role to an active bot by its template and checks
+the condition against fresh counts immediately before sending. A missing operand makes a comparison false, including
+`ne`; a stale suggestion becomes `condition_false`. A missing role stays pending. Finance uses the existing Finance bot
+template priority. `person_money_cap` uses spend alerts' company-owner lookup and keeper notice path; it waits if that
+person cannot be resolved or fresh local monthly spend is unknown or does not exceed the company pool's monthly cap.
+A zero-work bot gets a delivery-only turn, and redos consume nothing. Retries re-check conditions and role ownership.
+
+Each bot delivery carries at most ten suggestions and binds to the `update_queue` request id and original delivery
+message id. A bot posts acted-on ids as `suggestions_seen`, with
+`delivery_batch_id`; another bot or batch cannot acknowledge them. A completed turn without acted-on ids counts as
+`delivered` only for the original delivery message; a redo's turn cannot settle it. An unsettled receipt past its
+cooldown becomes `expired`. Fingerprints cannot repeat during cooldown;
+unreported outcomes are retained before renewing a fingerprint while reporting is on.
+
+**Report suggestion outcomes** starts on. Both privacy switches must remain on for either Gateway call. The step reports
+at most 100 receipts to `/v1/suggestions/outcomes`, containing only `suggestion_id` and `outcome` (`delivered`, `acted`, `dismissed`,
+`expired` or `condition_false`). Failed reporting keeps receipts unacknowledged for a later run. Both Gateway calls run
+outside write transactions. Privacy settings are owner-only at `GET/PUT /api/v2/system/suggestions` and discoverable
+through the existing `hub settings` and MCP settings catalogue.
+
 ## Nightly memory tidy contract (developer integration)
 
 `backend.memory_tidy` is the read-only proposal boundary. It does not schedule a

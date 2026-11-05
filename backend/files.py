@@ -243,6 +243,7 @@ class Files:
         a task must be one this bot may see, and bot-wide is refused from inside a chat."""
         attempt = who.attempt_id if who.role == "bot" and not who.agent else str(fields.get("attempt") or "")
         conversation, turn_task = self.turn_context(c, who, bot, attempt)
+        H._writer(c, self.actor_of(who, bot), task_id=turn_task, attempt_id=attempt)
         task = str(fields.get("task") or "").strip()
         wanted = str(fields.get("scope") or "").strip()
         if wanted not in ("", "task", "bot"):
@@ -257,6 +258,7 @@ class Files:
         if task:
             acting = who if who.role == "bot" else Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=attempt)
             self.auth.task(c, acting, task)
+            H._writer(c, self.actor_of(who, bot), task_id=task, attempt_id=attempt)
         if wanted == "bot":
             if ((task or turn_task) and H.task_private(c, H.task(c, task or turn_task))
                     or attempt and any(H.task_private(c, H.task(c, tid)) for tid in privacy.attempt_tasks(c, attempt))):
@@ -483,6 +485,13 @@ class Files:
 
         def work(c):
             scope, task, conversation, attempt = self.target(c, who, bot, fields)
+            existing = self.find(c, bot, scope, identity)
+            stored_task = existing["task_id"] if existing else None
+            H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
+            with H.refusal_task(task or stored_task):
+                return write_file(c, scope, task, conversation, attempt)
+
+        def write_file(c, scope, task, conversation, attempt):
             actor = self.actor_of(who, bot)
             if failed:
                 row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
@@ -598,9 +607,11 @@ class Files:
                     url, identity, kind, provider, _ = BF.normalize_link(body.url)
                 except BF.Refused as exc:
                     raise refused(exc) from exc
+            H._writer(c, actor, task_id=task, attempt_id=attempt)
             row, created = self.open_row(c, bot=bot, scope=scope, identity=identity,
                                          title=body.title or url, kind=kind, mime="", locator="remote_link", url=url,
                                          provider=provider, task=task, conversation=conversation, now=now)
+            H._writer(c, actor, task_id=row["task_id"], attempt_id=attempt)
             fields = {"last_activity_at": now, "url": url, "state": "ready"}
             if body.title:
                 fields["title"] = body.title[:300]
@@ -628,6 +639,7 @@ class Files:
             stored = c.execute("SELECT * FROM bot_files WHERE id=? AND identity LIKE 'task-file:%'", (fid,)).fetchone()
             if stored and body.model_dump(exclude_none=True) == {"archived": True}:
                 task = self.auth.task(c, who, stored["task_id"])
+                H._writer(c, who.actor, task_id=task["id"])
                 if (who.actor not in (task["owner_id"], task["requester_id"])
                         and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                     raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
@@ -647,6 +659,7 @@ class Files:
                     raise Problem("not_found", "File not found", 404)
                 for task in linked:
                     row = self.auth.task(c, who, task["task_id"])
+                    H._writer(c, who.actor, task_id=row["id"])
                     if (who.actor not in (row["owner_id"], row["requester_id"])
                             and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                         raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
@@ -669,6 +682,7 @@ class Files:
             if not row or row["state"] == "deleted" or not self.visible(c, who, row, {}):
                 raise Problem("not_found", "File not found", 404)
             actor, now = who.actor, H.now()
+            H._writer(c, actor, task_id=row["task_id"])
             if who.role == "bot":
                 if H.actor_id(who.actor) != row["bot_id"]:
                     raise Problem("not_found", "File not found", 404)
@@ -682,6 +696,7 @@ class Files:
             if body.task is not None:
                 if body.task:
                     self.auth.task(c, who, body.task)
+                    H._writer(c, actor, task_id=body.task)
                 fields["task_id"] = body.task or None
             if body.promote:
                 if row["task_id"] and H.task_private(c, H.task(c, row["task_id"])):

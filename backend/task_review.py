@@ -156,6 +156,7 @@ def version_review(c, fid, number, *, actor):
 
 def edit_version(c, auth, who, task_id, fid, number, body):
     auth.task(c, who, task_id)
+    H._writer(c, who.actor, task_id=task_id)
     if body.ask is not None:
         comment_rights(c, auth, who, task_id)
     version = file_version(c, task_id, fid, number)
@@ -176,6 +177,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             if H.answers_to(c, [existing]):
                 raise Problem("validation", "This version's question was answered; attach a new version for another review", 422)
             asked = H.message(c, existing)
+            H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
             row = H.task(c, task_id)
             from . import ask_routing
             recipient = H.task_ask_recipient(c, who.actor, row, value, route_system=False)
@@ -235,6 +237,7 @@ def reply_answer(c, auth, who, asked, text, warn=""):
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
     """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
     (its picks and Other text) is recorded as given."""
+    H._writer(c, who.actor, task_id=task_id)
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
@@ -253,6 +256,7 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
     if not asked or asked["kind"] != "ask" or not asked["refs"].get("questions"):
         raise Problem("validation", "The target has no structured question", 422)
     privacy.require_message(c, who, asked)
+    H._message_writer(c, who.actor, asked, H.conversation(c, asked["conversation_id"]))
     if asked["sender_id"] == who.actor:
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
     # A bot's question answered by the person it was put to (or its task waits on) is that bot's next move: it wakes.

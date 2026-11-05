@@ -5,7 +5,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const MB = {run: 0, data: null};
+const MB = {run: 0, data: null, refreshAfterMay: false};
 const MB_STATE = {connected: ['ok', 'Connected'], not_connected: ['waiting', 'Not connected'],
   awaiting_person: ['', 'Private'], stopped: ['', 'Not in use']};
 // What Tico may do (PUT /v2/google/permissions): the field the server keeps, the key GET /v2/mailboxes reads it back as.
@@ -44,6 +44,7 @@ async function renderSettingsMailboxes() {
   const list = el.querySelector('[data-mb-list]'), one = $('#set-mailbox');
   list.hidden = !!MAILBOX_OPEN; one.hidden = !MAILBOX_OPEN;
   if (MAILBOX_OPEN) return renderMailbox(MAILBOX_OPEN);
+  if (el.querySelector('[data-google-may]:disabled')) { MB.refreshAfterMay = true; return; }
   const run = ++MB.run;
   void window.mountGoogleConnect?.($('#set-google'));
   let d;
@@ -137,15 +138,17 @@ async function mbConnect(el, form) {
 async function mbSaveMay(el, input) {
   const boxes = [...el.querySelectorAll('[data-google-may]')];
   const body = Object.fromEntries(boxes.map(box => [box.dataset.googleMay, box.checked]));
+  ++MB.run;   // a read from before this save cannot replace its controls or restore old permissions
   boxes.forEach(box => { box.disabled = true; });
   try {
     await put('/v2/google/permissions', body);
     toast('Saved');
-    boxes.forEach(box => { box.disabled = false; });
     void window.mountGoogleConnect?.($('#set-google'), {force: true});
   } catch (e) {
     input.checked = !input.checked;
-    boxes.forEach(box => { box.disabled = false; });
     toast(e.message, true);
+  } finally {
+    boxes.forEach(box => { box.disabled = false; });
+    if (MB.refreshAfterMay) { MB.refreshAfterMay = false; void renderSettingsMailboxes(); }
   }
 }
