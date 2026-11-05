@@ -1,6 +1,32 @@
 use super::*;
 
 impl Recorder {
+    pub(super) fn may_open_linked_task(&self, url: &str) -> bool {
+        if self.link_tasks["scope"] != self.link_scope()
+            || self.link_tasks_at.elapsed() > Duration::from_secs(60)
+        {
+            return false;
+        }
+        let Some(base) = self.link_tasks["browser"]
+            .as_str()
+            .and_then(|base| settings::safe_url(base).ok())
+        else {
+            return false;
+        };
+        let Some(id) = url.strip_prefix(&format!("{base}/#/task/")) else {
+            return false;
+        };
+        self.link_tasks["tasks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|task| task["id"] == id)
+            || self.link_tasks["linked"]["tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|task| task["task_id"] == id)
+    }
     pub(super) fn draft_destination(&self, id: &str) -> String {
         let context = self.store.context(id).unwrap_or_default();
         if !context.live_destination.is_empty() {
@@ -215,8 +241,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"task","title":"Private title","number":42,"status":"open"}]});
+        app.link_tasks = json!({"scope":app.link_scope(),"browser":"https://browser.acme.example","tasks":[{"id":"task","title":"Private title","number":42,"status":"open"}]});
         app.link_tasks_at = Instant::now();
+        assert!(app.may_open_linked_task("https://browser.acme.example/#/task/task"));
+        assert!(!app.may_open_linked_task("https://browser.acme.example/#/task/other"));
         let view = app.actions_view("one");
         assert_eq!(
             view["items"]
@@ -228,6 +256,7 @@ mod tests {
             42
         );
         app.destination = "two".into();
+        assert!(!app.may_open_linked_task("https://browser.acme.example/#/task/task"));
         let rows = app.actions_view("two")["items"].as_array().unwrap().clone();
         assert_eq!(rows.len(), 1);
         assert!(rows[0]["proposed_task_id"].is_null());

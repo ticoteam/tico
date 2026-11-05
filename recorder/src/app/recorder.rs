@@ -2505,6 +2505,7 @@ impl Recorder {
             .any(|item| !item.task_url.is_empty() && item.task_url == url)
             && settings::safe_url(url.split('#').next().unwrap_or("")).is_ok();
         let allowed = known_item
+            || self.may_open_linked_task(url)
             || self.config.destinations.iter().any(|row| {
                 settings::safe_url(&row.base_url)
                     .is_ok_and(|base| url.starts_with(&format!("{base}/")))
