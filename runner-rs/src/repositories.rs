@@ -1671,9 +1671,7 @@ pub async fn base_kept(path: &Path) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Exiting Git from another fixture can be temporarily unreadable to the live-owner safety check.
-    static FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    use crate::gitlocks::TEST_FIXTURES as FIXTURES;
 
     struct RepoFixture { root: PathBuf, remote: PathBuf, seed: PathBuf, base: PathBuf, env: Env, _guard: tokio::sync::MutexGuard<'static, ()> }
 

@@ -11,6 +11,10 @@ use std::time::Duration;
 const OLD: Duration = Duration::from_secs(30 * 60);
 static OWNED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+// Exiting Git from another fixture can be temporarily unreadable to the live-owner safety check.
+#[cfg(test)]
+pub static TEST_FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Only registration paths, never an arbitrary Git command's cwd, authorize recovery.
 pub fn own(roots: &[PathBuf]) {
     OWNED.lock().unwrap().extend(roots.iter().filter(|r| !r.as_os_str().is_empty()).cloned());
@@ -308,6 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_abandoned_config_or_index_lock_is_preserved_and_git_retried() {
+        let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&root).unwrap();
         own(std::slice::from_ref(&root));
@@ -327,6 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_task_worktrees_abandoned_index_lock_recovers_without_touching_the_base_index() {
+        let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
         let base = root.join("base");
         let task = root.join("task");
@@ -354,6 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn linked_recovery_keeps_a_prepared_main_checkout_transaction() {
+        let _guard = TEST_FIXTURES.lock().await;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         use std::process::Stdio;
         let root = std::env::temp_dir().join(format!("tico-prepared-ref-{}", uuid::Uuid::new_v4().simple()));
@@ -397,6 +404,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fresh_or_open_lock_and_a_lock_outside_git_metadata_stay() {
+        let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-gitlocks-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(root.join(".git")).unwrap();
         own(std::slice::from_ref(&root));
@@ -422,6 +430,7 @@ mod tests {
     }
     #[tokio::test]
     async fn an_old_lock_outside_the_runners_roots_is_never_touched() {
+        let _guard = TEST_FIXTURES.lock().await;
         let root = std::env::temp_dir().join(format!("tico-outside-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let lock = root.join(".git/index.lock");
@@ -471,6 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn pythons_sidecar_lock_blocks_rust_recovery_and_the_stale_inode_is_kept() {
+        let _guard = TEST_FIXTURES.lock().await;
         use std::io::{BufRead, BufReader};
         use std::process::{Command, Stdio};
         let root = std::env::temp_dir().join(format!("tico-sidecar-{}", uuid::Uuid::new_v4().simple()));
