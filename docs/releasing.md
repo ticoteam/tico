@@ -76,9 +76,14 @@ migration file changed after it ran are all refused before anything is written.
 
 ## Migrations
 
-Every persistent schema change is a file in `backend/migrations`: `NNNN_name.sql` (its statements) or `NNNN_name.py`
-(an `up(conn)` that does not commit). The number is the next after the highest file. A file runs once, in its own
-transaction with its `schema_migrations` row, so a failure leaves neither. Never edit a file that has run: its checksum is
+Every persistent schema change is a file in `backend/migrations`: `YYYYMMDDHHMMSS_name.sql` (its statements) or `.py`
+(an `up(conn)` that does not commit), using a UTC timestamp. Create it with `python3 scripts/new_migration.py name`
+(add `--py` for Python). Existing `NNNN_` files keep their names and contents. Versions sort as full strings; legacy
+files precede timestamp files. Every unrecorded file runs, even if it sorts before one already applied. Each migration
+stands alone and must not depend on another unmerged migration's schema, so parallel PRs can merge in either order.
+CI rejects PR-added legacy names or duplicate timestamps against the current base tip and PR, with exact `git mv`
+suggestions. A file runs once, in its own transaction with its `schema_migrations` row, so a failure leaves neither.
+Never edit a file that has run: its checksum is
 recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
 (`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code. hubdb's `MIGRATIONS` list (user_version 71; a file from a
 release that ran growth segments as step 72 opens too, `NEWEST_USER_VERSION`) and the cloud steps in `Store.initialize`
