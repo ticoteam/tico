@@ -655,12 +655,18 @@ a bot's turn on a Mac without the runner's credential socket, cannot refresh suc
 A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
 the computer as before.
 
-Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
-Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
-app avoids verification only for accounts in the Workspace that owns the project.
+On the computer that holds the grants, `scripts/mail.sh google status` lists the connected accounts and what each may
+do (never a token). `scripts/mail.sh google revoke --mailbox <address>` removes that account's grant from this computer
+and asks Google to revoke it. The local copy goes first, so this computer stops using the grant even when Google cannot
+be reached. If Google does not confirm the revocation, the command says so; the grant may still be active at Google, so
+remove Tico at myaccount.google.com/permissions. The command ends without an error either way, so read its message.
 
 Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
 use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
+
+Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
+Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
+app avoids verification only for accounts in the Workspace that owns the project.
 
 IMAP is not an alternative here: Google's OAuth for IMAP needs full-mail access, it carries no calendar, and a Workspace
 that blocks apps usually blocks IMAP as well.
