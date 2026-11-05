@@ -369,18 +369,23 @@ def recheck_reads(c, auth, who):
     """Call under the publishing transaction; a source that moved outside the scope blocks publication."""
     from . import context_search
     from .files import file_visible
-    for kind, ref in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (who.attempt_id,)):
-        try:
-            if kind == "meeting":
-                context_search.readable(c, who, ref, auth=auth)
-                continue
-            row = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (ref,))
-            if row and file_visible(c, auth, who, row, {}):
-                continue
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
-        raise Problem("privacy", "A source is no longer in this task's context", 403)
+    # Validation returns no source content. Inserting the output can move an old source past the list's ten items.
+    reset = READS.set(None)
+    try:
+        for kind, ref in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (who.attempt_id,)):
+            try:
+                if kind == "meeting":
+                    context_search.readable(c, who, ref, auth=auth)
+                    continue
+                row = read_cache.one(c, "SELECT * FROM bot_files WHERE id=?", (ref,))
+                if row and file_visible(c, auth, who, row, {}):
+                    continue
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+            raise Problem("privacy", "A source is no longer in this task's context", 403)
+    finally:
+        READS.reset(reset)
 
 
 def flush(store, auth, pending):

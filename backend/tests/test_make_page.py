@@ -303,3 +303,18 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+
+
+def test_publishing_after_reading_ten_context_pages_does_not_fail_its_own_read_flush(api):
+    t = task(api, private=False)
+    _, publisher = turn(api, "cpo")
+    for i in range(10):
+        result = page(api, publisher, name=f"source-{i}.html", task=t["id"], data=HTML + str(i).encode())
+        assert result.status_code == 200, result.text
+    _, attempt, _ = start(api, t["id"])
+    sources = attempt["task_context"]["pages"]
+    assert len(sources) == 10
+    assert api.get("/api/v2/files/" + sources[-1]["id"], headers=headers(attempt["token"])).status_code == 200
+    result = page(api, attempt, name="combined.html", task=t["id"])
+    assert result.status_code == 200, result.text
+    assert status(api, t["id"])["state"] == "made"
