@@ -75,6 +75,11 @@ Older servers refuse the feature before the picker opens. Physical source select
 
 ## Tico server integration
 
+Every call to Tico carries `X-Tico-Recorder-Version` (the release's version, read from `tauri.conf.json` by `build.rs`)
+and `X-Tico-Recorder-Install`, a random id for this copy kept in `install-id` in the library folder; speech and chat
+providers never get them. Tico shows the version to owners and admins and offers an update link on Meetings
+(docs/meetings.md, Tico Recorder).
+
 Use the companion `codex/meeting-questions-v1` worktree. It adds question-mode sessions, gateway-only context reviews, serial Jev classification, and quoted proposals while preserving existing live-meeting endpoints.
 
 Configure the server's existing Tico gateway connection, plus `TICO_MEETING_QUESTION_MODEL` with a **published Tico gateway model profile** for the fast meeting agent. The intended upstream is Mercury 3. This repository does not publish that profile or assume it exists. With no profile/key, the feature fails closed and never falls back to a direct vendor. Deduplication uses the gateway's existing Decide endpoint.

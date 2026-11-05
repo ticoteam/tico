@@ -4386,3 +4386,77 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
         }
     }
 }
+
+/// Tico sees which Recorder build each copy runs: every kind of call (read, write, delete, event stream) carries
+/// this build's version and the same install id, and no call leaves either out.
+#[test]
+fn every_tico_call_names_this_recorder_version_and_install() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let replies = [
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        "Content-Type: text/event-stream\r\nContent-Length: 3\r\n\r\n:\n\n",
+    ];
+    let handle = std::thread::spawn(move || {
+        let mut heads = vec![];
+        for reply in replies {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![];
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut one = [0; 1];
+                stream.read_exact(&mut one).unwrap();
+                bytes.push(one[0]);
+            }
+            let head = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map_or(0, |value| value.trim().parse().unwrap());
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n{reply}").unwrap();
+            heads.push(head);
+        }
+        heads
+    });
+    let tico = Tico::new(
+        Destination {
+            id: "versioned".into(),
+            name: "Fixture".into(),
+            base_url: url,
+            actor: "human:test".into(),
+        },
+        "synthetic-token".into(),
+    )
+    .unwrap();
+    tico.call("/api/v2/me", None, "read").unwrap();
+    tico.call("/api/v2/meetings/import", Some(&json!({})), "write")
+        .unwrap();
+    tico.unlink_meeting_task("meeting", "task", "unlink")
+        .unwrap();
+    tico.events("/api/v2/events").unwrap();
+    let heads = handle.join().unwrap();
+    let install = settings::install_id();
+    assert_eq!(install.len(), 32);
+    assert_eq!(install, settings::install_id(), "one id for this copy");
+    assert!(!VERSION.is_empty());
+    for head in heads {
+        assert!(
+            head.contains(&format!(
+                "x-tico-recorder-version: {}\r\n",
+                VERSION.to_ascii_lowercase()
+            )),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("x-tico-recorder-install: {install}\r\n")),
+            "{head}"
+        );
+        assert!(head.contains("authorization: bearer synthetic-token"));
+    }
+}

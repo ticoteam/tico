@@ -26263,6 +26263,47 @@
         ]
       }
     },
+    "/api/v2/meetings/recorder": {
+      "get": {
+        "summary": "Your most recently used Tico Recorder, the newest release's version and the download",
+        "operationId": "getMyRecorder",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyRecorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/review": {
       "post": {
         "summary": "Share or dismiss your Pending meetings",
@@ -65124,6 +65165,44 @@
           "action"
         ],
         "title": "Moderate"
+      },
+      "MyRecorder": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Your most recently used copy's version; empty when none was seen"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recent": {
+            "type": "boolean",
+            "description": "A copy was seen in the last 30 days"
+          },
+          "latest": {
+            "type": "string",
+            "description": "The newest release's version; empty when unknown"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "download_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url",
+          "last_seen_at",
+          "latest",
+          "recent",
+          "update_available",
+          "version"
+        ],
+        "additionalProperties": true
       },
       "NeedsSummary": {
         "type": "object",

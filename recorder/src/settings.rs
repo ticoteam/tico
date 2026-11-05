@@ -139,6 +139,29 @@ pub fn write(root: &Path, settings: &Settings) -> Result<()> {
     changed();
     Ok(())
 }
+/// A random id for this copy of the Recorder, kept in its library folder beside settings.json (not in it, so a
+/// settings save from the window can never drop it). Tico uses it to tell one person's computers apart when it
+/// shows which version each runs; it says nothing else about the computer. Tests keep theirs in memory.
+pub fn install_id() -> String {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let valid = |id: &str| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit());
+        let path = root().join("install-id");
+        if !cfg!(test)
+            && let Ok(text) = fs::read_to_string(&path)
+            && valid(text.trim())
+        {
+            return text.trim().to_owned();
+        }
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        if !cfg!(test) {
+            let _ = fs::create_dir_all(root());
+            let _ = fs::write(&path, &id);
+        }
+        id
+    })
+    .clone()
+}
 pub fn safe_url(value: &str) -> Result<String> {
     let url = reqwest::Url::parse(value.trim()).context("Enter a valid server URL")?;
     ensure!(

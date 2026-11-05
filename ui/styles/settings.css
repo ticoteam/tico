@@ -50,7 +50,7 @@ input.people-switch:checked{background:var(--ink)}input.people-switch:checked::b
 input.people-switch:checked::before{transform:translateX(14px)}
 input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-list-card>header{align-items:center}
-.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 36px;align-items:center;gap:var(--s3)}
+.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 72px 36px;align-items:center;gap:var(--s3)}
 .people-head{padding:0 0 6px;border-bottom:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .people-list{list-style:none;margin:0;padding:0}
 .people-row{padding:10px 0;border-bottom:1px solid var(--line)}
@@ -63,6 +63,8 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-role{font-size:var(--t-base)}.people-role[data-role=owner]{font-weight:600}
 .people-cell-signin{display:flex;align-items:center;gap:8px}
 .people-switch-label{display:none;font-size:var(--t-base);color:var(--muted)}
+.people-cell-recorder{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}.people-cell-recorder.is-old{color:var(--wait)}
+.people-recorder-label{display:none}
 .people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
 .people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .people-more:hover,.people-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
@@ -91,7 +93,8 @@ button.people-danger{background:var(--fail);color:var(--surface)}
   .people-mode{align-self:stretch}.people-mode button{flex:1;padding:8px 6px}
   .people-add{flex-wrap:wrap}.people-add input[name=email]{flex:1 1 100%}
   .people-head{display:none}
-  .people-row{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-areas:"who who more" "role signin signin";row-gap:6px}
+  .people-row{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-areas:"who who more" "role signin signin" "recorder recorder recorder";row-gap:6px}
+  .people-cell-recorder{grid-area:recorder;padding-left:42px}.people-cell-recorder:empty{display:none}.people-recorder-label{display:inline}
   .people-who{grid-area:who}.people-cell-role{grid-area:role;padding-left:42px}.people-cell-signin{grid-area:signin}.people-cell-more{grid-area:more}
   .people-row.is-left{grid-template-areas:"who more"}
   .people-switch-label{display:inline}

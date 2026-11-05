@@ -37,7 +37,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       }),
       allowed: allowedPeople, allowed_domains: allowedDomains, admins: [], bot_admins: [], member_bot_limit: limit, rules: {assistant_direct: true, botops_direct: true, botops_manages_bots: true, admin_credentials: true, members_store_credentials: true, admin_sql: true, member_tokens: true, ...rules},
       company_domains: ['acme.example'], company_domain_source: 'owner', revision, proxy: 'cloudflare',
-      home_domain: 'acme.example', domain_sign_in: allowedDomains.includes('acme.example'), directory: directory.source});
+      home_domain: 'acme.example', domain_sign_in: allowedDomains.includes('acme.example'), directory: directory.source,
+      recorders: {ben: {version: '0.2.0', last_seen_at: new Date(Date.now() - 3 * 86400e3).toISOString(), update_available: true}}});
     let me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', credential_access: false, config: CONFIG};
     await context.route('**/*', async route => {
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
@@ -126,6 +127,22 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     await page.goto('https://tico-ui.test/#/settings');
     await page.getByRole('tab', {name: 'People'}).click();
     await row('ben').waitFor();
+    // The Recorder column: the version each person used last, marked when a newer one is out; empty without one.
+    assert.equal(await row('ben').locator('[data-recorder-version] .tnum').innerText(), '0.2.0');
+    assert.match(await row('ben').locator('[data-recorder-version]').getAttribute('title'), /^Last seen 3d ago · Update available$/);
+    assert.equal(await row('ana').locator('[data-recorder-version]').count(), 0);
+    const shots = process.env.TICO_UI_SHOTS, theme = await page.evaluate(() => window.ticoTheme?.get());
+    for (const [width, height] of [[1200, 900], [390, 844]]) {
+      await page.setViewportSize({width, height});
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no sideways scroll at ${width}px`);
+      assert.equal(await row('ben').locator('[data-recorder-version]').isVisible(), true, `the version shows at ${width}px`);
+      if (shots) for (const theme of ['light', 'dark']) {
+        await page.evaluate(v => window.ticoTheme?.set(v), theme);
+        await page.locator('.people-list-card').screenshot({path: path.join(shots, `people-recorder-${width}-${theme}.png`), animations: 'disabled'});
+      }
+    }
+    await page.setViewportSize({width: 1200, height: 900});
+    if (shots) await page.evaluate(v => window.ticoTheme?.set(v), theme);
     // Add manually is the mode with no directory; no title/team column and no Edit button; the bot limit reads 25.
     assert.equal(await page.locator('[data-people-mode=manual]').getAttribute('aria-pressed'), 'true');
     assert.doesNotMatch(await page.locator('#set-people').textContent(), /leadership|Edit/);
