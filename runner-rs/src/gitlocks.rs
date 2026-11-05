@@ -70,6 +70,14 @@ fn related(cwd: &Path, args: &[String], environment: &[String], roots: &[PathBuf
             if inside(&at.join(args.next()?))? { return Some(true); }
         } else if let Some(path) = arg.strip_prefix("--git-dir=").or_else(|| arg.strip_prefix("--work-tree=")) {
             if inside(&at.join(path))? { return Some(true); }
+        } else {
+            // init/clone and path-valued options can name the repository without -C.
+            let path = arg.split_once('=').map_or(arg.as_str(), |(_, value)| value);
+            match at.join(path).canonicalize() {
+                Ok(path) if roots.iter().any(|r| path.starts_with(r)) => return Some(true),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return None,
+                _ => {},
+            }
         }
     }
     for entry in environment {
@@ -506,7 +514,7 @@ mod tests {
         std::fs::remove_file(process.join("cwd")).unwrap();
         std::os::unix::fs::symlink(&root, process.join("cwd")).unwrap();
         for args in [format!("git\0-C\0{}\0commit\0", repo.display()), format!("git\0-C{}\0commit\0", repo.display()),
-            format!("git\0--work-tree={}\0commit\0", repo.display()), format!("git\0--git-dir\0{}\0commit\0", admin.display()), format!("git\0--git-dir={}\0commit\0", admin.display())] {
+            format!("git\0--work-tree={}\0commit\0", repo.display()), format!("git\0init\0{}\0", repo.display()), format!("git\0--git-dir\0{}\0commit\0", admin.display()), format!("git\0--git-dir={}\0commit\0", admin.display())] {
             std::fs::write(process.join("cmdline"), args).unwrap();
             assert_eq!(git_related(&process, &roots), Some(true));
         }

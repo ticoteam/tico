@@ -68,6 +68,13 @@ def related(cwd, arguments, environment, roots):
         elif arg.startswith(("--git-dir=", "--work-tree=")):
             if inside(arg.partition("=")[2], at):
                 return True
+        else:
+            # init/clone and path-valued options can name the repository without -C.
+            try:
+                if inside(arg.partition("=")[2] if "=" in arg else arg, at):
+                    return True
+            except FileNotFoundError:
+                pass
     for value in environment:
         if value.startswith(("GIT_DIR=", "GIT_COMMON_DIR=", "GIT_WORK_TREE=")) and inside(value.partition("=")[2], at):
             return True
