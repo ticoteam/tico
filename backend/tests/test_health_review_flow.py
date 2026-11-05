@@ -13,7 +13,8 @@ def ticket(api, number=206, step='Second look'):
             {'name': 'Build', 'status': 'doing'},
             {'name': 'First look', 'status': 'review', 'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}},
             {'name': 'Second look', 'status': 'review', 'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}},
-            {'name': 'In QA', 'status': 'review', 'flow': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'Build'}},
+            {'name': 'In QA', 'status': 'review', 'flow': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA Fixes'}},
+            {'name': 'QA Fixes', 'status': 'doing', 'flow': {'after_green': 'merge'}},
         ])
         task = H.task_create(c, 'human:morgan', f'Build change {number}', '', 'bot:builder', type=typ['id'], step=step, private=False)
         link = H.task_link(c, 'human:morgan', task['id'], f'https://github.com/Acme/atlas/pull/{number}')
@@ -178,7 +179,7 @@ def test_green_new_head_at_a_fixes_step_uses_merge_ready(environment):
     task = ticket(api, step='In QA')
     child(api, task, title='QA: PR #206', verdict='fail', head=OLD)
     with api.app.state.store.transaction() as c:
-        build = dict(c.execute("SELECT * FROM task_steps WHERE type_id=? AND name='Build'", (task['type_id'],)).fetchone())
+        build = dict(c.execute("SELECT * FROM task_steps WHERE type_id=? AND name='QA Fixes'", (task['type_id'],)).fetchone())
         c.execute('UPDATE task_steps SET flow=? WHERE id=?', (json.dumps({'after_green': 'merge'}), build['id']))
         c.execute('UPDATE tasks SET step_id=?,status=? WHERE id=?', (build['id'], 'doing', task['id']))
         H._task_event(c, task['id'], H.KEEPER, 'step', task['step_id'], build['id'], '')
