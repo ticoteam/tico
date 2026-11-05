@@ -1,12 +1,13 @@
 """The factory's board judge (evals/factory/scenarios.py board_keeps_moving): what it counts on the claim rounds it
 is given, and a real run whose server passes over ready work, which the judge must fail."""
+import threading
 from types import SimpleNamespace
 
 from evals.factory.cases.freezes import spend_under
 from evals.factory.scenarios import board_keeps_moving
 from evals.factory.sim import Run, Scenario, at, login_ready, tickets
 from evals.factory.world import START
-from backend import execution
+from backend import execution, maintenance
 
 
 def round_at(hour, free, ready, started, fallback=0, why=None):
@@ -106,6 +107,36 @@ def test_the_judge_fails_a_server_that_passes_over_every_claim(monkeypatch):
     assert not passed, "a stalled board passed the judge"
     assert "started 0" in detail, detail
     assert run.claims[200] > 0 and sum(m["started_at"] for m in run.marks) == 0
+
+
+def test_maintenance_roundup_finishes_before_the_round_it_is_judged_on(monkeypatch):
+    # Let the 16:00 Maintenance worker finish before reading the round's queue. With an asynchronous fake-clock
+    # pass its roundup can arrive after the last empty claim, and the judge calls that new work starvation.
+    from evals.factory.cases.recovery import SCENARIOS
+
+    workers, snapshots = [], []
+    execute, queued_now = maintenance._execute, Run.queued_now
+
+    def remember_worker(*args, **kwargs):
+        workers.append(threading.current_thread())
+        return execute(*args, **kwargs)
+
+    def settled_queue(run, w, bots):
+        if w.now() == START + at(7):
+            for worker in workers:
+                if worker is not threading.current_thread():
+                    worker.join(timeout=5)
+                    assert not worker.is_alive(), "Maintenance did not finish"
+            snapshots.append(w.now())
+        return queued_now(run, w, bots)
+
+    monkeypatch.setattr(maintenance, "_execute", remember_worker)
+    monkeypatch.setattr(Run, "queued_now", settled_queue)
+    scenario = next(s for s in SCENARIOS if s.name == "recover_runner_restart")
+    run = Run(scenario, seed=3).go()
+    assert snapshots
+    passed, detail = board_keeps_moving(at(2))(run)
+    assert passed, detail
 
 
 def turn(started, finished, cost, bot="fleet-01"):

@@ -18,6 +18,7 @@ use serde_json::{json, Map, Value};
 use crate::client::{ApiError, Client};
 use crate::env::Env;
 use crate::gitrun::{self, Fault, Out};
+use crate::regular_file::{self, CONTENT, SMALL};
 use crate::repositories::{self, GB};
 use crate::util::text_of;
 
@@ -101,7 +102,11 @@ pub fn safe_path(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
     let path = root.join(raw);
     let parts: Vec<_> = raw.components().collect();
     let dotdot = parts.iter().any(|c| matches!(c, std::path::Component::ParentDir));
-    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() || is_symlink(&path) {
+    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() {
+        return Err("Use a worktree inside the team workspace".into());
+    }
+    crate::repo_safety::outside_installation(&path)?;
+    if is_symlink(&path) {
         return Err("Use a worktree inside the team workspace".into());
     }
     let resolved = resolve(&path);
@@ -145,6 +150,7 @@ pub fn disk_floor(workspace: &Path) -> R<()> {
 
 /// Runner git in a worktree or base clone (worktrees.git): the restricted environment, at most 120 s.
 pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
+    crate::repo_safety::outside_installation(path)?;
     if args.len() >= 2 && args[0] == "worktree" && args[1] == "prune" && is_symlink(&path.join(".git").join("worktrees")) {
         return Err(WtErr::msg("Worktree registrations point outside the base clone; left as they are"));
     }
@@ -154,6 +160,9 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
         Fault::Io(e) => WtErr::Os(format!("OSError ({e})")),
     })?;
     if check && !done.ok() {
+        if done.stderr.starts_with("repository copy needs attention:") {
+            return Err(WtErr::msg(done.stderr));
+        }
         let detail = ["push", "fetch", "ls-remote"].contains(&args[0]).then(|| if done.stderr.is_empty() { format!("exit {}", done.code) } else { done.stderr.clone() });
         return Err(WtErr::Msg(format!("Git {} failed (exit {}); check access, network, disk space and repository state", args[0], done.code), detail));
     }
@@ -161,11 +170,12 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
 }
 
 /// The task lock the hub CLI takes too: one worktree step at a time per task path on this computer.
-pub struct TaskLock(#[allow(dead_code)] std::fs::File);
+pub struct TaskLock(#[allow(dead_code)] crate::lock::FileLock);
 
 pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     let tasks = workspace.join("tasks");
     let folder = tasks.join(".locks");
+    crate::repo_safety::outside_installation(&folder)?;
     if is_symlink(&tasks) || is_symlink(&folder) {
         return Err(WtErr::msg("Worktree locks point through a symlink; left as they are"));
     }
@@ -174,13 +184,13 @@ pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     // Locks an older runner made as the supervisor (0.3.46) stay unopenable to the bot's `hub worktree` otherwise.
     adopt_task_state(workspace, ".locks");
     let name = &gitrun::sha256_hex(task.as_bytes())[..2];
-    let file = std::fs::OpenOptions::new().create(true).append(true).custom_flags(libc::O_NOFOLLOW).open(folder.join(name))?;
+    let file = regular_file::open(&folder.join(name), std::fs::OpenOptions::new().create(true).append(true), SMALL)?;
     crate::isolation::chown_file(&file)?;
     let file = tokio::task::spawn_blocking(move || {
         use std::os::fd::AsRawFd;
         // SAFETY: flock on a file this process holds open.
         let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc == 0 { Ok(file) } else { Err(std::io::Error::last_os_error()) }
+        if rc == 0 { Ok(crate::lock::FileLock::from_locked(file)) } else { Err(std::io::Error::last_os_error()) }
     })
     .await
     .map_err(|e| WtErr::Os(e.to_string()))??;
@@ -224,6 +234,7 @@ fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBu
     }
     let tasks = resolve(workspace).join("tasks");
     let folder = tasks.join(".checkout-state");
+    crate::repo_safety::outside_installation(&folder)?;
     if is_symlink(&tasks) || is_symlink(&folder) {
         return Err(WtErr::msg("Worktree initialization state points through a symlink; left as it is"));
     }
@@ -249,7 +260,7 @@ fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBu
 /// foreign hard link in it changes nothing.
 fn adopt_task_state(workspace: &Path, name: &str) {
     let folder = resolve(workspace).join("tasks").join(name);
-    if folder.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+    if crate::repo_safety::outside_installation(&folder).is_ok() && folder.symlink_metadata().is_ok_and(|m| m.is_dir()) {
         crate::isolation::adopt(&[folder]);
     }
 }
@@ -269,7 +280,7 @@ pub fn read_marker(workspace: &Path, link_id: &str) -> R<Option<Map<String, Valu
     if !marker.is_file() {
         return Err(WtErr::msg("Worktree initialization marker is not a regular file; left as it is"));
     }
-    let value: Value = std::fs::read_to_string(&marker)
+    let value: Value = regular_file::text(&marker, CONTENT)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .ok_or_else(|| WtErr::msg("Worktree initialization marker cannot be read; left as it is"))?;
@@ -287,9 +298,11 @@ pub fn write_marker(workspace: &Path, value: &Map<String, Value>) -> R<()> {
     let temp = marker.with_file_name(format!("{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
     let written = (|| -> std::io::Result<()> {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&temp)?;
+        let mut f = regular_file::open(&temp, std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600), CONTENT)?;
         crate::isolation::chown_file(&f)?;
-        f.write_all(gitrun::compact_sorted(&Value::Object(value.clone())).as_bytes())?;
+        let bytes = gitrun::compact_sorted(&Value::Object(value.clone()));
+        if bytes.len() as u64 > CONTENT { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Worktree marker exceeds size limit")); }
+        f.write_all(bytes.as_bytes())?;
         f.flush()?;
         f.sync_all()?;
         std::fs::rename(&temp, &marker)
@@ -539,6 +552,46 @@ async fn checkout_target(base: &Path, branch: &str, default: &str, env: &Env) ->
     Ok((target, head))
 }
 
+/// A retired computer's last report is history, never proof of a checkout on this computer.
+async fn recover_retired(base: &Path, default: &str, link: &mut Map<String, Value>, task: &str, env: &Env, client: &Client) -> R<()> {
+    let Some(recovery) = link.get("recovery").and_then(Value::as_object).cloned() else { return Ok(()) };
+    if own(link, "checkout_state") != "queued" {
+        return Ok(());
+    }
+    let branch = checked_branch(&own(link, "branch")).await?;
+    let fallback = own(&recovery, "fallback_branch");
+    if branch == own(&recovery, "branch") {
+        link.entry("task_id").or_insert_with(|| json!(task));
+        if let Some(start) = saved_history(base, &branch, link, env, true).await? {
+            let heads = recovery.get("published_heads").and_then(Value::as_array).map(|heads| heads.iter().map(text_of).collect::<Vec<_>>())
+                .filter(|heads| !heads.is_empty()).unwrap_or_else(|| vec![own(&recovery, "published_head")]);
+            for published in heads {
+                if !published.is_empty() && (!is_sha(&published) || !git(base, env, &["merge-base", "--is-ancestor", &published, &start], false).await?.ok()) {
+                    return Err(WtErr::msg("Origin no longer contains the last published head; kept local history unchanged"));
+                }
+            }
+            if start != format!("refs/heads/{branch}") {
+                fast_forward(base, &branch, &start, env).await?;
+            }
+            if let Some(snapshot) = link.get("snapshot_skipped") {
+                client.patch(&format!("tasks/{task}/links/{}", own(link, "link_id")), &json!({"snapshot_skipped": snapshot})).await.map_err(|e| WtErr::msg(e.detail))?;
+            }
+            return Ok(());
+        }
+        client.patch(&format!("tasks/{task}/links/{}", own(link, "link_id")), &json!({"recovery_branch_missing": true})).await.map_err(|e| WtErr::msg(e.detail))?;
+        link.insert("branch".into(), json!(checked_branch(&fallback).await?));
+    } else if branch != fallback {
+        return Err(WtErr::msg("Recovery branch does not match its task link; kept unchanged"));
+    }
+    if remote_branch(base, default, env).await?.is_none() {
+        return Err(WtErr::msg("Origin has no default branch; retry once it is available"));
+    }
+    if git(base, env, &["show-ref", "--verify", &format!("refs/heads/{fallback}")], false).await?.ok() {
+        return Err(WtErr::msg("New recovery branch already exists locally; kept unchanged"));
+    }
+    Ok(())
+}
+
 /// The link's checkout record on the server: pending with setup pending until it is present and ready.
 async fn patch_checkout(client: &Client, task: &str, link: &str, checkout_state: &str, proof: (&str, &str, &str)) -> R<()> {
     let present = checkout_state == "ready";
@@ -551,6 +604,8 @@ async fn patch_checkout(client: &Client, task: &str, link: &str, checkout_state:
 /// Create a queued checkout, or resume an interrupted one, with its local proof written before and after
 /// `git worktree add` (_create_or_resume_checkout). Returns (expected_head, checkout_target, expected_base).
 async fn create_or_resume(path: &Path, c: &Checkout<'_>, base: &Path, default: &str, link: &Map<String, Value>, task: &str, client: &Client) -> R<(String, String, String)> {
+    crate::repo_safety::outside_installation(path)?;
+    crate::repo_safety::outside_installation(base)?;
     let mut state = Some(own(link, "checkout_state")).filter(|s| !s.is_empty()).unwrap_or_else(|| "queued".into());
     let fresh_queued = state == "queued";
     let (mut expected, mut target, mut expected_base) = (own(link, "expected_head"), own(link, "checkout_target"), own(link, "expected_base"));
@@ -649,6 +704,7 @@ fn setup_environment(env: &Env) -> Env {
 /// Run the repository's setup command in a new worktree (worktrees.setup): as the bot user, its own process
 /// group, output discarded, at most ten minutes. It gets no granted credentials, so it takes no leased turn user.
 async fn setup(path: &Path, command: &str, env: &Env) -> R<()> {
+    crate::repo_safety::outside_installation(path)?;
     if command.is_empty() {
         return Ok(());
     }
@@ -744,11 +800,10 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
     let mut link = row.as_object().cloned().unwrap_or_default();
     link.extend(detail(row));
     link.insert("link_id".into(), row["id"].clone());
-    let _lock = locked(workspace, &text_of(&row["path"])).await?;
-    let branch = checked_branch(&text_of(&row["branch"])).await?;
     let path = safe_path(workspace, &text_of(&row["path"]))?;
+    let _lock = locked(workspace, &text_of(&row["path"])).await?;
+    let mut branch = checked_branch(&text_of(&row["branch"])).await?;
     let name = own(repo, "full_name");
-    let c = Checkout { workspace, repo: &name, machine_git: crate::util::truthy(repo.get("machine_git")), branch: &branch, env };
     let state = Some(own(&link, "checkout_state")).filter(|s| !s.is_empty()).unwrap_or_else(|| "queued".into());
     if state == "queued" || state == "initializing" {
         if path.exists() && state == "queued" {
@@ -757,6 +812,9 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
         disk_floor(workspace)?;
         let (base, default) = repositories::worktree_base(workspace, repo, env).await?;
         link.insert("checkout_state".into(), json!(state));
+        recover_retired(&base, &default, &mut link, &task, env, client).await?;
+        branch = checked_branch(&own(&link, "branch")).await?;
+        let c = Checkout { workspace, repo: &name, machine_git: crate::util::truthy(repo.get("machine_git")), branch: &branch, env };
         let (head, target, base_id) = create_or_resume(&path, &c, &base, &default, &link, &task, client).await?;
         for (k, v) in [("checkout_state", "checkout_ready"), ("expected_head", head.as_str()), ("checkout_target", target.as_str()), ("expected_base", base_id.as_str())] {
             link.insert(k.into(), json!(v));
@@ -764,7 +822,9 @@ pub async fn prepare(workspace: &Path, row: &Value, repo: &mut Map<String, Value
     } else if state != "checkout_ready" && state != "setup_running" {
         return Err(WtErr::msg("Worktree is not waiting to be prepared; kept unchanged"));
     }
+    let c = Checkout { workspace, repo: &name, machine_git: crate::util::truthy(repo.get("machine_git")), branch: &branch, env };
     run_registered_setup(&path, &c, &own(repo, "setup_command"), &link, &task, client).await?;
+    repo.insert("_prepared_branch".into(), json!(branch));
     Ok((own(&link, "expected_head"), own(&link, "checkout_target"), own(&link, "expected_base")))
 }
 
@@ -949,6 +1009,66 @@ pub fn wip_branch(row: &Value) -> String {
     format!("wip/{}-{}", text_of(&row["task_id"]).chars().take(8).collect::<String>(), link.chars().take(6).collect::<String>())
 }
 
+/// Restore and recovery choose the newest saved head containing local and published task history.
+async fn saved_history(base: &Path, branch: &str, row: &mut Map<String, Value>, env: &Env, remote_required: bool) -> R<Option<String>> {
+    let local_ref = format!("refs/heads/{branch}");
+    let local = git(base, env, &["show-ref", "--verify", &local_ref], false).await?.ok().then_some(local_ref);
+    let found: R<(Option<String>, Vec<String>)> = async {
+        let task_remote = remote_branch(base, branch, env).await?;
+        let mut saved = vec![];
+        for name in [wip_branch(&Value::Object(row.clone())), format!("wip/{}", own(row, "task_id").chars().take(8).collect::<String>())] {
+            if let Some(snapshot) = remote_branch(base, &name, env).await? {
+                saved.push(snapshot);
+            }
+        }
+        Ok((task_remote, saved))
+    }.await;
+    let (task_remote, saved) = match found {
+        Ok(found) => found,
+        Err(_) if !remote_required && local.is_some() => {
+            row.insert("restore_source".into(), json!("local (remote unavailable)"));
+            return Ok(local);
+        }
+        Err(e) => return Err(e),
+    };
+    // A retired checkout's local branch alone does not prove its work was published.
+    if remote_required && task_remote.is_none() && saved.is_empty() {
+        return Ok(None);
+    }
+    let required: Vec<&String> = local.iter().chain(task_remote.iter()).collect();
+    let mut start: Option<String> = None;
+    for candidate in required.iter().copied().chain(saved.iter()) {
+        let mut contains_history = true;
+        for floor in &required {
+            if !git(base, env, &["merge-base", "--is-ancestor", floor, candidate], false).await?.ok() {
+                contains_history = false;
+                break;
+            }
+        }
+        if !contains_history {
+            continue;
+        }
+        if let Some(previous) = &start {
+            if !git(base, env, &["merge-base", "--is-ancestor", previous, candidate], false).await?.ok() {
+                continue;
+            }
+        }
+        start = Some(candidate.clone());
+    }
+    if !required.is_empty() && start.is_none() {
+        return Err(WtErr::msg("Task branch has separate history; kept worktree"));
+    }
+    row.remove("snapshot_skipped");
+    if let Some(start) = &start {
+        for snapshot in saved {
+            if !git(base, env, &["merge-base", "--is-ancestor", &snapshot, start], false).await?.ok() {
+                row.insert("snapshot_skipped".into(), json!(snapshot));
+            }
+        }
+    }
+    Ok(start)
+}
+
 async fn remote_branch(base: &Path, branch: &str, env: &Env) -> R<Option<String>> {
     checked_branch(branch).await?;
     let listed = git(base, env, &["ls-remote", "--exit-code", "origin", &format!("refs/heads/{branch}")], false).await?;
@@ -993,7 +1113,7 @@ async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
 /// temp folder.
 fn rebuildable(dir: &Path) -> bool {
     let name = dir.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let tagged = std::fs::read(dir.join("CACHEDIR.TAG")).is_ok_and(|b| b.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"));
+    let tagged = regular_file::read(dir.join("CACHEDIR.TAG"), SMALL).is_ok_and(|b| b.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"));
     dir.join("pyvenv.cfg").is_file()
         || tagged
         || name == "node_modules"
@@ -1138,7 +1258,9 @@ impl Drop for Scratch {
 
 /// True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited.
 async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -> R<bool> {
-    let Ok(text) = std::fs::read_to_string(path.join(name)) else { return Ok(false) };
+    crate::repo_safety::outside_installation(path)?;
+    crate::repo_safety::outside_installation(gitdir)?;
+    let Ok(text) = regular_file::text(path.join(name), 20 * CONTENT) else { return Ok(false) };
     let mut stages: HashMap<&str, String> = HashMap::new();
     for stage in ["1", "2", "3"] {
         let shown = git(path, env, &["show", &format!(":{stage}:{name}")], false).await?;
@@ -1153,12 +1275,14 @@ async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -
         return Ok(false);
     }
     let base = stages.get("1").cloned().unwrap_or_default();
-    let scratch = Scratch(gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple())));
+    let scratch = gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple()));
+    crate::repo_safety::outside_installation(&scratch)?;
+    let scratch = Scratch(scratch);
     std::fs::create_dir_all(&scratch.0)?;
     let (o, b, t) = (scratch.0.join("ours"), scratch.0.join("base"), scratch.0.join("theirs"));
-    std::fs::write(&o, ours)?;
-    std::fs::write(&b, base)?;
-    std::fs::write(&t, theirs)?;
+    regular_file::write(&o, ours.as_bytes(), 20 * CONTENT, true)?;
+    regular_file::write(&b, base.as_bytes(), 20 * CONTENT, true)?;
+    regular_file::write(&t, theirs.as_bytes(), 20 * CONTENT, true)?;
     let (o, b, t) = (o.display().to_string(), b.display().to_string(), t.display().to_string());
     let shaped = marker_shape(&text);
     for flags in [vec![], vec!["--diff3"]] {
@@ -1254,6 +1378,7 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
+    safe_path(workspace, &own(row, "path"))?;
     let _lock = locked(workspace, &own(row, "path")).await?;
     let done = act_inner(workspace, row, action, env, vault, &still_closed).await;
     match done {
@@ -1344,7 +1469,7 @@ where
                 .filter(|n| {
                     let file = path.join(n);
                     let leaf = Path::new(n).file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
-                    secret_name(&leaf) || is_symlink(&file) || std::fs::metadata(&file).is_ok_and(|m| m.len() > 20 * 1024 * 1024)
+                    secret_name(&leaf) || std::fs::symlink_metadata(&file).is_ok_and(|m| !m.is_file() || m.len() > 20 * CONTENT)
                 })
                 .map(|n| n.to_string())
                 .collect();
@@ -1359,8 +1484,10 @@ where
             }
             let mut patch = git(&path, env, &["diff", "--no-ext-diff", "--no-textconv", "HEAD"], true).await?.stdout;
             for n in &names {
-                if path.join(n).is_file() {
-                    patch += &String::from_utf8_lossy(&std::fs::read(path.join(n)).unwrap_or_default());
+                match regular_file::read(path.join(n), 20 * CONTENT) {
+                    Ok(bytes) => patch += &String::from_utf8_lossy(&bytes),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(_) => return Err(WtErr::msg("Could not inspect changed or untracked file safely; kept worktree")),
                 }
             }
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -1438,35 +1565,10 @@ where
     git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
     crate::isolation::mkdir(path.parent().unwrap(), 0o755)?;
     let local = git(&base, env, &["show-ref", "--verify", &format!("refs/heads/{branch}")], false).await?.ok();
-    let task = own(row, "task_id");
-    let found: R<(Option<String>, Option<String>)> = async {
-        let task_remote = remote_branch(&base, &branch, env).await?;
-        let mut saved = remote_branch(&base, &wip_branch(&value), env).await?;
-        if saved.is_none() {
-            saved = remote_branch(&base, &format!("wip/{}", task.chars().take(8).collect::<String>()), env).await?;
-        }
-        Ok((task_remote, saved))
-    }
-    .await;
-    let (task_remote, saved) = match found {
-        Ok(f) => f,
-        Err(e) if !local => return Err(e),
-        Err(_) => {
-            row.insert("restore_source".into(), json!("local (remote unavailable)"));
-            (None, None)
-        }
-    };
-    let mut start = if local { branch.clone() } else { task_remote.clone().unwrap_or_else(|| format!("origin/{default}")) };
-    if let Some(saved) = saved {
-        if !(local || task_remote.is_some()) || git(&base, env, &["merge-base", "--is-ancestor", &start, &saved], false).await?.ok() {
-            start = saved;
-        } else {
-            row.insert("snapshot_skipped".into(), json!(saved));
-        }
-    }
+    let start = saved_history(&base, &branch, row, env, false).await?.unwrap_or_else(|| format!("origin/{default}"));
     let p = path.display().to_string();
     if local {
-        if start != branch {
+        if start != format!("refs/heads/{branch}") {
             fast_forward(&base, &branch, &start, env).await?;
         }
         git(&base, env, &["worktree", "add", &p, &branch], true).await?;
@@ -1614,6 +1716,9 @@ impl Worktrees {
             match outcome {
                 Ok(state) => {
                     rows[index]["state"] = json!(state.0);
+                    if let Some(branch) = action_row.get("branch") {
+                        rows[index]["branch"] = branch.clone();
+                    }
                     if let Some(d) = state.1 {
                         rows[index]["detail_json"] = json!(d);
                     }
@@ -1712,6 +1817,10 @@ impl Worktrees {
                 Err(WtErr::Msg(_, Some(detail))) if crate::util::truthy(repo.get("machine_git")) => return Err(WtErr::msg(repositories::machine_error(&name, &detail, &Env::new()))),
                 other => other?,
             };
+            // Recovery may choose a new branch when origin no longer has the old one.
+            if let Some(branch) = base_repo.get("_prepared_branch") {
+                action_row.insert("branch".into(), branch.clone());
+            }
             // The report that follows is of the prepared worktree, not of the row read before it.
             let mut d = detail(row);
             for (k, v) in [("checkout_state", json!("ready")), ("setup_pending", json!(false)), ("expected_head", json!(head)), ("checkout_target", json!(target)), ("expected_base", json!(base))] {
@@ -1784,6 +1893,31 @@ impl Worktrees {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn locks_markers_cache_tags_and_conflict_reads_refuse_special_files() {
+        if !regular_file::in_child("worktrees::tests::locks_markers_cache_tags_and_conflict_reads_refuse_special_files").await { return; }
+        let root = std::env::temp_dir().join(format!("tico-worktree-files-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let folder = Folder(root.canonicalize().unwrap());
+        let root = &folder.0;
+        let lock_dir = root.join("tasks/.locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        regular_file::fifo(&lock_dir.join(&gitrun::sha256_hex(b"task")[..2]));
+        assert!(locked(root, "task").await.is_err());
+        let marker = marker_path(root, "link", true).unwrap().unwrap();
+        regular_file::fifo(&marker);
+        assert!(read_marker(root, "link").is_err());
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::File::create(&marker).unwrap().set_len(CONTENT + 1).unwrap();
+        assert!(read_marker(root, "link").is_err());
+        let cache = root.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        regular_file::fifo(&cache.join("CACHEDIR.TAG"));
+        assert!(!rebuildable(&cache));
+        regular_file::fifo(&root.join("conflict"));
+        assert!(!untouched_conflict(root, root, "conflict", &Env::new()).await.unwrap());
+    }
 
     struct Folder(PathBuf);
     impl Drop for Folder {
@@ -1907,6 +2041,28 @@ mod tests {
         assert_eq!(host.attempts.load(Ordering::SeqCst), 2);
         assert_eq!(std::fs::read_to_string(&wanted).unwrap(), "unfinished work");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn workspace_state_and_scratch_refuse_install_links_before_writing() {
+        let root = std::env::temp_dir().join(format!("tico-state-guard-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = crate::env::root().join("templates");
+        for relative in ["tasks", "tasks/.locks", "tasks/.checkout-state", "scratch"] {
+            let workspace = root.join(uuid::Uuid::new_v4().simple().to_string());
+            let link = workspace.join(relative);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let problem = match relative {
+                "tasks" | "tasks/.locks" => locked(&workspace, "task").await.err().unwrap().text(),
+                "tasks/.checkout-state" => marker_path(&workspace, "link", true).unwrap_err().text(),
+                _ => untouched_conflict(&workspace, &link, "file", &Env::new()).await.unwrap_err().text(),
+            };
+            assert!(problem.starts_with("Repository path is inside the Tico install:"), "{problem}");
+            assert!(!target.join(".locks").exists());
+            assert!(!target.join(".checkout-state").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2040,6 +2196,159 @@ mod tests {
         let root = std::env::temp_dir().join(format!("tico-merge-{name}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).unwrap();
         Folder(root.canonicalize().unwrap())
+    }
+
+    fn retired_repository() -> (Folder, PathBuf, String) {
+        let folder = temp_folder("retired");
+        let base = folder.0.join("base");
+        let remote = folder.0.join("origin.git");
+        std::fs::create_dir_all(&base).unwrap();
+        sh(&base, &["init", "--initial-branch=main"]);
+        sh(&folder.0, &["init", "--bare", "--initial-branch=main", remote.to_str().unwrap()]);
+        std::fs::write(base.join("file"), "initial").unwrap();
+        sh(&base, &["add", "."]);
+        sh(&base, &["commit", "-m", "Initial"]);
+        sh(&base, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        sh(&base, &["push", "origin", "main"]);
+        sh(&base, &["checkout", "-b", "tico/task"]);
+        std::fs::write(base.join("file"), "published work").unwrap();
+        sh(&base, &["commit", "-am", "Task work"]);
+        let head = sh(&base, &["rev-parse", "HEAD"]);
+        sh(&base, &["push", "origin", "tico/task"]);
+        sh(&base, &["checkout", "main"]);
+        sh(&base, &["branch", "-D", "tico/task"]);
+        (folder, base, head)
+    }
+
+    fn retired_link(head: &str) -> Map<String, Value> {
+        json!({"link_id": "link", "branch": "tico/task", "checkout_state": "queued",
+               "recovery": {"branch": "tico/task", "published_head": head, "fallback_branch": "tico/recovery"}}).as_object().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_fetches_published_history_and_rejects_separate_local_work() {
+        let (_folder, base, head) = retired_repository();
+        let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
+        let mut link = retired_link(&head);
+        recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap();
+        assert_eq!(checkout_target(&base, "tico/task", "main", &test_env()).await.unwrap(), ("refs/heads/tico/task".into(), head));
+        sh(&base, &["checkout", "-B", "tico/task", "main"]);
+        std::fs::write(base.join("file"), "unpublished local work").unwrap();
+        sh(&base, &["commit", "-am", "Local work"]);
+        let local = sh(&base, &["rev-parse", "HEAD"]);
+        sh(&base, &["checkout", "main"]);
+        let err = recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap_err();
+        assert!(err.text().contains("separate history"));
+        assert_eq!(sh(&base, &["rev-parse", "tico/task"]), local);
+    }
+
+    #[tokio::test]
+    async fn restore_and_recovery_choose_the_newest_saved_history() {
+        for (case, branch_tip, snapshot_tip, local_tip, expected) in [
+            ("snapshot-newer", Some("published"), Some("snapshot"), None, "snapshot"),
+            ("branch-newer", Some("latest"), Some("snapshot"), Some("published"), "latest"),
+            ("no-snapshot", Some("latest"), None, None, "latest"),
+            ("no-branch", None, Some("snapshot"), None, "snapshot"),
+            ("local-newer", Some("published"), Some("snapshot"), Some("latest"), "latest"),
+            ("neither", None, None, None, "main"),
+        ] {
+            for recovery in [false, true] {
+                let (folder, old_base, published) = retired_repository();
+                let workspace = folder.0.join("workspace");
+                let base = workspace.join("repos/org__product");
+                std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+                std::fs::rename(old_base, &base).unwrap();
+                let remote = folder.0.join("origin.git");
+                let mut heads = HashMap::from([("published", published.clone()), ("main", sh(&base, &["rev-parse", "main"]))]);
+                sh(&base, &["checkout", "-b", "saved", &published]);
+                for tip in ["snapshot", "latest"] {
+                    std::fs::write(base.join("file"), tip).unwrap();
+                    sh(&base, &["commit", "-am", tip]);
+                    heads.insert(tip, sh(&base, &["rev-parse", "HEAD"]));
+                }
+                sh(&base, &["checkout", "main"]);
+                if let Some(tip) = branch_tip {
+                    sh(&base, &["push", "origin", &format!("{}:refs/heads/tico/task", heads[tip])]);
+                } else {
+                    sh(&base, &["push", "origin", "--delete", "tico/task"]);
+                }
+                if let Some(tip) = snapshot_tip {
+                    sh(&base, &["push", "origin", &format!("{}:refs/heads/wip/task-link", heads[tip])]);
+                }
+                if let Some(tip) = local_tip {
+                    sh(&base, &["branch", "tico/task", &heads[tip]]);
+                }
+                sh(&base, &["config", "remote.origin.url", "https://github.com/org/product.git"]);
+                sh(&base, &["config", &format!("url.{}.insteadOf", remote.display()), "https://github.com/org/product.git"]);
+                let mut row = json!({"id": "link", "task_id": "task", "path": "tasks/task/product",
+                                     "repo": "org/product", "full_name": "org/product", "branch": "tico/task",
+                                     "default_branch": "main", "state": "pending"}).as_object().unwrap().clone();
+                if recovery {
+                    row.insert("detail_json".into(), json!(json!({"checkout_state": "queued", "setup_pending": true,
+                        "recovery": {"branch": "tico/task", "published_heads": [published], "fallback_branch": "tico/recovery"}}).to_string()));
+                    let (url, server) = serve_rows(Arc::new(Mutex::new(json!({})))).await;
+                    let client = Client::new(&url, "fixture", 5, 0).unwrap();
+                    let mut repo = json!({"full_name": "org/product", "default_branch": "main", "setup_command": "touch setup-ran"}).as_object().unwrap().clone();
+                    prepare(&workspace, &Value::Object(row.clone()), &mut repo, &test_env(), &client).await
+                        .unwrap_or_else(|e| panic!("{case}, recovery: {}", e.text()));
+                    assert!(workspace.join("tasks/task/product/setup-ran").exists(), "{case}");
+                    server.abort();
+                } else {
+                    act(&workspace, &mut row, "restore", &test_env(), &[], || async { false }).await
+                        .unwrap_or_else(|e| panic!("{case}, restore: {}", e.text()));
+                }
+                let path = workspace.join("tasks/task/product");
+                assert_eq!(sh(&path, &["rev-parse", "HEAD"]), heads[expected], "{case}, recovery={recovery}");
+                let branch = if recovery && branch_tip.is_none() && snapshot_tip.is_none() { "tico/recovery" } else { "tico/task" };
+                assert_eq!(sh(&path, &["symbolic-ref", "--short", "HEAD"]), branch, "{case}");
+                if let Some(tip) = branch_tip {
+                    assert_eq!(sh(&remote, &["rev-parse", "tico/task"]), heads[tip], "{case}");
+                } else {
+                    assert!(!sh_ok(&remote, &["show-ref", "--verify", "refs/heads/tico/task"]), "{case}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_missing_origin_branch_uses_a_new_default_branch() {
+        let (_folder, base, head) = retired_repository();
+        sh(&base, &["branch", "tico/task", &head]);
+        sh(&base, &["push", "origin", "--delete", "tico/task"]);
+        let (url, server) = serve_rows(Arc::new(Mutex::new(json!({})))).await;
+        let client = Client::new(&url, "fixture", 5, 0).unwrap();
+        let mut link = retired_link(&head);
+        recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap();
+        assert_eq!(own(&link, "branch"), "tico/recovery");
+        assert_eq!(sh(&base, &["rev-parse", "tico/task"]), head);
+        assert_eq!(checkout_target(&base, "tico/recovery", "main", &test_env()).await.unwrap().1, sh(&base, &["rev-parse", "main"]));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_refuses_origin_history_without_the_published_head() {
+        let (_folder, base, head) = retired_repository();
+        sh(&base, &["push", "--force", "origin", "main:refs/heads/tico/task"]);
+        let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
+        let err = recover_retired(&base, "main", &mut retired_link(&head), "task", &test_env(), &client).await.unwrap_err();
+        assert!(err.text().contains("last published head"));
+        assert!(!sh_ok(&base, &["show-ref", "--verify", "refs/heads/tico/task"]));
+    }
+
+    #[tokio::test]
+    async fn retired_recovery_checks_the_computer_head_when_the_push_report_is_older() {
+        let (_folder, base, head) = retired_repository();
+        sh(&base, &["checkout", "-b", "later", &head]);
+        std::fs::write(base.join("file"), "later published head").unwrap();
+        sh(&base, &["commit", "-am", "Later head"]);
+        let later = sh(&base, &["rev-parse", "HEAD"]);
+        sh(&base, &["checkout", "main"]);
+        let mut link = retired_link(&head);
+        link.get_mut("recovery").unwrap()["published_heads"] = json!([head, later]);
+        let client = Client::new("http://127.0.0.1:1", "fixture", 5, 0).unwrap();
+        let err = recover_retired(&base, "main", &mut link, "task", &test_env(), &client).await.unwrap_err();
+        assert!(err.text().contains("last published head"));
+        assert!(!sh_ok(&base, &["show-ref", "--verify", "refs/heads/tico/task"]));
     }
 
     #[tokio::test]

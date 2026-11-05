@@ -360,11 +360,13 @@ def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provid
     assert field == J.MAX_OUTPUT_TOKENS == B.MAX_OUTPUT_TOKENS
     if provider == "openai":
         assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
-    # The draft writer is not a decision call and keeps its own length: only Anthropic, which requires one, is capped.
+    # The draft writer is metered too, so it carries the same cap in the same field.
     J.llm_writer(provider, "synthetic", model, opener=lambda request, timeout=None: seen.append(
         json.loads(request.data)) or WholeAllowance(provider)(request))("Draft it.", "Ana's facts")
-    assert provider == "anthropic" or not ({"max_tokens", "max_completion_tokens"} & set(seen[-1])
-                                           or "maxOutputTokens" in (seen[-1].get("generationConfig") or {}))
+    body = seen[-1]
+    assert {"anthropic": body.get("max_tokens"), "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
+            "openai": body.get("max_completion_tokens"), "xai": body.get("max_tokens"),
+            "openrouter": body.get("max_tokens")}[provider] == J.MAX_OUTPUT_TOKENS
 
 
 @pytest.mark.parametrize("provider,model", COMPANY_MODELS)

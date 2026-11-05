@@ -11,16 +11,26 @@ On macOS, open the universal `.dmg` and drag Tico to Applications. On Windows, r
 `.deb` package. A Mac build without Apple signing and notarization may need **Open Anyway**
 in System Settings > Privacy & Security on its first launch.
 
-The first launch asks for the **Server** address, for example `https://tico.example.com`. Enter
-your team's address and click **Connect**. Tico checks that the server is reachable and answers
-its `/healthz` check as Tico, saves the address in the app's config folder, then opens your Team.
-Sign in as you would in a browser. HTTPS is required; `http://localhost` and `http://127.0.0.1`
-are allowed for a server on your Computer. A failed check shows an error below the field.
+In the Mac app, the first launch shows **Sign in to Tico**. Click it, and a window opens at
+[app.tico.dev](https://app.tico.dev/), the account page. Sign in there. The list shows each Tico
+server that has your email address among its people: tick the ones you want, then click **Add**.
+Tico adds each one as an organization, opens the first of them, and closes the sign-in window.
+To use another account, click **Use another account** on that page. Closing the window without
+**Add** adds nothing. If the list is empty, or your server is not on Tico sign-in (a server behind
+Cloudflare Access, for example), click **Use a server address** under the button instead.
 
-Use **Change server…** in the generic app's menu to connect to another server.
-The app saves the address and restarts automatically to replace its native permissions.
-Only the selected server's origin can use native IPC; Access and external sign-in pages that
-remain in the window receive no native permissions.
+On Windows and Linux, and in the Mac app after **Use a server address**, the first launch asks for
+the **Server** address, for example `https://tico.example.com`. Enter your team's address and click
+**Connect**. Tico checks that the server is reachable and answers its `/healthz` check as Tico, saves
+the address in the app's config folder, then opens your Team. Sign in as you would in a browser.
+HTTPS is required; `http://localhost` and `http://127.0.0.1` are allowed for a server on your
+Computer. A failed check shows an error below the field.
+
+In the Mac app, choose **Add Organization…** from Tico's menu to add another organization. It opens
+the same sign-in screen. On Windows and Linux, use **Change server…** in the app's menu to connect
+to another server. The app saves the address and restarts automatically to replace its native
+permissions. Only the selected server's origin can use native IPC; Access and external sign-in pages
+that remain in the window receive no native permissions.
 
 The app can keep [signed visuals](visuals.md) inline when the selected server uses
 a separate HTTPS address for them. After sign-in, the server supplies that address
@@ -57,6 +67,16 @@ start, each update check and how it went, and any warning. At 1 MB it moves to `
 kept. **Show the app's log** at the foot of Help opens it in Finder; a Support request sent from the app attaches its
 last 200 lines with @diagnostics, redacted like the rest of the bundle.
 Your team may also offer its own app.
+
+## Switch between organizations
+
+The generic Mac app can hold several organizations, each with its own sign-in. Once you have added more than one (see the first launch above), **Switch organization** appears in the account menu. It lists your organizations with a check mark on the open one; choose one to show its page. Switching needs no restart and no new sign-in.
+
+When you leave an organization, its page is hidden and stays open for 30 seconds, so switching back shows it as it was, with no reload. Up to two hidden pages are kept this way. A page past that limit closes at once and opens again where you were when you return to it. A call in the page you leave ends as you switch. A page that may be capturing the screen closes as you leave it.
+
+Choose **Remove *name*…** from the **Tico** menu to remove an organization. Tico asks first, then deletes its sign-in and its data on this Mac. The other organizations are not affected.
+
+Only the generic Mac app can hold several organizations. Company builds, environment builds with a server address, and the Windows and Linux apps connect to one server at a time.
 
 ## Optional per-environment builds
 

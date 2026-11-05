@@ -1,6 +1,7 @@
 """The Tico AI Gateway's picks (backend/gateway_tiers.py): ids, the catalog refresh, a bot's department, the Decisions level
 and the lineup an agent reads. Fakes only: no call leaves the test."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -252,7 +253,6 @@ def test_the_fetch_tool_asks_the_route_with_the_url_and_a_default_size(api, monk
 
 def test_a_templates_gateway_block_holds_only_a_level_and_fast():
     import yaml
-    from pathlib import Path
     seen = 0
     for path in sorted(Path("templates/catalog").glob("*/bot.yaml")):
         block = (yaml.safe_load(path.read_text()) or {}).get("gateway")
@@ -266,7 +266,6 @@ def test_a_templates_gateway_block_holds_only_a_level_and_fast():
 
 def test_the_shipped_snapshot_matches_a_copy_of_the_gateways_own_catalog():
     """Prices and models cannot drift from what Tico HQ publishes: tiers (with long-prompt rates) and decision levels."""
-    from pathlib import Path
     hq = json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())
     ours = T.SNAPSHOT
 
@@ -441,3 +440,54 @@ def test_every_held_catalog_model_is_held_by_the_gateway_too():
     """The Gateway's held list names each held catalog row's model, so a live tier cannot reopen one of them."""
     held = [row["id"] for row in providers.MODEL_CATALOG if row.get("held")]
     assert held and all(T._model_key(model) in T.HELD_MODELS for model in held)
+
+
+def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
+    """Settings > Gateway shows each service's details (label and value pairs); a row from an older HQ has none."""
+    hq = {**T.SNAPSHOT, "services": json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())["services"]}
+    rows = {row["id"]: row for row in T.validate(hq)["services"]}
+    assert rows["search"]["details"][-1] == {"label": "Engines", "value": "Exa, then Parallel"}
+    assert rows["email.send"]["details"] == []
+    old = [{k: v for k, v in row.items() if k != "details"} for row in hq["services"]]
+    old[0]["details"] = [{"label": "Low", "value": "Jev"}, {"label": 3, "value": "x"}, "odd", {"label": "No value"}]
+    cleaned = T.validate({**hq, "services": old})["services"]
+    assert cleaned[0]["details"] == [{"label": "Low", "value": "Jev"}] and all(row["details"] == [] for row in cleaned[1:])
+    # The release's copy has the same shape, with this app's own tool names.
+    assert all(isinstance(row["details"], list) and row["for"] for row in T.SNAPSHOT["services"])
+    assert next(row for row in T.SNAPSHOT["services"] if row["id"] == "mail.physical")["tools"] == ["hub_mail_list", "hub_mail_read"]
+
+
+def test_the_gateway_page_lists_one_model_row_per_level_with_its_fast_model(api):
+    from backend import gateway_page
+    body = get(api, "gateway")
+    models = body["models"]
+    assert models == gateway_page.models(T.SNAPSHOT)
+    assert models["same"] is True and models["departments"][:2] == ["General", "Product"] and len(models["departments"]) == 10
+    low, medium, high = models["levels"]
+    assert [low["name"], medium["name"], high["name"]] == ["Low", "Medium", "High"]
+    assert low["model"] == {"model": "Claude Haiku 5.5", "price": "$0.15 / $0.75 per 1M", "long": "$0.75 / $3.75 per 1M past 100K",
+                            "context": 1_000_000, "inputs": ["text", "image", "pdf"]}
+    assert low["fast"]["model"] == "DeepSeek V4.1 Flash" and low["fast"]["inputs"] == ["text"]
+    assert high["fast"]["price"] == "$10.00 / $50.00 per 1M"
+    assert models["meeting"]["model"] == "Inception Mercury 3" and models["meeting"]["price"] == "$0.30 / $1.05 per 1M"
+    assert [(row["name"], row["model"], row["price"]) for row in models["decisions"]] == [
+        ("Decide · Low", "Jev 1.13", "$0.06 per 1M input"), ("Decide · Medium", "Claude Sonnet 5.5", "$2.50 / $12.50 per 1M"),
+        ("Decide · High", "Claude Opus 5.5", "$5.00 / $25.00 per 1M"), ("Classify · Low", "Jev 1.13", "$0.06 per 1M input")]
+    search = next(row for row in body["services"] if row["id"] == "search")
+    assert search["for"] == "Search the web and read what it finds" and search["details"][0] == {"label": "Search", "value": "$0.00875 each"}
+
+
+def test_the_gateway_page_lists_departments_when_one_runs_a_level_on_another_model():
+    from backend import gateway_page
+    cat = json.loads(json.dumps(T.SNAPSHOT))
+    next(row for row in cat["models"] if row["id"] == "tico-legal-high")["versions"][0]["model"] = "Another Model"
+    models = gateway_page.models(cat)
+    assert models["same"] is False and len(models["levels"]) == 30
+    assert models["levels"][0]["name"] == "General · Low"
+    assert next(row for row in models["levels"] if row["name"] == "Legal · High")["model"]["model"] == "Another Model"
+
+
+def test_settings_gateway_models_leave_out_a_tier_that_runs_the_held_model():
+    from backend import gateway_page
+    cat, _ = _tier_running_a_held_model(current_held=True)
+    assert "GPT-6.1 Terra" not in json.dumps(gateway_page.models(cat))

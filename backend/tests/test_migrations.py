@@ -68,6 +68,43 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
+def test_native_hub_participant_access_observes_meeting_deletion_without_cloud_boot(tmp_path):
+    from backend import meeting_audience
+    c = H.connect(tmp_path / 'native.sqlite')
+    try:
+        H.sync_registry(c, {}, {'people': [{'id': 'ana', 'email': 'ana@acme.example'},
+                                         {'id': 'ben', 'email': 'ben@acme.example'}]})
+        task = H.task_create(c, 'human:ana', 'Prepare the plan', '', 'human:ana', private=True, lint=False)
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) "
+                  "VALUES('source','Planning','ana@acme.example',?, 'now','now')",
+                  (json.dumps({'kind': 'meeting', 'private': True,
+                               'participants': [{'email': 'ben@acme.example'}]}),))
+        c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,status,created_by,result_ref,created_at,updated_at) "
+                  "VALUES('sent','source','task','Prepare the plan','pushed','human:ana',?,'now','now')", (task['id'],))
+        meeting_audience.grant(c, task['id'], ['human:ben'], 'human:ana')
+        assert H.task_private_readable(c, 'human:ben', task)
+        c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('source','now')")
+        assert not H.task_private_readable(c, 'human:ben', task)
+        assert H.task_private_readable(c, 'human:ana', task)
+    finally:
+        c.close()
+
+
+def test_an_existing_cloud_machine_gains_the_pending_start_marker_without_losing_its_wake(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE cloud_machines DROP COLUMN start_asked_at")
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105004523_cloud_machine_start_asked'")
+        c.execute("INSERT INTO cloud_machines(bot,state,wake_key,woke_at) VALUES('ops','stopped','job:a',1000)")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT state,wake_key,woke_at,start_asked_at FROM cloud_machines WHERE bot='ops'").fetchone() == (
+            "stopped", "job:a", 1000, None)
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 def test_meeting_links_upgrade_a_database_at_main_newest(tmp_path, monkeypatch):
     known = migrations.files()
     # Freeze the upgrade's starting point so later migrations do not move this regression's baseline.
@@ -104,6 +141,23 @@ def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path)
         assert c.execute("SELECT id FROM audit_log").fetchall() == [("a1",)]
         versions = _versions(c)
         assert all(versions.count(m.version) == 1 for m in migrations.files())
+
+
+def test_personal_alert_migration_preserves_consent_caps_and_dispatches_when_adopted(tmp_path):
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('alert-person','Alert recipient','alerts@acme.example')")
+        c.execute("INSERT INTO alert_preferences(person_id,phone,phone_version,verified_at,call_consent,monthly_cap,updated_at) "
+                  "VALUES('alert-person','+14155550123','consent-1','now',1,3,'now')")
+        c.execute("UPDATE alert_company_settings SET monthly_cap=7 WHERE id=1")
+        c.execute("INSERT INTO personal_alerts(id,person_id,incident_key,kind,subject_id,phone_version,state,reserved,created_at) "
+                  "VALUES('paid','alert-person','incident-1','test','','consent-1','accepted',1,'now')")
+        before = {table: c.execute('SELECT * FROM ' + table).fetchall()
+                  for table in ('alert_preferences', 'alert_company_settings', 'personal_alerts')}
+        c.execute("DELETE FROM schema_migrations WHERE version='20261105040931_personal_alerts'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert {table: c.execute('SELECT * FROM ' + table).fetchall() for table in before} == before
 
 
 def test_the_migrations_run_before_the_module_schema_code(tmp_path, monkeypatch):

@@ -450,6 +450,31 @@ def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(
     assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == ""
 
 
+@pytest.mark.parametrize("stop_state", ["stopping", "stopped"])
+def test_a_stop_still_listed_as_running_keeps_its_idle_clock_and_wake_guard(cloud, monkeypatch, stop_state):
+    enrolled(cloud)
+    before = cloud.row()
+    cloud.hq.machines["m1"]["state"] = "running"
+    stop = cloud.hq.stop
+
+    def delayed(machine_id):
+        cloud.hq.calls.append(("stop", machine_id))
+        return {**cloud.hq.machines[machine_id], "state": stop_state}
+
+    monkeypatch.setattr(cloud.hq, "stop", delayed)
+    cloud.hq.calls.clear()
+    cloud.at[0] = before["active_at"] + 400                # past both the start and the queued job's idle window
+    assert cloud.tick() == ["stop"] and cloud.row()["state"] == stop_state
+    monkeypatch.setattr(cloud.hq, "stop", stop)
+    cloud.manager.synced = None                          # HQ's next list still says running while the stop lands
+    assert cloud.tick(10) == ["stop", "stop"] and cloud.row()["state"] == "stopped"
+    after = cloud.row()
+    assert (after["active_at"], after["wake_key"], after["woke_at"]) == (
+        before["active_at"], before["wake_key"], before["woke_at"])
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == []   # its old work has already spent its wake
+
+
 def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
@@ -811,6 +836,20 @@ def test_hq_errors_back_off_with_one_event_and_a_wait_note(cloud):
     assert len(events(cloud, "cloud_machine.refused")) == 1     # one per streak, not per retry
     assert cloud.tick(60) == ["start"] * 4
     assert cloud.row()["failures"] == 0 and cloud.row()["problem"] == ""
+
+
+def test_a_refused_stop_backs_off_after_the_last_bot_is_drained(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    draining(cloud, "ops", 1)
+    cloud.hq.fail["stop"] = [CM.Refused("unreachable"), CM.Refused("unreachable")]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["stop"]
+    assert cloud.tick(10) == ["stop"]                     # inside the first 15-second backoff
+    assert cloud.tick(5) == ["stop", "stop"]
+    assert cloud.tick(29) == ["stop", "stop"]             # the second refusal waits 30 seconds
+    assert cloud.tick(1) == ["stop", "stop", "stop"]
+    assert cloud.row()["state"] == "stopped" and cloud.row()["failures"] == 0
 
 
 def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(cloud):
@@ -1844,6 +1883,68 @@ def test_a_stopped_machine_behind_its_server_starts_once_to_update_then_idles(cl
     assert cloud.tick(10) == ["start"]
 
 
+@pytest.mark.parametrize("wake", ["work", "update"])
+def test_a_resume_whose_answer_was_lost_gets_its_idle_window_and_spends_its_wake(cloud, monkeypatch, wake):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20" if wake == "update" else "0.5.21")
+    stopped_when_idle(cloud)
+    if wake == "work":
+        work(cloud, text="More work after the idle stop")
+    start = cloud.hq.start
+
+    def lost(*args):
+        assert cloud.row()["start_asked_at"] == cloud.at[0]  # durable before the call, including a hub restart
+        start(*args)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "start", lost)
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:unreachable"
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["start"]                     # HQ sees the resume: no immediate idle stop
+    current = cloud.row()
+    assert current["active_at"] == cloud.at[0] == current["woke_at"]
+    assert current["wake_key"].startswith("job:" if wake == "work" else "update:")
+    assert current["start_asked_at"] is None
+    assert current["problem"] == "" and current["failures"] == 0 and current["next_try_at"] is None
+    cloud.tick(299)
+    assert "stop" not in cloud.hq.actions()                # later lists do not move the idle clock again
+    assert cloud.tick(1)[-1] == "stop"
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == []   # no start/stop billing loop for the same wake
+
+
+def test_a_lost_update_start_that_finishes_before_the_list_keeps_a_spent_job_wake(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.21")
+    assert cloud.tick(400)[-1] == "stop"                   # the job was never taken: its wake is spent
+    spent = cloud.row()
+    assert spent["wake_key"].startswith("job:")
+    monkeypatch.setenv("TICO_VERSION", "0.5.22")
+    start = cloud.hq.start
+
+    def lost(*args):
+        start(*args)
+        raise CM.Refused("unreachable")
+
+    monkeypatch.setattr(cloud.hq, "start", lost)
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:unreachable"
+    reported(cloud, computer, "0.5.22")                   # the update finished before HQ's next list
+    with cloud.store.read() as c:
+        current = CM.row(c, "ops")
+        assert CM.wake_for(current, CM.facts(c, cloud.store.settings, current, cloud.at[0])) == (None, True)
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["start"]
+    current = cloud.row()
+    assert (current["wake_key"], current["woke_at"]) == (spent["wake_key"], spent["woke_at"])
+    assert current["active_at"] == cloud.at[0] and current["problem"] == ""
+    assert cloud.tick(300)[-1] == "stop"
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
+
+
 @pytest.mark.parametrize("server, release", [("0.5.21", "0.5.21"), ("0.5.21", "0.5.22"), ("0.5.21", "dev"),
                                              ("0.5.21", ""), ("", "0.5.20")])
 def test_a_stopped_machine_is_not_woken_for_a_release_its_computer_is_not_behind(cloud, monkeypatch, server, release):
@@ -2114,6 +2215,57 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
         CM.save(c, CM.SHARED, problem="out_of_credit")
     assert health_of(cloud)["computers"]["summary"] == "Every computer is offline."
     assert "computer_offline" in issue_kinds(cloud)
+
+
+def test_a_cloud_machine_left_empty_is_resting_after_its_bot_moves_to_a_computer(cloud):
+    computer = enrolled(cloud)
+    other = runner(cloud.api, label="Office computer")
+    reported(cloud, other)                                # enrollment alone does not make a computer online
+    idle(cloud)
+    assign(cloud.api, other, "ops", 1)
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["stop"] and cloud.row()["mode"] == "computer"
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                  (H.shift(H.now(), hours=-1), computer["runner_id"]))
+    data = get(cloud.api, "health")
+    old = next(r for r in data["computers"] if r["id"] == computer["runner_id"])
+    assert old["resting"] and not old["online"]
+    assert next(r for r in data["checks"] if r["id"] == "computers")["status"] == "ok"
+    assert "computer_offline" not in issue_kinds(cloud)
+
+
+def test_a_failed_cloud_update_wake_is_on_health_even_without_queued_work(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20")
+    stopped_when_idle(cloud)
+    cloud.hq.fail["start"] = [CM.Refused("http_502", 502)]
+    assert cloud.tick(10) == ["start"]
+    waiting = health_of(cloud)["waiting"]
+    assert waiting["status"] == "warn" and "http_502" in waiting["summary"] and "ops" in waiting["summary"]
+    draining(cloud, "ops", 1)                             # a paused bot no longer wants the failed machine
+    assert health_of(cloud)["waiting"]["status"] == "ok"
+    draining(cloud, "ops", 0)
+    assert cloud.tick(CM.BACKOFF)[-1] == "start"
+    assert health_of(cloud)["waiting"]["status"] == "ok"  # the successful retry clears the warning
+
+
+def test_an_offline_laptop_and_a_failed_cloud_create_are_both_on_health(cloud):
+    laptop = runner(cloud.api, label="Office laptop")
+    ready(cloud.api, laptop, ["cpo"])
+    assign(cloud.api, laptop, "cpo")
+    work(cloud, "cpo")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                  (H.shift(H.now(), hours=-1), laptop["runner_id"]))
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("http_502", 502)]
+    assert cloud.tick(10) == ["create"]
+    check = health_of(cloud)["waiting"]
+    assert check["status"] == "bad"                        # the cloud warning cannot lower the offline outage
+    assert "cpo" in check["summary"] and "ops" in check["summary"] and "http_502" in check["summary"]
 
 
 def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(cloud):

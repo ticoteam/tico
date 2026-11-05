@@ -79,6 +79,7 @@ struct Inner {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     home: PathBuf,
     cmd: Vec<String>,
     inner: Mutex<Inner>,
@@ -90,6 +91,7 @@ pub struct AntigravityHost(Arc<Shared>);
 impl AntigravityHost {
     pub fn new(home: &Path, cmd: Vec<String>, tx: Events) -> AntigravityHost {
         AntigravityHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             home: home.to_path_buf(),
             cmd,
             inner: Mutex::new(Inner {
@@ -133,6 +135,10 @@ impl AntigravityHost {
         std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(mode)).map_err(|e| failed(e.to_string()))?;
         self.inner().up = true;
         Ok(())
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -208,6 +214,7 @@ impl AntigravityHost {
     fn spawn(&self, settings: &Settings, effort: Option<&str>, provider: Option<&str>) -> Result<(Proc, tokio::process::ChildStdout), HostError> {
         let mut command = self.command(settings, effort, provider)?;
         let mut child = command.spawn().map_err(|e| failed(format!("could not start agy: {e}")))?;
+        self.0.allocation.mark();
         let host = self.clone();
         let _stderr = crate::run_diagnostics::Stderr::capture_with(&mut child, move |value| {
             let inner = host.inner();

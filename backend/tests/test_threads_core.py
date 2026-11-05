@@ -7,23 +7,37 @@ The migration's reader sets are pinned by test_threads_migration_e2e.py (goldens
 """
 
 import pytest
+import time_machine
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import org_rule_check, threads
 from backend.store import H, Problem
-from backend.tests.test_threads_migration_e2e import build, close, identities, open_store
+from backend.tests.demo_template import copy_demo
+from backend.tests.test_threads_migration_e2e import NOW, build, close, identities, open_store
 from clients import sessions
 
 
+@pytest.fixture(scope="module")
+def demo_template(tmp_path_factory):
+    """Each worker seeds once; tests only open private copies of this directory. A module that imports `world` imports
+    this too."""
+    # The function-scoped bot_ids_are_their_slugs fixture has not run during module setup.
+    with pytest.MonkeyPatch.context() as monkeypatch, time_machine.travel(NOW, tick=False):
+        monkeypatch.setattr(H, "new_bot_id", lambda slug: slug)
+        return build("demo", tmp_path_factory.mktemp("threads-demo-template"))
+
+
 @pytest.fixture
-def world(tmp_path):
-    settings = build("demo", tmp_path)
-    store, auth = open_store(settings)
-    with store.transaction() as c:
-        auth.sync_access(c)
-        who = identities(c, auth)
-    yield store, auth, who
-    close(store)
+def world(tmp_path, demo_template):
+    """A private copy of the template, read on the day it was built (including clocks outside hubdb.now)."""
+    with time_machine.travel(NOW, tick=False):
+        settings = copy_demo(demo_template, tmp_path / "demo")
+        store, auth = open_store(settings)
+        with store.transaction() as c:
+            auth.sync_access(c)
+            who = identities(c, auth)
+        yield store, auth, who
+        close(store)
 
 
 def owner_of(c, auth):

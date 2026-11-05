@@ -329,6 +329,9 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
+    ("PUT", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("PUT", r"postal/settings"),
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
     ("DELETE", rf"automations/{_S}"), ("POST", rf"automations/{_S}/delete"),
@@ -416,6 +419,9 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return None
     if method == "GET":
         return None if NO_READ.fullmatch(path) else "do"
+    if method == "PUT" and path == API + "system/suggestions":
+        # Outcome reporting follows the owner's words; sharing counts needs the owner's own consent in Settings.
+        return "do" if isinstance(body, dict) and set(body) == {"report_suggestion_outcomes"} else None
     if any(m == method and p.fullmatch(path) for m, p in CONFIRM) or enables_audience(method, path, body):
         return "confirm"
     if method == "POST" and MESSAGES.fullmatch(path):

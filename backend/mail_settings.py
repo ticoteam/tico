@@ -92,6 +92,18 @@ def require_person(who, bot=""):
                                    "with their own token" + (". " + mail_settings_hint(bot) if bot else ""), 403)
 
 
+def message_sender_can_approve_send(c, auth, row):
+    """A message's human sender may approve mail for its bot addressee when they may manage its sending."""
+    sender, recipient = str(row.get("sender_id") or ""), str(row.get("recipient_id") or "")
+    if not sender.startswith("human:") or not recipient.startswith("bot:"):
+        return False
+    try:
+        who = auth.identity_for_actor(c, sender)
+    except Problem:
+        return False
+    return auth.bot_manager(c, who, H.actor_id(recipient))
+
+
 def update(c, auth, who, bot, body):
     require_person(who, bot)
     if not H.bot(c, bot):
@@ -164,7 +176,7 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
-            # What Tico may do in Settings > Google is the company's own switch over every bot's: with Send mail off
+            # What Tico may do in Settings > Inboxes is the company's own switch over every bot's: with Send mail off
             # the bot's connector refuses each send before any approval (connectors/mail/policy.py), and the bot reads
             # sending as off. Organize mail and Change calendar gate the connector's other writes the same way,
             # whichever credential it holds (connectors/mail/oauth.py company_allows).

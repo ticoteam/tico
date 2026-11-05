@@ -4,9 +4,8 @@ release checks), a week of Learnings nights, and Tico release updates delivered 
 Everything goes through the code a real install runs: automations are saved through the API, events and mail reach the
 automation engine through its own entry points (`hubdb.hook`, `automations.on_mail`), the engine drains the runs, and
 the Learnings and update-feed modules write their own rows. Bots work their queue through the runner's own endpoints
-(claim, started, memory report, complete), and a person reads a thread through the thread API. The only direct SQL is
-the scheduler's own bookkeeping (the next due time of a schedule), and reads of the packet tasks a night made and of a
-task thread's last message.
+(claim, started, memory report, complete), and a person reads a thread through the thread API. Direct SQL keeps the
+scheduler's bookkeeping, holds unrelated jobs during the replay, and reads Update delivery receipts and task threads.
 """
 
 import hashlib
@@ -14,15 +13,15 @@ from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from .. import automations, learnings, update_feeds
+from .. import automations, learnings, update_feeds, updates
 from ..scheduler import next_due
 from ..store import H
 
 FINISH_AFTER = timedelta(minutes=12)    # how long a night's run takes after it starts
-MAX_AHEAD_JOBS = 40                     # the most queued jobs a packet's run works through before its own
+MAX_AHEAD_JOBS = 40                     # queued jobs a delivery turn works through before its own
 CLAIM_TRIES = 30                        # polls a computer makes for a bot's job before it gives up
 CLAIM_POLL = timedelta(seconds=5)       # the gap between two polls on the demo clock (a computer takes work after 120 s)
-WORK_WINDOW = timedelta(minutes=5)      # room a packet's run needs after its bot starts, before the build's now
+WORK_WINDOW = timedelta(minutes=5)      # room a delivery turn needs before the build's now
 CLOSE_MARGIN = timedelta(minutes=1)     # a task closed "now" is closed this long before the build's now
 
 CONTENT = {
@@ -173,7 +172,8 @@ CONTENT = {
         {"at": [2, 10.0], "name": "custom.review.posted", "subject": "review/R-2230", "actor": "bot:marketplace",
          "data": {"stars": 5, "product": "Home Pro", "text": "Easy to calibrate."}},
         {"at": [2, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
-         "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."}},
+         "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."},
+         "close": "reviews"},
         {"at": [0, 0.9], "name": "custom.review.posted", "subject": "review/R-2240", "actor": "bot:marketplace",
          "data": {"stars": 3, "product": "Home Pro", "text": "Fine for the price."}},
         {"at": [4, 11.0], "name": "finance.card.declined", "subject": "charge/C-7781", "actor": "bot:bookkeeper",
@@ -188,7 +188,7 @@ CONTENT = {
          "data": {"version": "cloud 1.8.1"}, "close": "deploys"},
         {"at": [6, 15.0], "name": "custom.deploy.finished", "subject": "deploy/app-3.1.0", "actor": "bot:devops",
          "data": {"version": "app 3.1.0"}, "close": "deploys"},
-        {"at": [1, 15.0], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
+        {"at": [0, 1.5], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
          "data": {"version": "cloud 1.8.2"}},
     ],
     # Mail to Ben's inbox. Orders come from the marketplace; the rest are questions the filter drops.
@@ -207,7 +207,7 @@ CONTENT = {
          "subject": "Can I move the unit to the garage?"},
         {"at": [2, 12.0], "id": "order-4455", "from": "orders@bigmarket.example",
          "subject": "Order 4455: Home Pro x1", "close": "orders"},
-        {"at": [1, 9.0], "id": "order-4470", "from": "orders@bigmarket.example",
+        {"at": [0, 9.0], "id": "order-4470", "from": "orders@bigmarket.example",
          "subject": "Order 4470: Storefront x1"},
         {"at": [0, 0.4], "id": "order-4478", "from": "orders@bigmarket.example",
          "subject": "Order 4478: Home Pro x1"},
@@ -223,8 +223,7 @@ CONTENT = {
     # from a task. `hours` is how long before the run it was said. Scores are per bot: relevance, 0 to 1.
     "learnings": {
         "read": "Read. Kept the rule for the next task.",
-        # A bot works its packet this long after the night's run starts: a message wakes it in the task, and its run
-        # claims, saves what it learned, and completes.
+        # Update delivers the items after Learn finishes; the bot saves what it learned in that turn.
         "work_after_minutes": 25,
         "nights": [
             {"days": 6, "items": []},
@@ -470,24 +469,40 @@ def _nightly(b, aid):
 
 
 def _learn(b):
-    """One night per local day, each claimed and dispatched as the nightly run does. The packets a night's bots got
-    are finished by those bots before the next night, so none is left unread behind a newer one."""
+    """One Learn run per day, carried by Update turns before the next day."""
     today = learnings.local(b.now).date()
     previous = None
     work_after = timedelta(minutes=CONTENT["learnings"]["work_after_minutes"])
-    for spec in CONTENT["learnings"]["nights"]:
-        day = today - timedelta(days=spec["days"])
-        run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
-        if run_at + work_after + WORK_WINDOW > b.now:
-            break   # this night, and any after it, has not finished (and its bots worked their packets) yet
-        if previous:
-            b.clock.at = run_at - timedelta(hours=2)
-            _finish_packets(b, previous)
-        b.clock.at = run_at
-        previous = _night(b, spec, day.isoformat(), run_at)
-        for learned in spec.get("learned", []):
-            b.clock.at = run_at + work_after
-            _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
+    # The story already contains assignments from later in the week. Claiming them during an earlier delivery
+    # starts their tasks days too soon; an empty completion then leaves that work stuck in Doing.
+    queued = b.write(_hold_queued)
+    try:
+        for spec in CONTENT["learnings"]["nights"]:
+            day = today - timedelta(days=spec["days"])
+            run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
+            if run_at + work_after + WORK_WINDOW > b.now:
+                break   # this run and its delivery turns have not finished yet
+            if previous:
+                b.clock.at = run_at - timedelta(hours=2)
+                _finish_deliveries(b, previous)
+            b.clock.at = run_at
+            previous = _night(b, spec, day.isoformat(), run_at)
+            for learned in spec.get("learned", []):
+                b.clock.at = run_at + work_after
+                _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
+    finally:
+        b.write(lambda c: _release_held(c, queued))
+
+
+def _hold_queued(c):
+    """Hold existing jobs while a section replays its own turns; held jobs are skipped by the runner's claim."""
+    ids = [row[0] for row in c.execute("SELECT id FROM jobs WHERE state='queued' AND held=0").fetchall()]
+    c.executemany("UPDATE jobs SET held=1 WHERE id=?", [(job,) for job in ids])
+    return ids
+
+
+def _release_held(c, ids):
+    c.executemany("UPDATE jobs SET held=0 WHERE id=?", [(job,) for job in ids])
 
 
 def _night(b, spec, night, run_at):
@@ -504,42 +519,55 @@ def _night(b, spec, night, run_at):
                           "learnable": row["learnable"],
                           "scores": {_bot(c, slug): score for slug, score in row["scores"].items()}})
         qset = {"thresholds": {"relevant": 0.6, "noise": 0.2, "per_recipient": learnings.PER_RECIPIENT}}
-        chosen = learnings.packets(items, qset)
+        chosen = learnings.packets(items, qset, limit=15)
         team = {slug: {"name": (H.bot(c, slug) or {}).get("display_name") or slug} for slug in chosen}
         detail = {}
         _, routed = learnings.dispatch(c, run_id, night, items, chosen, team, detail)
         learnings.advance(c, items, learnings.utc(run_at))
-        box.update(run=run_id, read=len(items), routed=routed, detail=detail,
-                   deliveries=[(r[0], r[1]) for r in c.execute(
-                       "SELECT recipient, task_id FROM learning_deliveries WHERE run_id=?", (run_id,))])
+        deliveries = []
+        if chosen:
+            updates.build_queue(c, night, updates.kind_for(night))
+            for recipient in chosen:
+                row = c.execute("SELECT * FROM update_queue WHERE bot=? AND day=?", (recipient, night)).fetchone()
+                updates.send_request(c, row, delivery=True)
+                deliveries.append((recipient, row["id"]))
+        box.update(run=run_id, read=len(items), routed=routed, detail=detail, deliveries=deliveries)
     b.write(work)
     b.clock.at = run_at + FINISH_AFTER
     learnings.finish(b.store, box["run"], "done" if box["routed"] else "quiet", box["detail"],
                      read=box["read"], routed=box["routed"])
+    b.write(lambda c: learnings.refresh_details(c, box["run"]))
     box["run_at"] = run_at
     return box
 
 
-def _run(b, slug, task, summary, learned):
-    """A bot's run on its packet, as its computer does it: the computer claims the bot's next job, the run starts,
-    reports the memory commit it made, and completes with its answer in the packet's thread. The bot's queue is worked
-    in order, so jobs queued ahead of the packet's are run first, with nothing to report and no reply posted."""
+def _run(b, slug, batch_id, summary, learned):
+    """A bot takes its Update delivery, reports a memory commit and completes its turn."""
+    box = {}
+    def request(c):
+        box["message"] = c.execute("SELECT message_id FROM update_queue WHERE id=?", (batch_id,)).fetchone()[0]
+    b.write(request)
     for _ in range(MAX_AHEAD_JOBS):
         claim = _claim(b, slug)
         if claim is None:
-            raise RuntimeError(f"{slug} was handed no job for packet task {task}")
+            raise RuntimeError(f"{slug} was handed no job for Update {batch_id}")
         aid = claim["id"]
-        mine = (claim.get("task") or {}).get("id") == task
+        mine = (claim.get("message") or {}).get("id") == box["message"]
         b.call("POST", f"attempts/{aid}/started", {"thread_id": claim["conversation"]["id"]}, token=b.mac["token"])
-        if mine:
+        if mine and learned:
             b.call("POST", f"bots/{slug}/memory/report", {"commits": [_commit(slug, learned, aid, b.clock.at)]},
                    token=b.mac["token"])
-        b.call("POST", f"attempts/{aid}/complete",
-               {"outcome": "completed", "text": summary if mine else "", "last_seq": 0}, token=b.mac["token"])
+        text = summary + f"\nlearnings_saved: {int(bool(learned))}" if mine else ""
+        b.call("POST", f"attempts/{aid}/complete", {"outcome": "completed", "text": text, "last_seq": 0},
+               token=b.mac["token"])
         if mine:
+            def settle(c):
+                row = c.execute("SELECT * FROM update_queue WHERE id=?", (batch_id,)).fetchone()
+                updates.settle_sent(c, row)
+            b.write(settle)
             _keep_focus(b, slug)
             return
-    raise RuntimeError(f"{slug} has more than {MAX_AHEAD_JOBS} jobs queued ahead of packet task {task}")
+    raise RuntimeError(f"{slug} has more than {MAX_AHEAD_JOBS} jobs queued ahead of Update {batch_id}")
 
 
 def _keep_focus(b, slug):
@@ -571,13 +599,14 @@ def _commit(slug, learned, aid, at):
             "files": ["memory/learnings.md"], "diff": diff, "attempt": aid}
 
 
-def _finish_packets(b, night):
-    note = CONTENT["learnings"]["read"]
-
-    def work(c):
-        for recipient, task in night["deliveries"]:
-            H.task_update(c, H.bot_actor(recipient), task, status="done", note=note)
-    b.write(work)
+def _finish_deliveries(b, night):
+    for recipient, batch_id in night["deliveries"]:
+        box = {}
+        def state(c, box=box, batch_id=batch_id):
+            box["state"] = c.execute("SELECT state FROM update_queue WHERE id=?", (batch_id,)).fetchone()[0]
+        b.write(state)
+        if box["state"] == "sent":
+            _run(b, recipient, batch_id, CONTENT["learnings"]["read"], None)
 
 
 def _release(b, release):
