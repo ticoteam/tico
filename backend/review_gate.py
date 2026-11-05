@@ -216,8 +216,8 @@ def snapshot(service, prs):
                     limited = " rate limited" if response.status_code == 403 and rate_limited(response) else ""
                     raise ValueError(f"GitHub answered {response.status_code}{limited}")
                 return response.json()
-            data = read(f"/pulls/{pr['number']}")
-            head = data["head"]["sha"]
+            pr_data = read(f"/pulls/{pr['number']}")
+            head = pr_data["head"]["sha"]
             checks = {}
             for endpoint, field in (("check-runs", "check_runs"), ("statuses", None)):
                 for page in range(1, 11):
@@ -247,8 +247,8 @@ def snapshot(service, prs):
             if read(f"/pulls/{pr['number']}")["head"]["sha"] != head:
                 raise ValueError("head changed during collection")
             out[pr["id"]] = {"head_sha": head, "checks": checks, "at": H.now(),
-                             "state": data.get("state"), "draft": data.get("draft"),
-                             "mergeable": data.get("mergeable"), "mergeable_state": data.get("mergeable_state")}
+                             "state": pr_data.get("state"), "draft": pr_data.get("draft"),
+                             "mergeable": pr_data.get("mergeable"), "mergeable_state": pr_data.get("mergeable_state")}
         except ValueError as exc:
             # An unresolved link is Tico's own record, not GitHub's answer: relinking clears it, not access help.
             out[pr["id"]] = {"error": True, "why": str(exc), **answered_cause(str(exc)),

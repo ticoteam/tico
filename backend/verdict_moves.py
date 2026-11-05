@@ -445,7 +445,8 @@ def _judged_by(c, row, step, *, evidence=None):
 
 def merge_text(c, row, pr, head):
     if F.pr_checks(c, row):
-        return f"Approved at {head}, checks green: merge PR #{pr['number']} under the repo's merge rules. {pr['url']}"
+        return (f"Approved at {head}, checks green: merge PR #{pr['number']} under the repo's merge rules. "
+                f"Use --match-head-commit {head}. {pr['url']}")
     name = step_of(c, row) or "The last check"
     number = pr.get("number") or "?"
     landing = F.merge_step(c, row["type_id"])

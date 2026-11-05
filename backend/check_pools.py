@@ -892,7 +892,7 @@ def retry(store, limit=RETRY_LIMIT, *, service=None):
     limit = max(0, min(limit, RETRY_LIMIT))
     if not limit:
         return []
-    out = retry_prs(store, limit=limit, service=service)
+    out = []
     # Advance past ineligible tickets without rewriting idle waits. A restart starts again at the oldest wait.
     after = getattr(store, "_check_retry_after", {})
     store._check_retry_after = after
@@ -924,12 +924,15 @@ def retry(store, limit=RETRY_LIMIT, *, service=None):
                 child = safely(c, _take, dict(row), None, snapshots)
                 if child:
                     out.append(child["id"])
+    out.extend(retry_prs(store, limit=max(0, limit - len(out)), service=service))
     return out
 
 
 def retry_prs(store, limit=RETRY_LIMIT, *, service=None):
     """Bounded oldest-first discovery also catches PRs linked before this route existed."""
     from . import review_gate, step_flow
+    if not limit:
+        return []
     after = getattr(store, "_pr_review_after", ("", ""))
     sql = ("SELECT l.task_id,l.created_at,l.id FROM task_links l JOIN tasks t ON t.id=l.task_id "
            "WHERE l.kind='pr' AND l.state='open' AND t.status NOT IN ('closed','declined') "

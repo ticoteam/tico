@@ -1,5 +1,6 @@
 """Bot PRs outside ticket boards use the ticket pools and captured verdict handoff."""
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -159,6 +160,18 @@ def test_backfill_is_oldest_first_and_limited_per_reviewer_per_hour(api, monkeyp
     assert [len(children(api, t)) for t in tasks] == [1, 1, 1, 1]
 
 
+def test_backfill_takes_older_waits_before_discovering_the_next_page(api, monkeypatch):
+    setup(api)
+    monkeypatch.setattr(P, "PR_REVIEWS_PER_HOUR", 1)
+    tasks = [task_pr(api, n) for n in range(30, 35)]
+    P.retry(api.app.state.store, limit=3)
+    assert [len(children(api, t)) for t in tasks] == [1, 1, 0, 0, 0]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE history_events SET created_at=? WHERE kind='pr_review_filed'", (H.shift(H.now(), hours=-2),))
+    P.retry(api.app.state.store, limit=3)
+    assert len(children(api, tasks[2])) == 1
+
+
 @pytest.mark.parametrize("conflict,stale", [(True, False), (False, True)])
 def test_conflicting_or_behind_pr_returns_to_owner_once(api, conflict, stale):
     setup(api)
@@ -168,6 +181,26 @@ def test_conflicting_or_behind_pr_returns_to_owner_once(api, conflict, stale):
     assert children(api, task) == []
     [notice] = handoffs(api, task, "merge_conflict")
     assert "rebase on main" in notice["body"]
+
+
+@pytest.mark.parametrize("mergeable_state", ["dirty", "behind"])
+def test_backfill_reads_github_before_dispatching_a_cached_clean_pr(api, monkeypatch, mergeable_state):
+    setup(api)
+    task = task_pr(api)
+    service = api.app.state.github_app
+    monkeypatch.setattr(service, "row", lambda c: {"org": "Acme"})
+    monkeypatch.setattr(service, "mint", lambda *a, **kw: ("synthetic", "later"))
+
+    def fetch(method, path, **kw):
+        data = ({"head": {"sha": HEAD}, "state": "open", "mergeable_state": mergeable_state}
+                if "/pulls/" in path else {"check_runs": [{"name": "required", "conclusion": "success"}]}
+                if path.endswith("check-runs") else [])
+        return SimpleNamespace(status_code=200, json=lambda: data)
+
+    monkeypatch.setattr(service, "_call", fetch)
+    P.retry(api.app.state.store, service=service)
+    assert not children(api, task)
+    assert len(handoffs(api, task, "merge_conflict")) == 1
 
 
 def test_role_review_without_check_model_is_normal_child(api):
