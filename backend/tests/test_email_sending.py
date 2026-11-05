@@ -349,3 +349,24 @@ def test_migration_snapshots_existing_authorizations_without_granting_new_ones()
     module.up(c)
     assert S.saved(c, "bot:support")["mode"] == "never"
     assert not c.execute("SELECT 1 FROM email_legacy_automations WHERE automation_id='new'").fetchone()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_reply_history_migration_initializes_fresh_tables_and_preserves_existing_mail(existing):
+    path = next((Path(__file__).parents[1] / "migrations").glob("*_initialize_mail_reply_history.py"))
+    spec = importlib.util.spec_from_file_location("reply_history_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with sqlite3.connect(":memory:") as c:
+        if existing:
+            c.execute(module.TABLE)
+            c.execute("INSERT INTO mail_messages(mailbox,msg_id,epoch,date,from_addr,to_addresses,cc,subject,snippet,"
+                      "labels,body,attachments,updated_at) VALUES(?,'kept',1,'now',?,'[]','[]','Update','Hello',"
+                      "'[]','Hello','[]','now')", (BOX, CONTACT))
+        module.up(c)
+        assert "send_facts" in {row[1] for row in c.execute("PRAGMA table_info(mail_messages)")}
+        assert c.execute("SELECT name FROM sqlite_master WHERE name='mail_messages_rfc_id'").fetchone()
+        if existing:
+            assert c.execute("SELECT msg_id,body,send_facts FROM mail_messages").fetchall() == [("kept", "Hello", "{}")]
+        module.up(c)
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == int(existing)
