@@ -17,31 +17,27 @@ from backend.tests.test_threads_migration_e2e import NOW, build, close, identiti
 from clients import sessions
 
 
-@pytest.fixture(scope="module", autouse=True)
-def demo_clock():
-    """Builds and reads see the same day, including clocks outside hubdb.now."""
-    with time_machine.travel(NOW, tick=False):
-        yield
-
-
 @pytest.fixture(scope="module")
-def demo_template(tmp_path_factory, demo_clock):
-    """Each worker seeds once; tests only open private copies of this directory."""
+def demo_template(tmp_path_factory):
+    """Each worker seeds once; tests only open private copies of this directory. A module that imports `world` imports
+    this too."""
     # The function-scoped bot_ids_are_their_slugs fixture has not run during module setup.
-    with pytest.MonkeyPatch.context() as monkeypatch:
+    with pytest.MonkeyPatch.context() as monkeypatch, time_machine.travel(NOW, tick=False):
         monkeypatch.setattr(H, "new_bot_id", lambda slug: slug)
         return build("demo", tmp_path_factory.mktemp("threads-demo-template"))
 
 
 @pytest.fixture
 def world(tmp_path, demo_template):
-    settings = copy_demo(demo_template, tmp_path / "demo")
-    store, auth = open_store(settings)
-    with store.transaction() as c:
-        auth.sync_access(c)
-        who = identities(c, auth)
-    yield store, auth, who
-    close(store)
+    """A private copy of the template, read on the day it was built (including clocks outside hubdb.now)."""
+    with time_machine.travel(NOW, tick=False):
+        settings = copy_demo(demo_template, tmp_path / "demo")
+        store, auth = open_store(settings)
+        with store.transaction() as c:
+            auth.sync_access(c)
+            who = identities(c, auth)
+        yield store, auth, who
+        close(store)
 
 
 def owner_of(c, auth):
