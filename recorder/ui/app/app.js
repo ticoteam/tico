@@ -1122,6 +1122,8 @@
     html += line('Microphone', `<select class="field" data-model="form.microphone">${mics.map((name) => `<option value="${esc(name)}" ${name === f.microphone ? 'selected' : ''}>${esc(name || 'System default')}</option>`).join('')}</select>`);
     html += line('Also record meeting audio', toggle('meeting_audio', f.meeting_audio));
     html += `</div></div>`;
+    // Updates: version, Check for updates, Move to Applications (update.js).
+    html += window.ticoUpdateRow?.(st.update) || '';
     html += `<div class="settings-group"><details class="more" ${S.ui.importOpen ? 'open' : ''} data-details="importOpen"><summary>${icon('right', 12)}Import an older recorder library</summary><div class="inset" style="margin-top:8px"><div class="line">${field('legacy', 'Folder path')}<button class="btn" data-act="import" ${st.busy || s.recording ? 'disabled' : ''}>Import</button></div></div></details></div>`;
     const dirty = formDirty();
     const foot = S.status.message || (!S.status.speech || f.speech_source === 'own' ? 'Keys are kept in the macOS keychain.' : '');
@@ -2094,6 +2096,8 @@
     if (!document.hidden) poll();
   });
 
+  // update.js redraws after its own clicks.
+  window.ticoRedraw = render;
   window.addEventListener('error', (event) => bootError(event.message));
   window.addEventListener('DOMContentLoaded', () => {
     const events = window.__TAURI__.event;
@@ -2107,6 +2111,11 @@
       preview.querySelector('img').src = event.payload.url;
     });
     events.listen('level', (event) => onLevel(event.payload));
+    // The app menu's Check for Updates…: Settings at the Updates row; the app runs the check.
+    events.listen('open-updates', () => {
+      settings();
+      document.getElementById('updates')?.scrollIntoView({ block: 'center' });
+    });
     poll();
   });
 })();

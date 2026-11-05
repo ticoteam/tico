@@ -229,13 +229,13 @@ function tasksKeep(state) {
   S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
     since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
 }
-function taskOwnerOptions(selected = '') {
+function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
   const people = (S.people || []).filter(p => !p.hidden)
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
     .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   const pick = value => value === selected ? ' selected' : '';
-  return `<option value="">Who is this for?</option>
+  return `<option value="">${esc(blank)}</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>

@@ -214,3 +214,24 @@ a Mac with a built-in mic/speaker route, using identical speaker playback and co
 `capture::start_microphone` with `capture::start_microphone_for_meeting(..., true)`. The meeting
 process tap stays the reference recording in both runs. Headphones must remain on the raw path.
 macOS PR CI compiles/links the native bridge; it cannot measure a room's acoustic response.
+## Suggested task owners
+
+`assist_cases.json` covers commitments, named requests, concierge bot/team work, multiple recipients,
+and unknown speakers or absent teammates. Names and actors are fictional. Each case supplies a roster,
+signed-in identity, transcript speaker labels, and expected owner. A miss includes a missing or extra
+item, so the eval cannot pass by returning no suggestions. The opt-in Rust eval calls the production
+draft request, validates the model's owner against the offered PEOPLE, and checks the stored Item.
+It repeats each case at least three times and prints per-case and overall exact owner accuracy.
+
+Run on RunsOn with `scripts/remote.py --setup rust --minutes 4 -- ...` and a secure credential source
+on the VM, using:
+
+```sh
+TICO_RECORDER_ASSIST_KEY=<model key> cargo test --manifest-path recorder/Cargo.toml --locked \
+  --features desktop,cli assist::tests::owner_eval -- --ignored --nocapture
+```
+
+`TICO_RECORDER_ASSIST_MODEL` and `TICO_RECORDER_ASSIST_URL` optionally select a compatible model or
+Tico recorder relay; defaults match Settings. `TICO_RECORDER_ASSIST_REPEATS` defaults to 3 and must be
+at least 3. This is a paid, manual eval, excluded from ordinary test runs. Never put a provider key
+in a workflow command or its logs.

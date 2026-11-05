@@ -45,7 +45,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
-| See growth numbers and their sources, or marketing tasks | Growth (`#/growth`; Sources is a link on the page) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
+| See growth numbers and their sources, or marketing tasks | Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | See the Company page, or share it | Overview → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
 | Change the Company page: editions, disclosure, stats, audiences, accent, logo | Overview → Share → Manage (`#/company-page`) |
