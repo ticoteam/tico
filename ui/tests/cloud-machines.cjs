@@ -7,6 +7,7 @@
 //  - picking a cloud machine for a bot on a computer is no move: Save posts mode cloud with the placement and starts
 //    no transition;
 //  - off cloud (`cloud_machine` null) there is no such option and no Size row.
+//  - owners and admins can replace an own machine after confirming; cancel sends nothing and failures stay visible.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -31,7 +32,7 @@ const {unrouted} = require('./support/routes.cjs');
       cloud_machine: {...own, mode: 'computer', state: 'none', runner_id: null}});
     const scout = bot('scout', {machine: {runner_id: 'r8', label: 'Shared cloud machine', owner_id: 'ana', generation: 1},
       cloud_machine: {...own, placement: 'shared', runner_id: 'r8', starts_month: 1}});
-    let bots = [helper, writer, scout], calls = [];
+    let bots = [helper, writer, scout], calls = [], replaceFailure = false;
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -39,6 +40,12 @@ const {unrouted} = require('./support/routes.cjs');
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (req.method() === 'POST' && p === '/api/v2/bots/helper/cloud-machine/replace') {
+        calls.push({bot: 'helper', what: 'replace', body: req.postDataJSON()});
+        if (replaceFailure) return json({error: {code: 'busy', detail: 'Wait for the current turn to finish'}}, 409);
+        Object.assign(helper.cloud_machine, {state: 'deleted', runner_id: null, machine_size: null, cost_month_usd: 0, starts_month: 0});
+        return json({ok: true});
+      }
       const write = p.match(/^\/api\/v2\/bots\/([^/]+)\/([^/]+)$/);
       if (req.method() === 'POST' && write) {
         const body = req.postDataJSON(), b = bots.find(row => row.name === write[1]);
@@ -51,8 +58,8 @@ const {unrouted} = require('./support/routes.cjs');
         calls.push({bot: null, what: 'shared', body: req.postDataJSON()});
         return json({size: 'default', always_on: false, bots: ['scout']});
       }
-      if (p === '/api/v2/cloud-machines') return json({offered: true, caps: {}, sizes: [['small', 1], ['default', 2], ['large', 4], ['xlarge', 8]]
-        .map(([name, cpu]) => ({name, cpu, memory_gb: cpu * 2, usd_per_hour: cpu * 0.05, start_usd: 0.04, idle_stop_s: 300}))});
+      if (p === '/api/v2/cloud-machines') return json({offered: true, caps: {}, sizes: [['small', 2, 0.0225], ['default', 4, 0.045], ['large', 8, 0.09], ['xlarge', 16, 0.25]]
+        .map(([name, cpu, usd_per_hour]) => ({name, cpu, memory_gb: cpu * 2, usd_per_hour, start_usd: 0.04, idle_stop_s: 300}))});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
       if (p === '/api/employees') return json(bots);
@@ -103,6 +110,9 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(o => o.value)), ['cloud-shared', 'cloud-own', 'r1']);
     // HQ's sizes come in with their prices; Size, Pause after and Always on wait for Save bot.
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-cloud-size] option')?.textContent.includes('CPU'));
+    assert.deepEqual(await editor.locator('[data-bot-cloud-size] option').evaluateAll(options =>
+      options.map(o => o.textContent.match(/\$([\d.]+)\/h/)[1])), ['0.0225', '0.045', '0.09', '0.25'],
+    'hourly rates keep fractions of a cent so the size choice shows the price HQ charges');
     await editor.locator('[data-bot-cloud-size]').selectOption('large');
     await editor.locator('[data-bot-cloud-pause]').fill('45');
     await editor.locator('[data-bot-cloud-pause]').dispatchEvent('change');
@@ -113,8 +123,46 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(calls.map(c => [c.what, c.body]), [['definition', calls[0].body], ['cloud-machine', {size: 'large'}],
       ['cloud-machine', {pause_minutes: 45}], ['cloud-machine', {always_on: true}]]);
 
+    // Replace acts only after confirmation; it keeps pending edits and refreshes the machine's state.
+    await open('helper');
+    await editor.locator('[data-bot-cloud-replace]').click();
+    await page.locator('[data-confirm-cancel]').click();
+    assert.deepEqual(calls, []);
+    replaceFailure = true;
+    await editor.locator('[data-bot-cloud-replace]').click();
+    await page.locator('[data-confirm-ok]').click();
+    await editor.getByText('Wait for the current turn to finish', {exact: true}).waitFor();
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').isEnabled(), true);
+    replaceFailure = false;
+    calls = [];
+    await editor.locator('[data-bot-cloud-size]').selectOption('xlarge');
+    await page.setViewportSize({width: 390, height: 844});
+    await editor.locator('[data-bot-cloud-replace]').click();
+    await page.locator('[data-confirm-ok]').click();
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-cloud-status]')?.textContent.includes('Deleted'));
+    assert.deepEqual(calls, [{bot: 'helper', what: 'replace', body: {}}]);
+    assert.equal(await editor.locator('[data-bot-cloud-size]').inputValue(), 'xlarge', 'replacement preserves unsaved edits');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 0);
+    helper.cloud_machine.problem = 'Made, but it never connected to this server';
+    await page.evaluate(() => loadSettings());
+    await open('helper');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 1, 'an enrollment failure can be replaced after its disk is gone');
+    helper.cloud_machine.problem = '';
+    await page.setViewportSize({width: 1440, height: 900});
+
+    helper.cloud_machine.state = 'running'; helper.cloud_machine.runner_id = 'r10';
+    await page.evaluate(() => loadSettings());
+    await page.evaluate(() => { S.me.role = 'human'; S.me.bot_admin = false; });
+    await open('helper');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 0, 'a bot manager is not an owner or admin');
+    await page.evaluate(() => { S.me.bot_admin = true; });
+    await open('helper');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 1, 'admins can replace');
+    await page.evaluate(() => { S.me.role = 'owner'; S.me.bot_admin = false; });
+
     // A bot on the shared machine: its Size and Always on are the company's, posted to the shared machine.
     await open('scout');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 0, 'shared replacement is separate');
     assert.equal(await editor.locator('[data-bot-machine]').inputValue(), 'cloud-shared');
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-cloud-size] option')?.textContent.includes('CPU'));
     await editor.locator('[data-bot-cloud-size]').selectOption('small');
@@ -123,6 +171,7 @@ const {unrouted} = require('./support/routes.cjs');
 
     // A bot on a computer joins the shared machine: mode cloud, placement shared, no transition.
     await open('writer');
+    assert.equal(await editor.locator('[data-bot-cloud-replace]').count(), 0, 'a local computer cannot be replaced here');
     assert.equal(await editor.locator('[data-bot-cloud-size]').count(), 0, 'no Size row while it runs on a computer');
     await editor.locator('[data-bot-machine]').selectOption('cloud-shared');
     await save();

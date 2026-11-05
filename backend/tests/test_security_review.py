@@ -3,6 +3,7 @@ import asyncio
 
 from backend.store import encode
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 
 def raw_get(app, path):
@@ -55,8 +56,8 @@ def test_a_verified_assertion_without_an_email_is_not_a_person(api):
 def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
-                  (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     # The run is handling the owner's room; the owner's request in another thread is not its to cite.
     _, _, botops = setup_attempt(api, "botops")
     from backend.store import H
@@ -88,7 +89,16 @@ def test_a_person_reads_and_books_only_calendars_they_may_see(api):
                                       headers={"Authorization": "Bearer " + token})
     assert get_("ana@acme.example", "ben-test").status_code == 403
     assert get_("ben@acme.example", "ben-test").status_code == 200
+    # The owner holds no bypass: ben's calendar follows ben's mailbox, which ben shares or not.
+    assert get_("ben@acme.example", "ana-test").status_code == 403
+    from backend import mailbox_access
+    with api.app.state.store.transaction() as c:
+        row = mailbox_access.ensure_mailbox(c, "ben@acme.example")
+        mailbox_access.grant(c, "person:ben", row["id"], "person", "ana", "read")
     assert get_("ben@acme.example", "ana-test").status_code == 200
+    booking_ben = {"calendar": "ben@acme.example", "title": "x", "start": "2099-01-01T09:00:00+00:00",
+                   "end": "2099-01-01T09:30:00+00:00", "attendees": []}
+    post(api, "calendar/appointments", booking_ben, token="ana-test", expected=403)    # Read does not change it
     booking = {"calendar": "ana@acme.example", "title": "x", "start": "2099-01-01T09:00:00+00:00",
                "end": "2099-01-01T09:30:00+00:00", "attendees": ["someone@evil.example"]}
     post(api, "calendar/appointments", booking, token="ben-test", expected=403)

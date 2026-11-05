@@ -1,7 +1,7 @@
 // Threads per role, at desktop and phone width (docs/dev/threads-contract.md, plan §9 "UI per role"): the sidebar's
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
-// Catch up, New thread, a thread with its sub-threads inline, tapping into a sub-thread and back by the breadcrumb, a
-// reply shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
+// Catch up, New thread, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
+// answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
 // New DM, a server without the rail, and a teammate who may see a bot but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
@@ -105,12 +105,15 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
-let dmRows = null, callsOff = false, railOff = false;
+let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
+// Start call as the server answers it: the call it makes (after a moment), or none.
+let callMade = null, joinRefused = false, startWait = 150;
+let startGate = null, leaveGate = null, callLive = null;
 async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: [],
-    readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: []};
+    readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: [], callSeats: new Set()};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
@@ -121,9 +124,15 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
       Room: class {
         constructor() { this.mic = false; this.gone = false; this.remoteParticipants = new Map(); const room = this;
-          this.localParticipant = {setMicrophoneEnabled: async on => { room.mic = on; }, setScreenShareEnabled: async () => {}}; window.__rooms.push(this); }
+          // The microphone's track, as a publication: stopped is what a hidden page must do to it.
+          this.mic_track = {stopped: false, stop() { this.stopped = true; }};
+          this.localParticipant = {trackPublications: new Map(), setMicrophoneEnabled: async on => {
+            room.mic = on; if (on) room.localParticipant.trackPublications.set('mic', {track: room.mic_track}); }, setScreenShareEnabled: async () => {}};
+          window.__rooms.push(this); }
         on() { return this; }
-        async connect(url, token) { this.token = token; await new Promise(r => setTimeout(r, 200)); }
+        async connect(url, token) { this.token = token;
+          if (window.__connectGate) await new Promise(go => window.__connectGate.push(go));
+          else await new Promise(r => setTimeout(r, 200)); }
         disconnect() { this.gone = true; }
       },
     };
@@ -163,6 +172,11 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       }
       const body = 'event: ready\ndata: {"seq":1}\n\n' + sse.queue.splice(0).map(d => `event: threads\nid: ${++sse.seq}\ndata: ${JSON.stringify(d)}\n\n`).join('');
       return route.fulfill({status: 200, contentType: 'text/event-stream', body}).catch(() => {});
+    }
+    if ((p === '/api/v2/threads' || p === '/api/v2/threads/rail') && method === 'GET') {
+      if (threadsOff === 'odd') return json(p.endsWith('/rail') ? {error: 'not_found'} : {nothing: true}, p.endsWith('/rail') ? 404 : 200);
+      if (threadsOff) return json({error: 'not_found'}, 404);
+      if (threadsGate) await new Promise(go => threadsGate.push(go));
     }
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : dmRows || [dm, botDm],
       bot_dms: bob ? {} : {'bot:ops': 2}, next_cursor: null});
@@ -207,7 +221,14 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       messages: [{...msg('x1', 1, 'human:bea', 'Morning.'), thread_id: tl[1]}]});
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
-    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
+    if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
+      seen.calls.push('start:' + callMade.id);
+      seen.callSeats.add(callMade.id);
+      if (startGate) await new Promise(go => startGate.push(go));
+      else await new Promise(r => setTimeout(r, startWait));
+      return json({call: callMade});
+    }
+    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: callLive ? [callLive] : [], next_before: null, available: !callsOff});
     const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
     if (settings && method === 'PATCH') {
       const body = JSON.parse(req.postData() || '{}');
@@ -226,14 +247,6 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       title: 'A message is held for your review', requester_id: 'Bea', created_at: at(5)}], count: 1, version: 'v1'});
     if (p === '/api/v2/rule-holds/hold3') return json({id: 'hold3', operation: 'threads', can_send: true, reason: 'Names a customer'});
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
-    if (p === '/api/v2/rule-holds/hold2') return json({id: 'hold2', operation: 'threads_edit', message_id: 'ed1', can_send: false});
-    if (p === '/api/v2/rule-holds/hold2/withdraw') { seen.withdrawn.push('hold2'); return json({ok: true}); }
-    const edit = p.match(/^\/api\/v2\/messages\/([^/]+)$/);
-    if (edit && method === 'PATCH') {
-      const body = JSON.parse(req.postData() || '{}');
-      if (/secret/i.test(body.text)) return json({held: {id: 'hold2', outcome: 'blocked', rules: [{id: 'r1', text: 'No secrets in threads'}]}});
-      return json({...msg(edit[1], 1, 'human:ana', body.text), thread_id: 't-edit', edited_at: at(0)});
-    }
     const asked = p.match(/^\/api\/v2\/threads\/([^/]+)\/(catch-up|follow|open-earlier)$/);
     if (asked) {
       if (asked[2] === 'catch-up') { seen.catchUps.push({thread: asked[1], ...JSON.parse(req.postData() || '{}')}); return json({thread_id: asked[1], messages: 2, posted: {id: 'cu1'}}); }
@@ -247,15 +260,15 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
     // The server answers a reaction with the message's reactions, a bare list.
     if (react) return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]), count: 1, actors: ['human:ana']}] : []);
-    const task = p.match(/^\/api\/v2\/threads\/messages\/([^/]+)\/task$/);
-    if (task) { seen.tasks.push({message: task[1], ...JSON.parse(req.postData() || '{}')}); return json({id: 'task1', private: true}); }
-    if (p === '/api/v2/tasks' && method === 'POST') { seen.tasks.push({copied: true}); return json({id: 'task-copy'}); }
     if (p === '/api/v2/threads/search') return json({hits: url.searchParams.get('q') === 'price' ? [{message_id: 'm2', thread_id: 't-plan', title: 'Launch plan',
       sender_id: 'human:ana', created_at: at(58), excerpt: 'What price do we open with?'}] : [], next_cursor: null});
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
-      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
+      if (call[2] === 'leave' && leaveGate) await new Promise(go => leaveGate.push(go));
+      if (call[2] === 'join' && joinRefused) return json({error: {code: 'call_access_removed'}}, 403);
+      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); seen.callSeats.add(call[1]); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
+      if (call[2] === 'leave') seen.callSeats.delete(call[1]);
       if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
       return json({ok: true});
     }
@@ -363,27 +376,31 @@ let browser = null;
     await page.locator('.thv-head .thv-pin[aria-pressed="false"]').click();
     await rail.locator('[data-list="pinned"] .tr-row[data-thread="t-plan"]').waitFor();
     assert.deepEqual(seen.pins, ['DELETE:t-plan', 'PUT:t-plan']);
-    // A manager pins it for everyone from the menu.
+    // A manager pins it for everyone from Thread settings.
     await page.locator('[data-thv-menu]').click();
-    await page.locator('.thv-pop').getByText('Pin for everyone', {exact: true}).click();
+    await page.locator('#thread-settings[open] #ths-pin').click();
     for (let i = 0; i < 40 && !seen.patches.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.patches, [{pinned_for_everyone: true}]);
     seen.patches.length = 0;
+    await page.keyboard.press('Escape');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
-    // One thread: its sub-threads inline under their message, indented, deepest capped.
+    // One thread, flat: an older server's tree drawn in its order with no indent, each sub-thread reply quoting the
+    // message its sub-thread opened under.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
     const order = await page.locator('.thv-list .th-msg .th-body').allTextContents();
-    assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'tree order');
-    assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:2');
+    assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'time order');
     assert.equal((await page.locator('.th-notshown[data-mid="h1"]').textContent()).trim(), 'Not shown', 'a message the viewer may not read is one quiet row');
-    // Each sub-thread opens with one header row that links to it; its replies follow, indented.
-    assert.deepEqual(await page.locator('.th-subhead').evaluateAll(els => els.map(a => a.getAttribute('href'))), ['#/thread/t-sub', '#/thread/t-sub2']);
-    assert.equal(await page.locator('.th-msg[data-mid="m2"] + .th-subhead + .th-msg[data-mid="s1"]').count(), 1, 'the header sits between the message and its replies');
-    // A title only if it was given one: otherwise the row doesn't repeat the line above it.
-    assert.deepEqual(await page.locator('.th-subhead-title').allTextContents(), ['Pricing']);
-    assert.match(await page.locator('.th-msg[data-mid="s1"] + .th-subhead').innerText(), /^1 reply$/);
+    const lefts = await page.locator('.thv-list .th-msg[data-mid] .th-av').evaluateAll(els => [...new Set(els.map(e => Math.round(e.getBoundingClientRect().left)))]);
+    assert.equal(lefts.length, 1, 'no indent: ' + lefts);
+    assert.equal(await page.locator('.th-subhead, .th-sub').count(), 0, 'no sub-thread heads');
+    const quoted = id => page.locator(`.th-msg[data-mid="${id}"] .th-quote`).getAttribute('data-th-quote');
+    assert.equal(await quoted('s1'), 'm2');
+    assert.equal(await quoted('s1a'), 's1');
+    assert.equal(await quoted('s2'), 'm2');
+    assert.equal(await page.locator('.th-msg[data-mid="s1"] .th-quote-who').textContent(), 'You', 'the viewer\'s own message, as their name reads');
+    assert.equal(await page.locator('.th-msg[data-mid="m1"] .th-quote').count(), 0);
     // A turn's steps load when their fold opens.
     await page.locator('.th-msg[data-mid="m5"] details.run-steps summary').click();
     await page.locator('.th-msg[data-mid="m5"] .steps-list .step-tool').waitFor();
@@ -404,31 +421,14 @@ let browser = null;
     await page.locator('.th-held').getByText('No secrets in threads').waitFor();
     assert.equal(await page.locator('.th-held [data-held-send]').count(), 0, 'Send anyway only when the hold allows it');
 
-    // Reply in sub-thread: one inline box under the message's sub-thread.
+    // A reaction: picked from the hover bar; mine comes from the reactors the server lists, and its bare-list answer
+    // settles the row.
     await page.locator('.th-msg[data-mid="m1"]').hover();
-    await page.locator('.th-msg[data-mid="m1"] [data-th-more]').click();
-    await page.locator('.thv-pop').getByText('Reply in sub-thread').click();
-    await page.locator('.th-reply-text').fill('Monday at ten.');
-    await page.locator('[data-th-reply-send]').click();
-    await page.waitForFunction(() => document.querySelectorAll('.th-reply').length === 0);
-    assert.equal(seen.posts.at(-1).parent_message_id, 'm1');
-
-    // Acknowledge: mine comes from the reactors the server lists, and its bare-list answer settles the row.
-    await page.locator('.th-msg[data-mid="m1"]').hover();
-    await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').click();
+    await page.locator('.th-msg[data-mid="m1"] [data-th-pick]').click();
+    await page.locator('.thv-emoji button[data-k="👍"]').click();
     await page.locator('.th-msg[data-mid="m1"] .th-react.me[aria-pressed="true"]').waitFor();
     await page.locator('.th-msg[data-mid="m1"] .th-react').click();
     await page.waitForFunction(() => !document.querySelector('.th-msg[data-mid="m1"] .th-react'));
-
-    // Make task: the server makes it from the message; the page never copies the words into a task of its own.
-    await page.locator('.th-msg[data-mid="m1"]').hover();
-    await page.locator('.th-msg[data-mid="m1"] [data-th-more]').click();
-    await page.locator('.thv-pop').getByText('Make task').click();
-    await page.locator('#thread-task button[type="submit"]').click();
-    await page.waitForFunction(() => !document.querySelector('#thread-task[open]'));
-    assert.deepEqual(seen.tasks.map(t => t.message), ['m1']);
-    assert.ok(!seen.tasks.some(t => t.copied), 'no task made from copied text');
-    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // A late page from the server keeps a newer message the stream already showed.
     await page.evaluate(() => threadViewsLive('messages', {id: 'live1', thread_id: 't-plan', root_id: 't-plan',
@@ -437,14 +437,13 @@ let browser = null;
     await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')));
     assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
 
-    // A whole tree inline: a long branch keeps its latest messages under "N more", and what is drawn is what is read.
+    // An older server's whole tree, drawn flat: a long branch's start is one link to it, and what is drawn is what is read.
     await page.goto('https://tico-ui.test/#/thread/t-tree');
     await page.getByText('Unread inline.').waitFor();
     await page.waitForFunction(() => document.querySelector('.th-msg[data-mid="n1"]'));
     const mids = () => page.locator('.thv-list [data-mid]').evaluateAll(els => els.map(e => e.dataset.mid).filter(id => !/^f\d/.test(id)));
     assert.deepEqual(await mids(), ['p1', 'r1', 'p2', 'more:t-lb', 'b3', 'b4', 'p3', 'n1']);
-    assert.match(await page.locator('.th-more').textContent(), /2 more.*new/);
-    assert.equal((await page.locator('.th-msg[data-mid="p3"] + .th-subhead').innerText()).replace(/\s+/g, ' '), '1 reply · 1 new');
+    assert.equal(await page.locator('.th-more').getAttribute('href'), '#/thread/t-lb');
     await page.waitForTimeout(150);
     assert.ok(seen.readSeqs.includes('t-nb:24'), 'a sub-thread drawn inline is read: ' + seen.readSeqs);
     assert.ok(seen.readSeqs.includes('t-tree:59') && !seen.reads.includes('t-rb'), 'read as far as drawn; nothing new, nothing sent: ' + seen.readSeqs);
@@ -456,21 +455,14 @@ let browser = null;
     assert.ok(await page.evaluate(() => document.querySelector('.th-newline').nextElementSibling?.classList.contains('th-new')), 'the line sits on the first new one');
     await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
     await shot(page, 'subthreads-desktop');
-    await page.locator('.th-more').click();
-    await page.getByText('Long one.', {exact: true}).waitFor();
-    assert.deepEqual((await mids()).slice(2, 7), ['p2', 'b1', 'b2', 'b3', 'b4'], 'the older part takes the row\'s place');
-    await page.waitForTimeout(150);
-    assert.ok(seen.readSeqs.includes('t-lb:22'), 'opened, it reads to the last message: ' + seen.readSeqs);
-    // A reply in an old sub-thread lands under its parent, new, and Unread goes there.
+    // A reply arriving live in an old sub-thread lands at the bottom, in time order, quoting its sub-thread's message.
     await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
     await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
       message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', sender_id: 'human:bea', body: 'Late reply.', created_at: new Date().toISOString()}}));
-    assert.deepEqual((await mids()).slice(0, 3), ['p1', 'r1', 'lv']);
-    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 1);
-    assert.match(await page.locator('.th-msg[data-mid="p1"] + .th-subhead').textContent(), /2 replies/);
-    await page.locator('.thv-unread').click();
-    await page.waitForFunction(() => { const b = document.querySelector('.thv-scroll').getBoundingClientRect(), r = document.querySelector('[data-mid="lv"]').getBoundingClientRect(); return r.top >= b.top && r.bottom <= b.bottom; });
-    await page.waitForTimeout(100);
+    assert.equal((await mids()).at(-1), 'lv');
+    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 0, 'arriving at the bottom is not news, in any thread');
+    assert.equal(await page.locator('.th-msg[data-mid="lv"] .th-quote').getAttribute('data-th-quote'), 'p1');
+    await page.waitForTimeout(150);
     assert.ok(seen.readSeqs.includes('t-rb:70'), seen.readSeqs);
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
@@ -499,13 +491,188 @@ let browser = null;
     await page.waitForFunction(() => !document.querySelector('#call-bar'));
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
-    // Tapping a sub-thread message opens the sub-thread, with the way back.
-    await page.locator('.th-msg[data-mid="s2"] .th-body').click();
-    await page.waitForFunction(() => location.hash === '#/thread/t-sub');
+    // The desktop app hides the page to show another org's (window.ticoPageHidden; no pagehide comes then): a live
+    // call stops its microphone and leaves at once, and a join still on its way never turns the microphone on.
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: false});
+    await page.evaluate(() => { window.__rooms.length = 0; void callJoin('t-plan', {id: 'c3'}, 'C').catch(() => {}); });
+    await page.waitForFunction(() => window.__rooms.some(r => r.mic));
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+    assert.deepEqual(await page.evaluate(() => window.__rooms.map(r => ({stopped: r.mic_track.stopped, gone: r.gone}))), [{stopped: true, gone: true}]);
+    assert.equal(await page.locator('#call-bar').count(), 0, 'the call bar goes with the call');
+    for (let i = 0; i < 20 && !seen.calls.includes('leave:c3'); i++) await page.waitForTimeout(50);
+    assert.ok(seen.calls.includes('leave:c3'), 'the hidden page gives its seat back');
+    for (const wait of [0, 260]) {      // still joining on the server, then connecting to the room
+      await page.evaluate(() => { window.__rooms.length = 0; window.__joining = callJoin('t-plan', {id: 'c4'}, 'D').catch(() => {}); });
+      await page.waitForTimeout(wait);
+      assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a join on its way counts as in a call');
+      await page.evaluate(() => window.__joining);
+      await page.waitForTimeout(250);
+      assert.deepEqual(await page.evaluate(() => window.__rooms.map(r => ({mic: r.mic, gone: r.gone}))), wait ? [{mic: false, gone: true}] : [],
+        'no microphone after the page went hidden');
+      assert.equal(await page.locator('#call-bar').count(), 0);
+    }
+    assert.equal(seen.calls.filter(c => c === 'leave:c4').length, 2, 'each overtaken join gives its seat back: ' + seen.calls);
+    // Hidden while Start call is still making the call: in a call already, the call made is never joined, and the seat
+    // creation gave goes back.
+    callMade = {id: 'c5', state: 'live', connector: 'human:ana'};
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !seen.calls.includes('start:c5'); i++) await page.waitForTimeout(25);
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a call being made counts as in a call');
+    await page.evaluate(() => window.__starting);
+    await page.waitForTimeout(450);
+    assert.ok(!seen.calls.includes('join:c5'), 'the call made while hidden is not joined: ' + seen.calls);
+    assert.equal(seen.calls.filter(c => c === 'leave:c5').length, 1, 'the call made while hidden gives its seat back: ' + seen.calls);
+    assert.deepEqual(await page.evaluate(() => window.__rooms.length), 0);
+    assert.equal(await page.locator('#call-bar').count(), 0);
+    // A join the server refuses still says so: Start call's own join number is the one the join checks.
+    callMade = {id: 'c6', state: 'live', connector: 'human:ana'}; joinRefused = true;
+    await page.evaluate(() => callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'));
+    assert.ok(seen.calls.includes('join:c6'), 'the call made is joined: ' + seen.calls);
+    await page.locator('.thv-call-note', {hasText: 'Removed from call'}).waitFor();
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
+    callMade = null; joinRefused = false;
+    // Start call still on its way, the call's start redraws the header to Join, and Join gets in first: when Start
+    // answers, its cleanup leaves that seat alone and the call stays connected.
+    callMade = {id: 'c7', state: 'live', connector: 'human:ana'}; startWait = 800;
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !seen.calls.includes('start:c7'); i++) await page.waitForTimeout(25);
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), call: {id: 'c7', state: 'live'}}); thvDraw(v); });
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => CALL?.id === 'c7' && window.__rooms.some(r => r.mic));
+    await page.evaluate(() => window.__starting);
+    await page.waitForTimeout(150);
+    assert.ok(!seen.calls.includes('leave:c7'), 'the Join that got in first keeps its seat: ' + seen.calls);
+    assert.equal(seen.calls.filter(c => c === 'join:c7').length, 1, 'Start call does not join again: ' + seen.calls);
+    assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => !r.gone).length]), ['c7', 1], 'the call stays connected');
+    assert.equal(await page.locator('#call-bar').count(), 1);
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+    callMade = null; startWait = 150;
+
+    // Start B while in A; its event redraws Join before Start answers. Join waits for A's held leave, then Start
+    // answers and leaves the seat to Join. Hidden or refused, Join owes that seat back once; connected, it keeps it.
+    for (const [id, finish] of [['c8', 'hidden'], ['c9', 'refused'], ['c10', 'joined']]) {
+      await page.evaluate(async id => { window.__rooms.length = 0; await callJoin('t4', {id: id + '-a'}, 'A'); }, id);
+      await page.locator('.thv-call[data-call="start"]').first().waitFor();
+      callMade = {id, state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
+      await page.evaluate(() => { window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+      for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(startGate.length, 1, 'Start B waits for its response');
+      callLive = callMade;
+      await page.evaluate(() => threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}));
+      await page.locator('.thv-call[data-call="join"]').first().click();
+      for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(leaveGate.length, 1, 'Join B waits for A to leave');
+      const starts = startGate; startGate = null; starts.forEach(go => go());
+      await page.evaluate(() => window.__starting);
+      assert.deepEqual(await page.evaluate(id => [CALL?.id, CALL_JOINING.get(id)], id), [id + '-a', 1]);
+      assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, 0, 'Start B defers cleanup to Join');
+      if (finish === 'hidden') assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+      joinRefused = finish === 'refused';
+      const leaves = leaveGate; leaveGate = finish === 'hidden' ? [] : null; leaves.forEach(go => go());
+      await page.waitForFunction(() => CALL_JOINS === 0);
+      await page.waitForTimeout(150);
+      assert.equal(seen.calls.filter(c => c === 'leave:' + id).length, finish === 'joined' ? 0 : 1,
+        'only an abandoned Join gives Start B\'s seat back, once: ' + seen.calls);
+      assert.equal(seen.calls.filter(c => c === 'join:' + id).length, finish === 'hidden' ? 0 : 1);
+      if (finish === 'joined') {
+        assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), [id, 1]);
+        callLive = null;
+        await page.locator('#call-bar [data-cb="leave"]').click();
+        await page.waitForFunction(() => !document.querySelector('#call-bar'));
+      } else {
+        assert.deepEqual(await page.evaluate(() => [CALL, window.__rooms.filter(r => !r.gone).length]), [null, 0]);
+        assert.equal(await page.locator('#call-bar').count(), 0);
+        if (finish === 'hidden') {
+          // Hold the finalizer's leave while B tries to rejoin: cleanup must finish before the new seat is taken.
+          assert.equal(seen.callSeats.has(id), true, 'B\'s cleanup is held before returning its original seat');
+          const rejoinPosted = await page.evaluate(id => {
+            window.__rejoining = callJoin('t-plan', {id}, 'B');
+            return pendingWrites.has('POST /v2/calls/' + id + '/join\n{}');
+          }, id);
+          assert.equal(rejoinPosted, false, 'rejoining B waits for its pending finalizer leave');
+          const cleanupLeft = page.waitForResponse(r => r.url().endsWith('/calls/' + id + '/leave'));
+          const cleanups = leaveGate; leaveGate = null; cleanups.forEach(go => go());
+          await (await cleanupLeft).finished();
+          await page.evaluate(() => window.__rejoining);
+          assert.equal(seen.callSeats.has(id), true, 'delayed cleanup cannot remove B\'s rejoined seat');
+          assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), [id, 1]);
+          callLive = null;
+          await page.locator('#call-bar [data-cb="leave"]').click();
+          await page.waitForFunction(() => !document.querySelector('#call-bar'));
+        }
+      }
+      callMade = callLive = null; joinRefused = false;
+      await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {call: null}); thvDraw(v); });
+    }
+
+    // Join B connects while Start's response waits. Hidden gives the seat back before Start answers; a late Start
+    // must not recreate that debt. Hold any duplicate leave until after rejoining B, when it would remove the new seat.
+    callMade = {id: 'c11', state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
+    await page.evaluate(() => { window.__rooms.length = 0; window.__connectGate = [];
+      window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
+    assert.equal(startGate.length, 1, 'Start B waits for its response');
+    callLive = callMade;
+    await page.evaluate(() => threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}));
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => window.__connectGate.length === 1);
+    const hiddenLeave = page.waitForResponse(r => r.url().endsWith('/calls/c11/leave'));
+    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
+    for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+    assert.equal(leaveGate.length, 1, 'Hidden gives B its seat back');
+    leaveGate.shift()();
+    await (await hiddenLeave).finished();
+    await page.waitForFunction(() => !pendingWrites.has('POST /v2/calls/c11/leave\n{}'));
+    assert.equal(seen.callSeats.has('c11'), false, 'the first leave has settled B\'s seat');
+    const starts = startGate; startGate = null; starts.forEach(go => go());
+    await page.evaluate(() => window.__starting);
+    await page.evaluate(() => { const connects = window.__connectGate; window.__connectGate = null; connects.forEach(go => go()); });
+    await page.waitForFunction(() => CALL_JOINS === 0);
+    // The API registers a write before sending it, so wait for its route only if the cancelled Join sent one.
+    const duplicate = await page.evaluate(() => pendingWrites.has('POST /v2/calls/c11/leave\n{}'));
+    if (duplicate) {
+      for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
+      assert.equal(leaveGate.length, 1, 'the duplicate leave is held before reaching the seat');
+    }
+    await page.evaluate(() => callJoin('t-plan', {id: 'c11'}, 'B'));
+    assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => r.mic && !r.gone).length]), ['c11', 1]);
+    assert.equal(seen.callSeats.has('c11'), true, 'B has successfully rejoined');
+    const duplicateLeft = duplicate ? page.waitForResponse(r => r.url().endsWith('/calls/c11/leave')) : null;
+    const leaves = leaveGate; leaveGate = null; leaves.forEach(go => go());
+    if (duplicateLeft) await (await duplicateLeft).finished();
+    assert.equal(seen.callSeats.has('c11'), true, 'a delayed cleanup cannot remove the rejoined seat');
+    assert.equal(seen.calls.filter(c => c === 'leave:c11').length, 1, 'B leaves only once before rejoining');
+    callMade = callLive = null;
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+
+    // The hidden page's leave never answers: returning and clicking Join waits only for its deadline, then joins.
+    callLive = {id: 'c12', state: 'live', connector: 'human:ana'};
+    await page.evaluate(() => { window.__rooms.length = 0; window.__callLeaveTimeoutMs = 250;
+      threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}); });
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await page.waitForFunction(() => CALL?.id === 'c12' && window.__rooms.some(r => r.mic));
+    leaveGate = [];       // Never released, including after the timeout.
+    const stalledLeave = page.waitForRequest(r => r.url().endsWith('/calls/c12/leave'));
+    assert.deepEqual(await page.evaluate(() => [window.ticoPageHidden(), CALL_LEAVING.has('c12')]), [{inCall: true}, true]);
+    await stalledLeave;
+    const rejoined = page.waitForRequest(r => r.url().endsWith('/calls/c12/join'), {timeout: 1500});
+    await page.locator('.thv-call[data-call="join"]').first().click();
+    await rejoined;
+    await page.waitForFunction(() => CALL?.id === 'c12' && CALL_JOINS === 0 && window.__rooms.some(r => r.mic && !r.gone), null, {timeout: 1500});
+    assert.equal(seen.calls.filter(c => c === 'join:c12').length, 2, 'Join proceeds after the stalled leave times out');
+    assert.deepEqual(await page.evaluate(() => [CALL_LEAVING.has('c12'), CALL_JOINING.has('c12'), window.__rooms.filter(r => r.mic && !r.gone).length]),
+      [false, false, 1], 'the timed-out leave and rejoin settle their tracking and leave one live call');
+    leaveGate = callLive = null;
+    await page.evaluate(() => { delete window.__callLeaveTimeoutMs; });
+    await page.locator('#call-bar [data-cb="leave"]').click();
+    await page.waitForFunction(() => !document.querySelector('#call-bar'));
+
+    // An older sub-thread opened by its link keeps the way back, and reads flat too.
+    await page.goto('https://tico-ui.test/#/thread/t-sub');
     await page.locator('.thv-crumbs a', {hasText: 'Launch plan'}).waitFor();
-    // Opened, it shows its own sub-threads the same way, one step in from itself.
-    assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:1');
-    assert.equal(await page.locator('.th-msg[data-mid="s1"] + .th-subhead + .th-msg[data-mid="s1a"]').count(), 1);
+    assert.equal(await page.locator('.th-msg[data-mid="s1a"] .th-quote').getAttribute('data-th-quote'), 's1');
     await page.locator('.thv-back').click();
     await page.waitForFunction(() => location.hash === '#/thread/t-plan');
 
@@ -517,8 +684,8 @@ let browser = null;
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
-    // The Home's actions (the call and the menu) sit in the Home/DM bar; the thread has no title line.
-    await page.locator('#pane-chat .bot-talk-acts [data-thv-menu]').waitFor();
+    // The Home's actions (the call and the menu) sit in the page's top line; the thread has no title line.
+    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-title').count(), 0);
     // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
     assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
@@ -559,50 +726,19 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/thread/t-sub');
     await page.locator('.thv-head [data-call="start"]').waitFor();
 
-    // A held edit: the message keeps its words, the held text waits under it, and Edit takes it back into the box.
     await page.goto('https://tico-ui.test/#/thread/t-edit');
-    const body = page.locator('.th-msg[data-mid="ed1"] .th-body');
-    await body.getByText('Open at 40.').waitFor();
-    const editWith = async text => {
-      await page.locator('.th-msg[data-mid="ed1"]').hover();
-      await page.locator('.th-msg[data-mid="ed1"] [data-th-more]').click();
-      await page.locator('.thv-pop').getByText('Edit', {exact: true}).click();
-      await page.locator('.th-edit-text').fill(text);
-      await page.locator('[data-th-edit-save]').click();
-    };
-    await editWith('Open at the secret price.');
-    await page.locator('.th-held').getByText('No secrets in threads').waitFor();
-    assert.equal((await body.textContent()).trim(), 'Open at 40.', 'a held edit changes nothing yet');
-    await shot(page, 'held-edit-desktop');
-    await page.locator('.th-held [data-held-edit]').click();
-    assert.equal(await page.locator('.th-edit-text').inputValue(), 'Open at the secret price.');
-    await page.waitForTimeout(100);
-    assert.deepEqual(seen.withdrawn, ['hold2'], 'editing it takes the held one back');
-    await page.locator('.th-edit-text').fill('Open at 45.');
-    await page.locator('[data-th-edit-save]').click();
-    await body.getByText('Open at 45.').waitFor();
-    assert.equal(await page.locator('.th-held').count(), 0);
-    await editWith('Another secret.');
-    await page.locator('.th-held [data-held-drop]').click();
-    await page.waitForFunction(() => !document.querySelector('.th-held'));
-    await page.waitForTimeout(100);
-    assert.equal((await body.textContent()).trim(), 'Open at 45.', 'Discard leaves the message alone');
-    assert.equal(seen.withdrawn.length, 2);
+    await page.locator('.th-msg[data-mid="ed1"] .th-body').getByText('Open at 40.').waitFor();
 
-    // The thread menu: Summarize, and one reader's notification setting.
-    const pick = async (...labels) => {
-      await page.locator('[data-thv-menu]').click();
-      for (const label of labels) await page.locator('.thv-pop').getByText(label, {exact: true}).click();
-    };
-    await pick('Summarize');
+    // Thread settings: Summarize, and one reader's notification setting.
+    const settings = async () => { await page.locator('[data-thv-menu]').click(); return page.locator('#thread-settings[open]'); };
+    await (await settings()).locator('[data-ths="catchup"]').click();
     await page.locator('.toast', {hasText: 'Summary ready'}).waitFor();
     assert.deepEqual(seen.catchUps, [{thread: 't-edit', scope: 'subtree'}]);
-    await pick('Notifications', 'Digest');
-    await page.waitForTimeout(100);
+    await (await settings()).locator('[data-notify="digest"]').click();
+    for (let i = 0; i < 40 && !seen.follows.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.follows, ['digest']);
-    await page.locator('[data-thv-menu]').click();
-    await page.locator('.thv-pop').getByText('Notifications', {exact: true}).click();
-    assert.equal(await page.locator('.thv-pop [aria-checked="true"]').textContent(), 'Digest', 'the menu shows the current setting');
+    await page.keyboard.press('Escape');
+    assert.equal(await (await settings()).locator('[data-notify][aria-pressed="true"]').textContent(), 'Digest', 'the panel shows the current setting');
     await page.keyboard.press('Escape');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
@@ -655,7 +791,49 @@ let browser = null;
     assert.equal(await cu.locator('.cu-you').count(), 1, 'it says the viewer is named');
     assert.match(await cu.locator('.cu-msgs').innerText(), /Booked for Friday\.\s*…/, 'a clipped message ends in …');
     await themed(page, 'catch-up');
+    // A reply: Send shows once there is text, and the sent message shows on the card, which stays until Mark read.
+    const reply = cu.locator('.cu-reply input'), sendBtn = cu.locator('.cu-send');
+    assert.equal(await sendBtn.isVisible(), false, 'no Send while the box is empty');
+    await reply.fill('On it.');
+    await sendBtn.waitFor();
+    await themed(page, 'catch-up-typing');
+    await sendBtn.click();
+    await cu.locator('.cu-msg', {hasText: 'On it.'}).waitFor();
+    assert.equal(seen.posts.at(-1).text, 'On it.');
+    assert.equal(await reply.inputValue(), '');
+    assert.equal(await sendBtn.isVisible(), false);
+    assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3', 'the card stays after a reply');
+    // Mark read can be taken back: nothing goes to the server while Undo shows.
     await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
+    await cu.locator('.cu-undo-pill', {hasText: 'Marked read'}).waitFor();
+    if (shots) await page.evaluate(() => clearTimeout(CU.undo?.timer));    // the screenshots take longer than Undo shows
+    await themed(page, 'catch-up-undo');
+    await cu.locator('[data-cu-undo]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
+    assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3');
+    assert.match(await cu.locator('.cu-msgs').innerText(), /On it\./, 'the sent reply is still on the card');
+    assert.deepEqual(seen.readAll, [], 'an undone Mark read sends nothing');
+    // A draft stays with its card through Mark read and Undo.
+    await reply.fill('Half a thought');
+    await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    assert.equal(await cu.locator('.cu-reply input').inputValue(), '');
+    await cu.locator('[data-cu-undo]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
+    assert.equal(await cu.locator('.cu-reply input').inputValue(), 'Half a thought');
+    assert.equal(await sendBtn.isVisible(), true);
+    await cu.locator('.cu-reply input').fill('');
+    await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    // The next action makes the last one final: Later sends the read it followed.
+    await cu.locator('[data-cu-later]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Bea, Cy'}).waitFor();
+    for (let i = 0; i < 40 && !seen.readAll.length; i++) await page.waitForTimeout(50);
+    assert.deepEqual(seen.readAll, ['t11']);
+    // Ctrl+Z undoes too (here a Later).
+    await page.keyboard.press('Control+z');
     await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
     assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
     await cu.locator('[data-cu-later]').click();
@@ -666,7 +844,11 @@ let browser = null;
     assert.equal(await cu.locator('.cu-pos').textContent(), '3 of 3', 'what was put off comes last');
     await cu.locator('[data-cu-mute]').click();
     await cu.getByText('All caught up').waitFor();
-    for (let i = 0; i < 40 && seen.readAll.length < 3; i++) await page.waitForTimeout(50);
+    await cu.locator('.cu-undo-pill', {hasText: 'Muted'}).waitFor();
+    assert.deepEqual(seen.readAll, ['t11', 't-gdm'], 'the mute waits while Undo shows');
+    // Undo goes by itself after a few seconds, and then the mute and read go out.
+    await cu.locator('.cu-undo').waitFor({state: 'detached', timeout: 8000});
+    for (let i = 0; i < 40 && (seen.readAll.length < 3 || seen.follows.at(-1) !== 'muted'); i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.readAll, ['t11', 't-gdm', 't4']);
     assert.equal(seen.follows.at(-1), 'muted');
     await page.keyboard.press('Escape');
@@ -698,6 +880,32 @@ let browser = null;
     assert.equal(await page.locator('#thread-new input[value^="group:"]').count(), 0);
     await shot(page, 'new-dm-desktop');
     await page.keyboard.press('Escape');
+
+    // Members: each avatar keeps its round size (a group's initials, a bot's shape), names start in one column, and
+    // Owner or Remove sits at the row's end.
+    await page.route('**/api/v2/threads/t-plan/members*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({
+      members: [{actor: 'human:ana', role: 'owner'}, {actor: 'group:ops'}, {actor: 'bot:ops'}, {actor: 'human:bea'}], next_cursor: null})}));
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    await page.locator('.thv-head [data-thv-members]').click();
+    const mem = page.locator('#thread-members[open]');
+    await mem.locator('.thd-list li .thd-name').nth(3).waitFor();
+    const rows = await mem.locator('.thd-list li').evaluateAll(lis => lis.map(li => {
+      const box = e => e && e.getBoundingClientRect(), r = box(li), av = box(li.querySelector('.av')), name = box(li.querySelector('.thd-name'));
+      const end = box(li.querySelector('.thd-tag, [data-remove]'));
+      return {w: av.width, h: av.height, avX: av.left, nameX: name.left, endGap: end ? r.right - end.right : null, tag: li.querySelector('.thd-tag')?.textContent || ''};
+    }));
+    for (const [i, r] of rows.entries()) assert.ok(Math.abs(r.w - r.h) < 1 && r.w <= 24, `row ${i}: the avatar is round at its size: ${r.w}x${r.h}`);
+    assert.equal(new Set(rows.map(r => Math.round(r.avX))).size, 1, 'avatars line up');
+    assert.equal(new Set(rows.map(r => Math.round(r.nameX))).size, 1, 'names start at one x');
+    assert.equal(rows[0].tag, 'Owner');
+    for (const [i, r] of rows.entries()) assert.ok(r.endGap !== null && r.endGap <= 8, `row ${i}: Owner or Remove ends the row (${r.endGap}px from its end)`);
+    // Add is a plain link, with no disclosure triangle.
+    const summary = mem.locator('.thd-add>summary');
+    assert.equal(await summary.evaluate(e => getComputedStyle(e).display), 'inline-flex');
+    assert.equal(await summary.locator('svg').count(), 1);
+    await themed(page, 'members');
+    await page.keyboard.press('Escape');
+    await page.unroute('**/api/v2/threads/t-plan/members*');
 
     assert.ok(seen.reads.includes('t-plan'), 'opening a thread marks it read');
     assert.deepEqual(seen.errors, []);
@@ -772,6 +980,13 @@ let browser = null;
     assert.ok(cuBox.width >= 389 && cuBox.y + cuBox.height <= navBox.y + 1, 'above the tab bar, the full width: ' + JSON.stringify([cuBox, navBox]));
     assert.ok(await sideways(page) <= 390);
     await themed(page, 'catch-up', true);
+    await page.locator('#catch-up [data-cu-read]').tap();
+    await page.locator('#catch-up .cu-undo-pill', {hasText: 'Marked read'}).waitFor();
+    assert.ok(await sideways(page) <= 390, 'Undo fits the phone');
+    if (shots) await page.evaluate(() => clearTimeout(CU.undo?.timer));
+    await themed(page, 'catch-up-undo', true);
+    await page.locator('#catch-up [data-cu-undo]').tap();
+    await page.locator('#catch-up .cu-undo').waitFor({state: 'detached'});
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#catch-up')?.open);
     await page.locator('#thread-rail [data-tr-new]').tap();
@@ -785,11 +1000,9 @@ let browser = null;
     await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
-    // On a phone the tree reads the same, indented less, with no sideways scroll.
+    // On a phone the timeline reads the same, with no sideways scroll; a long press, not a hover bar, holds the actions.
     assert.equal(await page.locator('.th-msg[data-mid="s1a"]').isVisible(), true);
-    // On a phone each message shows only ⋯; Acknowledge is in its menu.
-    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').isVisible(), false);
-    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-more]').isVisible(), true);
+    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-reply]').isVisible(), false);
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(width <= 390, 'no sideways scroll: ' + width);
     await shot(page, 'thread-phone');
@@ -879,23 +1092,27 @@ let browser = null;
 
     // A manager sets how long a thread keeps its messages, forever until they say otherwise.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
+    // It saves as it changes, from Thread settings.
     const keep = async () => {
       await page.locator('[data-thv-menu]').tap();
-      await page.locator('.thv-pop').getByText('Keep messages').tap();
-      return page.locator('#thread-keep select');
+      return page.locator('#thread-settings[open] #ths-keep');
+    };
+    const done = async () => {
+      await page.locator('#thread-settings .tmodal-x').tap();
+      await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
     };
     const select = await keep();
     assert.equal(await select.inputValue(), '', 'forever by default');
     await shot(page, 'keep-messages-phone');
     await select.selectOption('90');
-    await page.locator('#thread-keep [type=submit]').tap();
-    await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
+    for (let i = 0; i < 40 && !seen.patches.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.patches, [{retention_days: 90}]);
+    await done();
     assert.equal(await (await keep()).inputValue(), '90');
     await select.selectOption('');
-    await page.locator('#thread-keep [type=submit]').tap();
-    await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
+    for (let i = 0; i < 40 && seen.patches.length < 2; i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.patches[1], {retention_days: null});
+    await done();
 
     // Calls off: nobody gets a control that cannot work, and no "Set up calls" note either.
     callsOff = true;
@@ -982,6 +1199,32 @@ let browser = null;
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;
+  }
+  // ---- Threads is in the sidebar and the phone bar from the first paint, before its read lands; only a server without
+  // threads (its reads answer 404) takes it away.
+  {
+    for (const phone of [false, true]) {
+      threadsGate = [];
+      const {page} = await open(browser, 'ana', {phone});
+      await page.goto('https://tico-ui.test/#/tasks');
+      await page.locator(phone ? '#mobile-threads' : '#nav-threads').waitFor();
+      assert.equal(await page.evaluate(() => THREADS.on), null, 'there before the first threads read lands');
+      if (phone) assert.equal(await page.locator('#mobile-search').isVisible(), false, 'Threads holds the bar\'s place, not Search');
+      const gate = threadsGate; threadsGate = null; gate.forEach(go => go());
+      await page.waitForFunction(() => THREADS.on === true);
+      await page.close();
+    }
+    // A 404, and a list read that answers something other than a list.
+    for (const [off, phone] of [[true, false], [true, true], ['odd', false], ['odd', true]]) {
+      threadsOff = off;
+      const {page} = await open(browser, 'ana', {phone});
+      await page.goto('https://tico-ui.test/#/tasks');
+      await page.waitForFunction(() => THREADS.on === false);
+      assert.equal(await page.locator(phone ? '#mobile-threads' : '#nav-threads').isVisible(), false, 'a server without threads has no link');
+      if (phone) await page.locator('#mobile-search').waitFor();
+      await page.close();
+    }
+    threadsOff = false;
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});

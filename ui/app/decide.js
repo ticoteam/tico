@@ -352,9 +352,18 @@ function decidePaintBody(st) {
   const c = decideCurrent(st), body = $('.decide .dc-body');
   if (!c || !body) return;
   // Other bots' tasks waiting on the person for the same thing are named on the card.
-  const html = c.type === 'memory_tidy' ? decideMemoryTidyHTML(st, c) : c.type === 'approve' ? decideApprovalHTML(c) : c.type === 'stale' ? decideStaleHTML(c)
+  const html = c.type === 'memory_tidy' ? decideMemoryTidyHTML(st, c) : c.type === 'approve' ? decideApprovalHTML(st, c) : c.type === 'stale' ? decideStaleHTML(c)
     : (c.type === 'pick' ? decidePickHTML(st, c) : c.type === 'ask' ? decideAskHTML(c) : decideTaskHTML(st, c)) + foldedHTML(c.it) + decideClarifyHTML(c);
   if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
+  if (c.type === 'ask' || c.type === 'task' || c.type === 'pick') decideAskRead(c.it);   // an option card reads its question too
+}
+// Showing a question on its card reads it: a loose one by itself, a task's through the task (hub-v2.js taskAsksRead).
+function decideAskRead(it) {
+  if (!askToMe(it?.ask) || it.ask.read_at) return;
+  if (it.kind !== 'ask') return taskAsksRead(it.id, it.ask.id);
+  if (ASKS_SENT.read.has(it.id)) return;
+  ASKS_SENT.read.add(it.id);
+  post(`/v2/messages/${encodeURIComponent(it.id)}/ack`, {}).catch(() => ASKS_SENT.read.delete(it.id));
 }
 function decideStalePaint(st) {
   const c = decideCurrent(st), body = $('.decide .dc-body'), actions = $('.decide .dc-actions');
@@ -398,7 +407,7 @@ function decideActionsPlain(c, k) {
   if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
   if (c.type === 'memory_tidy') return c.it.keep_pending ? '<button type="button" disabled>Applying Keep…</button>'
     : `<button type="button" data-dc="no">Discard</button><button type="button" class="primary" data-dc="yes"${c.it.keep_available ? '' : ' disabled title="Update this bot’s computer to enable Keep"'}>Keep</button>`;
-  if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes">Approve${k('Y')}</button>`;
+  if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes"${c.it.what === 'send' && c.it.payload?.email_send_id && !DEC?.data.get(c.it.id)?.email?.preview_complete ? ' disabled title="Load the frozen email before approving"' : ''}>Approve${k('Y')}</button>`;
   if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
   if (c.type === 'ask') return `${skip}<button type="button" class="primary" data-dc="answer" data-dc-text disabled title="Type an answer">Answer</button>`;
   if (c.type === 'stale') return skip + ((c.it.rows || []).some(r => r.action) ? `<button type="button" class="primary" data-stale-all="${esc(c.it.id)}">Accept all</button>` : '');
@@ -426,11 +435,13 @@ function decideTick(st, i, on) {
 }
 const DEC_APPROVAL_Q = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
   support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?',
-  finance: 'Approve this Finance change?'};
+  finance: 'Approve this Finance change?', mail_alert: 'Let this bot send mail?'};
 // The exact payload, as Needs you has always shown it (needs-you.js approvalPayloadNode): every value set as text,
 // the raw JSON folded underneath.
-function decideApprovalHTML(c) {
-  return `<p class="dc-q">${esc(DEC_APPROVAL_Q[c.it.what] || 'Approve this?')}</p>${approvalPayloadNode(c.it).outerHTML}`;
+function decideApprovalHTML(st, c) {
+  const frozen = c.it.what === 'send' && c.it.payload?.email_send_id;
+  const preview = st.data.get(c.it.id);
+  return `<p class="dc-q">${esc(DEC_APPROVAL_Q[c.it.what] || 'Approve this?')}</p>${approvalPayloadNode(c.it).outerHTML}${frozen ? preview?.error ? '<p class="err">Could not load the frozen email. Reopen this card to try again.</p>' : preview?.email ? emailSendPreviewHTML(preview.email) : '<p role="status">Loading frozen email…</p>' : ''}`;
 }
 // A question asked outside any task: the question, and what the bot would do; the answer is the note.
 function decideAskHTML(c) {
@@ -507,6 +518,21 @@ function decideTaskHTML(st, c) {
     ? `<details class="dc-details"><summary>Details</summary>${details}</details>` : ''}`;
 }
 async function decideLoad(st, c, again = false) {
+  if (c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id) {
+    if (st.at !== c.key) return;
+    if (st.data.has(c.it.id) && !again) return;
+    st.data.set(c.it.id, null);
+    try {
+      const email = await get(`/v2/email/sends/${encodeURIComponent(c.it.payload.email_send_id)}`, {fresh: true});
+      st.data.set(c.it.id, email.preview_complete && email.send.content_sha256 === c.it.payload.content_sha256 ? {email} : {error: true});
+    } catch { st.data.set(c.it.id, {error: true}); }
+    if (DEC === st && st.at === c.key) {
+      decidePaintBody(st);
+      const actions = $('.decide .dc-actions');
+      if (actions) actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
+    }
+    return;
+  }
   if (c.type === 'memory_tidy') {
     if (st.data.has(c.it.id) && !st.data.get(c.it.id)?.error && !again) return;
     st.data.set(c.it.id, null);
@@ -611,6 +637,8 @@ function decideAct(st, what, i, shown = st.shown) {
   const key = st.at, c = decideCurrent(st), root = $('.decide');
   // A second tap while the card leaves, or a button from a card no longer current, does nothing.
   if (!c || !root || st.busy || key !== shown || performance.now() < (st.lockUntil || 0)) return;
+  if (what === 'yes' && c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id
+      && !st.data.get(c.it.id)?.email?.preview_complete) return;
   const card = $('.dc-card', root);
   if (['skip', 'next', 'prev'].includes(what)) {
     const to = decideStepKey(st, what === 'prev' ? -1 : 1, what === 'skip');

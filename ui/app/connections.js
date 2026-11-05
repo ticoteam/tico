@@ -1,6 +1,6 @@
 /* ui/app/connections.js — Library › Connections (#/library/connections): every way the outside world reaches the
    company, one row each, from GET /api/v2/connections (backend/connections.py): Slack, the GitHub App, mail bots'
-   mailboxes, Email & Phone inboxes, meeting importers, incoming and outgoing webhooks, physical mail and Listening. A
+   mailboxes, Tico addresses and numbers, meeting importers, incoming and outgoing webhooks, physical mail and Listening. A
    row says its status, whose it is, who reads it and its bots, and links to where it is set up (Slack's and GitHub's
    connect cards stay on their Tools pages). The hub filters the rows per reader; this page only draws them.
    Below the list, admins see Slack (threads linked to Slack channels); its rows are in ui/app/thread-connect.js.

@@ -52,7 +52,7 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
+    return H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
                              "ORDER BY created_at", (task_id, owner)))
 
 
@@ -71,7 +71,7 @@ def _row(it, actor):
     if it.get("person_ask"):
         row["ask"] = it["person_ask"]
     if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has been asked to say plainly what it needs (backend/restate_asks.py).
+        # Nothing to decide yet: the bot has not yet said plainly what it needs.
         row["ask_missing"] = True
     if (it.get("ask") or {}).get("body"):
         row["question"] = _clip(it["ask"]["body"], 1500)
@@ -93,7 +93,8 @@ def _row(it, actor):
     if deadline(it):
         row["due_at"] = deadline(it)
     if it.get("recommend"):
-        row["recommend"] = it["recommend"]["do"]       # what the bot would do: "do what you recommend" takes it
+        row["recommend"], provenance = H.sourced_text(it["recommend"]["do"], [it["recommend"].get("source")])
+        row.update(provenance)
     if it.get("folded"):
         # Other bots' tasks waiting on the person for the same thing: said with the card so none is lost.
         row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner_id")),
@@ -305,14 +306,15 @@ def candidates(c, actor, items):
     return rows, notes, reports
 
 
-def start(c, actor, items, snapshot, scope=None):
+def start(c, actor, items, snapshot, scope=None, reader=None):
     """The open batch if there is one (resume), otherwise a new one from `items` (needs-you rows):
-    the whole list, or one group of it when `scope` names a bot, a person, `me`, or `next`."""
+    the whole list, or one group of it when `scope` names a bot, a person, `me`, or `next`. `reader` is the privacy
+    actor the person reads with (task_privacy.actor): only the questions it may read are marked read."""
     rows, notes, reports = candidates(c, actor, items)
     line = lineup(c, actor, notes + rows)
     open_ = current(c, actor)
     if open_:
-        return {**view(c, open_, resumed=True), "lineup": line}
+        return _presented(c, actor, {**view(c, open_, resumed=True), "lineup": line}, reader)
     group = _scope(c, actor, line, scope)
     if group:
         rows = [r for r in rows if group_of(r, actor) == group]
@@ -336,7 +338,21 @@ def start(c, actor, items, snapshot, scope=None):
                                        "responses", "alerts", "message_id", "report", "scope")))
     H.event(c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)),
                                                      "scope": group})
-    return {**view(c, batch), "lineup": line}
+    return _presented(c, actor, {**view(c, batch), "lineup": line}, reader)
+
+
+def _presented(c, actor, out, reader=None):
+    """The item the person now hears in full is opened: its task's questions to them that they may read are read
+    (delivered and read set, as opening it in Needs you does; backend/task_holds.py says so when one is withdrawn).
+    A question they may not read stays unread, as on the task page."""
+    key = str((out.get("item") or {}).get("key") or "")
+    if key.startswith("task:"):
+        row = H.task(c, key[5:])
+        if row:
+            mine = [a["id"] for a in H.open_task_asks(c, row, actor=reader or actor)
+                    if a["recipient_id"] == actor]
+            H.asks_seen(c, actor, mine, read=True)
+    return out
 
 
 def _items(batch):
@@ -363,7 +379,9 @@ def view(c, batch, resumed=False):
     else:
         out.update({"end": True, "summary": summary(batch),
                     "note": "The list is done. Say the summary and ask whether to commit."})
-    return out
+    from .files import readable_page_refs
+    from .teammate_access import _viewer_for
+    return readable_page_refs(c, None, _viewer_for(c, batch["person"]), out)
 
 
 def _load(c, actor, batch_id):
@@ -373,7 +391,7 @@ def _load(c, actor, batch_id):
     return dict(row)
 
 
-def next_item(c, actor, batch_id):
+def next_item(c, actor, batch_id, reader=None):
     batch = _load(c, actor, batch_id)
     if batch["state"] != "open":
         raise Problem("state", f"This batch is {batch['state']}", 409)
@@ -381,7 +399,7 @@ def next_item(c, actor, batch_id):
     cursor = min(int(batch["cursor"] or 0) + 1, len(items))
     c.execute("UPDATE batches SET cursor=? WHERE id=?", (cursor, batch["id"]))
     batch["cursor"] = cursor
-    return view(c, batch)
+    return _presented(c, actor, view(c, batch), reader)
 
 
 def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", until=None):
@@ -470,8 +488,9 @@ def _apply_decide(c, auth, who, item, r, boards):
             raise Problem("approve_not_asked", "Approving is the person's own decision: the Assistant can decline here, "
                           "but the person approves it in Tico or with their yes to the Assistant's read-back", 403)
         row = auth.approval(c, who, ident, decide=True)
-        if row["kind"] == "support":
-            # As on the approve route: sending off the install is a person's own tap in Tico, not their token.
+        if row["kind"] == "support" and decision == "approve":
+            # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
+            # sends nothing, so it is anyone's who may decide it.
             from .support import require_person
             try:
                 require_person(who)

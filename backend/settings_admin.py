@@ -30,6 +30,7 @@ from . import names as actor_names
 from . import read_cache
 from . import report_managers
 from .store import H, P, Problem, bot_readiness, encode, readiness_document, repo_url
+from . import bot_settings as BS
 
 
 def _json(value, fallback=None):
@@ -170,7 +171,7 @@ class SettingsAdmin:
 
     @staticmethod
     def _config(c, bot):
-        row = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
         if not row:
             raise Problem("not_found", "Bot not found", 404)
         return row
@@ -240,7 +241,7 @@ class SettingsAdmin:
             if current in seen:
                 raise Problem("hierarchy", "A bot cannot report to itself or one of its descendants", 422)
             seen.add(current)
-            row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (current,)).fetchone()
+            row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (current,)).fetchone()
             if not row:
                 break
             current = row["reports_to"] or (_json(row["config"], {}) or {}).get("reports_to")
@@ -340,7 +341,7 @@ class SettingsAdmin:
         effort = self._effort(choice, None, config.get("reasoning_effort"))
         config.update(model=model, reasoning_effort=effort)
         c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, slug))
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
+        BS.write(c, slug, config)
 
     def pick_slug(self, c, name, fallback="bot"):
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
@@ -511,11 +512,12 @@ class SettingsAdmin:
         c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,?,?)",
                   (bot_id, body.slug, body.display_name, effort, body.status, now))
         c.execute(
-            "INSERT INTO bot_config(bot,config,team,owner_id,owner_ids,description,reports_to,"
+            "INSERT INTO bot_config(bot,team,owner_id,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated_at,definition_updated_by,bot_owners,created_by) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (bot_id, encode(config), team, operator, encode(owners), body.description,
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (bot_id, team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
+        BS.write(c, bot_id, config, now)
         from .finance import actions as FA
         FA.revalidate_org(c)                 # a new bot joins the org chart Finance's grants follow (spec 7.5)
         if not body.model and config.get("gateway"):
@@ -592,7 +594,7 @@ class SettingsAdmin:
             declared["shared"] = bool(card.get("shared"))
             if card.get("session"):
                 declared["session"] = card["session"]
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), bot_id))
+            BS.write(c, bot_id, declared)
             MessageBots.link(c, who.actor, bot_id, who.actor)      # BotOps built it for them: it is their message bot
         return {**result, **self.definition(c, bot_id), "created": True}
 
@@ -840,10 +842,11 @@ class SettingsAdmin:
             c.execute("UPDATE bot_control SET draining=0 WHERE bot=?", (bot,))
             H.status_set(c, who.actor, bot, state="active", focus="", reason="Resumed in Settings")
             H.event(c, who.actor, "bot.resume", bot, {"via": "definition"})
+        BS.write(c, bot, declared)
         c.execute(
-            "UPDATE bot_config SET config=?,description=?,reports_to=?,repo=?,thread_mode=?,"
+            "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
             "definition_updated_at=?,definition_updated_by=?,revision=revision+1 WHERE bot=?",
-            (encode(declared), values["description"], values.get("reports_to"), values["repo"],
+            (values["description"], values.get("reports_to"), values["repo"],
              values["thread_mode"], H.now(), who.actor, bot))
         entries = self._entries(c)
         roster = self._roster(c)
@@ -1072,7 +1075,8 @@ class SettingsAdmin:
                                  "harness": target.get("harness") or runtime_of(target["runtime"]) or target["runtime"],
                                  "reasoning_effort": target["effort"],
                                  "model_managed_by": "cloud"})
-                c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+                BS.write(c, bot, declared)
+                c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
                 c.execute("UPDATE bots SET effort=? WHERE id=?", (target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
@@ -1394,11 +1398,14 @@ class SettingsAdmin:
             H.event(c, who.actor, "settings.undo", bot, {"change": change_id, "field": change["field"]})
             return {"undone": True, "bot": bot, "field": change["field"], "revision": config["revision"] + 1}
         if change["field"] == "task_model":
+            # Every field is named, so the undo restores the record it replaced, nulls included.
+            restored = before and SimpleNamespace(
+                harness=before.get("harness") or None, model=before.get("model") or None,
+                effort=before.get("reasoning_effort") or None, compact_at=before.get("compact_at"),
+                model_fields_set={"harness", "model", "effort", "compact_at"})
             return self.set_task_model(c, who, bot, SimpleNamespace(
-                task_model=SimpleNamespace(harness=before.get("harness") or None, model=before.get("model") or None,
-                                           effort=before.get("reasoning_effort") or None,
-                                           compact_at=before.get("compact_at")) if before else None,
-                expected_revision=body.expected_revision), undo_change_id=change_id)
+                task_model=restored or None, expected_revision=body.expected_revision,
+                model_fields_set={"task_model", "expected_revision"}), undo_change_id=change_id)
         raise Problem("not_reversible", "This settings change cannot be undone", 409)
 
     def team_names(self, c):
@@ -1458,7 +1465,8 @@ class SettingsAdmin:
         if before == body.manages_reports:
             raise Problem("unchanged", "That setting is already selected", 409)
         declared[report_managers.KEY] = body.manages_reports
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         self.record(c, who.actor, bot, report_managers.KEY, before, body.manages_reports)
         H.event(c, who.actor, "bot.manages_reports_changed", bot, {"before": before, "after": body.manages_reports})
         return {"bot": bot, "manages_reports": body.manages_reports, "revision": config["revision"] + 1}
@@ -1504,8 +1512,8 @@ class SettingsAdmin:
             declared.pop("fallback", None)
         else:
             declared["fallback"] = target
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?",
-                  (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         after = self.snapshot(c, bot, "fallback")
         self.record(c, who.actor, bot, "fallback", before, after)
         if undo_change_id:
@@ -1519,7 +1527,13 @@ class SettingsAdmin:
         optional on its own. No model means the bot's own model, so an effort or context length can be set alone; the
         effort is checked against the bot's own model then. Null clears all of it. Only this key changes: the bot's own
         model, and so its sessions, stay as they are. A model the bot's computer cannot run is saved all the same, and
-        its tasks run on the bot's model until it can: the answer's `readiness` says so now."""
+        its tasks run on the bot's model until it can: the answer's `readiness` says so now.
+
+        A saved held model (Dev 693) is the exception: a save with no model, or the same one, keeps it, and a different
+        held model is refused. For that model a field the save leaves out (effort, context length) is kept, a context
+        length sent as null clears it, a null effort keeps the held model's effort, and a harness with no model is
+        refused. Sending `task_model` as null clears the whole setting, held or not; leaving it out names no model, so on
+        the held model it keeps it."""
         CA.gate(c, who.actor, "cost", f"change the model {(H.bot(c, bot) or {}).get('slug', bot)}'s tasks run on")
         self._manager(c, who, bot, report="task_model")
         shared_bots.refuse_copy(c, bot)
@@ -1527,23 +1541,47 @@ class SettingsAdmin:
         if config["revision"] != body.expected_revision:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         chosen = body.task_model
-        if chosen is None or not (chosen.model or chosen.effort or chosen.compact_at):
+        before = self.snapshot(c, bot, "task_model")
+        # The saved task model: a held row that is it stays editable (Dev 693). A save that sends no model, or the same
+        # one, keeps it; a save that picks another held model is still refused.
+        kept = (before or {}).get("model") or ""
+        saved = self.models.get(kept) if kept else None
+        held = bool(saved and saved.get("held"))
+        # A body that leaves `task_model` out names no model, so on the saved held model it keeps it, as `{}` does. An
+        # explicit null still clears the whole setting. The undo below names every field it sends.
+        if chosen is None and held and "task_model" not in body.model_fields_set:
+            chosen = M.BotTaskChoice()
+        if held and chosen is not None and chosen.harness and not chosen.model:
+            raise Problem("harness", "Choose a task model to pick a harness for it", 422)
+        # A null task model clears all of it. A body that names nothing clears a task model that is not held; on the
+        # saved held model it is a save with no model, which keeps it (below).
+        if chosen is None or not (chosen.model or chosen.effort or chosen.compact_at or held):
             target = None
         elif chosen.model:
             choice = self.models.get(chosen.model)
             if not choice:
                 raise Problem("model", "Choose one of the supported models", 422)
-            self.refuse_retired(choice)
-            harness = self._harness(choice, chosen.harness)
-            target = {"harness": harness, "model": choice["id"], "reasoning_effort": self._effort(choice, chosen.effort),
-                      "runtime": runtime_of(harness) or choice["runtime"], "compact_at": chosen.compact_at}
+            self.refuse_retired(choice, kept)
+            same = before if held and choice["id"] == kept else {}
+            harness = self._harness(choice, chosen.harness, same.get("harness"))
+            target = {"harness": harness, "model": choice["id"],
+                      "reasoning_effort": self._effort(choice, chosen.effort, same.get("reasoning_effort")),
+                      "runtime": runtime_of(harness) or choice["runtime"],
+                      "compact_at": task_models.kept_context(chosen, same)}
+        elif held:
+            # An effort or context length alone: the saved held model stays, with the harness, effort and context
+            # length it has unless the save names them.
+            harness = self._harness(saved, None, before.get("harness"))
+            target = {"harness": harness, "model": kept,
+                      "reasoning_effort": self._effort(saved, chosen.effort, before.get("reasoning_effort")),
+                      "runtime": runtime_of(harness) or saved["runtime"],
+                      "compact_at": task_models.kept_context(chosen, before)}
         else:
             if chosen.harness:
                 raise Problem("harness", "Choose a task model to pick a harness for it", 422)
             own = self.models.get(self.snapshot(c, bot, "model")["model"]) or {}
             target = {"harness": "", "model": "", "reasoning_effort": self._effort(own, chosen.effort) if chosen.effort else "",
                       "runtime": "", "compact_at": chosen.compact_at}
-        before = self.snapshot(c, bot, "task_model")
         if before == target:
             raise Problem("unchanged", "That task model is already selected", 409)
         declared = _json(config["config"], {}) or {}
@@ -1551,7 +1589,8 @@ class SettingsAdmin:
             declared.pop(task_models.KEY, None)
         else:
             declared[task_models.KEY] = target
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         after = self.snapshot(c, bot, "task_model")
         self.record(c, who.actor, bot, "task_model", before, after)
         if undo_change_id:
@@ -1623,7 +1662,8 @@ class SettingsAdmin:
         before = self.snapshot(c, bot, "compact_at")
         declared = _json(config["config"], {}) or {}
         declared["compact_at"] = body.compact_at
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
         return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
@@ -1636,7 +1676,8 @@ class SettingsAdmin:
         declared = _json(config["config"], {}) or {}
         before = auto_tasks.of(declared)
         declared[auto_tasks.KEY] = body.keep_tasks_going
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         self.record(c, who.actor, bot, auto_tasks.KEY, before, body.keep_tasks_going)
         if undo_change_id:
             c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
@@ -1654,7 +1695,8 @@ class SettingsAdmin:
         declared = _json(config["config"], {}) or {}
         before = start_places.bot_limit(declared)
         declared[start_places.BOT_KEY] = body.turns_at_once
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         self.record(c, who.actor, bot, start_places.BOT_KEY, before, body.turns_at_once)
         if undo_change_id:
             c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
@@ -1679,7 +1721,8 @@ class SettingsAdmin:
         if profiles.name_of(declared):
             # A bot with a profile keeps it: the old setting only changes the profile's window (backend/profiles.py).
             profiles.apply_preset(declared, chosen)
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        BS.write(c, bot, declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         wake_presets.replan(c, bot)
         self.record(c, who.actor, bot, "wake_preset", before, chosen)
         H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": chosen})
@@ -1693,7 +1736,7 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     (a bot id) or else its operator; bots reporting to it move up to its own parent. A bot that
     roots a team hands the team to `successor`, which then reports to nobody. Nothing is
     deleted: the rows, tasks and history stay, and the repository is untouched."""
-    config = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
     if not config or not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     if successor and (successor == bot or not H.bot(c, successor)
@@ -1706,8 +1749,11 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     declared.pop("branch_previous_status", None)
     declared["status"] = "archived"
     c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1,definition_updated_at=?,"
-              "definition_updated_by=? WHERE bot=?", (encode(declared), ts, actor, bot))
+    from . import pages
+    pages.forget_audience_member(c, actor, "bots", bot)
+    BS.write(c, bot, declared, ts)
+    c.execute("UPDATE bot_config SET revision=revision+1,definition_updated_at=?,"
+              "definition_updated_by=? WHERE bot=?", (ts, actor, bot))
     c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
     c.execute("UPDATE jobs SET state='canceled' WHERE bot_id=? AND state='queued'", (bot,))
     for row in c.execute("SELECT id FROM schedules WHERE bot=? AND deleted_at IS NULL", (bot,)).fetchall():
@@ -1782,13 +1828,14 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
 
 
 def _set_parent(c, actor, bot, parent, ts):
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     declared = _json(row["config"], {}) or {}
     declared["reports_to"] = parent
     from .report_order import arrive
     arrive(c, "bot:" + bot, parent)
-    c.execute("UPDATE bot_config SET reports_to=?,config=?,revision=revision+1,"
+    BS.write(c, bot, declared, ts)
+    c.execute("UPDATE bot_config SET reports_to=?,revision=revision+1,"
               "definition_updated_at=?,definition_updated_by=? WHERE bot=?",
-              (parent, encode(declared), ts, actor, bot))
+              (parent, ts, actor, bot))
     from .finance import actions as FA
     FA.revalidate_org(c)                     # a bot's manager is part of the org chart Finance's grants follow (spec 7.5)

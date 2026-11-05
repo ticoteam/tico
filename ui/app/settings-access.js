@@ -188,9 +188,9 @@ function teammateEditAccess(kind, id, name, after) {
   return accessEditor({path: teammateAccessPath(kind, id), name, levels: TEAMMATE_ACCESS_LEVELS[kind],
     presets: ACCESS_PRESETS.filter(([value]) => value !== 'requests'), skipPerson: kind === 'human' ? id : '', after});
 }
-async function accessEditor({path, name, levels, presets, skipBot = '', skipPerson = '', stage, panel, after}) {
+async function accessEditor({path, name, levels, presets = [], skipBot = '', skipPerson = '', stage, panel, after, initialData, singleAudience, save}) {
   let data;
-  try { data = await get(`${path}/access`, {fresh: true}); }
+  try { data = initialData || await get(`${path}/access`, {fresh: true}); }
   catch (error) { toast(error.message, true); return; }
   let dialog = (panel && botSettingsPanel('access-editor', 'access-editor', 'access-editor-title')) || $('#access-editor');
   if (!dialog) {
@@ -221,14 +221,14 @@ async function accessEditor({path, name, levels, presets, skipBot = '', skipPers
   };
   const paintPickers = () => {
     const host = dialog.querySelector('[data-access-pickers]');
-    host.innerHTML = preset === 'open' ? ''
+    host.innerHTML = singleAudience ? picker(['read'], 'Who can see it', '', true) : preset === 'open' ? ''
       : preset === 'requests' ? picker(['read'], 'Who can read its work', '', false)
       : preset === 'private' ? picker(['see', 'read', 'write'], 'Who can use it', '', false)
       : levels.map(([key, label, what]) => picker([key], label, what, true)).join('');
   };
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="access-editor-title">Access to ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-access-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="access-editor-title">${singleAudience ? 'Who can see it' : 'Access to ' + esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-access-close aria-label="Close">✕</button></div>
     <div class="access-body">
-      <fieldset class="access-presets"><legend>Access</legend>${presets.map(([value, label, hint]) =>
+      <fieldset class="access-presets" ${singleAudience ? 'hidden' : ''}><legend>Access</legend>${presets.map(([value, label, hint]) =>
         `<label><input type="radio" name="preset" value="${value}" ${value === preset ? 'checked' : ''}><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('')}</fieldset>
       <div data-access-pickers></div></div>
     <div class="row access-foot"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></form>`;
@@ -266,7 +266,7 @@ async function accessEditor({path, name, levels, presets, skipBot = '', skipPers
     }
     const submit = form.querySelector('[type=submit]'); submit.disabled = true; status.textContent = 'Saving…';
     try {
-      const saved = await put(`${path}/access`, {see: draft.see, read: draft.read, write: draft.write, revision: data.revision});
+      const saved = save ? await save(draft.read) : await put(`${path}/access`, {see: draft.see, read: draft.read, write: draft.write, revision: data.revision});
       settingsPanelClose(dialog); if (after) await after(saved); toast('Saved');
     } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false; }
   };

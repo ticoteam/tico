@@ -16,8 +16,8 @@ Steps:
 4. Strip terms. Remove any valuation, amount, allocation, round date or comparison with other investors. Where the investor
    asks about terms, leave a marked blank: "[terms: to be confirmed by the person]".
 5. Put every figure and every blank's source in a short note under the draft, not in the message itself.
-6. Put the draft on the task with the recipient named. The send is one approval per message, requested with
-   `hub approval request --kind send` (see AGENT.md, Sending).
+6. Put the draft on the task with the recipient named. With this bot in Ask first mode, `mail send --draft <id>`
+   freezes it for its own preview and approval; otherwise leave it for the person (see AGENT.md, Sending).
 
 Checks before you finish:
 - No terms, valuation, amount, allocation or round date appear in the draft.

@@ -8,6 +8,7 @@ from backend.scheduler import Scheduler
 from backend.tests.test_api import api, post, get, claim, ready, setup_attempt
 from backend.tests.test_execution_review import (add_recovery_reviewer, restarted_mid_turn, rival, sweep, job_state)
 from backend.tests.test_login_holds import at, signed_in, two_bots, limit, events, health_detail
+from backend import bot_settings as BS
 
 
 @pytest.mark.parametrize('identity', ['task', 'lane', 'main'])
@@ -21,7 +22,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
             c.execute("UPDATE attempts SET lane=? WHERE id IN (?,?)", (lane, attempt['id'], other['id']))
         else:
             task = H.task_create(c, 'human:ana', 'Shared work', 'Finish this.', 'bot:ops')
-            c.execute('UPDATE turns SET task_id=? WHERE id IN (?,?)', (task['id'], attempt['id'], other['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id IN (?,?)', (task['id'], attempt['id'], other['id']))
             c.execute('UPDATE messages SET refs=? WHERE id=?', (json.dumps({'task': task['id']}), message['id']))
     assert sweep(api) == []
     with api.app.state.store.read() as c:
@@ -123,7 +124,7 @@ def test_shell_run_ignores_another_runs_task_merge(api):
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Shared task', 'Finish.', 'bot:ops')
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (task['id'], attempt['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (task['id'], attempt['id']))
         c.execute('INSERT INTO task_links(id,task_id,kind,url,created_at,pr_merged_at) VALUES(?,?,?,?,?,?)',
                   (H.new_id(), task['id'], 'pr', 'https://example.com/acme/app/pull/9', H.now(), H.now()))
     assert [d['state'] for d in sweep(api)] == ['queued']
@@ -154,8 +155,7 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
     at(monkeypatch, '2026-10-26T10:53:00.000000Z', api)
     if named_fallback:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                      (json.dumps({'harness': 'codex', 'model': 'gpt-5.5'}),))
+            BS.update(c, 'ops', {'fallback': {'harness': 'codex', 'model': 'gpt-5.5'}})
     for n in range(2):
         post(api, 'chat/ops', {'text': f'Please finish request {n}'})
     first = claim(api, machine, bot='ops')
@@ -212,8 +212,7 @@ def test_fallbacks_own_named_reset_holds_only_that_login_and_is_visible(api, mon
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, '2026-10-26T10:53:00.000000Z', api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                  (json.dumps({'harness': 'codex', 'model': 'gpt-5.5'}),))
+        BS.update(c, 'ops', {'fallback': {'harness': 'codex', 'model': 'gpt-5.5'}})
     post(api, 'chat/ops', {'text': 'Finish the queued work'})
     first = claim(api, machine, bot='ops')
     limit(api, machine, first, errors=('Usage limit',), limit_resets_at='2026-10-26T12:50:00Z')

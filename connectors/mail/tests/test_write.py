@@ -41,123 +41,48 @@ class Sending(Writing):
         self.assertEqual(rc, 0, err)
         return p["draft"]
 
-    def test_a_retried_send_sends_nothing_and_says_so(self):
+    def test_a_retried_send_queues_the_same_frozen_content_without_sending(self):
         did = self.make()
-        self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
-        rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
-        self.assertEqual(rc, 1)          # the draft is gone: Gmail says notFound
-        did2 = self.make()
-        row = db.get_send(self.conn(), compose.send_key("influencer", "42", did))
-        self.assertEqual(row["status"], "sent")
+        command = ("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        rc, first, err = self.run_json(*command)
+        self.assertEqual(rc, 0, err)
+        rc, second, err = self.run_json(*command)
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(first["queued"])
+        self.assertFalse(first["sent"])
+        self.assertEqual(first["send_id"], second["send_id"])
+        self.assertEqual(self.service.sent, [])
+        self.assertIn(did, self.service.drafts_by_id)
 
-    def test_a_warned_mail_goes_with_the_warning_line_on_its_body(self):
-        # The org rule check answers warn (backend/org_rule_check.py): the recipient reads the line above the mail.
+    def test_a_warned_mail_freezes_the_warning_line_in_the_queue(self):
         did = self.make()
-        line = "Warning: Influencer's message may break the rule 'Offers need a review.'"
+        line = "Warning: this offer needs review."
         pl.HUB_POST = lambda path, body, key=None: {"outcome": "warn", "warning_line": line,
-                                          "rule_warning": {"text": "delivered with a warning"}}
-        rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
+                                                   "rule_warning": {"text": "Review needed"}}
+        rc, result, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
         self.assertEqual(rc, 0, err)
-        self.assertTrue(p["sent"])
-        payload = self.service.store[self.service.sent[-1]["id"]]["payload"]
-        parts = payload.get("parts") or [payload]
-        data = next(x["body"]["data"] for x in parts if x["mimeType"] == "text/plain")
-        import base64
-        text = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode()
-        self.assertTrue(text.startswith(line), text[:200])
-        self.assertIn(GOOD_BODY.strip().splitlines()[0], text)
+        self.assertTrue(result["queued"])
+        self.assertIn(line, compose.decode(self.queue_requests[0]["raw"]))
+        self.assertEqual(self.service.sent, [])
 
-    def test_a_failed_rule_check_lets_the_send_go_but_logs_it_and_says_so(self):
-        # Tico refused the check (another bot's token) or failed: the send goes out, never quietly.
+    def test_a_failed_rule_check_is_reported_while_the_server_queue_still_owns_delivery(self):
         did = self.make()
-
-        def refused(path, body, key=None):
-            raise pl.HubFailed("forbidden", status=403)
-        pl.HUB_POST = refused
-        rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        pl.HUB_POST = lambda *a, **kw: (_ for _ in ()).throw(pl.HubFailed("forbidden", status=403))
+        rc, result, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
         self.assertEqual(rc, 0, err)
-        self.assertTrue(p["sent"])
-        self.assertIn("forbidden", p["rule_check"])
-        [failed] = [a for a in self.audit_lines() if a["action"] == "rule-check-failed"]
-        self.assertEqual(failed["detail"]["reason"], "forbidden")
+        self.assertTrue(result["queued"])
+        self.assertIn("forbidden", result["rule_check"])
+        self.assertEqual(self.service.sent, [])
+        self.assertEqual(db.mail_check_misses(self.conn(), "influencer"), [])
 
-    def misses(self):
-        return db.mail_check_misses(self.conn(), "influencer")
-
-    def send(self, n=0):
-        rc, p, err = self.draft("--subject", f"Ava, 6 months of Acme on us ({n})")      # its own draft and send
-        self.assertEqual(rc, 0, err)
-        return self.run_json("send", "--as", "influencer", "--draft", p["draft"], "--issue", "42")[1]
-
-    def test_a_send_after_any_failed_check_is_kept_by_that_checks_id_and_reported_once_tico_answers(self):
-        self.write_policy(harness.POLICY.replace("per_recipient_cooldown_days: 365", "per_recipient_cooldown_days: 0")
-                          .replace("per_recipient_cooldown_days: 14", "per_recipient_cooldown_days: 0"))
-        keys, reported = [], []
-
-        def failing(failure):
-            def post(path, body, key=None):
-                keys.append(key)
-                raise failure
-            return post
-
-        def back(path, body, key=None):
-            if path.endswith("/misses"):
-                reported.append(body["ids"])
-                return {"recorded": len(body["ids"]), "known": []}
-            return {"outcome": "pass"}
-        # Whatever the failure, Tico's refusal or error, a stale lease, a proxy, a timeout: kept, by the check's key.
-        for n, failure in enumerate((pl.HubFailed("forbidden", 403), pl.HubFailed("http_409", 409),
-                                     pl.HubFailed("http_401", 401), pl.HubFailed("http_530", 530),
-                                     pl.HubFailed("http_500", 500), pl.HubFailed("unavailable"))):
-            pl.HUB_POST = failing(failure)
-            self.assertTrue(self.send(n)["sent"])
-        self.assertEqual(sorted(self.misses()), sorted(keys))
-        self.assertEqual(len(set(keys)), 6)
-        pl.HUB_POST = back
-        self.send(9)
-        self.assertEqual(([sorted(r) for r in reported], self.misses()), ([sorted(keys)], []))
-
-    def test_a_miss_is_reportable_only_once_gmail_confirms_the_send(self):
-        # Another run reports while this send is in flight, and the send then fails: nothing was out, nothing told.
-        from connectors.mail import gmail
-        pl.HUB_POST = lambda path, body, key=None: (_ for _ in ()).throw(pl.HubFailed("unavailable"))
-        seen, send = [], gmail.Gmail.send_draft
-
-        def in_flight(gm_self, draft_id):
-            seen.append(db.mail_check_misses(self.conn(), "influencer"))
-            self.service.send_fails = True
-            try:
-                return send(gm_self, draft_id)
-            finally:
-                self.service.send_fails = False
-        with mock.patch.object(gmail.Gmail, "send_draft", in_flight):
-            self.run_cli("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")
-        self.assertEqual((seen, self.misses()), ([[]], []))
-
-    def test_an_older_tico_without_the_misses_route_keeps_them_and_still_holds_the_mail(self):
-        pl.HUB_POST = lambda path, body, key=None: (_ for _ in ()).throw(pl.HubFailed("unavailable"))
-        self.send()
-        queued = self.misses()
-
-        def older(path, body, key=None):
-            if path.endswith("/misses"):
-                raise pl.HubFailed("http_404", status=404)
-            return {"outcome": "held", "held": {"text": "held by the rule 'No offers by mail.'"}}
-        pl.HUB_POST = older
-        p = self.send(1)
-        self.assertEqual((p["sent"], p["gate"]), (False, "rules"))
-        self.assertEqual(self.misses(), queued)
-
-    def test_the_idempotency_row_is_written_before_the_api_call(self):
+    def test_queue_failure_keeps_the_draft_and_never_calls_the_provider(self):
+        from connectors.mail import Failure
         did = self.make()
-        self.service.send_fails = True
-        rc, out, err = self.run_cli("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        with mock.patch.object(pl, "queue_send", side_effect=Failure("Queue unavailable")):
+            rc, _, _ = self.run_cli("send", "--as", "influencer", "--draft", did, "--issue", "42")
         self.assertEqual(rc, 1)
-        # the claim was rolled back, so a retry is allowed to try again
-        self.assertIsNone(db.get_send(self.conn(), compose.send_key("influencer", "42", did)))
-        self.service.send_fails = False
-        rc, p, _ = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
-        self.assertTrue(p["sent"])
+        self.assertIn(did, self.service.drafts_by_id)
+        self.assertEqual(self.service.sent, [])
 
     def test_outbound_send_false_downgrades_with_the_reason(self):
         p = self.root / "emp-influencer" / "employee.yaml"
@@ -178,9 +103,6 @@ class Sending(Writing):
         self.assertEqual((rc, out["sent"], out["gate"]), (0, False, "global"))
 
 class AttachAndDiscard(Writing):
-    def allow(self):
-        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
-
     @property
     def home(self):
         return self.root / "emp-influencer"
@@ -196,9 +118,6 @@ class AttachAndDiscard(Writing):
     def test_an_attached_draft_still_goes_through_every_send_gate(self):
         pdf = self.root / "emp-influencer" / "letter.pdf"
         pdf.write_bytes(b"%PDF-1.4 response letter")
-        rc, _, _ = self.draft("--attach", str(pdf))             # the harness policy says no
-        self.assertEqual(rc, 2)
-        self.allow()
         p = self.root / "emp-influencer" / "employee.yaml"
         p.write_text(p.read_text().replace("outbound_send: true", "outbound_send: false"))
         rc, d, err = self.draft("--attach", str(pdf), "--reply-to", "t-ava")
@@ -216,7 +135,6 @@ class AttachAndDiscard(Writing):
         self.assertEqual(down[-1]["detail"]["attachments"], ["letter.pdf"])
 
     def test_a_file_outside_the_bots_folder_is_refused_however_it_is_named(self):
-        self.allow()
         outside = self.root / "elsewhere.pdf"
         outside.write_bytes(b"%PDF-1.4 not the bot's")
         (self.home / "docs").mkdir()
@@ -229,7 +147,6 @@ class AttachAndDiscard(Writing):
             self.assertTrue("outside this bot's folder" in err or "'..'" in err, (path, err))
 
     def test_secret_looking_files_are_refused_inside_the_bots_folder(self):
-        self.allow()
         names = (".env", ".env.local", "prod.env", "server.pem", "tls.key", "id_rsa", "id_rsa.pub",
                  "id_ed25519", "cert.p12", "cert.pfx", ".netrc", ".npmrc", ".pypirc", "credentials.json",
                  "Credentials", "client_secret.json", "MY-SECRETS.txt", "github_token", "api-token.txt",
@@ -244,29 +161,20 @@ class AttachAndDiscard(Writing):
         (self.home / "notes.pdf").symlink_to(self.home / ".env")        # a harmless name pointing at one
         self.assertIn("never attached", self.refused(self.home / "notes.pdf"))
 
-    def test_the_policy_default_refuses_and_the_mailbox_can_allow_a_workspace_file(self):
+    def test_legacy_policy_keys_do_not_prevent_a_workspace_attachment(self):
         pdf = self.home / "out" / "letter.pdf"
         pdf.parent.mkdir()
         pdf.write_bytes(b"%PDF-1.4 response letter")
-        self.write_policy(harness.POLICY.replace("  allow_attachments: false\n", ""))   # not set at all
-        with mock.patch.object(cli, "open", create=True, side_effect=AssertionError("read")) as opened:
-            self.assertIn("allow_attachments", self.refused(pdf))
-        opened.assert_not_called()
-        # Off for every mailbox but this one.
-        self.write_policy(harness.POLICY.replace("ana@acme.example: { paused: false }",
-                                                 "ana@acme.example: { paused: false, allow_attachments: true }"))
-        for path in (pdf, "out/letter.pdf"):                           # a relative path starts in the bot's folder
-            rc, d, err = self.draft("--attach", str(path))
-            self.assertEqual((rc, [a["name"] for a in d["attachments"]]), (0, ["letter.pdf"]), err)
-        # On for every mailbox but this one: its own false wins over the default.
-        self.service.drafts_by_id.clear()
-        self.write_policy(harness.POLICY.replace("  allow_attachments: false\n", "  allow_attachments: true\n")
-                          .replace("ana@acme.example: { paused: false }",
-                                   "ana@acme.example: { paused: false, allow_attachments: false }"))
-        self.assertIn("allow_attachments", self.refused(pdf))
+        for source in (harness.POLICY.replace("  allow_attachments: false\n", ""), harness.POLICY,
+                       harness.POLICY.replace("allow_attachments: false", "allow_attachments: true")
+                       .replace("ana@acme.example: { paused: false }",
+                                "ana@acme.example: { paused: false, allow_attachments: false }")):
+            self.write_policy(source)
+            for path in (pdf, "out/letter.pdf"):
+                rc, d, err = self.draft("--attach", str(path))
+                self.assertEqual((rc, [a["name"] for a in d["attachments"]]), (0, ["letter.pdf"]), err)
 
     def test_an_oversized_file_is_refused_before_it_is_read(self):
-        self.allow()
         big = self.home / "big.pdf"
         with open(big, "wb") as f:
             f.truncate(cli.MAX_ATTACH_BYTES + 1)                       # sparse: nothing is written

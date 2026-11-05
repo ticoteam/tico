@@ -60,9 +60,9 @@ def chat(api):
     def usage(context=150_000, cached=40_000, age=30, summed=None):
         summed = summed or context or 0
         with store.transaction() as c:
-            last = c.execute("SELECT t.id FROM turns t JOIN bot_sessions s ON s.bot=t.bot AND s.thread_id=t.thread_id "
-                             "WHERE t.bot='ops'").fetchone()[0]
-            c.execute("UPDATE turns SET input_tokens=?,cached_tokens=?,prompt_tokens=?,finished_at=? WHERE id=?",
+            last = c.execute("SELECT t.id FROM attempts t JOIN bot_sessions s ON s.bot=t.bot_id AND s.thread_id=t.thread_id "
+                             "WHERE t.bot_id='ops'").fetchone()[0]
+            c.execute("UPDATE attempts SET input_tokens=?,cached_tokens=?,prompt_tokens=?,settled_at=? WHERE id=?",
                       (summed - cached, cached, context, H.shift(H.now(), seconds=-age), last))
     usage()
     return api, machine, conversation, model, usage
@@ -201,7 +201,7 @@ def run_with(api, machine, requests):
                  json={"outcome": "completed", "last_seq": 0, "text": "Done.", "usage": {**part, "segments": [part]}})
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
-        return tuple(c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM turns WHERE id=?",
+        return tuple(c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM attempts WHERE id=?",
                                (turn["id"],)).fetchone())
 
 

@@ -9,7 +9,7 @@ from backend.tests.test_task_lanes import new_task, task_bot
 
 def ops_turns(api, task_id):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM turns WHERE bot='ops' AND task_id=?", (task_id,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops' AND task_id=?", (task_id,)).fetchone()[0]
 
 
 def queued(api, bot="ops"):

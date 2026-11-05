@@ -3,10 +3,13 @@ check subtask keeps its check model, a task model that cannot run never holds th
 what ran."""
 import json
 
+import pytest
+
 from backend import usage_limits
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_check_models import company, finish, heartbeat
+from backend import bot_settings as BS
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
@@ -25,9 +28,9 @@ def ops_on_sonnet(api):
     """ops on Claude Sonnet at high effort, on a computer signed in to Claude and Grok."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -106,8 +109,8 @@ def test_session_bot_keeps_tasks_on_the_bots_model(api):
     """One provider thread for everything: a task cannot switch it to another model."""
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'session': 'bot'})
     set_task_model(api, HAIKU)
     _, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
@@ -154,7 +157,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     assert ran["task_model"]["note"] == ("Ran on the bot's model claude-sonnet-5-5 at task effort low: task model "
                                          "grok-4.6 (low) could not run (grok is not signed in on Test Mac)")
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='task_model'",
+        events = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                            (task["id"],)).fetchall()
     assert [tuple(e) for e in events] == [("grok-4.6 (low)", "claude-sonnet-5-5 (low)", ran["task_model"]["note"])]
     # Its next turn says the same once more on the run, not again on the task.
@@ -162,7 +165,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     again = claim(api, machine)
     assert again["task"]["id"] == task["id"] and again["config"]["model"] == "claude-sonnet-5-5"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='task_model'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                          (task["id"],)).fetchone()[0] == 1
     # Signed in again: the next task runs on the task model.
     finish(api, machine, again)
@@ -174,10 +177,10 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
 def test_a_retired_or_switched_off_task_model_falls_back_too(api):
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["task_model"] = {"harness": "claude", "model": "claude-opus-5", "reasoning_effort": "high",
                                 "runtime": "claude"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     task, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
     finish(api, machine, turn)
@@ -188,6 +191,154 @@ def test_a_retired_or_switched_off_task_model_falls_back_too(api):
     assert turn["config"]["model"] == "claude-sonnet-5-5"
     finish(api, machine, turn)
     assert "to be enabled" in get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
+
+
+def test_a_saved_held_terra_task_model_runs_as_the_saved_default_with_no_fallback_note(api):
+    """Ruling 3 (Dev 693): a saved held default keeps running. A bot whose task model was saved as gpt-6.1-terra before
+    the hold runs its tasks on it, and the run says nothing fell back. A held row that is not the saved default stays
+    refused as a pick."""
+    from backend import task_models
+    machine = ops_on_sonnet(api)
+    company(api, "anthropic", "xai", "openai")
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex"}
+        BS.write(c, 'ops', config)
+    rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
+                                  "codex": {"installed": True, "authenticated": "ready"}})
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["runtime"], turn["config"]["model"]) == ("codex", "gpt-6.1-terra"), turn["config"]
+    finish(api, machine, turn, {"model": "gpt-6.1-terra", "runtime": "codex", "harness": "codex", "effort": "medium",
+                                "billing": "api"})
+    ran = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]
+    assert ran["task_model"]["source"] == "task" and "could not run" not in ran["task_model"]["note"], ran["task_model"]
+    store = api.app.state.store
+    with store.read() as c:
+        terra = {"harness": "codex", "model": "gpt-6.1-terra", "runtime": "codex"}
+        assert "is retired" in task_models.why_not(c, store.settings, "ops", terra, "runner-1")
+        assert "is retired" in task_models.why_not(c, store.settings, "ops", terra, "runner-1",
+                                                   kept="claude-haiku-5-5")
+        assert "is retired" not in task_models.why_not(c, store.settings, "ops", terra, "runner-1",
+                                                       kept="gpt-6.1-terra")
+
+
+def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_save(api, monkeypatch):
+    """Dev 693 (Engineering Lead's ruling on the Terra PR): a save that sends no model, or the saved one again, keeps
+    the saved held task model. For that model a field the save leaves out is kept, and a context length sent as null
+    clears it. A harness with no model is refused. A save that picks another held model is refused, and so is a fresh
+    pick of the held model on a bot without it saved."""
+    from backend import providers
+    ops_on_sonnet(api)
+    set_task_model(api, {"harness": "codex", "model": "gpt-6.1-terra", "effort": "medium"}, expected=422)
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex"}
+        BS.write(c, 'ops', config)
+    terra = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium", "runtime": "codex",
+             "compact_at": None}
+    assert get(api, "bots/ops")["task_model"] == terra
+    assert set_task_model(api, {"effort": "high"})["task_model"] == {**terra, "reasoning_effort": "high"}
+    kept = {**terra, "reasoning_effort": "high", "compact_at": 400000}
+    assert set_task_model(api, {"compact_at": 400000})["task_model"] == kept
+    assert get(api, "bots/ops")["task_model"] == kept
+    same_again = set_task_model(api, {"model": "gpt-6.1-terra", "compact_at": 400000}, expected=409)
+    assert same_again["error"]["code"] == "unchanged"
+    moved = set_task_model(api, {"model": "gpt-6.1-terra", "compact_at": 600000})
+    assert moved["task_model"] == {**kept, "compact_at": 600000}
+    # A harness on its own is refused for the held model, and nothing changes.
+    set_task_model(api, {"harness": "codex"}, expected=422)
+    assert get(api, "bots/ops")["task_model"] == {**kept, "compact_at": 600000}
+    # The same model with a harness and an effort keeps the context length it does not name.
+    same_with_harness = set_task_model(api, {"harness": "codex", "model": "gpt-6.1-terra", "effort": "low"})
+    assert same_with_harness["task_model"] == {**kept, "reasoning_effort": "low", "compact_at": 600000}
+    # A context length sent as null clears it, and the effort the save names stays.
+    cleared = set_task_model(api, {"effort": "low", "compact_at": None})
+    assert cleared["task_model"] == {**terra, "reasoning_effort": "low"}
+    # A save that names nothing, or sends only a null effort, keeps the held model and its context length.
+    set_task_model(api, {"compact_at": 400000})
+    kept_now = {**terra, "reasoning_effort": "low", "compact_at": 400000}
+    assert set_task_model(api, {}, expected=409)["error"]["code"] == "unchanged"
+    assert set_task_model(api, {"effort": None}, expected=409)["error"]["code"] == "unchanged"
+    assert get(api, "bots/ops")["task_model"] == kept_now
+    # A context length sent as null clears only the context length: the held model stays.
+    assert set_task_model(api, {"compact_at": None})["task_model"] == {**terra, "reasoning_effort": "low"}
+    # Another held model is still refused, whether it is named with its harness or alone, and the saved one stays.
+    monkeypatch.setitem(providers.MODEL_BY_ID["claude-haiku-5-5"], "held", True)
+    set_task_model(api, {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}, expected=422)
+    set_task_model(api, {"model": "claude-haiku-5-5"}, expected=422)
+    assert get(api, "bots/ops")["task_model"] == {**terra, "reasoning_effort": "low"}
+    # Sending the task model as null clears the whole setting, held or not.
+    assert set_task_model(api, None)["task_model"] is None
+
+
+def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_replaced(api):
+    """Undo of a save on the saved held model (Dev 693) restores the record it replaced: the effort, and a context
+    length that was unset as well as one that was set (the undo names every field, so null restores null)."""
+    ops_on_sonnet(api)
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex"}
+        BS.write(c, 'ops', config)
+    terra = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium", "runtime": "codex",
+             "compact_at": None}
+
+    def undo_last():
+        history = [h for h in get(api, "settings/history")["changes"] if h["field"] == "task_model"]
+        post(api, f"settings/history/{history[0]['id']}/undo", {"expected_revision": revision(api)})
+
+    # An effort-only save on the held model, then undone: the effort comes back, and the unset context length stays
+    # unset.
+    set_task_model(api, {"effort": "high"})
+    assert get(api, "bots/ops")["task_model"]["reasoning_effort"] == "high"
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == terra
+    # A context-length save on the held model, then undone: the unset context length comes back as unset.
+    set_task_model(api, {"compact_at": 400000})
+    assert get(api, "bots/ops")["task_model"] == {**terra, "compact_at": 400000}
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == terra
+    # A save that changes the effort and clears a context length that was set, then undone: both come back.
+    set_task_model(api, {"compact_at": 400000})
+    set_task_model(api, {"effort": "high", "compact_at": None})
+    assert get(api, "bots/ops")["task_model"] == {**terra, "reasoning_effort": "high"}
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == {**terra, "compact_at": 400000}
+
+
+@pytest.mark.parametrize("body, changed", [
+    ({"task_model": {}}, None),
+    ({"task_model": {"effort": None}}, None),
+    ({"task_model": {"compact_at": None}}, {"compact_at": None}),
+    ({"task_model": {"effort": None, "compact_at": None}}, {"compact_at": None}),
+    # A body that leaves `task_model` out altogether names no model either: it is not an explicit null.
+    ({}, None),
+])
+def test_a_save_that_names_no_model_keeps_the_saved_held_model(api, body, changed):
+    """Dev 693 (Engineering Lead's ruling): a save that names no model keeps the saved held model, and only the field
+    the save names may change. A save that changes nothing is refused as unchanged (409), a context length sent as null
+    clears only the context length, and a null effort keeps the held effort. An explicit null for the whole task model
+    still clears it (asserted at the end of the held-model test above)."""
+    ops_on_sonnet(api)
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex", "compact_at": 400000}
+        BS.write(c, 'ops', config)
+    before = get(api, "bots/ops")["task_model"]
+    assert before == {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium", "runtime": "codex",
+                      "compact_at": 400000}, before
+    if changed is None:
+        refused = post(api, "bots/ops/task-model", {**body, "expected_revision": revision(api)}, expected=409)
+        assert refused["error"]["code"] == "unchanged", refused
+    else:
+        saved = post(api, "bots/ops/task-model", {**body, "expected_revision": revision(api)})
+        assert saved["task_model"] == {**before, **changed}, saved
+    after = get(api, "bots/ops")["task_model"]
+    assert after == {**before, **(changed or {})}, after
+    assert after["model"] == "gpt-6.1-terra"
 
 
 def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(api):
@@ -283,10 +434,10 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config = {k: v for k, v in config.items() if k != "fallback"}
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
@@ -366,16 +517,15 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
     assert note.startswith("Ran on the bot's task model claude-haiku-5-5 (low), below the minimum for this bot")
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model'",
+        assert [r[0] for r in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                                         (task["id"],))] == [note]
     # The bot view judges against the bot's model now: on Haiku itself, its Haiku tasks are not below it.
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (json.dumps({**config, "model": "claude-haiku-5-5"}),))
+        config = BS.read(c, 'ops')
+        BS.write(c, 'ops', {**config, 'model': 'claude-haiku-5-5'})
     assert get(api, "bots/ops")["task_model_warning"] == ""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     # A pick of the same tier or dearer, or another provider's, is not below the minimum.
     set_task_model(api, None)
     assert set_task_model(api, {"harness": "claude", "model": "claude-opus-5-5", "effort": "high"})["warning"] == ""
@@ -407,9 +557,9 @@ def ops_on_grok(api):
     """ops on Grok at low effort, on a computer signed in to Claude and Grok, as a bot whose own model lacks max."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config.update(runtime="grok", harness="grok", model="grok-4.6", reasoning_effort="low")
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -512,10 +662,10 @@ def test_task_effort_and_context_length_set_and_clear_on_their_own(api):
 def test_an_old_task_model_record_runs_on_its_model_as_before(api):
     machine = ops_on_sonnet(api)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["task_model"] = {"harness": "claude", "model": "claude-haiku-5-5", "reasoning_effort": "low",
                                 "runtime": "claude"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
     assert "compact_at" not in turn["config"]

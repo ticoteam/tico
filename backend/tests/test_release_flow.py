@@ -7,6 +7,7 @@ from backend import hubdb as H
 from backend import release_flow as RF
 from backend.store import encode
 from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
 
@@ -17,8 +18,8 @@ def _team(api):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                      (slug, encode({**bots[slug], "template": template}), "product", "ana"))
+            c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
+            BS.write(c, slug, {**bots[slug], 'template': template})
         dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=[
             {"name": "In QA", "status": "review"}, {"name": "Pending Release", "status": "review"},
             {"name": "Post Release QA", "status": "review"}, {"name": "Done", "status": "done"}])
@@ -130,7 +131,7 @@ def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
                           "repository": {"full_name": "ticoteam/tico"}})
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
-    assert "Visual replies" in body and "1 private ticket, not named here" in body
+    assert "Visual replies" in body and "1 private ticket. Skip them: their owners handle any docs." in body
     assert "Acme payroll" not in body and "/413" not in body
 
 
@@ -195,3 +196,20 @@ def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_
                           "repository": {"full_name": "acme/other"}})
     with store.read() as c:
         assert H.approval(c, older["id"])["decision"] == "withdrawn"
+
+
+def test_only_the_docs_task_tells_its_reader_to_skip_private_tickets(api):
+    dev = _team(api)
+    visible = _ticket(api, dev, "Visual replies", 412)
+    secret = _ticket(api, dev, "Acme payroll export", 413)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+        c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
+        tickets = RF.pending(c)
+        release = RF.request(c, "human:ana", source="release_now")
+        body = H.task(c, release["task"])["body"]
+        assert "1 private ticket" in body and "Skip them" not in body
+        assert secret["title"] not in body and "/413" not in body
+        assert visible["title"] in body and "Cut one release for them" in body
+        docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
+        assert "1 private ticket. Skip them: their owners handle any docs." in H.task(c, docs)["body"]

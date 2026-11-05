@@ -7,6 +7,7 @@ import re
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 from backend.tests.test_task_privacy_reads import traced
+from backend import bot_settings as BS
 
 HARNESSES = ("claude", "codex", "gemini", "pi")       # gemini and pi hold a key per bot, so each check reads the grants
 
@@ -24,8 +25,8 @@ def seed(api, computers, first, last):
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for i, s in enumerate(slugs, first):
             harness = HARNESSES[i % len(HARNESSES)]
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                      (s, encode({"name": s, "runtime": harness, "harness": harness}), None, "ana"))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (s, None, 'ana'))
+            BS.write(c, s, {'name': s, 'runtime': harness, 'harness': harness})
     for k, r in enumerate(computers):
         mine = slugs[k::len(computers)]
         for s in mine:

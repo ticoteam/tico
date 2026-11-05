@@ -60,10 +60,24 @@ def _context(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
-def refuse_retired(choice):
-    """A retired model stays in the catalog for bots already on it; nothing new may pick it."""
+def refuse_retired(choice, kept=""):
+    """A retired model stays in the catalog for bots already on it; nothing new may pick it. `kept` is the bot's saved
+    task model: a held row that is that model stays editable (its effort, context length or the same model is saved
+    again, Dev 693); any other held row is refused as a pick."""
+    if choice.get("held"):
+        if choice["id"] == kept:
+            return
+        raise Problem("model", f"{choice['label']} is not offered yet", 422)
     if choice.get("deprecated"):
         raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)
+
+
+def kept_context(chosen, current):
+    """The context length a save sets for the saved held model: the one named (null clears it), else the saved one when
+    the save leaves the field out. `current` is the saved task model, or {} when the save does not keep it."""
+    if not current or "compact_at" in chosen.model_fields_set:
+        return chosen.compact_at
+    return current.get("compact_at")
 
 
 def harness_of(choice, requested=None, current=None):
@@ -157,21 +171,25 @@ def readiness(c, bot, choice, runner_id=None):
     return can
 
 
-def why_not(c, settings, bot, choice, runner_id, job_id=None):
+def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
     """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. A no from
     `readiness` is a reason (not installed, not signed in). Its "don't know" is not: Grok's sign-in can't be checked
     without starting it (`check = "none"`) and Antigravity reports no readiness, so a "don't know" would keep them off
     for good. Such a turn runs, and a refused login comes back through `mark_rejected` as a no for the next claim. A
     login a usage limit holds, or that another job is probing after one, is a reason too, so the task runs on the
-    bot's model rather than wait on it."""
+    bot's model rather than wait on it. `kept` is the bot's saved task model: a held row that is that model still runs
+    (a saved held default keeps running, Dev 693); any other held row is refused as a pick."""
     from . import login_holds
     row = providers.MODEL_BY_ID.get(choice["model"])
     if not row:
         return f"{choice['model']} is not a model Tico knows any more"
-    if row.get("deprecated") and row.get("lineup") != "old":      # the Gateway's old lineup is not offered but still runs
+    saved = bool(row.get("held")) and choice["model"] == kept
+    # The Gateway's old lineup is not offered but still runs.
+    if row.get("deprecated") and row.get("lineup") != "old" and not saved:
         return f"{row.get('label') or choice['model']} is retired"
     try:
-        providers.complete_choice(providers.load(c, settings)["enabled"], choice["runtime"], choice["model"])
+        providers.complete_choice(providers.load(c, settings)["enabled"], choice["runtime"], choice["model"],
+                                  kept=choice["model"] if saved else "")
     except providers.ProviderError as exc:
         return str(exc).replace("default model", "task model")
     can = readiness(c, bot, choice, runner_id)
@@ -325,7 +343,7 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
                      "effort": applied, "compact_at": compact_at, "note": note}
     failed = []
     for cand in [x for x in (mine, choice) if x]:
-        why = why_not(c, settings, bot, cand, runner_id, job_id)
+        why = why_not(c, settings, bot, cand, runner_id, job_id, kept=choice["model"] if choice else "")
         if not why:
             return _on_task_model(c, settings, bot, followed, cand, cand is mine, compact_at, failed)
         failed.append((cand, why))
@@ -391,7 +409,8 @@ def handed(c, attempt_id, task_id, record):
     c.execute("UPDATE attempts SET model=? WHERE id=?", (json.dumps(record), attempt_id))
     if (record["source"] != "fallback" and not record.get("below_minimum")) or not task_id:
         return
-    last = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model' ORDER BY rowid DESC LIMIT 1",
+    last = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model' "
+                     "ORDER BY rowid DESC LIMIT 1",
                      (task_id,)).fetchone()
     if not last or last[0] != record["note"]:
         H._task_event(c, task_id, H.KEEPER, "task_model", label(record["asked"]),

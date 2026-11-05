@@ -1,6 +1,8 @@
 """A computer's and a bot's "Turns at once": the claim holds new turns at the limit, and says so."""
 from backend.store import H
-from backend.tests.test_api import api, as_member, claim, get, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, as_member, claim, get, post, put, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_assistant import assistant_turn
+from backend.tests.test_settings_assistant import mcp
 from backend.tests.test_task_lanes import new_task, task_bot
 
 NEW_RUNNER = ["task_lanes_v2", "turns_at_once_v1"]
@@ -158,3 +160,18 @@ def test_omitting_the_turns_at_once_field_is_refused_and_an_explicit_null_clears
     assert get(api, "bots/ops")["turns_at_once"] == 1
     assert set_computer(api, machine, None)["turn_limit"] == 4
     assert set_bot(api, None)["turns_at_once"] is None
+
+
+def test_with_assistant_acts_without_asking_off_a_computer_limit_is_a_confirm_card_the_person_taps(api):
+    rid = runner(api, label="Test Mac")["runner_id"]
+    put(api, "access/rules", {"assistant_direct": False})
+    r, attempt = assistant_turn(api, "ana-test", "Let Test Mac run 3 turns at once")
+    err, card = mcp(api, "hub_settings_set", {"key": "computer.turns_at_once", "value": {"turns_at_once": 3},
+                                              "computer": rid, "on_behalf_of": "turn"}, attempt["token"])
+    assert not err and card["needs_confirm"] is True, card
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (rid,)).fetchone()[0] is None
+    done = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done", done
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (rid,)).fetchone()[0] == 3

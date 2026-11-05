@@ -7,6 +7,42 @@ from unittest import mock
 import pytest
 
 
+def test_a_workspace_ancestor_cannot_put_a_base_clone_inside_the_install(tmp_path, monkeypatch):
+    from clients import repo_safety
+    from runner_support import repositories
+    install = tmp_path / 'install'
+    install.mkdir()
+    workspace = tmp_path / 'workspace'
+    workspace.symlink_to(install, target_is_directory=True)
+    monkeypatch.setattr(repo_safety, 'ROOT', install)
+    with pytest.raises(ValueError, match='inside the Tico install'):
+        repositories.worktree_base(workspace, {'full_name': 'acme/product'}, {})
+    assert list(install.iterdir()) == []
+
+
+@pytest.mark.parametrize('relative', [
+    'link/new', 'missing/../link/new', 'missing/deep/../../link/new', 'existing/../link/new',
+])
+def test_missing_components_cannot_hide_a_later_install_link(tmp_path, monkeypatch, relative):
+    from clients import repo_safety
+    from runner_support import repositories
+    install = tmp_path / 'install'
+    (install / 'templates').mkdir(parents=True)
+    workspace = tmp_path / 'ws'
+    (workspace / 'existing').mkdir(parents=True)
+    (workspace / 'link').symlink_to(install / 'templates', target_is_directory=True)
+    monkeypatch.setattr(repo_safety, 'ROOT', install)
+    path = workspace / relative
+    with pytest.raises(ValueError) as caught:
+        repo_safety.outside_installation(path)
+    assert str(path) in str(caught.value)
+    with pytest.raises(ValueError):
+        repositories.worktree_base(path, {'full_name': 'acme/product'}, {})
+    assert list((install / 'templates').iterdir()) == []
+    assert not (workspace / 'missing').exists()
+    assert repo_safety.outside_installation(workspace / 'safe/new') == workspace / 'safe/new'
+
+
 def test_isolated_state_exposes_only_mirrors(tmp_path, monkeypatch):
     import os
     from runner_support.state import State

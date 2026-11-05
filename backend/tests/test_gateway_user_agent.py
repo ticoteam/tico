@@ -115,6 +115,14 @@ def turn(base):
 CALLS = {"decisions": decide, "chat completions": write, "key check": check, "enroll": enrol, "rotate": turn}
 
 
+def letters(base):
+    G.letters(KEY, base, "?limit=1")
+    return "GET", "/v1/gateway/letters?limit=1"
+
+
+CALLS["letters"] = letters
+
+
 @pytest.mark.parametrize("call", list(CALLS))
 def test_every_gateway_call_carries_ticos_user_agent_past_an_edge_that_refuses_the_default(call, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", "v0.3.65")
@@ -152,6 +160,7 @@ HQ_CLIENTS = {
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',
     "backend/support_access.py": '"User-Agent": "tico-support-access"',
+    "backend/suggestions.py": '"User-Agent": G.user_agent()',
     "clients/gateway.py": "branded_opener(*handlers).open(",
     "clients/judge.py": "G.branded_opener(*handlers).open(",
     "setup/support.py": '"User-Agent": "tico-setup"',

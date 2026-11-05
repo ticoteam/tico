@@ -289,8 +289,7 @@ def test_every_source_writes_its_topic(api):
             write(c)
             return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
     aid, cid = attempt["id"], msg["conversation_id"]
-    approval = post(api, "approvals", {"kind": "send", "payload": {"to": "x@acme.example", "cc": [], "subject": "Hi",
-                                                                   "body_sha256": "a" * 64, "mailbox": "work"}},
+    approval = post(api, "approvals", {"kind": "publish", "payload": {"url": "https://acme.example/draft", "content_sha256": "a" * 64}},
                     token=attempt["token"])
     task = post(api, "tasks", {"owner": "ben", "title": "Coverage", "body": "Please."})
     assert logged(lambda c: c.execute("UPDATE tasks SET title='Covered' WHERE id=?", (task["id"],))) == {
@@ -308,8 +307,11 @@ def test_every_source_writes_its_topic(api):
     assert logged(lambda c: c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
                                       "VALUES(?,99,'delta','{}',?)", (aid, H.now()))) == {("runs", "output")}
     assert logged(lambda c: c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.now(), aid))) == set()
-    assert logged(lambda c: c.execute("UPDATE attempts SET state='running' WHERE id=?", (aid,))) == {("runs", "attempt")}
-    assert logged(lambda c: c.execute("UPDATE jobs SET state='completed' WHERE attempt_id=?", (aid,))) == {("runs", "job")}
+    # A thread run's or its job's state change moves that thread's bot status too.
+    assert logged(lambda c: c.execute("UPDATE attempts SET state='running' WHERE id=?", (aid,))) == {
+        ("runs", "attempt"), ("threads", "bot_status")}
+    assert logged(lambda c: c.execute("UPDATE jobs SET state='completed' WHERE attempt_id=?", (aid,))) == {
+        ("runs", "job"), ("threads", "bot_status")}
     assert logged(lambda c: c.execute("INSERT INTO bot_status(bot,state) VALUES('finance','idle')")) == {("bots", "status")}
     assert logged(lambda c: c.execute("UPDATE bot_status SET updated_at='x' WHERE bot='finance'")) == set()
     assert logged(lambda c: c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")) == {("bots", "state")}
@@ -328,7 +330,11 @@ def test_every_source_writes_its_topic(api):
     # Every trigger defined is installed, so a source cannot quietly drop out.
     with store.read() as c:
         installed = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'")}
-    assert installed == {name for name, *_ in E.TRIGGERS}
+        tables = {row[0]: {r[1] for r in c.execute(f"PRAGMA table_info({row[0]})")}
+                  for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert installed == {name for name, _, table, *_ in E.TRIGGERS if table in tables
+                         and all(need.split('.')[0] in tables and ('.' not in need or need.split('.')[1] in tables[need.split('.')[0]])
+                                 for need in E.NEEDS.get(name, ()))}
 
 
 def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monkeypatch):
@@ -447,6 +453,90 @@ def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, mo
 
 def _task_views(rows, c, who, visible_sql="1"):
     return [{"id": row["id"]} for row in rows]
+
+
+def test_link_insert_and_delete_events_require_both_resources_for_each_viewer(api):
+    from backend.tests.test_meeting_task_links import link, record, remove, task
+    rid = record(api, {'private': True, 'audience': 'participants'}, 'ben-test')
+    t = task(api, private=False)
+    store, auth = api.app.state.store, api.app.state.auth
+
+    def read(actor, cursor):
+        who = Identity('human:' + actor, 'human', actor + '@acme.example')
+        with store.read() as c:
+            return E.read(c, auth, who, cursor, topics=('tasks',), task_views=_task_views)[0]
+
+    for linked in (True, False):
+        with store.read() as c:
+            cursor = E.latest(c)
+        if linked:
+            link(api, rid, [t['id']], 'ben-test')
+        else:
+            remove(api, rid, t['id'], 'ben-test')
+        for actor in ('ana', 'cara'):
+            assert read(actor, cursor) == []  # both read the task, neither reads this meeting
+        sent = read('ben', cursor)
+        assert len(sent) == 1
+        data = sent[0][2]
+        assert data['id'] == t['id'] and data['kinds'] == ['meetings']
+        change = data['meeting_links'][0]
+        assert change['meeting_id'] == rid
+        assert bool(change['link']) == bool(change['meeting']) == linked
+
+
+def test_link_events_recheck_meeting_permissions_and_hide_private_kinds_when_folded(api):
+    from backend.tests.test_meeting_task_links import link, record, task
+    rid = record(api, {'private': True, 'participants': ['cara@acme.example']}, 'ben-test')
+    t = task(api, private=False)
+    store, auth = api.app.state.store, api.app.state.auth
+    cara = Identity('human:cara', 'human', 'cara@acme.example')
+    with store.read() as c:
+        cursor = E.latest(c)
+    link(api, rid, [t['id']], 'ben-test')
+    with store.read() as c:
+        assert E.read(c, auth, cara, cursor, topics=('tasks',), task_views=_task_views)[0][0][2]['meeting_links']
+    with store.transaction() as c:
+        c.execute("UPDATE meetings SET metadata=json_set(metadata,'$.participants',json('[]')) WHERE id=?", (rid,))
+    with store.read() as c:
+        assert E.read(c, auth, cara, cursor, topics=('tasks',), task_views=_task_views)[0] == []
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET title=? WHERE id=?', ('Review the revised plan', t['id']))
+    with store.read() as c:
+        sent = E.read(c, auth, cara, cursor, topics=('tasks',), task_views=_task_views)[0]
+        assert len(sent) == 1 and sent[0][2]['kinds'] == ['update']
+        assert 'meeting_links' not in sent[0][2] and rid not in json.dumps(sent)
+    # A grant before delivery also applies to the recorded change, without sharing another viewer's result.
+    with store.transaction() as c:
+        c.execute("UPDATE meetings SET metadata=json_set(metadata,'$.private',json('false')) WHERE id=?", (rid,))
+    with store.read() as c:
+        sent = E.read(c, auth, cara, cursor, topics=('tasks',), task_views=_task_views)[0]
+        assert sent[0][2]['kinds'] == ['meetings', 'update']
+        assert sent[0][2]['meeting_links'][0]['meeting_id'] == rid
+
+
+def test_link_events_hide_tasks_and_remove_rows_when_task_read_access_is_revoked(api):
+    from backend.tests.test_meeting_task_links import link, record, task
+    rid = record(api, token='ben-test')
+    t = task(api, owner='human:ben', requester='human:ben', private=True)
+    store, auth = api.app.state.store, api.app.state.auth
+    cara = Identity('human:cara', 'human', 'cara@acme.example')
+    with store.read() as c:
+        cursor = E.latest(c)
+    link(api, rid, [t['id']], 'ben-test')
+    with store.read() as c:
+        assert E.read(c, auth, cara, cursor, topics=('tasks',), task_views=_task_views)[0] == []
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET private=0 WHERE id=?', (t['id'],))
+    with store.read() as c:
+        cursor = E.latest(c)
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET private=1 WHERE id=?', (t['id'],))
+        c.execute('DELETE FROM meeting_task_links WHERE meeting_id=?', (rid,))
+    with store.read() as c:
+        sent = E.read(c, auth, cara, cursor, topics=('tasks',), task_views=_task_views)[0]
+        assert len(sent) == 1
+        assert sent[0][2]['gone'] and sent[0][2]['kinds'] == ['update']
+        assert 'meeting_links' not in sent[0][2] and rid not in json.dumps(sent)
 
 
 def test_one_read_sends_its_byte_budget_and_the_rest_comes_on_the_next_read(api, monkeypatch):

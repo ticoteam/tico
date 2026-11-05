@@ -5,14 +5,15 @@ import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend import bot_settings as BS
 
 
 def task_bot(api, lanes, capability="task_lanes_v2", capacity=8, others=()):
     """`ops` keyed on tasks, assigned to a runner that does or does not advertise lanes."""
     with api.app.state.store.transaction() as c:
         for bot in ("ops", *others):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, "session": "task"}), bot))
+            config = BS.read(c, bot)
+            BS.write(c, bot, {**config, 'session': 'task'})
     machine = runner(api)
     for bot in ("ops", *others):
         assign(api, machine, bot)

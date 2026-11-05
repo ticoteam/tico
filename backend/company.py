@@ -3,12 +3,12 @@
 is on (backend/strategy_bot.py).
 
 - Vision (one or two sentences: where the company is going) and Description (a short paragraph: what it does, for whom)
-  are one row, `company_profile`. Every change leaves a `company_events` row, as `goal_events` does for a goal, so the
+  are one row, `company_profile`. Every change leaves a `history_events` row (subject_type `company`), as a goal's do, so the
   history says who changed which and when. Only a person who is the owner or an admin writes them, on their own click:
   never a bot, the Strategy Bot included, and never the Assistant acting for someone (backend/goal_routes.py).
 - A goal's Why is one line tying it to the vision (`goals.why`, with who set it and when). The Strategy Bot proposes one
   (`goal_proposals` kind `goal_why`); a person who may edit the goal accepts it as it is or edited, or writes one
-  themselves. Either way it is a `goal_events` row. A goal with no Why is "Not tied to the vision", which is not an
+  themselves. Either way it is a row in the goal's history. A goal with no Why is "Not tied to the vision", which is not an
   error. Writing a Why settles the goal's other pending Why proposals, so the Strategy Bot's next ask is about what is
   still open.
 
@@ -23,9 +23,6 @@ FIELDS = ("vision", "description")
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS company_profile (id TEXT PRIMARY KEY CHECK (id = 'company'), "
     "vision TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', updated_at TEXT, updated_by TEXT)",
-    "CREATE TABLE IF NOT EXISTS company_events (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, "
-    "field TEXT NOT NULL, old TEXT NOT NULL DEFAULT '', new TEXT NOT NULL DEFAULT '')",
-    "CREATE INDEX IF NOT EXISTS company_events_ts ON company_events(created_at)",
 )
 
 
@@ -68,15 +65,17 @@ def update(c, actor, vision=None, description=None):
               (after["vision"], after["description"], ts, actor))
     for field in FIELDS:
         if field in changed:
-            c.execute("INSERT INTO company_events (id, created_at, actor, field, old, new) VALUES (?,?,?,?,?,?)",
-                      (H.new_id(), ts, actor, field, before[field], changed[field]))
+            H.history_event(c, "company", "company", actor, field, before[field] or "", changed[field] or "",
+                            created_at=ts)
     H.event(c, actor, "company.update", "company", {"fields": sorted(changed)})
     return profile(c)
 
 
 def history(c, limit=200):
     """Every change to the vision and the description, newest first."""
-    return H._rows(c.execute("SELECT * FROM company_events ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)))
+    return H._rows(c.execute("SELECT id, created_at, actor_id AS actor, kind AS field, coalesce(old, '') AS old, "
+                             "coalesce(new, '') AS new FROM history_events WHERE subject_type='company' "
+                             "ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)))
 
 
 # ----------------------------------------------------------------------------- a goal's Why

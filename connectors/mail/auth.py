@@ -1,4 +1,5 @@
-"""Google access for one mailbox: that person's own connected account, else the service account.
+"""Google access for one mailbox: that person's own connected account, else this computer's service-account key,
+else the Google Workspace connection on the Tico server.
 
 A person can connect their own Google account (connectors/mail/oauth.py): no domain-wide delegation, and the
 grant reaches only their mailbox and calendar. A mailbox with such a grant is always served from it, never
@@ -6,6 +7,9 @@ from the service account. Otherwise one Google service account with domain-wide 
 mailbox. The key is never in a bot's environment;
 this module reads it by path (`GOOGLE_SA_KEY`, default <projects>/secrets/google-sa.json) and
 mints a credential impersonating one mailbox at a time (`subject=`).
+A computer with no key file but with the runner's way to the server (TICO_GOOGLE_BROKER_URL/AUTH) asks the server
+for a token instead: the server holds the Workspace key, mints only for a mailbox it covers and names this computer
+for, and this computer never holds that key.
 
 Nothing here ever prints or returns the private key. `key_info()` returns only the public
 identifiers the owner needs for the Admin console: client_email, client_id, project_id.
@@ -83,7 +87,8 @@ def delegation_hint(scope, client_id):
 
 
 def mint_token(mailbox, service):
-    """(access token, ISO expiry, granted scopes or None) acting as `mailbox`, from its grant or the key file.
+    """(access token, ISO expiry, granted scopes or None) acting as `mailbox`, from its grant, the key file, or the
+    Google Workspace connection on the server.
     Only the supervisor reads them. The scopes travel with the token so a turn refuses what was not granted."""
     creds = credentials(mailbox, SERVICE_SCOPES[service], key_only=True)
     if not creds.token:
@@ -123,12 +128,45 @@ def supervisor_token(mailbox, scopes):
         reason = getattr(e, "reason", "") or str(e)
         if reason in ("signin", "admin_policy", "app_config", "app_unavailable"):
             raise oauth.refused(reason, mailbox)
+        if reason in oauth.WORKSPACE_REFUSALS:
+            raise oauth.workspace_refused(reason, mailbox)
         raise Failure(f"the runner would not give this turn access to {mailbox}: {e}",
                       "The run's attempt is not known to the runner, or it has ended. docs/mail.md, Works on Linux runners.")
 
 
+def key_file_present(path=None):
+    return (Path(path) if path else key_path()).exists()
+
+
+def _service(scopes):
+    return next((k for k, v in SERVICE_SCOPES.items() if list(scopes or []) == v), None)
+
+
+def workspace_credentials(mailbox, scopes=None):
+    """A token from the Tico server's Google Workspace connection, for a computer with no key file
+    (oauth.server_workspace_token). One service at a time, as a person's own grant is."""
+    service = _service(scopes)
+    if not service:
+        raise Failure(f"{mailbox}'s Google access is given one service at a time", "Ask for gmail or calendar.")
+    try:
+        from google.oauth2.credentials import Credentials     # noqa: PLC0415
+    except ImportError:
+        raise Failure("the google-auth library is not installed",
+                      "Run mail through scripts/mail.sh, which builds the venv "
+                      "(connectors/mail/requirements.txt).")
+    token, expiry, granted = oauth.server_workspace_token(mailbox, service)
+    creds = Credentials(token=token, expiry=_naive_utc(expiry))
+    if granted is not None:
+        creds._tico_granted = granted
+    return creds
+
+
 def credentials(mailbox, scopes=None, path=None, key_only=False):
-    """A credential that acts as `mailbox`. Requires the google-auth library."""
+    """A credential that acts as `mailbox`. Requires the google-auth library.
+
+    Order: the runner's supervisor (a turn), a person's own grant (a refused grant never falls back), this computer's
+    key file, and then, only when there is no key file and the runner gave this process its way to the server, the
+    Google Workspace connection on the server."""
     if not key_only and path is None:
         granted = supervisor_token(mailbox, scopes)
         if granted:
@@ -140,6 +178,8 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
     found = oauth.grant(mailbox, oauth.grants_path(path) if path else None)
     if found:
         return person_credentials(mailbox, found, scopes)
+    if not key_file_present(path) and oauth.broker_configured():
+        return workspace_credentials(mailbox, scopes)
     try:
         from google.oauth2 import service_account       # noqa: PLC0415
     except ImportError:

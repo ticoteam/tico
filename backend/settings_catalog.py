@@ -198,8 +198,9 @@ def _kind_words(kind):
 
 def path_for(e, target, template=None):
     template = template if template is not None else e.route
-    if e.target and not (target or {}).get(e.target):
-        raise Problem("validation", f"{e.name} is set per {e.target}: name one with --{e.target}", 422)
+    for name in TARGETS:
+        if "{" + name + "}" in template and not (target or {}).get(name):
+            raise Problem("validation", f"{e.name} is set per {name}: name one with --{name}", 422)
     path = template
     for name in TARGETS:
         if "{" + name + "}" in path and name == "id" and path.startswith("repositories/"):

@@ -31,13 +31,15 @@ def add(api, rid, body, token="ana-test", expected=200, key=None):
 
 
 def change(api, rid, iid, body, token="ana-test", expected=200, key=None):
+    body = {"version": next(i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid), **body}
     r = api.post(f"/api/meetings/{rid}/items/{iid}", json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
     return r.json()
 
 
 def push(api, rid, iid, body=None, token="ana-test", expected=200, key=None):
-    r = api.post(f"/api/meetings/{rid}/items/{iid}/push", json=body or {}, headers=headers(token, key))
+    body = {"version": next(i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid), **(body or {})}
+    r = api.post(f"/api/meetings/{rid}/items/{iid}/push", json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
     return r.json()
 
@@ -54,7 +56,7 @@ def test_a_private_meeting_keeps_its_items_to_the_people_the_invite_names(api):
     # Making it a company meeting again opens the items with it.
     api.post(f"/api/meetings/{rid}/edit", json={"private": False, "version": 1},
              headers=headers("ben-test"))
-    assert items(api, rid, "cara-test")["can_push"] is False
+    assert items(api, rid, "cara-test")["can_send"] is True
 
 
 # ----------------------------------------------------------------------------- comments

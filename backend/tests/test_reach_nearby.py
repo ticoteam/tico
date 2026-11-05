@@ -7,6 +7,7 @@ with no manager counts as reporting to the owner, Ana: doc-updater and Scout, wh
 Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
 import json
 
+from backend import bot_settings as BS
 from backend import reach, task_allocator
 from backend.auth import Identity
 from backend.store import H, encode
@@ -28,10 +29,10 @@ def chart(api):
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
         for bot, boss, team in (("cpo", "human:ben", "product"), ("product-design", "cpo", "product"),
                                 ("finance", "cpo", ""), ("ops", "product-design", ""), ("doc-updater", None, "product")):
-            c.execute("UPDATE bot_config SET reports_to=?, team=?, config=json_set(config, '$.team', ?) WHERE bot=?",
-                      (boss, team, team, bot))
+            c.execute("UPDATE bot_config SET reports_to=?, team=? WHERE bot=?", (boss, team, bot))
+            BS.update(c, bot, {"team": team})
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
-        c.execute("INSERT INTO bot_config(bot, config, team, owner_id) VALUES('scout', '{}', '', 'ana')")
+        c.execute("INSERT INTO bot_config(bot, team, owner_id) VALUES('scout', '', 'ana')")
     as_bot(api, "product-design", "pd-test")
     as_bot(api, "doc-updater", "doc-test")
 
@@ -339,3 +340,24 @@ def test_a_cap_of_one_allows_one_legacy_message(api):
     assert r.status_code == 200, r.text
     message(api, "pd-test", "human:cara", "Can you look at this?")
     assert message(api, "pd-test", "human:cara", "And this?", expected=409)["error"]["code"] == "reach_line"
+
+
+def test_a_message_task_ref_sent_as_a_list_is_checked_on_its_first_task_and_junk_is_a_422(api):
+    """Bots send `refs.task` as a list (clients/hubtools.py `_refs`). The list names its first task, as the rest of the
+    code reads a message's task (hubdb.refs_task_id): reach judges that one, a shared task passes and an unshared one is
+    a 409 that writes nothing. A ref that is neither a task id nor a list of them is a 422, never a 500."""
+    chart(api)
+    shared = task(api, "ben-test", "bot:product-design", title="Launch note")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET waiting_on='human:cara' WHERE id=?", (shared["id"],))     # Cara is on it
+    other = task(api, "ben-test", "bot:finance", title="Budget")                             # Cara is not on it
+    message(api, "pd-test", "human:cara", "On the launch note.", refs={"task": [shared["id"]]})
+    refused = message(api, "pd-test", "human:cara", "On the budget.", expected=409, refs={"task": [other["id"]]})
+    assert refused["error"]["code"] == "reach_closed"
+    message(api, "pd-test", "human:cara", "Both.", refs={"task": [shared["id"], other["id"]]})
+    refused = message(api, "pd-test", "human:cara", "Budget first.", expected=409,
+                      refs={"task": [other["id"], shared["id"]]})
+    assert refused["error"]["code"] == "reach_closed"
+    for ref in ({"id": shared["id"]}, [[shared["id"]]]):
+        junk = message(api, "pd-test", "bot:finance", "Bad ref.", expected=422, refs={"task": ref})
+        assert junk["error"]["code"] == "reference"

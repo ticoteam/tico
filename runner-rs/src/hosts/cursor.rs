@@ -137,7 +137,10 @@ impl CursorHost {
         let cmd = self.cmd();
         let mut command = crate::isolation::command(&cmd[0]);
         command.args(&cmd[1..]).arg("create-chat").current_dir(&settings.cwd).env_clear().envs(Cursor::env(settings)).stdin(Stdio::null()).kill_on_drop(true);
-        let out = match tokio::time::timeout(CREATE_TIMEOUT, command.output()).await {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().map_err(|e| failed(format!("could not start a cursor chat: {e}")))?;
+        self.process_allocated();
+        let out = match tokio::time::timeout(CREATE_TIMEOUT, child.wait_with_output()).await {
             Err(_) => return Err(failed(format!("could not start a cursor chat: create-chat timed out after {}s", CREATE_TIMEOUT.as_secs()))),
             Ok(Err(e)) => return Err(failed(format!("could not start a cursor chat: {e}"))),
             Ok(Ok(out)) => out,

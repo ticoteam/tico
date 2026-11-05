@@ -402,7 +402,7 @@ def sync(conn, owner_id, at=None, reads=None):
                     note = f"Now asked of {H.actor_name(conn, moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
-                H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True)
+                H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True, strict=False)
                 closed.append(task["id"])
             conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
             if again:

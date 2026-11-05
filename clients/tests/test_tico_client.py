@@ -5,7 +5,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from clients.tico import APIError, Client
+from clients.tico import APIError, Client, gmail_read_timeout
 
 CLOUDFLARE_530 = {"type": "about:blank", "title": "Error 1033: Cloudflare Tunnel error", "status": 530,
                   "detail": "The host is unreachable", "retryable": False}
@@ -65,6 +65,15 @@ class Retries(unittest.TestCase):
         self.assertFalse(sleep.called)
         self.assertFalse(caught.exception.retryable)
         self.assertEqual((caught.exception.code, caught.exception.detail), ("not_found", "No such attempt"))
+
+
+def test_live_mail_waits_for_metadata_batches_without_changing_other_routes():
+    assert gmail_read_timeout("GET", "/api/v2/mail/messages?mailbox=ana%40acme.example", 15) == 90
+    assert gmail_read_timeout("GET", "/api/v2/mail/threads/t1", 60) == 90
+    assert gmail_read_timeout("GET", "/api/v2/mail/messages/m1", 120) == 120
+    assert gmail_read_timeout("GET", "/api/v2/mail/mailboxes", 15) == 15
+    assert gmail_read_timeout("POST", "/api/v2/mail/messages", 15) == 15
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,7 @@ class ThreadPost(BaseModel):
     to: str | None = None
     refs: dict = Field(default_factory=dict)
     parent_message_id: str | None = None
+    in_reply_to: str | None = None                # the message this one replies to, in the same root (flat replies)
     delivery: Way | None = None                   # only in a bot's Home or a DM with one bot
     defer_for: str | None = None                  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
 
@@ -64,6 +65,12 @@ class MessagePatch(BaseModel):
 
 class ReadMark(BaseModel):
     seq: int
+
+
+class ReadAll(BaseModel):
+    # Read what was there this long ago, not what came since: Catch up sends it once its Undo is gone, so a message
+    # that arrived while Undo showed stays unread. Milliseconds, measured by the client, so its clock never matters.
+    ago_ms: int | None = Field(None, ge=0, le=600_000)
 
 
 class MemberAdd(BaseModel):
@@ -91,6 +98,7 @@ class ThreadUpload(BaseModel):
     kind: str = "say"
     to: str | None = None
     parent_message_id: str | None = None
+    in_reply_to: str | None = None
     titles: list[str] = Field(default_factory=list, max_length=10)
     delivery: Way | None = None
     defer_for: str | None = None
@@ -111,6 +119,18 @@ def _delivery_words(body):
         raise Problem("delivery", "Name the way with delivery and defer_for, not in refs", 422)
     if body.delivery and getattr(body, "parent_message_id", None):
         raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
+
+
+def _reply_check(c, auth, who, thread_id, body):
+    """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
+    reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
+    target = getattr(body, "in_reply_to", None)
+    if not target:
+        return None
+    if getattr(body, "parent_message_id", None):
+        raise Problem("reply_target_invalid", "A reply goes in the thread: send in_reply_to without parent_message_id",
+                      422)
+    return threads.reply_target(c, threads.viewer(auth, who), thread_id, target)["id"]
 
 
 def _bot_across(c, v, thread_id, members=None):
@@ -135,7 +155,8 @@ def _bot_across(c, v, thread_id, members=None):
 def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
     """(the way, the refs that send it) for a post that named `delivery`, or (None, {}) for one that did not, which goes
     exactly as before. The rules are a task comment's (backend/app.py): steer and queue wake the bot, so they take the
-    right to message it (Write); a deadline wakes it too, so anyone without that right defers with none. A defer while
+    right to message it (Write, or being in a DM with it); a deadline wakes it too, so anyone without that right defers
+    with none. A defer while
     the bot has a turn going in this thread rides along as a queue. Only a person names a way; a bot's message goes as
     bot-to-bot messages do."""
     way, defer_for = body.delivery, body.defer_for
@@ -151,6 +172,13 @@ def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
         directs = teammate_access.can(c, who, "write", bot, auth=auth)
     except (ValueError, KeyError):
         directs = False
+    # A DM is a conversation with the bot (contract §4.3: a DM queues a run), and a post there without a way already
+    # wakes it: the members of a DM with it may name any way, Write or not. Without this a member's message sent from
+    # the composer (which names its remembered way) went as a quiet defer with no deadline.
+    if not directs and members is not None:
+        directs = True                  # a DM's first message: making the DM is checked as it is made (threads.dm)
+    elif not directs and thread_id and _dm_with(c, v, thread_id, bot):
+        directs = threads.can_post(c, v, thread_id)
     if way in ("steer", "queue") and not directs:
         raise Problem("delivery", "Only someone who may message this bot can wake it: send it with defer", 403)
     if way == "defer" and not directs:
@@ -166,6 +194,14 @@ def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
     if way == "defer":
         return way, {"send_way": "defer", "quiet": True, **({"send_defer_for": defer_for} if defer_for else {})}
     return way, {}
+
+
+def _dm_with(c, v, thread_id, bot):
+    """Whether `thread_id` is a DM root between the viewer and `bot` alone."""
+    row = threads.thread_row(c, thread_id)
+    if row is None or row.get("parent_id") or threads.audience_of(row) not in ("personal", "participants"):
+        return False
+    return sorted(a for a in threads._dm_members(c, row)) == sorted({v.actor, bot})
 
 
 def _sent_as(c, way, message):
@@ -256,6 +292,7 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
 
 def install(app, store, auth, mutate, rule_check):
     from .media import upload_contract
+    from . import bot_home_merge
 
     def recipients(c, who, thread_id, to):
         """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
@@ -296,7 +333,11 @@ def install(app, store, auth, mutate, rule_check):
 
     def check(who, thread_id, body):
         """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
-        bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment."""
+        bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment; so is a
+        reply to a message the poster can't reply to."""
+        if getattr(body, "in_reply_to", None):
+            with store.read() as c:
+                _reply_check(c, auth, who, thread_id, body)
         reach.precheck(store, who, lambda c: reach.check_thread(c, who, thread_id, body.text, body.to,
                                                                 body.parent_message_id))
         return rule_check(who, "threads", body.text, lambda c: recipients(c, who, thread_id, body.to), "",
@@ -386,12 +427,27 @@ def install(app, store, auth, mutate, rule_check):
 
     @app.get("/api/v2/threads/{thread_id}/timeline")
     def timeline(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None,
-                 max_bytes: int | None = None):
+                 max_bytes: int | None = None, flat: int = 0):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
-        breadcrumb. `next_cursor` is the seq to pass as `cursor` for the page above."""
+        breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
+        `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
+        first page has `bot_status`."""
         with store.read() as c:
             return threads.timeline(c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor,
-                                    limit=limit, max_bytes=max_bytes)
+                                    limit=limit, max_bytes=max_bytes, flat=bool(flat))
+
+    @app.get("/api/v2/threads/{thread_id}/bot-status")
+    def bot_status(request: Request, thread_id: str):
+        """The bots the thread's root waits on, and why (threads-contract §4.10): `{"bots": [...]}`, five at most,
+        oldest wait first. 404 for a thread the viewer cannot read."""
+        from . import thread_bot_status
+        with store.read() as c:
+            v = threads.viewer(auth, request.state.identity)
+            row = threads.require(c, v, thread_id)
+            root = threads.root_of(c, row)
+            if root["id"] != row["id"]:
+                root = threads.require(c, v, root["id"])
+            return {"bots": thread_bot_status.status(c, v, root)}
 
     @app.get("/api/v2/threads/{thread_id}/members")
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):
@@ -466,17 +522,23 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
+        thread_id = bot_home_merge.named_home(store, thread_id)
         _delivery_words(body)
         rc = check(who, thread_id, body)
 
         def work(c):
+            v = threads.viewer(auth, who)
+            replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
-            message = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind,
+            message = threads.post(c, v, thread_id, body.text, kind=body.kind,
                                    refs={**body.refs, **marks} if marks else body.refs,
-                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc, reach=True)
+                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc, reach=True,
+                                   in_reply_to=replying)
             if "id" not in message:         # held: post wrote nothing and answers with the hold
                 return message
             out = _thread_message(message)
+            out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
         return mutate(request, body, work)
 
@@ -489,13 +551,16 @@ def install(app, store, auth, mutate, rule_check):
         with store.read() as c:
             # Only one's own message one can read is edited: anything else is the 404/403 before any check, so neither
             # the reach check nor the rule check reads (or names who reads) a message hidden from the caller.
-            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id).get("conversation_id") or ""
+            # Writer refusals belong in the mutation transaction; this lookup only checks ownership.
+            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id,
+                                         check_writer=False).get("conversation_id") or ""
         # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
         reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
                         {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
 
         def work(c):
+            threads._own_say(c, *threads._actor_of(viewer), message_id)
             gate = org_rule_check.apply(c, rc, body.text, {"message_id": message_id, "text": body.text},
                                         audience_now=recipients(c, who, thread_id, None) if rc else None)
             if gate and gate.get("moved"):
@@ -520,10 +585,12 @@ def install(app, store, auth, mutate, rule_check):
         return mutate(request, body, lambda c: threads.mark_read(c, threads.viewer(auth, who), thread_id, body.seq))
 
     @app.post("/api/v2/threads/{thread_id}/read-all")
-    def read_all(request: Request, thread_id: str):
-        """Read up to now in the thread and every sub-thread under it."""
+    def read_all(request: Request, thread_id: str, body: ReadAll | None = None):
+        """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
-        return mutate(request, Nothing(), lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id))
+        body = body or ReadAll()
+        return mutate(request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id,
+                                                                     ago_ms=body.ago_ms))
 
     @app.post("/api/v2/threads/{thread_id}/members")
     def add_member(request: Request, thread_id: str, body: MemberAdd):
@@ -635,6 +702,7 @@ def install(app, store, auth, mutate, rule_check):
         from .views import human_only
         who = request.state.identity
         human_only(who)
+        thread_id = bot_home_merge.named_home(store, thread_id)     # as post_message names it: the Home, before the check
         checked = {}
 
         def admit(body):
@@ -648,6 +716,7 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             items = [register(c, who, **upload) for upload in uploads]
             for index, item in enumerate(items):
@@ -655,10 +724,11 @@ def install(app, store, auth, mutate, rule_check):
                 item["title"] = caption or item["name"]
             posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to, refs=marks or None,
                                   parent_message_id=body.parent_message_id, checked=checked["rc"],
-                                  attachments=items or None)
+                                  attachments=items or None, in_reply_to=replying)
             if "id" not in posted:          # held: its files are in the hold's replay, linked when it is released
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
+            message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {"thread": threads.get(c, v, thread_id), "message": message}

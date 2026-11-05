@@ -48,7 +48,8 @@ function actorAvatar(a, size = 22) {
 }
 // A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from before threads read as
 // "BotOps"); a group chat by the name it was given, else by its people; any other thread by its title.
-function threadTitle(t) {
+// `messages`: what is loaded of it, which names a DM the server sends with no title and no people (a notice thread).
+function threadTitle(t, messages) {
   if (!t) return '';
   const others = threadOthers(t), total = Number(t.dm_with_count) || others.length;
   // The server's name, for someone in this DM the viewer's people list leaves out.
@@ -59,6 +60,10 @@ function threadTitle(t) {
   if (own) return own;
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
   if (people) return people;
+  if (threadIsDm(t) && !t.parent_id) {
+    const authors = [...new Set((messages || []).map(m => m?.sender_id).filter(a => a && a !== myActor()))];
+    if (authors.length) return authors.slice(0, 3).map(actorName).join(', ') + (authors.length > 3 ? ` +${authors.length - 3}` : '');
+  }
   return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
@@ -123,8 +128,11 @@ async function threadsLoad() {
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
       if (e?.status === 404 && THREADS.on !== true) THREADS.on = false;
-    } finally { THREADS.loading = null; }
-    threadsSideRender();
+    } finally {
+      THREADS.loading = null;
+      // Every way out draws the sidebar again, the early return for a server without threads included.
+      threadsSideRender();
+    }
   })();
   const loading = THREADS.loading;
   await loading;
@@ -148,13 +156,14 @@ async function threadsReady() {
 
 // ----------------------------------------------------------------- the sidebar
 function threadsSideRender() {
-  const on = THREADS.on === true;
+  // Shown from the first paint, before the first read lands: only a server without threads (THREADS.on false) hides it.
+  const on = THREADS.on !== false;
   const link = $('#nav-threads'); if (link) link.hidden = !on;
   // On a phone Threads takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
   const tab = $('#mobile-threads'), search = $('#mobile-search');
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;
-  if (!on) return;
+  if (THREADS.on !== true) return;
   // The link and the phone tab carry the same count: what Catch up has left.
   const n = threadsCatchUp();
   for (const badge of [$('#nav-threads .nav-badge'), $('#mobile-threads .nav-badge')]) {
