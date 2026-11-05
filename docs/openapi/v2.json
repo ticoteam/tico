@@ -67004,6 +67004,19 @@
             ],
             "title": "Company Daily Cap"
           },
+          "max_outside_recipients": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Outside Recipients"
+          },
           "pacing_seconds": {
             "anyOf": [
               {
@@ -67063,6 +67076,17 @@
             ],
             "title": "Ask Many Recipients"
           },
+          "ask_outside_cc": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Outside Cc"
+          },
           "ask_legal_money": {
             "anyOf": [
               {
@@ -67073,6 +67097,58 @@
               }
             ],
             "title": "Ask Legal Money"
+          },
+          "ask_lint": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ask Lint"
+          },
+          "second_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Second Review"
+          },
+          "blocked_recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Recipients"
+          },
+          "owner_handles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Handles"
           },
           "who_can_ok": {
             "anyOf": [

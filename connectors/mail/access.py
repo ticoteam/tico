@@ -6,7 +6,7 @@ credential is: a bot's turn token, a person's own token (their Assistant is them
 What Tico may do (oauth.company_allows). Read gives `read`; Read and write gives:
   - `read`: read messages and download attachments, and
   - `organize`: label, archive, mark read, star, triage, run mail rules, unsubscribe;
-  - `draft`, `send`: write a draft, send one (sending keeps its own approvals, connectors/mail/policy.py);
+  - `draft`, `send`: write a draft, queue one (Tico's sending policy decides every send, connectors/mail/policy.py);
   - `schedule`: change calendar events.
 No handle holds every verb: the owner has no bypass. `bot.yaml` (`tools:` gmail entries) can only narrow a bot's answer:
 `read_only: true` keeps it to reading, and `draft`/`send` count only when its `can:` lists them.
@@ -50,21 +50,6 @@ def where(slug):
     """`<repo folder>/<manifest>` as a message names it: bot-<slug>/bot.yaml, or emp-<slug>/employee.yaml for an older bot."""
     p = manifest_path(slug)
     return f"{p.parent.name}/{p.name}"
-
-
-def forward_to(manifest):
-    """The addresses the owner lists as this bot's forward targets: `forward_to:` in bot.yaml (a list, or one
-    comma-separated string), lowercased, one of each. Mail to them needs no per-message approval once
-    `outbound_send` is on (docs/mail.md, "Turning sending on")."""
-    raw = (manifest or {}).get("forward_to")
-    if isinstance(raw, str):
-        raw = raw.replace(";", ",").split(",")
-    out = []
-    for item in raw if isinstance(raw, (list, tuple)) else []:
-        addr = str(item or "").strip().lower()
-        if "@" in addr and " " not in addr and addr not in out:
-            out.append(addr)
-    return out
 
 
 def employee(slug=None, env=None):

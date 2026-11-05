@@ -2055,19 +2055,6 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("bot_access", "Bot access", "info", str(notice.get("message") or ""),
                              [_fix("Open bots", "#/settings", "bots")]))
 
-    # A bot.yaml asking to send without approval, or to forward to new addresses, has no effect until a person turns
-    # it on in Tico (backend/mail_settings.py); the request itself is worth a look, since a bot or BotOps may write it.
-    # Whoever may turn it on sees it: the owner and admins for every bot, a person who manages a bot for that bot only.
-    from .mail_settings import alert_text, alerts as mail_alerts
-    asking = mail_alerts(c) if full or who.role == "human" else []
-    if not full:
-        asking = [(bot, extra) for bot, extra in asking if auth.bot_manager(c, who, bot)]
-    if asking:
-        checks.append(_check("mail_sending", "Mail sending", "warn",
-                             "; ".join(alert_text(_bot_name(c, bot), extra) for bot, extra in asking[:3])
-                             + ("." if len(asking) <= 3 else f"; and {len(asking) - 3} more."),
-                             [_fix("Open bots", "#/settings", "bots"),
-                              _fix("How", "https://github.com/ticoteam/tico/blob/main/docs/mail.md#turning-sending-on")]))
     # A go-live waiting for its computer to get the repository finishes by itself (backend/go_live.py); until then
     # the bot is placed but not on. Seen by the owner and admins, and by a person who manages that bot.
     from .go_live import EXPIRY_DAYS, waiting as waiting_go_lives

@@ -21,8 +21,7 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.conn=sqlite3.connect(':memory:')
         self.ctx=SimpleNamespace(slug='inbox',mailbox='ana@acme.example',conn=self.conn,
-                                 dry=False,calendar=MagicMock(),gmail=MagicMock(),audit=MagicMock(),
-                                 policy={'defaults':{'max_sends_per_day':20}})
+                                 dry=False,calendar=MagicMock(),gmail=MagicMock(),audit=MagicMock())
         self.ctx.calendar.create_scheduling_event.return_value={'id':'event'}
         self.ctx.gmail.create_draft.return_value={'id':'draft'}
         self.ctx.gmail.send_raw.return_value={'id':'sent'}
@@ -193,22 +192,54 @@ def test_conference_patch_refuses_an_event_edited_after_verification():
 
 
 class PermissionGrant(unittest.TestCase):
+    """Standing scheduling permission lives in bot.yaml (`scheduling_send: true`); Tico still decides the send."""
     def setUp(self):
-        self.manifest={'scheduling_send':True,'outbound_send':False,'access':[
+        self.manifest={'scheduling_send':True,'access':[
             {'service':'gmail','identity':'ana@acme.example','can':['read','draft','schedule']},
             {'service':'google-calendar','identity':'ana@acme.example','can':['read','schedule']}]}
-        self.ctx=SimpleNamespace(slug='inbox',mailbox='ana@acme.example',policy={
-            'scheduling':{'mailbox':'ana@acme.example','employee':'inbox'},
-            'send_enabled':True,'mailboxes':{},'blocklist':{'addresses':[],'domains':[]},
-            'owner_handles_personally':{'addresses':[],'domains':[]}})
+        self.ctx=SimpleNamespace(slug='inbox',mailbox='ana@acme.example')
 
-    def test_kill_switch_and_personal_recipients_still_block(self):
-        with patch.object(s.pl, "sending_preflight"), patch.object(s.access,'load',return_value=self.manifest):
-            self.ctx.policy['send_enabled']=False
+    def test_settings_need_scheduling_send_and_a_matching_mailbox(self):
+        self.assertEqual(s.settings(self.ctx,self.manifest)['mailbox'],'ana@acme.example')
+        self.assertEqual(s.settings(self.ctx,dict(self.manifest,scheduling_send='yes')),{})
+        self.assertEqual(s.settings(self.ctx,dict(self.manifest,scheduling={'mailbox':'other@acme.example'})),{})
+        named=s.settings(self.ctx,dict(self.manifest,scheduling={'mailbox':'Ana@Acme.example','meeting_title':'Intro'}))
+        self.assertEqual((named['mailbox'],named['meeting_title']),('ana@acme.example','Intro'))
+
+    def test_no_standing_permission_or_an_unknown_category_refuses(self):
+        with patch.object(s.pl, "sending_preflight"), patch.object(s.access,'load',return_value=dict(self.manifest,scheduling_send=False)):
             with self.assertRaises(Refused):s.permission(self.ctx,'influencer','x@example.org','t',None)
-            self.ctx.policy['send_enabled']=True
-            self.ctx.policy['owner_handles_personally']['addresses']=['x@example.org']
-            with self.assertRaises(Refused):s.permission(self.ctx,'influencer','x@example.org','t',None)
+        with patch.object(s.pl, "sending_preflight"), patch.object(s.access,'load',return_value=self.manifest), \
+                patch.object(s.access,'resolve'):
+            s.permission(self.ctx,'influencer','x@example.org','t',None)
+            with self.assertRaises(Refused):s.permission(self.ctx,'sales','x@example.org','t',None)
+
+
+class ReviewThread(unittest.TestCase):
+    """The decision model reads the thread before any booking; no model, or a doubtful one, books nothing."""
+    MSGS=[{'id':'m','from':'creator@example.org','date':'2030-01-01','subject':'Call','body':'Tuesday at 10 works'}]
+    START=[datetime(2030,1,8,10,tzinfo=s.TZ)]
+
+    def engine(self, eligible, accepts):
+        values={'eligible':eligible,'accepts_slot':accepts}
+        return lambda state, questions, label: {'answers':{q:{'noul':values[q]} for q in questions}}
+
+    def test_no_decision_model_refuses(self):
+        with patch.object(s.jd,'engine',return_value=None):
+            with self.assertRaises(Refused):s.review_thread(self.MSGS,'creator@example.org','influencer','book',self.START)
+
+    def test_a_doubtful_answer_refuses_and_a_clear_one_passes(self):
+        with patch.object(s.jd,'engine',return_value=self.engine(0.3,0.95)):
+            with self.assertRaises(Refused):s.review_thread(self.MSGS,'creator@example.org','influencer','book',self.START)
+        with patch.object(s.jd,'engine',return_value=self.engine(0.95,0.3)):
+            with self.assertRaises(Refused):s.review_thread(self.MSGS,'creator@example.org','influencer','book',self.START)
+        with patch.object(s.jd,'engine',return_value=self.engine(0.95,0.9)):
+            self.assertEqual(s.review_thread(self.MSGS,'creator@example.org','influencer','book',self.START),
+                             {'eligible':0.95,'accepts_slot':0.9})
+
+    def test_a_broken_model_answer_refuses(self):
+        with patch.object(s.jd,'engine',return_value=lambda *a:{'answers':{}}):
+            with self.assertRaises(Refused):s.review_thread(self.MSGS,'creator@example.org','influencer','book',self.START)
 
 
 def test_calendar_provider_never_notifies_before_the_frozen_invitation_dispatch():

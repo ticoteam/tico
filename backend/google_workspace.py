@@ -48,7 +48,7 @@ READ_ONLY_SCOPES = {"gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
                     "calendar": ["https://www.googleapis.com/auth/calendar.readonly"]}
 # What Tico may do in Google beyond reading (Tools > Settings > Email), one JSON row in registry_metadata. Each is on until an
 # admin turns it off. Organize mail and Send mail both need gmail.modify (Google has no narrower scope Tico uses), so
-# Send mail is also held in Tico: off, no bot sends (backend/mail_settings.py, connectors/mail/policy.py).
+# Send mail is also held in Tico: off, no bot sends (backend/mailbox_access.py, backend/email_sending.py).
 PERMISSIONS_KEY = "google_permissions"
 PERMISSIONS = ("organize_mail", "send_mail", "change_calendar")
 TOKEN_URI = "https://oauth2.googleapis.com/token"

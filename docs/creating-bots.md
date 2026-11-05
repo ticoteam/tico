@@ -192,7 +192,7 @@ skill of that name is left alone unless you say to replace it. Nothing stays lin
 A message bot is assigned to one human on the roster. **Settings → Bots → Add from template** (and
 the Finish setup cards) show a human picker when the template is `inbox`. The chosen address is
 appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}}` in
-`bot.yaml` from that line. The bot is created `planned`, with `outbound_send: false`, one
+`bot.yaml` from that line. The bot is created `planned`, with its gmail Tool at `read` and `draft`, one
 routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
 declared off and switched on when its setup starts, and gmail `read`/`draft` plus calendar `read` on that mailbox. It reads only that mailbox,
 through the grant it gets as its person's message bot (Tools); another mailbox is that mailbox's
@@ -230,7 +230,7 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
 | Record status: `planned`, `active`, `paused`, `quarantined` | `knowledge/`, what is true in the domain |
 | Display name, reporting line, owner and primary human | `memory/`, dated learnings and decisions |
 | The repository link recorded on the bot | `state.md`, where the bot is right now |
-| Tasks, approvals, runs, routines and their history | `bot.yaml`: `tools:`, `outbound_send` |
+| Tasks, approvals, runs, routines, sending policy and their history | `bot.yaml`: `tools:` |
 
 A one-off request is a **task**, not an edit. Only change the repository when the change should
 hold next month too.
@@ -245,7 +245,7 @@ own paths, so renaming later is real work.
 | Path | What it is for |
 |---|---|
 | `AGENT.md` | The Instructions. Read at the start of every run. **Required.** `AGENTS.md` and `CLAUDE.md` are one-line pointers at it, so any model CLI finds it |
-| `bot.yaml` | Identity and switches: `name`, optional runtime overrides, `gateway:`, `tools:`, `outbound_send`, `reads:`. An older `employee.yaml` (with `access:` and `schedules:`) is still read for one release; the template refresh renames it |
+| `bot.yaml` | Identity and switches: `name`, optional runtime overrides, `gateway:`, `tools:`, `reads:`. An older `employee.yaml` (with `access:` and `schedules:`) is still read for one release; the template refresh renames it |
 | `state.md` | Current focus, open threads, next step. Rewritten at the end of each run |
 | `memory/learnings.md` | How to do the job: the flag it forgot, the tool that refused, dated |
 | `memory/decisions.md` | What was decided, when, why. Dated. This is where history goes |
@@ -452,7 +452,7 @@ that fires daily, is either perfect or unread.
 
 **Say what the bot may do.** A playbook carries out the authorized request with its granted Tools;
 spending, publishing, merging, record changes and deletion have no blanket approval step.
-Messages to outsiders stay drafts until a person who manages the bot turns mail sending on in Tico (Settings → Bots → Mail sending, or `hub bot mail <slug> --send`). `outbound_send` in bot.yaml only asks for it.
+Sending is set in Tico, never in bot.yaml: a person who manages the bot picks **On their own**, **Ask first** or **Never** (Settings → Bots → <bot> → Email sending, or the company or inbox sending policy). Every email goes through Tico's send queue with an undo window; under Ask first a person approves it in Tico.
 An approval can still be requested for an uncertain action, with the exact action attached;
 it is optional, decided by a human and used once. See [Permissions](permissions.md).
 
@@ -500,7 +500,7 @@ quietly stops the routine. Quiet day or not, the run ends with the task marked d
 note saying what was checked and what was found.
 
 **The read-only period pattern.** A new bot can run fully while nothing it produces leaves the
-building: set `outbound_send: false`, give it `read` in `tools:` and no `post` or `send`, and let
+building: leave its sending at Never in Tico, give it `read` in `tools:` and no `post` or `send`, and let
 it write drafts onto tasks. Routines fire, the work is real, the output is reviewed, and nobody
 wakes up to a message the bot sent. Turn sends on per bot, later, deliberately.
 
@@ -511,11 +511,10 @@ is shown on the bot's page, it is what the shared tools check, and it is what pr
 resolves against the computer before a bot goes active.
 
 ```yaml
-outbound_send: false           # a request only: a person turns sending on in Tico
 tools:
   - service: gmail
     identity: "desk@example.com"
-    can: [read, draft]         # sends need the Tico mail switch on
+    can: [read, draft]         # send also needs Tico's sending policy to allow it
     env: GOOGLE_SA_KEY
     note: "reads and drafts on its own mailbox; never files or sends"
   - service: warehouse-api
@@ -710,7 +709,7 @@ or the bot will not run, which is why the plainest repository names neither.
 
 1. **Create it `planned`.** **Settings → Bots → Add bot**, then copy `templates/employee-repo/` to
    `<workspace>/bot-<slug>` on the computer that will run it, fill in `AGENT.md` and `bot.yaml`,
-   commit, push, and record the repository link on the bot. Leave `outbound_send: false` and
+   commit, push, and record the repository link on the bot. Leave its sending at Never in Tico and
    add no routines yet.
 2. **Run preflight** and fix everything it fails on. Then set the bot to `active` so it can take tasks.
    Keep sending off and routines disabled while you check its work.

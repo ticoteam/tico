@@ -548,7 +548,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            show or set who sees, reads, writes (V: everyone, or ben,group:legal,bot:x)
     hub bot owners <slug> [--add P ...] [--remove P ...]
                                            add or remove the humans who own a bot, as the requester (BotOps)
-    hub bot mail <slug> [--send|--no-send] [--forward-to a@x,b@y] [--from-bot-yaml]
+    hub bot mail <slug> [--send|--no-send]
                                            show or set whether the bot sends mail without approval and its forward
                                            targets; a person who manages the bot only, never a bot (docs/mail.md)
     hub bot setup-done [slug]              mark a bot's onboarding complete: a person above it on the org chart
@@ -3608,13 +3608,10 @@ def parser():
     s.add_argument("--add", nargs="+", default=[], metavar="HUMAN")
     s.add_argument("--remove", nargs="+", default=[], metavar="HUMAN")
     s.set_defaults(fn="bot owners")
-    s = bot.add_parser("mail", help="show or set a bot's mail sending without approval (a person only)")
+    s = bot.add_parser("mail", help="show or set whether a bot sends mail on its own (a person only)")
     s.add_argument("slug")
     s.add_argument("--send", dest="outbound_send", action=argparse.BooleanOptionalAction, default=None,
-                   help="--send: send without a per-message approval to the recipients docs/mail.md lists; --no-send: off")
-    s.add_argument("--forward-to", dest="forward_to", help="comma list of forward addresses; an empty string clears it")
-    s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
-                   help="take what the bot's bot.yaml asks, as its computer reported it")
+                   help="--send: its sending policy is On their own; --no-send: Ask first")
     s.set_defaults(fn="bot mail")
     s = bot.add_parser("setup-done", help="mark a bot's onboarding complete, as a person above it on the org chart")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")

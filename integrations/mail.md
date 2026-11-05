@@ -73,10 +73,9 @@ $HUB_DIR/scripts/mail.sh label add 18f2... hub/needs-owner           # label rem
 $HUB_DIR/scripts/mail.sh draft --to person@example.org --subject "..." --body-file out/draft.txt --issue 128
 $HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128 --attach out/letter.pdf   # a file in the bot's folder; normal send permissions apply
 $HUB_DIR/scripts/mail.sh discard r-882... --issue 128                # only an unsent draft you made
-$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131]
-$HUB_DIR/scripts/mail.sh reply --thread 18f2... --body-file out/reply.txt --issue 128   # draft, then send if allowed
+$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval <id>]   # queues it with Tico
+$HUB_DIR/scripts/mail.sh reply --thread 18f2... --body-file out/reply.txt --issue 128   # draft, then queue it with Tico
 $HUB_DIR/scripts/mail.sh lint --body-file out/draft.txt --subject "..." [--to addr]
-$HUB_DIR/scripts/mail.sh review --body-file out/reply.txt --thread 18f2...
 $HUB_DIR/scripts/mail.sh slots --for owner@example.com --n 2 --minutes 30
 $HUB_DIR/scripts/mail.sh upcoming --for owner@example.com --hours 24
 $HUB_DIR/scripts/mail.sh calendar list --for teammate@example.com --hours 48
@@ -85,7 +84,7 @@ $HUB_DIR/scripts/mail.sh calendar get --for teammate@example.com --event <id>
 $HUB_DIR/scripts/mail.sh schedule --thread 18f2... --slot 2026-09-08T13:00:00-07:00 --minutes 30 --attendee a@b.c --body-file out/confirm.txt --issue 128
 $HUB_DIR/scripts/mail.sh unsubscribe 18f2... --dry-run --json        # RFC 8058 one-click; needs the unsubscribe verb
 $HUB_DIR/scripts/mail.sh scheduling offer|book ...                   # the inbox bot's scoped workflow only
-$HUB_DIR/scripts/mail.sh policy show                                 # what you may send, to whom, how often
+$HUB_DIR/scripts/mail.sh policy show                                 # your sending policy, as Tico answers it
 $HUB_DIR/scripts/mail.sh audit --since 24h                           # everything mail did
 $HUB_DIR/scripts/mail.sh sent-log --since 7d                         # what actually went out
 ```
@@ -104,22 +103,16 @@ policy refused you. Add `--json` for structured output.
   delivery is part of that calendar action, not a grant to the generic mail send command.
 - A `read_only: true` entry (a review-only bot on `owner@example.com`) refuses filing, labels, rules,
   mark-read, star, drafts and sends whatever else is listed.
-- Every write goes through five gates in order: policy (`registry/mail-policy.yaml` plus your
-  `bot.yaml`), lint, a second model (a different vendor), execution, audit. A gate that
-  says no leaves a draft in Gmail with the reason. Read the reason; do not retry the same text
-  or look for another route.
-- A send to anyone outside `@example.com` needs the bot's mail switch turned on in Tico by a person (bot.yaml's `outbound_send` only asks) and one of: a standing
-  allowance in `registry/mail-policy.yaml` that lists the recipient, or a per-message approval
-  (`--approval-issue`: a matching GitHub Issue, a decided Tico send approval, or the owner's
-  Tico message telling you to send). With the flag false every send is a draft unless that
-  approval is a full yes.
-- Caps: sends per employee per day, a 14-day per-recipient cooldown, one external recipient per
-  message, no Cc or Bcc outside example.com, and a blocklist of addresses bots never email.
-- Attachments use the same send permissions and approvals as the message without files. An owner's
-  Tico message telling you to send covers its files. Files must be in your own bot folder, exclude
-  secrets and total at most 25 MB; drafts with files are reviewed again at send time. Legacy registry
-  `allow_attachments` keys have no effect. If a Tico send approval names files, its draft id and exact
-  set of file names, sizes and sha256 hashes must still match; an approval naming no files does not constrain them.
+- Sending is set in Tico, never in `bot.yaml`: **Settings > Bots > <bot> > Email sending**, or the company or inbox
+  sending policy. The modes are **On their own**, **Ask first** and **Never**.
+- Every send goes through Tico's send queue, which decides it: the sending policy, blocked recipients, the people the
+  owner handles personally, outside Cc and many outside recipients, the lint and a second reviewer, the org rules,
+  bounces and approvals. An allowed send waits out an undo window, then goes; under Ask first a person approves it in
+  Tico. `--approval <id>` passes the id of a person's Tico approval or message the send relies on; Tico checks it.
+- A send Tico blocks leaves the draft in Gmail with Tico's reason. Read the reason; do not retry the same text or look
+  for another route.
+- Attachments go into the frozen message Tico queues, so its decision and any approval cover the exact files. Files
+  must be in your own bot folder, exclude secrets and total at most 25 MB.
 - Touch only the labels the hub owns (`hub/triaged/<slug>`, `hub/handled/<slug>`,
   `hub/drafted`, `hub/needs-owner`, `hub/marketing`, `hub/notification`, `hub/noise`) and
   Gmail's INBOX, UNREAD, STARRED. Everything else is the owner's filing.

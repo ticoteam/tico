@@ -1180,8 +1180,6 @@ class Store:
             _doc_sources.ensure_schema(c)
             from . import bot_tools as _bot_tools
             c.executescript(_bot_tools.SCHEMA)
-            from . import mail_settings as _mail_settings
-            c.executescript(_mail_settings.SCHEMA)
             from . import company_storage as _company_storage
             c.executescript(_company_storage.SCHEMA)
             from . import tico_storage as _tico_storage
