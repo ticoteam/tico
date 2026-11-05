@@ -27,10 +27,12 @@ def all_shapes(fid, bid, digest, title, mid):
             "answer": {"target": {"file": fid, "version": 1}, "reviewed": [{**review, "verdict": "approve"}],
                        "review": [review], "files": [review]},
             "message": {"refs": {"attachments": [attachment]}},
+            "page": {"path": "#/page/" + fid, "title": title},
             "pages": [{"id": fid, "title": title}, {"file_id": fid, "title": title},
                       {"page": fid, "title": title}, {"page_id": fid, "title": title},
                       {"ref": "page:" + fid, "title": title}, {"url": "/?page=" + fid, "title": title},
                       {"href": "#/page/" + fid, "title": title},
+                      {"path": "#/page/" + fid, "title": title},
                       {"src": "/api/v2/pages/" + quote(fid, safe=""), "title": title}],
             "versions": [{"id": bid, "title": title}, {"digest": digest, "title": title}],
             "meetings": [{"id": mid, "title": "Forbidden meeting title"}],
@@ -44,6 +46,7 @@ def append_allowed(refs, fid, bid, digest):
     refs["files"].append(fid + "@1")
     refs["review"]["files"].append({"file": fid, "version": 1, "digest": digest})
     refs["pages"].append({"page": fid, "title": "Allowed page title"})
+    refs["pages"].append({"path": "#/page/" + fid, "title": "Allowed page title"})
 
 
 def no_sources(value, secrets):
@@ -209,7 +212,7 @@ def test_claim_and_runner_inputs_reproject_saved_wire_refs_after_scope_narrows(a
 def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkeypatch):
     import sqlite3
     from fastapi import Request
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, PlainTextResponse
     from backend.tests.test_assistant import assistant_turn
     from backend.tests.test_turn_scope import make_scope
 
@@ -221,7 +224,9 @@ def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkey
     make_scope(api, attempt, t["id"])
 
     @api.app.get("/api/v2/projection-fixture")
-    def fixture(request: Request):
+    def fixture(request: Request, plain: str = ""):
+        if plain:
+            return PlainTextResponse("Forbidden live title " + live if plain == "hidden" else "Allowed source " + fid)
         return JSONResponse({"attachments": [{"file_id": fid, "title": "Allowed source"}],
                              "meetings": [{"id": live, "title": "Forbidden live title"}]}, status_code=409)
 
@@ -234,6 +239,10 @@ def test_boundary_alone_logs_sources_before_delivering_even_an_error(api, monkey
     store = api.app.state.store
     with store.read() as c:
         assert c.execute("SELECT 1 FROM attempt_reads WHERE attempt_id=? AND ref=?", (attempt["id"], fid)).fetchone()
+    response = api.get("/api/v2/projection-fixture?plain=hidden", headers=headers(attempt["token"]))
+    assert response.status_code == 200 and response.content == b""
+    response = api.get("/api/v2/projection-fixture?plain=allowed", headers=headers(attempt["token"]))
+    assert response.status_code == 200 and response.text == "Allowed source " + fid
     original = store.mutate
 
     def unavailable(who, operation, *args, **kwargs):

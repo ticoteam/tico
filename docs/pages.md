@@ -39,7 +39,7 @@ other tasks. Several carried tasks get their intersection. Access changes apply 
 file and blob addresses and retried runner claims. Outside task turns, a bot attached by a private meeting's owner may
 read that saved meeting.
 
-Every JSON response to a scoped turn, including nested review and message references, passes through the same source projector. Claims and queued runner inputs apply it before delivery, and saved claim retries reapply current access to the whole payload. Out-of-scope references and their metadata disappear. Make-page attempts and scoped bot task turns receive `403` on event streams; the runner follows work with its separate runner identity.
+Every JSON or plain-text response to a scoped turn, including nested review and message references, passes through the same source projector. Claims and queued runner inputs apply it before delivery, and saved claim retries reapply current access to the whole payload. Out-of-scope references and their metadata disappear. Make-page attempts and scoped bot task turns receive `403` on event streams; the runner follows work with its separate runner identity.
 
 **What a page may hold.** One `.html` file, up to 10 MB. It runs no script and loads nothing from elsewhere. Tico
 removes scripts and outside addresses when the page is published, and the answer lists what it removed

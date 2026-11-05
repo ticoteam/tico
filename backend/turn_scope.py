@@ -164,7 +164,7 @@ def project(c, scoped, payload, *, auth=None):
             identity = {"id", "file_id", "blob_id", "page_id", "meeting_id", "file", "ref", "digest", "source_digest", "item"}
             if any(rejected(item) for key, item in value.items() if key in identity):
                 return gone
-            if (any(rejected(item) for key, item in value.items() if key in {"page", "meeting", "url", "href", "src"})
+            if (any(rejected(item) for key, item in value.items() if key in {"page", "meeting", "url", "href", "src", "path"})
                     and {"title", "name", "version"}.intersection(value)):
                 return gone
             out = {}
