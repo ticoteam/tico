@@ -20,7 +20,8 @@ other file.
   Without it, the page belongs to the turn's task or conversation, as a file would; `--scope bot` makes it
   bot-wide.
 - **`--replaces`** names an older page of the same bot that this one takes over. The older page then says
-  **Replaced by** and links here.
+  **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
+  and both pages must be filed on the request's task.
 
 A bot writes only its own pages. Over MCP the same tools are `hub_page_publish`, `hub_page_list`, `hub_page_show` and
 `hub_page_archive`.

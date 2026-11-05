@@ -305,26 +305,30 @@ class Pages:
 
         def extra(c, row, changed):
             now = H.now()
+            editor = who
+            if who.role == "runner":
+                from .auth import Identity
+                editor = Identity("bot:" + row["bot_id"], "bot")
             c.execute("INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?) "
                       "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
                       "archived=CASE WHEN ? THEN 0 ELSE archived END",
                       (row["id"], cadence or "none", as_of, now, now, cadence, as_of, now, int(bool(changed))))
             if audience_set:
-                editor = who
-                if who.role == "runner":
-                    from .auth import Identity
-                    editor = Identity("bot:" + row["bot_id"], "bot")
                 self.set_audience(c, editor, row, checked_audience(c, audience))
             if replaces:
                 old = c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
                                 (replaces,)).fetchone()
-                if not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted":
+                if (not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted"
+                        or who.via == "assistant" and old["task_id"] != row["task_id"]
+                        or not self.files.visible(c, editor, old, {})):
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
+                if not self.may_manage(c, editor, old):
+                    raise Problem("forbidden", "Only page managers replace a page", 403)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
-                H._writer(c, "bot:" + row["bot_id"], task_id=old["task_id"])
+                H._writer(c, editor.actor, task_id=old["task_id"])
                 c.execute("UPDATE pages SET replaced_by_id=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
-                self.files.activity(c, old["id"], "bot:" + row["bot_id"], "modified", now=now,
+                self.files.activity(c, old["id"], editor.actor, "modified", now=now,
                                     detail={"replaced_by": row["id"]})
             if task and row["task_id"] == task:
                 if who.via == "assistant" and not c.execute(

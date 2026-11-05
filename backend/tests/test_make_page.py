@@ -407,9 +407,104 @@ def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
     fid = original.json()["page"]["file_id"]
     post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     _, second, _ = start(api, t["id"], person="cara-test", machine=machine)
+    # The shared publishing bot grants no rights to rename, archive, delete or arrange Ben's page.
+    token = second["token"]
+    for path, body in (("files/" + fid, {"title": "Cara's title"}),
+                       ("pages/" + fid, {"archived": True})):
+        refused = api.patch("/api/v2/" + path, json=body, headers=headers(token))
+        assert refused.status_code == 403, refused.text
+    refused = api.delete("/api/v2/files/" + fid, headers=headers(token))
+    assert refused.status_code == 403, refused.text
+    pin = get(api, "places/task:" + t["id"], token)["pins"][0]
+    refused = api.patch("/api/v2/pins/" + pin["id"], json={"size": "large"}, headers=headers(token))
+    assert refused.status_code == 403, refused.text
+    refused = api.delete("/api/v2/pins/" + pin["id"], headers=headers(token))
+    assert refused.status_code == 403, refused.text
     other = page(api, second, task=t["id"], data=b"<h1>Cara's plan</h1>")
     assert other.status_code == 200, other.text
     assert other.json()["page"]["file_id"] != fid
     assert get(api, "pages/" + fid, "ben-test")["page"]["version"] == 1
     content = api.get("/api/v2/files/" + fid, headers=headers("ben-test"))
     assert b"Ben's plan" in content.content and b"Cara's plan" not in content.content
+
+
+@pytest.mark.parametrize("person,another_task,expected", [
+    ("cara-test", False, 403), ("cara-test", True, 404), ("ben-test", True, 404)])
+def test_make_page_replacement_requires_person_management_and_the_same_task(api, person, another_task, expected):
+    t = task(api, private=False)
+    machine, first, _ = start(api, t["id"])
+    original = page(api, first, task=t["id"])
+    assert original.status_code == 200, original.text
+    fid = original.json()["page"]["file_id"]
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    target = task(api, private=False) if another_task else t
+    _, attempt, _ = start(api, target["id"], person=person, machine=machine)
+    get(api, "pages/" + fid, attempt["token"])
+    refused = page(api, attempt, task=target["id"], name="replacement.html", replaces=fid)
+    assert refused.status_code == expected, refused.text
+    original = get(api, "pages/" + fid, "ben-test")["page"]
+    assert original["replaced_by_id"] is None and original["version"] == 1
+    assert [p["page"]["file_id"] for p in get(api, "places/task:" + t["id"], "ben-test")["pins"]] == [fid]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM pages").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM bot_files").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == 1
+
+
+def test_owner_make_page_can_replace_their_own_page_and_records_the_person(api):
+    t = task(api, private=True, owner="human:ana")
+    _, attempt, _ = start(api, t["id"], person="ana-test")
+    original = page(api, attempt, task=t["id"])
+    assert original.status_code == 200, original.text
+    fid = original.json()["page"]["file_id"]
+    made = page(api, attempt, task=t["id"], name="replacement.html", replaces=fid)
+    assert made.status_code == 200, made.text
+    assert get(api, "pages/" + fid)["page"]["replaced_by_id"] == made.json()["page"]["file_id"]
+    activity = get(api, "files/" + fid + "/activity")["activity"]
+    assert activity[0]["action"] == "modified" and activity[0]["actor"] == "human:ana"
+
+
+def test_lost_private_make_page_claim_replays_the_lease_as_the_person_and_rechecks_access(api):
+    as_member(api, "ben@acme.example")
+    t = task(api, private=True)
+    machine, first, _ = start(api, t["id"])
+    source = page(api, first, task=t["id"])
+    assert source.status_code == 200, source.text
+    fid = source.json()["page"]["file_id"]
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    sent = post(api, f"tasks/{t['id']}/make-page", {"text": "Make a revised plan"}, "ben-test")["message"]
+    key, body = "claim:" + sent["id"], {"next_run": True}
+    claimed = post(api, "jobs/claim", body, machine["token"], key)["attempt"]
+    assert [p["id"] for p in claimed["task_context"]["pages"]] == [fid]
+    from backend import task_privacy
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (claimed["id"],)).fetchone()[0] == "leased"
+        assert not task_privacy.attempt_readable(c, "bot:coo", claimed["id"])
+    # Discard the first response: the same key must recover the existing lease, without starting another turn.
+    replayed = post(api, "jobs/claim", body, machine["token"], key)["attempt"]
+    assert (replayed["id"], replayed["token"]) == (claimed["id"], claimed["token"])
+    assert replayed["make_page"] == claimed["make_page"] and replayed["task_context"] == claimed["task_context"]
+    post(api, "jobs/claim", body, "cara-test", key, expected=403)
+    outsider = runner(api, operator="cara")
+    assert post(api, "jobs/claim", body, outsider["token"], key)["attempt"] is None
+    archived = api.patch("/api/v2/pages/" + fid, json={"archived": True}, headers=headers())
+    assert archived.status_code == 200, archived.text
+    refreshed = post(api, "jobs/claim", body, machine["token"], key)["attempt"]
+    assert refreshed["id"] == claimed["id"] and refreshed["task_context"]["pages"] == []
+    current = get(api, "tasks/" + t["id"])["task"]
+    post(api, "tasks/" + t["id"], {"version": current["version"], "owner": "human:cara"})
+    post(api, "jobs/claim", body, machine["token"], key, expected=403)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (claimed["job_id"],)).fetchone()[0] == 1
+
+
+def test_cached_make_page_claim_requires_the_current_person_and_computer(api):
+    t = task(api, private=True)
+    machine, attempt, sent = start(api, t["id"])
+    key, body = "claim:" + sent["id"], {"next_run": True}
+    post(api, "access/people/ben", {"sign_in": False})
+    post(api, "jobs/claim", body, machine["token"], key, expected=403)
+    post(api, "access/people/ben", {"sign_in": True})
+    other = runner(api)
+    assign(api, other, "coo", generation=attempt["generation"])
+    post(api, "jobs/claim", body, machine["token"], key, expected=403)

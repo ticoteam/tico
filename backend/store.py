@@ -2350,8 +2350,8 @@ class Store:
                     aid = result.get("attempt_id") or (saved.get("id") if isinstance(saved, dict) else None)
                     if aid:
                         # A finished attempt can replay its receipt without a live bot lease, but
-                        # the computer must still own that generation and the bot must still see it.
-                        hosted = c.execute("SELECT a.bot_id FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+                        # the computer must still own that generation and the acting principal must still see it.
+                        hosted = c.execute("SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
                                            "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
                                            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
                                            (aid, identity.runner_id, identity.runner_id)).fetchone()
@@ -2359,13 +2359,18 @@ class Store:
                             raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
                         replay_principal = Identity("bot:" + hosted["bot_id"], "bot", runner_id=identity.runner_id,
                                                     attempt_id=aid)
-                        if not privacy.attempt_readable(c, replay_principal.actor, aid):
+                        claim = operation == "/api/v2/jobs/claim" and isinstance(saved, dict)
+                        if claim:
+                            acting = replay_auth.assistant_principal(c, hosted)
+                            if saved.get("make_page") and acting is None:
+                                raise Problem("privacy", "The person can no longer run this page request", 403)
+                            replay_principal = acting or replay_principal
+                        if not privacy.attempt_readable(c, privacy.actor(replay_principal), aid):
                             raise Problem("privacy", "This execution is no longer available", 403)
-                        if operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
+                        if claim:
                             from . import task_context
-                            attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
-                            acting = replay_auth.assistant_principal(c, attempt) or replay_principal
-                            saved["task_context"] = task_context.for_turn(c, replay_auth, acting, saved.get("task"))
+                            task = (saved.get("make_page") or {}).get("task") or saved.get("task")
+                            saved["task_context"] = task_context.for_turn(c, replay_auth, replay_principal, task)
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):
