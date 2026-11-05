@@ -226,6 +226,11 @@ def test_role_review_without_check_model_is_normal_child(api):
     with api.app.state.store.read() as c:
         assert H.check_model(c, child["id"]) is None
     assert dispatch(api) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.head_sha',?) WHERE task_id=?", (OLD, task["id"]))
+        V.new_head(c, H.task(c, task["id"]))
+    [current] = children(api, task)
+    assert current["id"] != child["id"] and OLD in current["body"]
 
 
 def test_merge_falls_back_to_existing_repo_manager_without_granting_access(api):

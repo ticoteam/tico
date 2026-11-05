@@ -677,7 +677,7 @@ def _unboard(c, ticket, snapshots=None):
         # An old open request cannot approve the new head or occupy its review slot.
         for child in V.review_checks(c, ticket):
             if child["status"] in H.ACTIVE_STATUSES and child["judged_head"] and \
-                    child["judged_head"] != head and pr["url"] in (child.get("body") or ""):
+                    child["judged_head"] != head and V.for_pr(child, pr):
                 H.task_close(c, H.KEEPER, child["id"], note="Superseded by a new PR head.", strict=False)
         for step in board:
             step = {**step, "pr": pr}
