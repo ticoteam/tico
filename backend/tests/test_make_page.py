@@ -5,7 +5,7 @@ import pytest
 
 from backend import cards
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.test_api import api, as_member, assign, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.test_assistant import assistant_turn, say
 from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
@@ -319,6 +319,7 @@ def test_make_page_cannot_bypass_page_cleaning_with_a_generic_upload(api):
 
 
 def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck(api):
+    as_member(api, "ben@acme.example")
     t = task(api, private=False)
     mid = record(api, {"private": False})
     _, publisher = turn(api, "cpo")
@@ -355,12 +356,20 @@ def test_make_page_keeps_normal_assistant_learning_and_tools(api):
 
 def test_make_page_on_a_private_task_keeps_its_normal_task_audience(api):
     t = task(api, owner="human:ben", private=True)
-    _, attempt, _ = start(api, t["id"])
+    machine, attempt, request = start(api, t["id"])
     made = page(api, attempt, task=t["id"])
     assert made.status_code == 200, made.text
     fid = made.json()["page"]["file_id"]
     get(api, "pages/" + fid, "ben-test")
     get(api, "pages/" + fid, "cara-test", expected=404)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0,
+         "text": "The private page is made."}, machine["token"])
+    messages = get(api, "conversations/" + request["conversation_id"] + "/messages", "ben-test")
+    assert any(m["body"] == "The private page is made." for m in messages)
+    from backend import task_privacy
+    with api.app.state.store.read() as c:
+        assert not task_privacy.message_readable(c, "bot:coo", request)
+        assert not task_privacy.attempt_readable(c, "bot:coo", attempt["id"])
 
 
 def test_person_who_makes_a_page_can_unlink_it_from_someone_elses_task(api):

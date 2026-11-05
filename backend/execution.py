@@ -2166,12 +2166,17 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
+def job_message_readable(c, bot, message):
+    # Claiming the person's page request does not grant the shared bot later access to its private task.
+    return privacy.message_readable(c, privacy.make_page_actor(c, "bot:" + bot, message), message)
+
+
 def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
-    if not privacy.message_readable(c, "bot:" + job["bot_id"], message):
+    if not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
@@ -3702,7 +3707,7 @@ class Execution:
         savepoint of its own (claim), so an error here rolls back only this job's writes."""
         msg = H.message(c, row["message_id"])
         from . import threads
-        if (not privacy.message_readable(c, "bot:" + row["bot_id"], msg)
+        if (not job_message_readable(c, row["bot_id"], msg)
                 or not threads.still_addressed(c, msg, "bot:" + row["bot_id"])):
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
             threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
@@ -4130,7 +4135,9 @@ class Execution:
             # never started has no result worth that: the sweep requeues or fails it as before.
             self.expire(c, attempt_ids=[aid])
             row = read()
-        if not privacy.attempt_readable(c, "bot:" + row["bot_id"], aid):
+        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
+        principal = privacy.make_page_actor(c, "bot:" + row["bot_id"], origin)
+        if not privacy.attempt_readable(c, principal, aid):
             raise Problem("stale_lease", "Task access expired; stop this attempt", 409)
         if (row["state"] in ("leased", "running") and row["lease_until"] > H.now()
                 and row["assigned_runner"] == who.runner_id and row["assigned_generation"] == row["generation"]
@@ -4904,6 +4911,10 @@ class Execution:
         the thread, where the wake rule and the loop guard decide whom it starts. A thread the bot may no longer read
         or post in (it was removed, the thread was archived) withholds that reply, and the run is still done."""
         from . import threads
+        if not carried and privacy.make_page_actor(c, actor, msg) == target:
+            # The Assistant's answer belongs in the initiating person's private room, as its request does.
+            return H._write_message(c, actor, target, text, conv, "say", refs, msg["id"], None,
+                                    delivered_at=H.now())
         to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
         v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
         thread, under = conv, None
@@ -5069,7 +5080,7 @@ class Execution:
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
                     refused = False
                     try:
-                        if replyable:
+                        if replyable and privacy.make_page_actor(c, actor, msg) != target:
                             privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"],
                                                         refs, source)
                     except Problem as refusal:
@@ -5938,7 +5949,7 @@ class Execution:
                              " ORDER BY j.created_at,j.id", job_ids or ()).fetchall():
             with isolated(c, "drop_unreadable", row["id"]):
                 # job_refusal's own check, with its arguments.
-                if privacy.message_readable(c, "bot:" + row["bot_id"], H.message(c, row["message_id"])):
+                if job_message_readable(c, row["bot_id"], H.message(c, row["message_id"])):
                     continue
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (row["id"],))
                 from . import threads
@@ -6111,7 +6122,7 @@ class Execution:
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
                 task_id = work_task_id(msg, conv) if msg else None
                 task = H.task(c, task_id) if task_id else None
-                if not privacy.message_readable(c, 'bot:' + row['bot_id'], msg):
+                if not job_message_readable(c, row['bot_id'], msg):
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
                     continue
