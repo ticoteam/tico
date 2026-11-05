@@ -1818,7 +1818,7 @@ def _unfiled_pr_checks(c, who, auth, full, kind):
     for raw in rows:
         pr = dict(raw)
         ticket = H.task(c, pr["task_id"])
-        if pr["url"] in seen or not P.bot_pr(c, ticket, pr):
+        if ticket["status"] == "closed" or pr["url"] in seen or not P.bot_pr(c, ticket, pr):
             continue
         seen.add(pr["url"])
         head = V._head(pr)
@@ -1827,7 +1827,7 @@ def _unfiled_pr_checks(c, who, auth, full, kind):
                if H.task_private_readable(c, who.actor, t) and F.check_kind(F.child_check(c, t, ticket)) == "review"):
             continue
         waits = P.waiting(c, ticket["id"])
-        reason = next((w["reason"] for w in waits if head in w["heads"].split(",")), "no review pool is configured")
+        reason = next((w["reason"] for w in waits if head in w["heads"].split(",")), "no review pool applies")
         items.append({"pr": pr["url"], "task": ticket["id"], "name": f"PR #{pr['number']}",
                       "text": f"PR #{pr['number']}: no review filed; {reason[:300]}.",
                       "fixes": [_fix("Open task", "#/tasks/" + ticket["id"])]})

@@ -755,3 +755,24 @@ def test_health_names_unfiled_pr_after_a_day_without_disclosing_private_task(api
         assert private["id"] in {i["task"] for i in checks[0]["items"]}
         other = health._unfiled_pr_checks(c, Identity("bot:rev-a", "bot"), auth, False, "bot")
         assert private["id"] not in {i["task"] for check in other for i in check["items"]}
+
+
+def test_health_ignores_closed_pr_but_flags_open_pr_without_a_pool(api):
+    setup(api)
+    closed = task_pr(api, 21)
+    opened = task_pr(api, 22)
+    with api.app.state.store.transaction() as c:
+        # General tasks have no review flow, like the closed review tasks that exposed this alert.
+        c.execute("UPDATE tasks SET type_id=? WHERE id IN (?,?)", (H.GENERAL_TYPE, closed["id"], opened["id"]))
+        H.task_close(c, "human:ana", closed["id"], "No longer needed")
+        c.execute("UPDATE task_links SET created_at=? WHERE task_id IN (?,?)",
+                  (H.shift(H.now(), hours=-25), closed["id"], opened["id"]))
+
+    from backend.auth import Identity
+    with api.app.state.store.read() as c:
+        checks = health._unfiled_pr_checks(
+            c, Identity("human:ana", "owner", "ana@acme.example"), api.app.state.auth, True, "owner")
+
+    assert len(checks) == 1
+    assert [item["task"] for item in checks[0]["items"]] == [opened["id"]]
+    assert checks[0]["items"][0]["text"] == "PR #22: no review filed; no review pool applies."
