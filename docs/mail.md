@@ -664,9 +664,9 @@ remove Tico at myaccount.google.com/permissions. The command ends without an err
 Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
 use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
 
-Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
-Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
-app avoids verification only for accounts in the Workspace that owns the project.
+Neither way of supplying the app gets past a Workspace's own controls. An administrator who blocks third-party apps, or
+who marks Gmail or Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's.
+An **Internal** app avoids verification only for accounts in the Workspace that owns the project.
 
 IMAP is not an alternative here: Google's OAuth for IMAP needs full-mail access, it carries no calendar, and a Workspace
 that blocks apps usually blocks IMAP as well.
