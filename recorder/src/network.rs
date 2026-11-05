@@ -407,7 +407,7 @@ impl Tico {
         response(request.bearer_auth(&self.token).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
-    pub fn unlink_meeting_task(&self, meeting: &str, task: &str) -> Result<Value> {
+    pub fn unlink_meeting_task(&self, meeting: &str, task: &str, key: &str) -> Result<Value> {
         let mut url = reqwest::Url::parse(&settings::safe_url(&self.destination.base_url)?)?;
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("Invalid Tico address"))?
@@ -416,7 +416,7 @@ impl Tico {
             self.client
                 .delete(url)
                 .bearer_auth(&self.token)
-                .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
+                .header("Idempotency-Key", key)
                 .send()?,
         )
     }
@@ -810,6 +810,7 @@ impl Tico {
                     .as_str()
                     .unwrap_or("")
                     .to_owned();
+                let mut item_version = delivery.receipt["items"][&item.id]["version"].clone();
                 if item_id.is_empty() {
                     if let Some(existing) = listing["sections"][section]
                         .as_array()
@@ -824,6 +825,7 @@ impl Tico {
                         })
                     {
                         item_id = existing["id"].as_str().unwrap_or("").into();
+                        item_version = existing["version"].clone();
                     }
                 }
                 if item_id.is_empty() {
@@ -836,8 +838,10 @@ impl Tico {
                         .as_str()
                         .context("Tico did not return an item ID")?
                         .into();
+                    item_version = reply["item"]["version"].clone();
                 }
-                delivery.receipt["items"][&item.id] = json!({"id":item_id,"status":"proposed"});
+                delivery.receipt["items"][&item.id] =
+                    json!({"id":item_id,"status":"proposed","version":item_version});
                 store.delivery(id, &delivery)?;
                 if push_items {
                     let reply = self.call_meeting(
@@ -972,10 +976,33 @@ impl Tico {
             let server_item = entry.receipt["items"][item_id]["id"]
                 .as_str()
                 .context("This item is not saved on the meeting")?;
+            let version = if let Some(version) = entry.receipt["items"][item_id]["version"].as_u64()
+            {
+                version
+            } else {
+                // Older Recorder receipts predate item versions. Keep the first read durably for retries.
+                let listing =
+                    self.call_meeting(&format!("/meetings/{}/items", entry.meeting_id), None, "")?;
+                let version = listing["sections"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|sections| sections.values())
+                    .filter_map(Value::as_array)
+                    .flatten()
+                    .find(|row| row["id"] == server_item)
+                    .and_then(|row| row["version"].as_u64())
+                    .context("This saved item is no longer available")?;
+                let mut updated = entry.clone();
+                updated.receipt["items"][item_id]["version"] = json!(version);
+                store.delivery(id, &updated)?;
+                version
+            };
+            let payload = json!({"version":version,"text":item.title,"private":private,
+                "detail":{"owner":owner,"body":item.body,"due":item.due}});
             let result = self.call_meeting(
                 &format!("/meetings/{}/items/{server_item}/push", entry.meeting_id),
-                Some(&json!({})),
-                &format!("recorder:{id}:push:{server_item}"),
+                Some(&payload),
+                &format!("recorder:{id}:push:{server_item}:{}", hash(&payload)),
             )?;
             json!({"task":{"id":result["item"]["result_ref"]}})
         } else {

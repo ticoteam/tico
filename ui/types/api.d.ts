@@ -3307,6 +3307,14 @@ export type MeetingTaskLink = {
   title: string;
 };
 
+export type MeetingTaskLinkBatch = {
+  next_cursor: string | null;
+  results: Array<{
+  status: 200 | 404;
+}>;
+  tasks: Array<MeetingTaskLink>;
+};
+
 export type MeetingTaskLinks = {
   next_cursor: string | null;
   tasks: Array<MeetingTaskLink>;
@@ -8043,7 +8051,7 @@ export type LinkMeetingTasksParams = {
   rid: string;
 };
 export type LinkMeetingTasksBody = Link;
-export type LinkMeetingTasksResponse = MeetingTaskLinks;
+export type LinkMeetingTasksResponse = MeetingTaskLinkBatch;
 
 /** GET /api/v2/automations/runs */
 export type ListAllAutomationRunsParams = {

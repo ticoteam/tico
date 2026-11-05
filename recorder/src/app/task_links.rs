@@ -70,6 +70,7 @@ impl Recorder {
     }
     pub(super) fn refresh_task_links(&mut self) {
         if self.demo
+            || self.context.kept_on_mac
             || self.background.contains("task-links")
             || self.link_tasks_at.elapsed() < Duration::from_secs(60)
         {
@@ -140,37 +141,18 @@ impl Recorder {
         let item_id = item_id.to_owned();
         self.network_job("link", move |tico, store, id| {
             let context = store.context(&id)?;
-            if let Some(task) = item_id.strip_prefix("server:") {
-                let record = store.get(&id)?;
-                let delivery = record
-                    .deliveries
-                    .iter()
-                    .find(|d| d.destination_id == tico.destination.id && live::saved_in_tico(d))
-                    .ok_or_else(|| anyhow::anyhow!("This meeting is not saved"))?;
-                tico.unlink_meeting_task(&delivery.meeting_id, task)?;
-                store.update_context(&id, |c| {
-                    c.items.retain(|i| i.kind != "link" || i.task_id != task);
-                    Ok(())
-                })?;
-                return Ok(json!({"message":"Unlinked"}));
-            }
-            if let Some(item) = context
-                .items
-                .iter()
-                .find(|i| i.id == item_id && i.kind == "link")
-            {
-                if let Some(delivery) = store
-                    .get(&id)?
-                    .deliveries
-                    .iter()
-                    .find(|d| d.destination_id == tico.destination.id && live::saved_in_tico(d))
-                {
-                    tico.unlink_meeting_task(&delivery.meeting_id, &item.task_id)?;
-                }
-                store.update_context(&id, |c| {
-                    c.items.retain(|i| i.id != item_id);
-                    Ok(())
-                })?;
+            let task = item_id
+                .strip_prefix("server:")
+                .map(str::to_owned)
+                .or_else(|| {
+                    context
+                        .items
+                        .iter()
+                        .find(|i| i.id == item_id && i.kind == "link")
+                        .map(|i| i.task_id.clone())
+                });
+            if let Some(task) = task {
+                tico.queue_unlink(&store, &id, &task)?;
             }
             Ok(json!({"message":"Unlinked"}))
         });
@@ -271,5 +253,89 @@ mod tests {
             })
             .unwrap();
         assert_eq!(app.draft_destination(&background.id), "one");
+    }
+
+    fn local_app() -> (tempfile::TempDir, Recorder, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Local meeting").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.config.destinations = vec![settings::Destination {
+            id: "one".into(),
+            name: "Acme".into(),
+            base_url: "https://acme.example".into(),
+            actor: "human:ana".into(),
+        }];
+        app.destination = "one".into();
+        app.open(&record.id).unwrap();
+        (dir, app, record.id)
+    }
+
+    #[test]
+    fn this_mac_reloads_open_context_and_closing_cannot_restore_dropped_links() {
+        let (_dir, mut app, id) = local_app();
+        let stale_link = Item {
+            id: "link".into(),
+            kind: "link".into(),
+            task_id: "target".into(),
+            ..Default::default()
+        };
+        app.context.items = vec![
+            stale_link.clone(),
+            Item {
+                id: "proposal".into(),
+                title: "Send the plan".into(),
+                proposed_task_id: "target".into(),
+                ..Default::default()
+            },
+        ];
+        app.context.notes = "Current notes".into();
+        app.save_context();
+        app.keep_local(&id);
+        assert!(app.context.kept_on_mac);
+        assert_eq!(app.context.items.len(), 1);
+        assert!(app.context.items[0].proposed_task_id.is_empty());
+        assert_eq!(app.actions_view("one")["can_link"], false);
+        // A stale editor or a late draft must also respect the durable local-only decision.
+        app.context.items.push(stale_link);
+        app.context.items[0].proposed_task_id = "target".into();
+        app.close();
+        let stored = app.store.context(&id).unwrap();
+        assert!(stored.kept_on_mac && stored.items.len() == 1);
+        assert!(stored.items[0].proposed_task_id.is_empty());
+        assert_eq!(stored.notes, "Current notes");
+        app.open(&id).unwrap();
+        assert_eq!(app.actions_view("one")["can_link"], false);
+    }
+
+    #[test]
+    fn post_save_sent_rows_remain_until_the_remote_list_contains_each_task() {
+        let (_dir, mut app, _) = local_app();
+        app.context.items = ["first", "second"]
+            .iter()
+            .map(|id| Item {
+                id: id.to_string(),
+                kind: "task".into(),
+                title: format!("Send {id}"),
+                task_id: id.to_string(),
+                task_destination: "one".into(),
+                ..Default::default()
+            })
+            .collect();
+        app.link_tasks =
+            json!({"scope":app.link_scope(),"remote":"saved","tasks":[],"linked":{"tasks":[]}});
+        app.link_tasks_at = Instant::now();
+        assert_eq!(
+            app.actions_view("one")["items"].as_array().unwrap().len(),
+            2
+        );
+        app.link_tasks["linked"]["tasks"] =
+            json!([{"task_id":"first","title":"Send first","number":42}]);
+        let view = app.actions_view("one");
+        let local = view["items"].as_array().unwrap();
+        assert_eq!(local.len(), 1);
+        assert_eq!(local[0]["id"], "second");
+        assert_eq!(local[0]["sent"], true);
+        assert_eq!(view["linked"]["tasks"].as_array().unwrap().len(), 1);
     }
 }

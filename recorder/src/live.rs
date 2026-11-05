@@ -482,6 +482,7 @@ impl Tico {
             }
             store.update_context(id, |c| {
                 c.kept_on_mac = true;
+                c.task_link_operations.clear();
                 c.items.retain(|item| item.kind != "link");
                 for item in &mut c.items {
                     item.proposed_task_id.clear();
@@ -529,6 +530,7 @@ impl Tico {
             c.live_state = "ended".into();
             c.live_removed = !older;
             c.kept_on_mac = true;
+            c.task_link_operations.clear();
             c.items.retain(|item| item.kind != "link");
             for item in &mut c.items {
                 item.proposed_task_id.clear();

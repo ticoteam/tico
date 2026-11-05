@@ -512,7 +512,7 @@ def answer(api, args):
 
 
 # ----------------------------------------------------------------------------- meetings
-@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Links preserve each resource's access.",
+@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Results match input order; status 404 skips an unavailable task. Links preserve each resource's access.",
       {"id": _s("Meeting id"), "task_ids": {"type": "array", "items": TASK_ID, "minItems": 1, "maxItems": 20},
        "kind": _s("linked (default), or sent for tasks you requested", enum=["linked", "sent"])},
       required=("id", "task_ids"), writes=True)

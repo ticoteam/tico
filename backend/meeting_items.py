@@ -54,13 +54,18 @@ class ItemCreate(M.Contract):
 
 
 class ItemEdit(M.Contract):
+    version: int | None = Field(default=None, ge=1)
     text: str | None = Field(default=None, min_length=1, max_length=2_000)
     detail: dict | None = None
     status: Literal["dismissed"] | None = None
 
 
 class ItemPush(M.Contract):
+    version: int | None = Field(default=None, ge=1)
+    text: str | None = Field(default=None, min_length=1, max_length=2_000)
+    detail: dict | None = None
     force: bool = False
+    private: bool = False
 
 
 class CommentCreate(M.Contract):
@@ -155,11 +160,13 @@ def add(c, record, author, body):
 
 def edit(c, rid, author, iid, body):
     row = one(c, rid, iid)
+    if body.version is not None and body.version != row['version']:
+        raise Problem('version_conflict', 'This item changed; reload it before editing', 409)
     if body.text is None and body.detail is None and body.status is None:
         raise Problem("validation", "Change the text, the detail, or delete the item", 422)
     if body.status == "dismissed" and row["status"] != "proposed":
         raise Problem("status", "Only a proposed item can be deleted", 409)
-    sets, args = ["updated_by=?", "updated_at=?"], [author, H.now()]
+    sets, args = ["updated_by=?", "updated_at=?", "version=version+1"], [author, H.now()]
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
@@ -198,12 +205,14 @@ def owner_of(c, detail):
     raise Problem("owner", "Choose an owner for this task: human:<id> or bot:<slug>", 422)
 
 
-def push_task(c, settings, task_create, who, record, row, detail):
+def push_task(c, settings, task_create, who, record, row, detail, private=False):
     owner = owner_of(c, detail)
     priority = detail.get("priority") or "p2"
     body = "\n\n".join([detail.get("body") or row["text"], f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
     created = task_create(c, who, M.TaskCreate(title=row["text"][:300], body=body, owner=owner,
-                                              due=detail.get("due") or None))
+                                              due=detail.get("due") or None,
+                                              private=bool(private or record['metadata'].get('private')
+                                                           or media.participants_only(record))))
     return created["task"]["id"]
 
 
@@ -304,7 +313,7 @@ def record_push(c, who, rid, iid, ref):
     if row["status"] == "pushed":                 # a second click, or a concurrent one: one result
         return view(row)
     ts = H.now()
-    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
+    c.execute("UPDATE meeting_items SET status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=?,version=version+1 "
               "WHERE id=? AND meeting_id=?", (ref, ts, who.actor, ts, iid, rid))
     H.event(c, who.actor, "meeting.item_pushed", rid,
             {"item": iid, "section": row["section"], "result": ref})
@@ -367,7 +376,8 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             if body.proposed_task_id:
                 if body.section != 'task':
                     raise Problem('section', 'Only a task item can propose a link', 422)
-                auth.task(c, who, body.proposed_task_id)
+                if not task_references.readable(c, auth, who, body.proposed_task_id):
+                    return {"item": add(c, record, who.actor, body.model_copy(update={'proposed_task_id': None}))}
             return {"item": add(c, record, who.actor, body)}
         return item_answer(request, rid, body, work)
 
@@ -410,9 +420,16 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             record, row = pushable(c, who, rid, iid)
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
+            if body.text is not None or body.detail is not None:
+                if body.version is None:
+                    raise Problem('version', 'Send the item version with its edits', 422)
+                edit(c, rid, who.actor, iid, ItemEdit(version=body.version, text=body.text, detail=body.detail))
+                row = one(c, rid, iid)
+            elif body.version is not None and body.version != row['version']:
+                raise Problem('version_conflict', 'This item changed; reload it before creating a task', 409)
             detail = json.loads(row["detail"] or "{}")
             if row["section"] == "task":
-                result = push_task(c, settings, task_create, who, record, row, detail)
+                result = push_task(c, settings, task_create, who, record, row, detail, body.private)
             elif row["section"] == "doc":
                 result = push_doc(c, settings, task_create, who, record, row, detail)
             else:

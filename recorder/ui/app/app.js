@@ -365,6 +365,7 @@
   /** Tasks: ones already in Tico by number, then proposals drafted as people talk, each created or dismissed. */
   function actions(a) {
     let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span>${a.can_link ? '<button class="btn small" data-act="task-picker-open">Link</button>' : ''}<button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
+    if (a.skipped_links) html += `<div class="notice inline">${a.skipped_links} ${a.skipped_links === 1 ? 'link skipped: that task is' : 'links skipped: those tasks are'} no longer available</div>`;
     if (a.draft_status) html += `<div class="notice inline">${icon('alert')}<span class="grow">${esc(a.draft_status)}</span></div>`;
     if (a.mode === 'choose' && a.items.some((it) => !it.sent)) {
       html += `<div class="choose-org"><span class="faint">Owners from</span>${a.orgs.map((o) => `<button class="btn small" data-act="choose-org" data-id="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>`;
@@ -438,6 +439,20 @@
     if (!p) return '';
     if (!S.meeting?.actions.can_link || p.scope !== JSON.stringify(S.meeting.actions.link_scope)) { S.ui.taskPicker = null; return ''; }
     return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><input class="field" data-model="taskQuery" placeholder="Search tasks" aria-label="Search tasks"><div class="pop-list">${p.rows.map((task) => `<button class="menu-item" data-act="task-pick" data-id="${esc(task.id)}" aria-pressed="${p.picks.includes(task.id)}"><span class="check">${p.picks.includes(task.id) ? icon('check', 12) : ''}</span><span class="grow">#${esc(task.number)} ${esc(task.title)} · ${esc(task.status)}</span></button>`).join('')}</div>${p.loading ? '<span class="spin"></span>' : !p.rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? '<button class="link" data-act="task-picker-more">More</button>' : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!p.picks.length || p.loading ? 'disabled' : ''}>Link</button></div></div>`;
+  }
+  function taskDueDay(value) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const when = new Date(value);
+    return Number.isNaN(when.getTime()) ? '' : new Date(when.getTime() - when.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  }
+  function taskDueTimestamp(value) {
+    if (!value) return '';
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return null;
+    const [year, month, day] = match.slice(1).map(Number), when = new Date(year, month - 1, day, 17, 0);
+    // Match the task editor: the end of the working day in the person's local time.
+    if (year < 2000 || year > 2200 || when.getMonth() !== month - 1 || when.getDate() !== day) return null;
+    return when.toISOString();
   }
   function taskDetailSheet() {
     const item = S.ui.taskDetail;
@@ -1533,10 +1548,14 @@
     'more-task-links': () => act('more_task_links'),
     'task-detail': (el) => {
       const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.id); if (!it) return;
-      S.ui.taskDetail = it.id; S.ui.detailDue = it.due || ''; S.ui.detailBody = it.body || ''; render();
+      S.ui.taskDetail = it.id; S.ui.detailDue = it.due ? taskDueDay(it.due) : ''; S.ui.detailBody = it.body || ''; render();
     },
     'task-detail-close': () => { S.ui.taskDetail = null; render(); },
-    'task-detail-save': () => { const id = S.ui.taskDetail; S.ui.taskDetail = null; act('edit_task_detail', { id, due: S.ui.detailDue, body: S.ui.detailBody }); },
+    'task-detail-save': () => {
+      const id = S.ui.taskDetail, due = taskDueTimestamp(S.ui.detailDue);
+      if (due === null) return;
+      S.ui.taskDetail = null; act('edit_task_detail', { id, due, body: S.ui.detailBody });
+    },
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'add-open': () => { S.ui.adding = true; S.ui.focusNext = '[data-model="addItem"]'; render(); },
     // Create files the proposal as a private Tico task; one that may quote paused speech asks twice.

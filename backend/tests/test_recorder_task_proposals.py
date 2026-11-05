@@ -38,7 +38,7 @@ def test_accepting_a_closed_task_proposal_links_without_creating_a_task(api):
 def test_hidden_missing_dismissed_and_non_task_proposals_cannot_link(api):
     rid, hidden = record(api), task(api, owner='bot:inbox', private=False)
     body = {'section': 'task', 'text': 'Follow up', 'proposed_task_id': hidden['id']}
-    add(api, rid, body, 'cara-test', expected=404)
+    assert add(api, rid, body, 'cara-test')['item']['proposed_task_id'] is None
     iid = add(api, rid, body)['item']['id']
     accept(api, rid, iid, 'cara-test', expected=404)
     add(api, rid, {**body, 'section': 'doc'}, expected=422)
@@ -101,3 +101,67 @@ def test_task_trash_keeps_proposals_with_the_meeting_and_restores_only_the_point
         c.execute('DELETE FROM meeting_items WHERE id=?', (iid,))
     restored = post(api, f"tasks/{target['id']}/restore", {})
     assert not restored['skipped'] and not restored.get('unlinked')
+
+
+def test_push_keeps_private_and_participants_meeting_text_private_for_human_owners(api):
+    from backend.tests.test_meeting_items import push
+    for audience in ({'private': True}, {'private': True, 'audience': 'participants'}):
+        rid = record(api, audience, 'ben-test')
+        iid = add(api, rid, {'section': 'task', 'text': 'Send the pricing plan',
+                            'quote': 'A confidential quote', 'detail': {'owner': 'human:cara'}}, 'ben-test')['item']['id']
+        result = push(api, rid, iid, {'private': False}, 'ben-test')
+        created = get(api, 'tasks/' + result['item']['result_ref'], 'ben-test')['task']
+        assert created['private'] and created['owner_id'] == 'human:cara'
+        get(api, 'tasks/' + created['id'], 'eve-test', expected=404)
+    rid = record(api, token='ben-test')
+    iid = add(api, rid, {'section': 'task', 'text': 'Send the pricing plan',
+                        'detail': {'owner': 'human:cara'}}, 'ben-test')['item']['id']
+    assert get(api, 'tasks/' + push(api, rid, iid, {'private': True}, 'ben-test')['item']['result_ref'], 'ben-test')['task']['private']
+
+
+def test_post_save_create_applies_current_edits_under_the_saved_version_and_replays_once(api):
+    from backend.tests.test_meeting_items import push
+    rid = record(api)
+    for original in ({}, {'owner': 'human:ben'}):
+        saved = add(api, rid, {'section': 'task', 'text': 'Send the original plan', 'detail': original})['item']
+        edited = {'version': saved['version'], 'text': 'Send the revised plan',
+                  'detail': {'owner': 'human:cara', 'body': 'The current details', 'due': '2026-12-01T17:00:00-08:00'}}
+        key = 'create-edited-' + saved['id']
+        result = push(api, rid, saved['id'], edited, key=key)
+        replay = push(api, rid, saved['id'], edited, key=key)
+        assert result['item']['result_ref'] == replay['item']['result_ref']
+        created = get(api, 'tasks/' + result['item']['result_ref'])['task']
+        assert created['owner_id'] == 'human:cara' and created['title'] == edited['text']
+        assert 'The current details' in created['body'] and created['due_at']
+        with api.app.state.store.read() as c:
+            assert c.execute('SELECT count(*) FROM tasks WHERE id=?', (created['id'],)).fetchone()[0] == 1
+    saved = add(api, rid, {'section': 'task', 'text': 'Send the plan'})['item']
+    changed = change(api, rid, saved['id'], {'text': 'Send the newer plan', 'version': saved['version']})['item']
+    assert changed['version'] > saved['version']
+    push(api, rid, saved['id'], {**edited, 'version': saved['version']}, expected=409)
+    change(api, rid, saved['id'], {'text': 'Stale edit', 'version': saved['version']}, expected=409)
+    assert next(row for row in items(api, rid)['sections']['task'] if row['id'] == saved['id'])['text'] == 'Send the newer plan'
+
+
+def test_missing_trashed_and_unreadable_targets_do_not_block_links_or_item_creation(api):
+    from backend.tests.test_meeting_task_links import link
+    rid = record(api)
+    available = task(api, private=False)
+    hidden = task(api, title='Secret target', private=True)
+    trashed = task(api, private=False)
+    post(api, f"tasks/{trashed['id']}/delete", {})
+    deleted = task(api, private=False)
+    with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM tasks WHERE id=?', (deleted['id'],))
+    ids = [available['id'], hidden['id'], trashed['id'], deleted['id'], 'missing']
+    response = link(api, rid, ids, 'cara-test', key='skip-unavailable')
+    assert response['results'] == [{'status': 200}, *[{'status': 404}] * 4]
+    assert [row['task_id'] for row in response['tasks']] == [available['id']]
+    assert 'Secret target' not in str(response) and hidden['id'] not in str(response)
+    for target in ids[1:]:
+        value = add(api, rid, {'section': 'task', 'text': 'Send the plan', 'proposed_task_id': target}, 'cara-test')['item']
+        assert value['proposed_task_id'] is None
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET private=1 WHERE id=?', (available['id'],))
+    replay = link(api, rid, ids, 'cara-test', key='skip-unavailable')
+    assert not replay['tasks'] and replay['results'] == [{'status': 404}] * 5

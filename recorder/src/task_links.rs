@@ -2,7 +2,7 @@
 use crate::{
     network::{Tico, hash},
     store::{Delivery, Store},
-    workspace::{Item, MAX_ITEMS},
+    workspace::{Item, MAX_ITEMS, TaskLinkOperation},
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,8 @@ pub struct Task {
     pub number: u64,
     pub title: String,
     pub status: String,
+    #[serde(default)]
+    pub owner_id: String,
 }
 
 impl Tico {
@@ -95,7 +97,14 @@ impl Tico {
                 c.task_candidates_destination = self.destination.id.clone();
                 Ok(())
             })?;
-            return Ok(found);
+            return Ok(found
+                .into_iter()
+                .filter(|task| {
+                    task.owner_id == self.destination.actor
+                        && ["open", "doing", "waiting", "review", "ready"]
+                            .contains(&task.status.as_str())
+                })
+                .collect());
         } else {
             context.task_candidates
         };
@@ -103,7 +112,9 @@ impl Tico {
             .readable_tasks(&ids)?
             .into_iter()
             .filter(|task| {
-                ["open", "doing", "waiting", "review", "ready"].contains(&task.status.as_str())
+                task.owner_id == self.destination.actor
+                    && ["open", "doing", "waiting", "review", "ready"]
+                        .contains(&task.status.as_str())
             })
             .collect())
     }
@@ -124,22 +135,12 @@ impl Tico {
             context.live_destination.is_empty() || context.live_destination == self.destination.id,
             "This meeting belongs to another Tico"
         );
-        if let Some(delivery) = store
-            .get(id)?
-            .deliveries
-            .iter()
-            .find(|d| d.destination_id == self.destination.id && crate::live::saved_in_tico(d))
-        {
-            for batch in ids.chunks(20) {
-                self.call(
-                    &format!("/api/v2/meetings/{}/tasks", delivery.meeting_id),
-                    Some(&json!({"task_ids":batch,"kind":"linked"})),
-                    &format!("recorder:{id}:links:{}", hash(&json!(batch))),
-                )?;
-            }
-        }
         store.update_context(id, |c| {
             ensure!(!c.kept_on_mac, "This meeting stays on this Mac");
+            ensure!(
+                c.task_link_operations.len() < MAX_ITEMS,
+                "Too many pending link actions"
+            );
             c.live_destination = self.destination.id.clone();
             for task in found {
                 if !c.items.iter().any(|item| item.task_id == task.id) {
@@ -154,8 +155,63 @@ impl Tico {
                     });
                 }
             }
+            c.task_link_operations.push(TaskLinkOperation {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "linked".into(),
+                task_ids: ids.to_vec(),
+            });
             Ok(())
-        })
+        })?;
+        self.flush_saved_links(store, id)
+    }
+
+    pub fn queue_unlink(&self, store: &Store, id: &str, task: &str) -> Result<()> {
+        store.update_context(id, |c| {
+            ensure!(!c.kept_on_mac, "This meeting stays on this Mac");
+            ensure!(
+                c.live_destination == self.destination.id,
+                "This meeting belongs to another Tico"
+            );
+            ensure!(
+                c.task_link_operations.len() < MAX_ITEMS,
+                "Too many pending link actions"
+            );
+            c.task_link_operations.push(TaskLinkOperation {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "unlink".into(),
+                task_ids: vec![task.to_owned()],
+            });
+            Ok(())
+        })?;
+        if !store
+            .get(id)?
+            .deliveries
+            .iter()
+            .any(|d| d.destination_id == self.destination.id && crate::live::saved_in_tico(d))
+        {
+            store.update_context(id, |c| {
+                c.items
+                    .retain(|item| item.kind != "link" || item.task_id != task);
+                for op in &mut c.task_link_operations {
+                    op.task_ids.retain(|tid| tid != task);
+                }
+                c.task_link_operations.retain(|op| !op.task_ids.is_empty());
+                Ok(())
+            })?;
+        }
+        self.flush_saved_links(store, id)
+    }
+
+    fn flush_saved_links(&self, store: &Store, id: &str) -> Result<()> {
+        if let Some(mut delivery) = store
+            .get(id)?
+            .deliveries
+            .into_iter()
+            .find(|d| d.destination_id == self.destination.id && crate::live::saved_in_tico(d))
+        {
+            self.flush_link_operations(store, id, &mut delivery)?;
+        }
+        Ok(())
     }
 
     pub fn accept_task_link(&self, store: &Store, id: &str, item_id: &str) -> Result<()> {
@@ -220,31 +276,92 @@ impl Tico {
         context: &crate::workspace::Context,
         delivery: &mut Delivery,
     ) -> Result<()> {
-        for kind in ["linked", "sent"] {
-            let mut ids: Vec<String> = context
-                .items
-                .iter()
-                .filter(|item| {
-                    !item.task_id.is_empty()
-                        && (item.kind == "link") == (kind == "linked")
-                        && (item.task_destination.is_empty()
-                            || item.task_destination == self.destination.id)
-                        && delivery.receipt["links"][&item.task_id] != kind
-                })
-                .map(|item| item.task_id.clone())
-                .collect();
-            ids.sort();
-            ids.dedup();
-            for batch in ids.chunks(20) {
-                self.call(
-                    &format!("/api/v2/meetings/{}/tasks", delivery.meeting_id),
-                    Some(&json!({"task_ids":batch,"kind":kind})),
-                    &format!("recorder:{id}:links:{kind}:{}", hash(&json!(batch))),
-                )?;
+        // Older local rows and tasks created before Save join the same durable outbox.
+        store.update_context(id, |c| {
+            for kind in ["linked", "sent"] {
+                let mut ids: Vec<String> = context
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        !item.task_id.is_empty()
+                            && (item.kind == "link") == (kind == "linked")
+                            && (item.task_destination.is_empty()
+                                || item.task_destination == self.destination.id)
+                            && delivery.receipt["links"][&item.task_id] != kind
+                            && !c
+                                .task_link_operations
+                                .iter()
+                                .any(|op| op.task_ids.contains(&item.task_id))
+                    })
+                    .map(|item| item.task_id.clone())
+                    .collect();
+                ids.sort();
+                ids.dedup();
+                if !ids.is_empty() {
+                    c.task_link_operations.push(TaskLinkOperation {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        kind: kind.into(),
+                        task_ids: ids,
+                    });
+                }
+            }
+            Ok(())
+        })?;
+        self.flush_link_operations(store, id, delivery)
+    }
+
+    fn flush_link_operations(
+        &self,
+        store: &Store,
+        id: &str,
+        delivery: &mut Delivery,
+    ) -> Result<()> {
+        for op in store.context(id)?.task_link_operations {
+            for batch in op.task_ids.chunks(20) {
+                let key = format!("recorder:{id}:links:{}:{}", op.id, hash(&json!(batch)));
+                let reply = if op.kind == "unlink" {
+                    self.unlink_meeting_task(&delivery.meeting_id, &batch[0], &key)?
+                } else {
+                    self.call(
+                        &format!("/api/v2/meetings/{}/tasks", delivery.meeting_id),
+                        Some(&json!({"task_ids":batch,"kind":op.kind})),
+                        &key,
+                    )?
+                };
+                let skipped: Vec<_> = batch
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| reply["results"][*index]["status"] == 404)
+                    .map(|(_, tid)| tid.clone())
+                    .collect();
                 for tid in batch {
-                    delivery.receipt["links"][tid] = json!(kind);
+                    if op.kind == "unlink" || skipped.contains(tid) {
+                        if let Some(links) = delivery.receipt["links"].as_object_mut() {
+                            links.remove(tid);
+                        }
+                    } else {
+                        delivery.receipt["links"][tid] = json!(op.kind);
+                    }
                 }
                 store.delivery(id, delivery)?;
+                store.update_context(id, |c| {
+                    c.skipped_task_links += skipped.len();
+                    c.items.retain(|item| {
+                        item.kind != "link"
+                            || !(skipped.contains(&item.task_id)
+                                || op.kind == "unlink" && batch.contains(&item.task_id))
+                    });
+                    if let Some(pending) = c
+                        .task_link_operations
+                        .iter_mut()
+                        .find(|pending| pending.id == op.id)
+                    {
+                        pending.task_ids.retain(|tid| !batch.contains(tid));
+                    }
+                    c.task_link_operations
+                        .retain(|pending| !pending.task_ids.is_empty());
+                    Ok(())
+                })?;
             }
         }
         Ok(())

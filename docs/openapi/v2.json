@@ -24576,7 +24576,7 @@
         ]
       },
       "post": {
-        "summary": "Link up to 20 readable tasks; sent is only for their requester; links never widen access",
+        "summary": "Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data",
         "operationId": "linkMeetingTasks",
         "parameters": [
           {
@@ -24614,7 +24614,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MeetingTaskLinks"
+                  "$ref": "#/components/schemas/MeetingTaskLinkBatch"
                 }
               }
             }
@@ -59428,6 +59428,47 @@
           "status",
           "task_id",
           "title"
+        ],
+        "additionalProperties": true
+      },
+      "MeetingTaskLinkBatch": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeetingTaskLink"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "enum": [
+                    200,
+                    404
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "next_cursor",
+          "results",
+          "tasks"
         ],
         "additionalProperties": true
       },

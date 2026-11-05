@@ -42,6 +42,13 @@ pub struct Turn {
 }
 pub const MAX_ITEMS: usize = 200;
 pub const MAX_TURNS: usize = 200;
+/// One person action, durable before its first request; retries retain its identity.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskLinkOperation {
+    pub id: String,
+    pub kind: String,
+    pub task_ids: Vec<String>,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Context {
@@ -71,6 +78,8 @@ pub struct Context {
     pub task_candidates_at: i64,
     pub task_candidates_destination: String,
     pub kept_on_mac: bool,
+    pub task_link_operations: Vec<TaskLinkOperation>,
+    pub skipped_task_links: usize,
 }
 impl Store {
     pub fn context(&self, id: &str) -> Result<Context> {

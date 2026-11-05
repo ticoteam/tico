@@ -162,10 +162,15 @@ if (!only.length || only.includes('checks')) {
     await page.fill('[data-model="detailDue"]', '2026-12-01');
     await page.fill('[data-model="detailBody"]', 'Synthetic details');
     await page.click('[data-act="task-detail-save"]');
+    const due = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1').due);
+    const expectedDue = await page.evaluate(() => new Date(2026, 11, 1, 17, 0).toISOString());
+    if (due !== expectedDue) throw Error('due date is not the task API timestamp');
     await page.click('[data-act="task-detail"][data-id="i1"]');
     if (await page.inputValue('[data-model="detailBody"]') !== 'Synthetic details') throw Error('details lost');
     await page.keyboard.press('Escape');
     await page.waitForSelector('[aria-label="Task details"]', { state: 'detached' });
+    await page.click('[data-act="create-item"][data-id="i1"]');
+    await page.waitForSelector('.item.task:has-text("Confirm the transcript link")');
   });
 
 

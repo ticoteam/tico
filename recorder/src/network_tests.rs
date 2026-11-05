@@ -2733,7 +2733,7 @@ fn recorder_drafts_only_offer_active_tasks_and_reauthorize_cached_candidates() {
     let record = transcript(&store, "Candidate cache");
     let (tico, seen, worker) = server(vec![
         Some(
-            json!({"tasks":[{"id":"visible","number":42,"title":"Review pricing","status":"open"}]}),
+            json!({"tasks":[{"id":"visible","number":42,"title":"Review pricing","status":"open","owner_id":"human:test"}]}),
         ),
         Some(json!({"tasks":[]})),
     ]);
@@ -2768,6 +2768,7 @@ fn recorder_note_taker_rejects_unoffered_task_numbers() {
         number: 42,
         title: "Review pricing".into(),
         status: "open".into(),
+        owner_id: "human:test".into(),
     }];
     assert_eq!(
         crate::assist::draft_with_tasks(&store, &config, "test-key", &record.id, &candidates)
@@ -2814,4 +2815,192 @@ fn recorder_picker_queues_forty_five_tasks_across_result_pages_without_creating_
             .all(|(path, _, _)| path.starts_with("GET /api/v2/tasks?ids="))
     );
     assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
+
+#[test]
+fn recorder_reassignment_between_note_taker_calls_removes_the_task_from_the_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Reassigned candidate");
+    let candidate = json!({"id":"visible","number":42,"title":"Review pricing","status":"open","owner_id":"human:test"});
+    let mut reassigned = candidate.clone();
+    reassigned["owner_id"] = json!("human:other");
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"tasks":[candidate.clone()]})),
+        Some(json!({"choices":[{"message":{"content":"{\"items\":[]}"}}]})),
+        Some(json!({"tasks":[reassigned]})),
+        Some(json!({"choices":[{"message":{"content":"{\"items\":[]}"}}]})),
+    ]);
+    let config = Settings {
+        transcription_url: tico.destination.base_url.clone(),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        let candidates = tico.draft_tasks(&store, &record.id).unwrap();
+        crate::assist::draft_with_tasks(&store, &config, "test-key", &record.id, &candidates)
+            .unwrap();
+        // Re-review speech after an ownership change, within the five-minute selection cache.
+        store
+            .update_context(&record.id, |c| {
+                c.drafted_through_ms = 0;
+                Ok(())
+            })
+            .unwrap();
+    }
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let first: Value =
+        serde_json::from_str(calls[1].1["messages"][1]["content"].as_str().unwrap()).unwrap();
+    let second: Value =
+        serde_json::from_str(calls[3].1["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(first["TASKS"].as_array().unwrap().len(), 1);
+    assert_eq!(second["TASKS"], json!([]));
+    assert!(calls[2].0.contains("ids=visible"));
+}
+
+#[test]
+fn recorder_post_save_create_sends_current_owner_title_details_and_due_with_the_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Saved then edited");
+    store
+        .update_context(&record.id, |c| {
+            c.items.push(crate::workspace::Item {
+                id: "local".into(),
+                kind: "task".into(),
+                title: "Send the revised plan".into(),
+                body: "Current details".into(),
+                due: "2026-12-01T01:00:00Z".into(),
+                owner: "human:other".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({"items":{"local":{"id":"server-item","version":3}}}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"url":"https://acme.example"})),
+        None,
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"item":{"result_ref":"created"}})),
+    ]);
+    assert!(
+        tico.send_task(&store, &record.id, "local", "human:other", "Other", true)
+            .is_err()
+    );
+    tico.send_task(&store, &record.id, "local", "human:other", "Other", true)
+        .unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(
+        calls[2].1,
+        json!({"version":3,"text":"Send the revised plan","private":true,
+        "detail":{"owner":"human:other","body":"Current details","due":"2026-12-01T01:00:00Z"}})
+    );
+    assert!(calls[2].0.contains("/items/server-item/push"));
+    assert_eq!(calls[2].1, calls[4].1);
+    assert_eq!(calls[2].2, calls[4].2);
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].task_id,
+        "created"
+    );
+}
+
+#[test]
+fn recorder_save_drops_unavailable_links_and_keeps_only_a_plain_skip_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Disappearing link");
+    store
+        .update_context(&record.id, |c| {
+            c.items.push(crate::workspace::Item {
+                id: "queued".into(),
+                kind: "link".into(),
+                task_id: "gone".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, _, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"meeting"})),
+        Some(json!({"results":[{"status":404}]})),
+    ]);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let context = store.context(&record.id).unwrap();
+    assert!(context.items.is_empty() && context.task_link_operations.is_empty());
+    assert_eq!(context.skipped_task_links, 1);
+    assert_eq!(store.get(&record.id).unwrap().deliveries[0].status, "sent");
+}
+
+#[test]
+fn recorder_link_unlink_link_uses_fresh_actions_and_retries_the_durable_unlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Link round trip");
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({}),
+            },
+        )
+        .unwrap();
+    let found =
+        json!({"tasks":[{"id":"task","number":42,"title":"Review pricing","status":"open"}]});
+    let (tico, seen, worker) = server(vec![
+        Some(found.clone()),
+        Some(json!({"results":[{"status":200}]})),
+        None,
+        Some(json!({"ok":true})),
+        Some(found),
+        Some(json!({"results":[{"status":200}]})),
+    ]);
+    let ids = vec!["task".to_owned()];
+    tico.queue_links(&store, &record.id, &ids).unwrap();
+    assert!(tico.queue_unlink(&store, &record.id, "task").is_err());
+    let reopened = Store::open(dir.path()).unwrap();
+    let mut delivery = reopened.get(&record.id).unwrap().deliveries[0].clone();
+    tico.save_links(
+        &reopened,
+        &record.id,
+        &reopened.context(&record.id).unwrap(),
+        &mut delivery,
+    )
+    .unwrap();
+    assert!(reopened.context(&record.id).unwrap().items.is_empty());
+    tico.queue_links(&reopened, &record.id, &ids).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_ne!(calls[1].2, calls[5].2);
+    assert_eq!(calls[2].2, calls[3].2);
+    assert_eq!(
+        reopened.context(&record.id).unwrap().items[0].task_id,
+        "task"
+    );
+    assert!(
+        reopened
+            .context(&record.id)
+            .unwrap()
+            .task_link_operations
+            .is_empty()
+    );
 }

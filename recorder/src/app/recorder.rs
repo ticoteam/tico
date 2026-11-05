@@ -566,6 +566,12 @@ impl Recorder {
                     }
                 }
                 current.items = items;
+                if current.kept_on_mac {
+                    current.items.retain(|item| item.kind != "link");
+                    for item in &mut current.items {
+                        item.proposed_task_id.clear();
+                    }
+                }
                 current.participants = edited.participants;
                 current.calendar = edited.calendar;
                 Ok(())
@@ -2028,10 +2034,14 @@ impl Recorder {
         if self.active.as_ref().is_some_and(|(active, _)| active == id) {
             self.stop();
         }
+        if self.meeting.as_deref() == Some(id) {
+            self.save_context();
+        }
         let context = self.store.context(id).unwrap_or_default();
         if context.live_id.is_empty() || context.live_removed {
             let result = self.store.update_context(id, |c| {
                 c.kept_on_mac = true;
+                c.task_link_operations.clear();
                 c.items.retain(|item| item.kind != "link");
                 for item in &mut c.items {
                     item.proposed_task_id.clear();
@@ -2039,6 +2049,10 @@ impl Recorder {
                 Ok(())
             });
             self.report(result);
+            if self.meeting.as_deref() == Some(id) {
+                self.context = self.store.context(id).unwrap_or_default();
+                self.link_tasks = Value::Null;
+            }
             self.reload_open();
             return;
         }
@@ -2878,7 +2892,9 @@ impl Recorder {
             .filter(|item| item.task_id.is_empty())
             .chain(items.iter().filter(|item| !item.task_id.is_empty()));
         let rows: Vec<Value> = order
-            .filter(|item| item.task_id.is_empty() || self.link_tasks["remote"].is_null())
+            .filter(|item| item.task_id.is_empty() || self.link_tasks["scope"] != self.link_scope()
+                || !self.link_tasks["linked"]["tasks"].as_array().into_iter().flatten()
+                    .any(|remote| remote["task_id"] == item.task_id))
             .filter(|item| item.kind != "link" || self.linked_task(&item.task_id).is_some())
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
@@ -2928,7 +2944,7 @@ impl Recorder {
             })
             .collect();
         json!({
-            "linked": if self.link_tasks["scope"] == self.link_scope() { self.link_tasks["linked"].clone() } else { Value::Null },
+            "linked": if !self.context.kept_on_mac && self.link_tasks["scope"] == self.link_scope() { self.link_tasks["linked"].clone() } else { Value::Null },
             "linked_browser": self.link_tasks["browser"],
             "link_scope": self.link_scope(),
             "can_link": mode == "ready" && !self.context.kept_on_mac,
@@ -2938,6 +2954,7 @@ impl Recorder {
             "multiple": self.config.destinations.len() > 1,
             "can_change": self.context.live_destination.is_empty(),
             "draft_status": self.draft_status,
+            "skipped_links": self.context.skipped_task_links,
             "items": rows,
             "waiting": items.iter().filter(|item| item.task_id.is_empty()).count(),
             "owners": owners.iter().map(|(actor, name)| json!({"actor":actor,"name":name,"bot":actor.starts_with("bot:")})).collect::<Vec<_>>(),
