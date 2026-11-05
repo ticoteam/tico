@@ -124,6 +124,91 @@ def test_a_deferred_item_already_gone_starts_nothing(api):
     assert fired(api) == [] and rows(api, item=held["id"])[0]["how"] == "moot"
 
 
+@pytest.mark.parametrize("status", H.TASK_ENDED)
+def test_ending_a_task_cancels_its_deferrals_permanently(api, status):
+    setup(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
+                               "delivery": "defer", "defer_for": "never"})
+    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
+                                                       "defer_for": "24h"})["comment"]
+    with api.app.state.store.transaction() as c:
+        if status == "closed":
+            H.task_close(c, "human:ana", task["id"], quiet=True)
+        else:
+            H.task_update(c, "human:ana", task["id"], status=status, quiet=True)
+        assert H.task(c, task["id"])["status"] == status
+    settled = [rows(api, item=item)[0] for item in (task["id"], held["id"])]
+    assert all(r["settled_at"] and r["how"] == "moot" for r in settled)
+    with api.app.state.store.transaction() as c:
+        assert delivery.due(c, H.shift(H.now(), hours=25)) == []
+        H.task_update(c, "human:ana", task["id"], status="open", quiet=True)
+        assert delivery.due(c, H.shift(H.now(), hours=26)) == []
+    assert job_of(api, held["id"]) is None and fired(api) == []
+    assert [rows(api, item=item)[0] for item in (task["id"], held["id"])] == settled
+
+
+@pytest.mark.parametrize("via", ("room", "refs"))
+def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api, via):
+    setup(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
+                               "delivery": "defer", "defer_for": "never"})
+    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
+                                                       "defer_for": "24h"})["comment"]
+    with api.app.state.store.transaction() as c:
+        if via == "room":
+            c.execute("UPDATE messages SET refs=json_remove(refs,'$.task') WHERE id=?", (held["id"],))
+        else:
+            c.execute("UPDATE deferrals SET kind='message',conversation_id='' WHERE item=?", (held["id"],))
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
+    assert rows(api, item=held["id"])[0]["settled_at"] is None
+    with api.app.state.store.transaction() as c:
+        assert delivery.due(c, H.shift(H.now(), hours=25)) == []
+    [row] = rows(api, item=held["id"])
+    assert row["settled_at"] and row["how"] == "moot"
+    assert job_of(api, held["id"]) is None and fired(api) == []
+
+
+def test_an_open_tasks_deferred_comment_still_fires(api):
+    setup(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team.",
+                               "delivery": "defer", "defer_for": "never"})
+    held = post(api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer",
+                                                       "defer_for": "24h"})["comment"]
+    with api.app.state.store.transaction() as c:
+        assert delivery.due(c, H.shift(H.now(), hours=25)) == [held["id"]]
+    [row] = rows(api, item=held["id"])
+    assert row["settled_at"] is None and row["fired_job"] == held["id"]
+    assert job_of(api, held["id"])[1] == "queued" and fired(api) == [held["id"]]
+
+
+@pytest.mark.parametrize("state", ("queued", "running"))
+def test_closing_a_task_cancels_only_its_spent_deadline_runs(api, state):
+    setup(api)
+    first, second = [post(api, "tasks", {"owner": "ops", "title": title, "body": "For the team.",
+                                        "delivery": "defer", "defer_for": "1h"})
+                     for title in ("Plan the launch", "Draft the FAQ")]
+    held = post(api, f"tasks/{first['id']}/comments", {"text": "Billing first.", "delivery": "defer",
+                                                        "defer_for": "1h"})["comment"]
+    with api.app.state.store.transaction() as c:
+        # Task-thread messages use the same cancellation rule as comments.
+        c.execute("UPDATE deferrals SET kind='message' WHERE item=?", (held["id"],))
+        assert len(delivery.due(c, H.shift(H.now(), hours=2))) == 2
+    shared = rows(api, item=first["id"])[0]["fired_job"]
+    assert rows(api, item=second["id"])[0]["fired_job"] == shared
+    ordinary = post(api, f"tasks/{first['id']}/comments", {"text": "Start now.", "delivery": "queue"})["comment"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state=? WHERE message_id=?", (state, held["id"]))
+        H.task_close(c, "human:ana", first["id"], quiet=True)
+    assert rows(api, item=held["id"])[0]["how"] == "moot"
+    assert job_of(api, held["id"])[1] == ("canceled" if state == "queued" else state)
+    assert job_of(api, ordinary["id"])[1] == "queued"
+    assert job_of(api, shared)[1] == "queued"
+    assert rows(api, item=second["id"])[0]["settled_at"] is None
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, "human:ana", second["id"], quiet=True)
+    assert job_of(api, shared)[1] == "canceled"
+
+
 def test_a_defer_rides_along_only_on_a_turn_in_its_own_session(api):
     machine = setup(api)
     working = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})

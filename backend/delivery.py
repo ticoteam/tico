@@ -22,6 +22,7 @@ neither loses a deadline nor fires one twice. A later deadline in a session whos
 and a run whose items all went in with another turn is canceled. A bot that is paused or quarantined is passed over until it is active
 again; spend caps, turns at once and claim holds apply to the run's job as to any other. Sleep when idle counts the
 next deadline as a reason to wake (sleep_idle.routine_times).
+A task that ends cancels its pending deferred deliveries, even if it is reopened later.
 
 This module imports nothing from hubdb at load, so hubdb can import it.
 """
@@ -168,15 +169,34 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
 
 def _drop_spent(conn, H, attempt_id, job, note):
     """Cancel each queued deadline run whose items all went in with this turn (another way, or another run)."""
-    from . import claim_holds
     spent = [r[0] for r in conn.execute(
         "SELECT DISTINCT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.attempt=? "
         "AND j.state='queued' AND d.fired_job IS NOT ? AND NOT EXISTS(SELECT 1 FROM deferrals x "
         "WHERE x.fired_job=d.fired_job AND x.settled_at IS NULL)", (attempt_id, job)).fetchall()]
-    for spent_job in spent:
-        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (spent_job,)).rowcount:
+    _drop_jobs(conn, H, spent, note, attempt_id)
+
+
+def _drop_jobs(conn, H, jobs, note, attempt_id=None):
+    """Cancel queued deadline runs with no deferred items left to carry."""
+    from . import claim_holds
+    for spent_job in jobs:
+        if conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued' AND NOT EXISTS("
+                        "SELECT 1 FROM deferrals WHERE fired_job=? AND settled_at IS NULL)",
+                        (spent_job, spent_job)).rowcount:
             claim_holds.clear(conn, spent_job, note)
             H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
+
+
+def task_closed(conn, task):
+    """Settle a task's pending deliveries and drop deadline runs that only carried them."""
+    H = _H()
+    rows = H._rows(conn.execute(
+        "SELECT id,fired_job FROM deferrals WHERE settled_at IS NULL AND "
+        "((kind IN ('comment','message') AND conversation_id=?) OR (kind='task' AND item=?))",
+        (task["conversation_id"], task["id"])))
+    _settle(conn, H, rows, H.now(), "moot")
+    jobs = dict.fromkeys(r["fired_job"] for r in rows if r["fired_job"])
+    _drop_jobs(conn, H, jobs, "Its task ended, canceling its deferred deliveries.")
 
 
 def summary(carried_=None, tasks=0, notes=0):
@@ -212,8 +232,7 @@ def _carrier_ok(conn, bot, item, refs, room, session):
 
 
 def _alive(conn, row):
-    """Whether a deferred item still waits: a task still a deferred task, a note not yet carried or taken back, a
-    message not deleted and not already queued by another way."""
+    """Whether a deferred item still waits and its task, if any, has not ended."""
     H = _H()
     if row["kind"] == "task":
         return H.next_run_waiting(conn, H.task(conn, row["item"]))
@@ -221,7 +240,15 @@ def _alive(conn, row):
         return H.note_waiting(conn, H.note(conn, row["item"]))
     found = conn.execute("SELECT m.refs, m.conversation_id FROM messages m WHERE m.id=? AND m.deleted_at IS NULL AND "
                          "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id)", (row["item"],)).fetchone()
-    return found is not None and _carrier_ok(conn, row["bot"], row["item"], found[0], found[1], row["conversation_id"])
+    if found is None:
+        return False
+    refs = H._json(found[0], {}) or {}
+    task_id = H.refs_task_id(refs)
+    ended = conn.execute(
+        "SELECT 1 FROM tasks WHERE (conversation_id=? OR id=?) "
+        f"AND status IN ({','.join('?' * len(H.TASK_ENDED))}) LIMIT 1",
+        (row["conversation_id"], task_id, *H.TASK_ENDED)).fetchone()
+    return not ended and _carrier_ok(conn, row["bot"], row["item"], refs, found[1], row["conversation_id"])
 
 
 def due(conn, at, failures=None):
