@@ -66,6 +66,11 @@ fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
 }
 
 fn app(store: Store, directory: &std::path::Path) -> Recorder {
+    // No-sign-in fixtures need empty credentials without depending on a desktop secret service.
+    static KEYRING: std::sync::Once = std::sync::Once::new();
+    KEYRING.call_once(|| {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+    });
     let lock = AppLock::acquire(directory).unwrap();
     Recorder::new(store, Some(lock), true).unwrap()
 }
