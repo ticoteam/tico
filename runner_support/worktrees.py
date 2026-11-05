@@ -12,7 +12,6 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
 import threading
 from urllib.parse import quote
 import uuid
@@ -20,6 +19,7 @@ import weakref
 
 from clients.tico import APIError
 from clients import git_repository
+from clients.repo_safety import outside_installation
 from . import git_credentials, isolation, repositories, safe_git
 
 
@@ -29,7 +29,10 @@ def safe_path(workspace, relative):
         raise ValueError('Invalid worktree path')
     raw = Path(relative)
     path = root / raw
-    if raw.is_absolute() or '..' in raw.parts or not raw.parts or path.is_symlink():
+    if raw.is_absolute() or '..' in raw.parts or not raw.parts:
+        raise ValueError('Use a worktree inside the team workspace')
+    outside_installation(path)
+    if path.is_symlink():
         raise ValueError('Use a worktree inside the team workspace')
     resolved = path.resolve()
     if resolved != path:
@@ -57,6 +60,7 @@ def disk_floor(workspace):
 
 
 def git(path, *args, env=None, check=True, errors='strict'):
+    outside_installation(path)
     if args[:2] == ('worktree', 'prune') and (Path(path) / '.git' / 'worktrees').is_symlink():
         raise ValueError('Worktree registrations point outside the base clone; left as they are')
     done = isolation.run([*safe_git.prefix(path), '-C', str(path), *args], env=safe_git.environment(env), capture_output=True, text=True,
@@ -71,8 +75,10 @@ def git(path, *args, env=None, check=True, errors='strict'):
 
 @contextmanager
 def locked(workspace, task):
-    folder = isolation.mkdir(Path(workspace) / 'tasks' / '.locks', mode=0o755)
+    folder = Path(workspace) / 'tasks' / '.locks'
     path = folder / hashlib.sha256(str(task).encode()).hexdigest()[:2]
+    outside_installation(path)
+    isolation.mkdir(folder, mode=0o755)
     with path.open('a') as handle:
         isolation.chown(path)
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -89,6 +95,7 @@ def setup_environment(env):
 
 
 def setup(path, command, env):
+    outside_installation(path)
     if command:
         with isolation.popen(['/bin/sh', '-c', command], cwd=path, env=setup_environment(env),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
@@ -164,6 +171,7 @@ def _marker_path(workspace, link_id, *, create=False):
     root = Path(workspace).resolve()
     tasks = root / 'tasks'
     folder = tasks / '.checkout-state'
+    outside_installation(folder)
     if tasks.is_symlink() or folder.is_symlink():
         raise ValueError('Worktree initialization state points through a symlink; left as it is')
     if create:
@@ -368,6 +376,8 @@ def _worktree_registered(base, path, env):
 
 
 def _create_or_resume_checkout(path, workspace, base, default, link, repo, task, env, client):
+    outside_installation(path)
+    outside_installation(base)
     detail = _detail(link)
     state = link.get('checkout_state') or detail.get('checkout_state') or 'queued'
     fresh_queued = state == 'queued'
@@ -619,9 +629,9 @@ def command(client, operation, value, task=None):
             if repo.get('machine_git'):
                 env = safe_git.machine_environment()
             link = client.post(f'tasks/{task}/worktrees', {'repo': repo['full_name']})
+            path = safe_path(workspace, link['path'])
             with locked(workspace, link['path']):
                 checked_branch(link['branch'])
-                path = safe_path(workspace, link['path'])
                 detail = _detail(link)
                 state = link.get('checkout_state') or detail.get('checkout_state')
                 setup_pending = bool(link.get('setup_pending', detail.get('setup_pending', False)))
@@ -750,9 +760,9 @@ def prepare(workspace, row, repo, env, client):
     its task once this reports the worktree present."""
     task = row['task_id']
     link = {**row, **_detail(row), 'link_id': row['id']}
+    path = safe_path(workspace, row['path'])
     with locked(workspace, row['path']):
         checked_branch(row['branch'])
-        path = safe_path(workspace, row['path'])
         state = link.get('checkout_state') or 'queued'
         if state in ('queued', 'initializing'):
             if path.exists() and state == 'queued':
@@ -999,9 +1009,22 @@ _SECRET = ('.env*', '*.pem', '*.key', 'id_rsa*', 'credentials*', '*.p12')
 _MARKER_LABEL = re.compile(rb'^(<{7}|\|{7}|>{7})(?: .*)?$', re.M)
 
 
+@contextmanager
+def _merge_scratch(gitdir):
+    scratch = Path(gitdir) / ('tico-merge-check-' + uuid.uuid4().hex)
+    outside_installation(scratch)
+    scratch.mkdir(mode=0o700)
+    try:
+        yield scratch
+    finally:
+        shutil.rmtree(scratch)
+
+
 def _untouched_conflict(path, gitdir, name, env):
     """True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited,
     line endings included. Bytes throughout, so no text decoding or newline translation can make two files look alike."""
+    outside_installation(path)
+    outside_installation(gitdir)
     try:
         data = (path / name).read_bytes()
         data.decode('utf-8')  # a conflicted file that is not text is not git's own text here: keep it
@@ -1015,7 +1038,7 @@ def _untouched_conflict(path, gitdir, name, env):
             stages[stage] = shown.stdout
     if '2' not in stages or '3' not in stages:
         return False
-    with tempfile.TemporaryDirectory(dir=gitdir) as scratch:
+    with _merge_scratch(gitdir) as scratch:
         files = {}
         for stage in ('1', '2', '3'):
             files[stage] = Path(scratch) / ('stage' + stage)
@@ -1215,6 +1238,7 @@ class Deferred(ValueError):
 
 
 def act(workspace, row, action, env, vault_values=(), before_remove=lambda: True):
+    safe_path(workspace, row['path'])
     with locked(workspace, row['path']):
         try:
             return _act(workspace, row, action, env, vault_values, before_remove)

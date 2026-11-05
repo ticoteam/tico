@@ -1437,6 +1437,8 @@ SCHEMAS["KpiDetail"]["properties"]["links"] = items(_merge(SCHEMAS["KpiLink"], o
 # Tags add rich display data beside the existing task label keys.
 TAGS["Tags"] = "Tags, metadata, markdown checklists and reusable templates."
 STABLE.extend([
+    ('/api/v2/meetings/{rid}/items/{iid}/link', 'post', 'Meetings', 'acceptMeetingTaskProposal',
+     'Accept a readable task proposal without creating a task; the meeting must be shared', 'MeetingTaskProposalAccepted'),
     ("/api/v2/tags", "get", "Tags", "listTags", "Tags and templates", "TagList"),
     ("/api/v2/tags", "post", "Tags", "createTag", "Create a tag or template", "TagResult"),
     ("/api/v2/tags/{tag_id}", "get", "Tags", "getTag", "A tag and its visible tasks", "TagDetail"),
@@ -1444,6 +1446,8 @@ STABLE.extend([
     ("/api/v2/tags/{tag_id}/instances", "post", "Tags", "createTagInstance", "Copy a template into a task tag", "TagResult"),
 ])
 SCHEMAS.update({
+    'MeetingTaskProposalAccepted': obj({'item': obj({'id': 's', 'proposed_task_id': 'n', 'result_ref': 'n',
+                                                    'status': 's'}), 'pushed': 'b'}),
     "Tag": obj({"id": "s", "key": "s", "label": "s", "metadata": "o", "markdown": "s", "is_template": "b",
                 "template_id": "n", "owner": "n", "version": "i", "created_at": "s", "updated_at": "s"}),
     "TagList": obj({"tags": items(ref("Tag"))}),
@@ -2339,7 +2343,7 @@ STABLE.extend([
     ("/api/v2/pages/{fid}", "get", "Pages", "getPage", "One page and its status line; 404 when the caller may not read it",
      "PageShown"),
     ("/api/v2/pages/{fid}", "patch", "Pages", "editPage",
-     "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+     "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
      "PageShown"),
     ("/api/v2/files", "get", "Files", "listFiles",
      "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, "
@@ -2350,7 +2354,10 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
+    "Page": obj({"audience": {"anyOf": [ref("AccessAudience"), {"type": "null"}],
+                             "description": "Only returned to managers on a single page read or write; null inherits where it is filed"},
+                 "restricted": {"type": "boolean", "description": "Only returned to managers, including on lists and cards"},
+                 "file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
@@ -2854,7 +2861,7 @@ STABLE.extend([
     ('/api/v2/meetings/{rid}/tasks', 'get', 'Meetings', 'listMeetingTasks',
      'Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap', 'MeetingTaskLinks'),
     ('/api/v2/meetings/{rid}/tasks', 'post', 'Meetings', 'linkMeetingTasks',
-     'Link up to 20 readable tasks; sent is only for their requester; links never widen access', 'MeetingTaskLinks'),
+     'Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data', 'MeetingTaskLinkBatch'),
     ('/api/v2/meetings/{rid}/tasks/{tid}', 'delete', 'Meetings', 'removeMeetingTask',
      'Remove a link as its creator, meeting owner, task owner or requester, or org owner', 'MeetingTaskRemoved'),
     ('/api/v2/tasks/{tid}/meetings', 'get', 'Tasks', 'listTaskMeetings',
@@ -2864,6 +2871,8 @@ SCHEMAS.update({
     'MeetingTaskLink': obj({'task_id': 's', 'number': {'type': ['integer', 'null']}, 'title': 's',
                             'status': 's', 'kind': {'enum': ['linked', 'sent', 'proposal']}, 'created_by': 's'}),
     'MeetingTaskLinks': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n'}),
+    'MeetingTaskLinkBatch': obj({'tasks': items(ref('MeetingTaskLink')), 'next_cursor': 'n',
+                                 'results': items(obj({'status': {'enum': [200, 404]}}))}),
     'TaskMeeting': obj({'meeting_id': 's', 'title': 's', 'started_at': 's', 'url': 's',
                         'kind': {'enum': ['linked', 'sent', 'proposal']}}),
     'TaskMeetings': obj({'meetings': items(ref('TaskMeeting')), 'next_cursor': 'n'}),

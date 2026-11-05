@@ -15,6 +15,8 @@ software: a web frontend your team builds, a script, another service. This page 
 - **Writes:** every `POST` and `PATCH` carries an `Idempotency-Key` header (1 to 200 characters, a fresh UUID per action). Sending
   the same key and body again returns the first answer instead of doing the work twice, so a retry after a dropped
   connection is safe. The same key with a different body is `409 idempotency_conflict`.
+  Message receipts saved before an upgrade still accept the same request when the earlier server hashed its
+  resolved Home. The retry uses the saved room and recipient, even if routing has since changed.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers

@@ -291,8 +291,8 @@ while a live run of the bot is on the same task (or the same thread, or the same
 when that lane frees. BotOps’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
 in the recovery history and shows its ownership in Stopped runs. Within five minutes of that work ending, the
 scheduler re-evaluates the stopped job and records who owns recovery and why.
-When the computer reports a restart, a run resumes on the next scheduler sweep, including one that used a shell or
-edited files. Its recovery note gives the interruption time and tells it to check what already happened first;
+When the computer reports a restart or a clean stop, a run resumes on the next scheduler sweep, including one that used a shell or
+edited files. A clean stop is the computer's own note that it stopped the turn. Its recovery note gives the interruption time and tells it to check what already happened first;
 the same computer continues the same provider session. A consumed approval or a named irreversible outside action
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
 is dismissed and BotOps is told. A stopped run is counted once however many requests were folded into it.
@@ -340,7 +340,7 @@ send or payment) instead holds it for review, so lifting the quarantine never re
 An answer the run finished as the quarantine began is kept on the run,
 never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
-Other runs stay *owner review needed*, because Tico cannot see what a
+Runs held this way stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
 BotOps resumes or dismisses it after checking what already happened. Nothing is lost or re-sent.
@@ -600,12 +600,21 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
+| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Manager** | people, a task given to it, its own clock | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |
+
+A production acceptance run is recognised by its title: a run verb (run, rerun, re-run, execute, perform, carry out,
+complete, finish, check, verify or do), then at most two words, none of them a build or change verb such as write,
+update or fix, then "production acceptance", then the end of the title, a colon, a comma, an opening bracket, or one of
+these words: for, after, on, against, in, at, with, from, to, before, during, of, and, through, across, test, tests,
+suite, run, pass, sweep, check, checks, again, now, today, as or once. A title that starts "Production acceptance run"
+also counts. The same title counts whether the task is top-level or a subtask. "Run production acceptance for billing"
+is a run. "Write production acceptance tests" and "Finish writing production acceptance tests" are ordinary work and go
+to a Doer, and so is "Run production acceptance plan": "plan" is not one of those words, so that title is not a run.
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
 snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a
@@ -717,5 +726,54 @@ Heartbeats and `scripts/tico doctor` report each base clone's state, last fetch,
 any error. A base clone failure does not change a bot's readiness. A clone that has been absent
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.
+
+An interrupted Git command can leave a lock behind. Tico never removes or moves another Git
+writer's lock, on any platform. The runner and Python updater hold the repository's
+`tico-lock-recovery` flock through their own Git commands; the main checkout and linked worktrees
+share this gate. Other tools and bot Git commands may bypass it, so it cannot prove a lock is unused.
+
+A lock at least 30 minutes old stays in place and the failed command is not retried. Health, the
+worktree link detail or the runner error names its full path, including the repository, and its age.
+It gives one command, `rm -- '<full lock path>'`, for BotOps or a person to run on that Computer
+**after checking no Git is running for that repository**. A recent lock also stays in place; retry
+when Git has finished. Config and mirror repair stop at any Git lock. Tico does not scan processes
+or keep moved lock files.
+
+A broken mirror is renamed to `<mirror>.broken-<timestamp>-*` before a fresh copy is built, only
+when it has no registered worktrees, no runner repository uses its objects through an alternates
+file, every local ref has the same SHA on the remote, and its config proves the default repository
+format with no extensions. Unknown refs, an unreadable format or an unreachable remote stop repair. One broken copy is retained for review; another repair waits for that review instead
+of deleting it. Refusals say `repository copy needs attention: <reason>` in Health. Retiring a
+repository keeps its mirror too. On a same-user computer, if a base clone's config cannot be written,
+the runner can stage a copy of the verified config. It preserves `core.repositoryformatversion` and
+all `extensions.*` settings, including `refStorage`, `objectFormat` and `worktreeConfig`. A malformed,
+missing or included config cannot establish the format reliably, so replacement is refused and the
+original stays in place for manual repair. This also protects reftable repositories. Staging does not
+clone another repository or borrow its default format. Repair takes Git's exclusive `config.lock` and
+checks the old config again under that lock. A changed config or another writer's lock stops repair.
+It copies the old config to `.git/tico-config-backup-*`, keeps its permissions, then renames the
+completed lock file over the config in one step. The original stays readable until that rename.
+An adopted checkout requires a readable config with a verified GitHub `origin` that can be preserved;
+otherwise replacement is refused. Computers running bots as a separate user, including Docker runners,
+refuse automatic base config replacement because the scratch paths are bot-controlled. Health reports
+the refusal and asks for manual config and permissions repair. Files, index, branches, stash and task
+worktree registrations stay in place, including unpublished bot work.
+
+Flattened instruction links are repaired only after checking the index and committed content.
+Supervisor reads of instruction files, targets and backups open nonblocking without following
+the final symlink, verify the opened file is regular, and stop at 1 MiB. Unsafe or oversized files
+stay untouched; unreadable backups stay for review. Legacy backup comparisons resolve the intended
+instruction link within the checkout before opening its target. Recovery metadata reads and writes
+use the same descriptor checks with limits appropriate to markers, config, refs and registrations.
+The regular file is first renamed into the Git admin directory's `tico-instruction-backups/`, with
+its relative path and a `.tico-backup-<timestamp>-*-sha256-<accepted-content-hash>` suffix, before
+creating the symlink. The hash records the accepted target contents at repair time, so a later
+release changing or removing that target does not turn an unchanged backup into a bot edit.
+Legacy backups gain a baseline only while they still match the checkout; differing or unknown
+copies remain for review. An open writer continues writing to this named backup. All instruction
+backups are retained so a later write cannot be lost. Unchanged backups do not block updates;
+differing or unreadable backups block updates and are named as a bot edit to review in Health and
+the update log. Each update rechecks retained backups to catch late writes.
+Git failure details are scrubbed before reaching Health.
 
 Outside source failures are isolated by computer, login profile and runtime. The provider's absolute reset time wins over a later status refresh, and a claim releases an expired reset hold even between scheduler ticks. Repeated observations update one durable source incident; only its start and recovery send quiet notices to Engineering and Health, with the since time, waiter count and expected return. Waiting automatic notices use the existing history/digest batching, while interrupted jobs retain their own checkpoint. Human bulk finish/close writes one count-only next-run note per recipient; task details remain on their original tasks, including for paused recipients.

@@ -114,14 +114,14 @@ async fn isolated_workspace_git_reuses_restored_metadata_and_creates_new_metadat
     let mirror = tmp.0.join("mirror.git");
     std::fs::create_dir(&mirror).unwrap();
     let env = turn_env(&tmp.0, &[]);
-    assert_eq!(sessions::ensure(&main, &old, "old", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::ensure(&main, &old, "old", &env).await.unwrap(), ("origin/main".into(), "".into()));
     assert_eq!(old_fetch.metadata().unwrap().uid(), 10003);
     assert_eq!(old.metadata().unwrap().uid(), 10003, "the existing-return path adopts the checkout too");
     assert_eq!(sessions::sync_shared(&old, &env).await, "");
     assert_eq!(old_fetch.metadata().unwrap().uid(), 10003, "fetch does not recreate supervisor metadata");
 
     let new = sessions::path_for(&projects, "ops", "new");
-    assert_eq!(sessions::ensure(&main, &new, "new", &env).await.1, "");
+    assert_eq!(sessions::ensure(&main, &new, "new", &env).await.unwrap().1, "");
     let write = crate::gitrun::run_as_bot(&["/bin/sh".into(), "-c".into(), "mkdir memory && printf lesson > memory/lesson.md".into()], &env, Some(&new), 10).await.unwrap();
     assert!(write.ok(), "{}", write.stderr);
     assert_eq!(sessions::finish(&new, "run", &env, &[], true).await, "");
@@ -138,7 +138,7 @@ async fn isolated_workspace_git_reuses_restored_metadata_and_creates_new_metadat
     let foreign = projects.join("foreign");
     std::fs::create_dir(&foreign).unwrap();
     std::os::unix::fs::symlink(&mirror, foreign.join(".git")).unwrap();
-    assert!(!sessions::ensure(&foreign, &tmp.0.join("outside"), "foreign", &env).await.1.is_empty());
+    assert!(!sessions::ensure(&foreign, &tmp.0.join("outside"), "foreign", &env).await.unwrap().1.is_empty());
     assert_eq!(mirror.metadata().unwrap().uid(), 0, "an external gitdir is never adopted");
 }
 
@@ -411,7 +411,7 @@ async fn isolated_mixed_owner_session_metadata_is_ensured_and_finished_as_the_bo
     seed_owner(&admin, 10002, 0o755);
     let env = turn_env(&tmp.0, &[]);
 
-    assert_eq!(sessions::ensure(&main, &session, "mixed", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::ensure(&main, &session, "mixed", &env).await.unwrap(), ("origin/main".into(), "".into()));
     assert_eq!(owner_mode(&index), (10003, 0o644));
     assert_eq!(std::fs::read(&index).unwrap(), index_bytes);
     assert_eq!(owner_mode(&fetch_head), (10003, 0o644));
@@ -435,11 +435,11 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
     let env = turn_env(&tmp.0, &[]);
     let session = sessions::path_for(&projects, "ops", "t1");
 
-    let (tracked, problem) = sessions::ensure(&main, &session, "t1", &env).await;
+    let (tracked, problem) = sessions::ensure(&main, &session, "t1", &env).await.unwrap();
     assert_eq!((tracked.as_str(), problem.as_str()), ("origin/main", ""));
     assert_eq!(sh(&session, &["symbolic-ref", "--short", "HEAD"]), "tico-session/t1");
     // A second turn on the task reuses the worktree.
-    assert_eq!(sessions::ensure(&main, &session, "t1", &env).await.1, "");
+    assert_eq!(sessions::ensure(&main, &session, "t1", &env).await.unwrap().1, "");
 
     // The bot commits code and leaves a lesson uncommitted; another lane pushes meanwhile.
     std::fs::write(session.join("code.txt"), "work\n").unwrap();
@@ -482,7 +482,7 @@ async fn a_stateless_task_lane_commits_no_memory_and_leaves_what_it_wrote_in_mem
     sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
     let env = turn_env(&tmp.0, &[]);
     let session = sessions::path_for(&projects, "tico-counsel", "t2");
-    assert_eq!(sessions::ensure(&main, &session, "t2", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::ensure(&main, &session, "t2", &env).await.unwrap(), ("origin/main".into(), "".into()));
 
     std::fs::write(session.join("code.txt"), "work\n").unwrap();
     sh(&session, &["add", "code.txt"]);
@@ -506,7 +506,7 @@ async fn a_memory_pass_checkout_drops_its_edits_and_commits_and_leaves_main_alon
     sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
     let env = turn_env(&tmp.0, &[]);
     let session = sessions::path_for(&projects, "tico-pass", "t4");
-    assert_eq!(sessions::ensure(&main, &session, "t4", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::ensure(&main, &session, "t4", &env).await.unwrap(), ("origin/main".into(), "".into()));
     let base = sh(&session, &["rev-parse", "HEAD"]);
 
     // A pass commits outside memory/ and edits memory/ without committing it; both must be gone after the turn.
@@ -536,7 +536,7 @@ async fn a_memory_pass_with_nothing_changed_discards_nothing_and_says_so() {
     sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
     let env = turn_env(&tmp.0, &[]);
     let session = sessions::path_for(&projects, "tico-quiet", "t5");
-    assert_eq!(sessions::ensure(&main, &session, "t5", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::ensure(&main, &session, "t5", &env).await.unwrap(), ("origin/main".into(), "".into()));
     assert_eq!(sessions::discard_pass(&session, &env).await.unwrap(), Vec::<String>::new());
 }
 
@@ -554,13 +554,13 @@ async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
     sh(&main, &["commit", "-qm", "start"]);
     let env = turn_env(&tmp.0, &[]);
     let task = sessions::path_for(&projects, "ops", "t1");
-    assert_eq!(sessions::ensure(&main, &task, "t1", &env).await, (String::new(), sessions::NO_UPSTREAM.into()));
+    assert_eq!(sessions::ensure(&main, &task, "t1", &env).await.unwrap(), (String::new(), sessions::NO_UPSTREAM.into()));
     let name = sessions::private_of("private:c-1");
     let session = sessions::path_for(&projects, "ops", &name);
-    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, (String::new(), String::new()));
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.unwrap(), (String::new(), String::new()));
     assert_eq!(sh(&session, &["rev-parse", "HEAD"]), sh(&main, &["rev-parse", "HEAD"]));
     assert!(session.join("AGENT.md").is_file());
-    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, (String::new(), String::new()), "reused");
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.unwrap(), (String::new(), String::new()), "reused");
     assert!(sessions::remove_private(&main, &session, &name, &env).await);
 }
 
@@ -577,7 +577,7 @@ async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_w
     let session = sessions::path_for(&projects, "ops", &name);
     let before = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "rev-parse", "main"]);
 
-    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.unwrap(), ("origin/main".into(), "".into()));
     assert_eq!(sh(&session, &["symbolic-ref", "--short", "HEAD"]), "tico-session/private-c-1");
     // No upstream, and the bot's checkout keeps its push setting: a bare `git push` from the meeting goes nowhere.
     assert_eq!(sh(&session, &["for-each-ref", "--format=%(upstream)", "refs/heads/tico-session/private-c-1"]), "");
@@ -588,7 +588,7 @@ async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_w
     sh(&session, &["add", "-A"]);
     sh(&session, &["commit", "-qm", "Embargo"]);
     std::fs::write(session.join("notes.md"), "unsaved\n").unwrap();
-    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.1, "");
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.unwrap().1, "");
     assert!(session.join("notes.md").is_file() && !main.join("memory/learnings.md").exists());
     // A task's careful remove keeps it (unpushed, dirty); the meeting's end deletes it all.
     assert!(!sessions::remove(&main, &session, &name, &env).await);
@@ -610,7 +610,7 @@ async fn a_task_turn_moves_the_bots_claude_memory_into_its_worktree_and_it_is_do
     sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
     let env = turn_env(&tmp.0, &[]);
     let session = sessions::path_for(&projects, "ops", "t1");
-    assert_eq!(sessions::ensure(&main, &session, "t1", &env).await.1, "");
+    assert_eq!(sessions::ensure(&main, &session, "t1", &env).await.unwrap().1, "");
     // Claude named the bot's memory by its own checkout, not the task's worktree.
     let home = tmp.0.join("home");
     let dir = claude_dir(&home, &main);
@@ -990,4 +990,54 @@ async fn a_worktree_reserved_for_a_waiting_task_is_checked_out_set_up_and_report
     assert!(failed.contains("setup failed (exit 3)"), "{failed}");
     let last = seen.lock().unwrap().last().unwrap().1.clone();
     assert_eq!((last["state"].as_str(), last["checkout_state"].as_str()), (Some("pending"), Some("setup_failed")));
+}
+
+#[tokio::test]
+async fn session_destinations_refuse_the_install_before_the_turn_writes() {
+    use std::sync::atomic::AtomicBool;
+    let tmp = Tmp::new();
+    let (_, main) = remote(&tmp.0, "external-bot");
+    let env = turn_env(&tmp.0, &[]);
+    let templates = crate::env::root().join("templates");
+    let entries = || {
+        let mut names: Vec<_> = std::fs::read_dir(&templates).unwrap().map(|e| e.unwrap().file_name()).collect();
+        names.sort();
+        names
+    };
+    let before = entries();
+    let registrations = sh(&main, &["worktree", "list", "--porcelain"]);
+    for lane in ["task:guard-task", "private:guard-meeting"] {
+        for depth in ["sessions", "bot", "destination"] {
+            let case = Tmp::new();
+            let projects = case.0.join("workspace");
+            std::fs::create_dir_all(&projects).unwrap();
+            let bot = format!("guard-{}", uuid::Uuid::new_v4().simple());
+            let config_path = case.0.join("runner.json");
+            std::fs::write(&config_path, json!({"projects_dir": projects, "repos": {(bot.clone()): main}}).to_string()).unwrap();
+            let config = crate::config::Config::load(&config_path).unwrap();
+            let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+            let runner = crate::runner::Runner::new(config, client, crate::state::State::open(&case.0.join("state")).unwrap());
+            let lost = AtomicBool::new(false);
+            let mut attempt = json!({"id": "guard-turn", "bot": bot, "lane": lane, "config": {}});
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            assert_eq!(place.main_path, main, "the bot's checkout is valid and outside the install");
+            let destination = sessions::path_for(&projects, &bot, &place.task);
+            let link = match depth {
+                "sessions" => projects.join("sessions"),
+                "bot" => destination.parent().unwrap().to_path_buf(),
+                _ => destination.clone(),
+            };
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&templates, &link).unwrap();
+            let expected = format!("Repository path is inside the Tico install: {}", destination.display());
+            assert_eq!(runner.place_turn(&mut place, &mut attempt, &env, &lost).await.unwrap_err(), expected);
+            assert!(place.session_path.is_none());
+            assert!(attempt.get("_session").is_none() && attempt.get("branch_sync_problem").is_none());
+            assert_eq!(sessions::ensure(&main, &destination, &place.task, &env).await.unwrap_err(), expected);
+            drop(place);
+            assert_eq!(runner.enter_lanes(&attempt, &lost).await.err().unwrap(), expected);
+            assert_eq!(entries(), before, "nothing is created in the install");
+            assert_eq!(sh(&main, &["worktree", "list", "--porcelain"]), registrations);
+        }
+    }
 }

@@ -106,6 +106,10 @@ function visualCardHTML(f, key, state) {
 function visualCardsHTML(files, {key = '', chips = () => ''} = {}) {
   const cards = [], rest = [], shown = new Set(), keys = new Set();
   for (const f of Array.isArray(files) ? files : []) {
+    if (f?.removed && f.label && !f.file_id) {
+      cards.push(`<span class="vcard-note">${esc(f.label)}</span>`);
+      continue;
+    }
     const state = cards.length < VISUAL_INLINE_MAX ? visualState(f) : null;
     if (!state) { rest.push(f); continue; }
     let k = `${key}:${visualRef(f)}`;

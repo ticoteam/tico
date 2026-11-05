@@ -18,6 +18,7 @@ TABLES = {
     rows.LetterRow: "letters",
     rows.LetterProofRow: "letter_proofs",
     rows.LetterSourceRow: "letter_sources",
+    rows.PageIdentityRow: "page_identities",
     rows.AlertPreferenceRow: "alert_preferences",
     rows.AlertCompanySettingRow: "alert_company_settings",
     rows.PersonalAlertRow: "personal_alerts",
