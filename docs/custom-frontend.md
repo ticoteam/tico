@@ -279,7 +279,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
 | `runs` | `run_id`, `conversation_id`, `bot_id`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
 | `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
-| `letters` | `id` and `letter`, as `GET /api/v2/letters/{id}` shows it; patch that row without rereading the list |
+| `letters` | `id` and `letter`, as `GET /api/v2/letters/{id}` shows it; replace that row. `{id, gone:true}` removes a row after access is lost. Source access changes above `FAN_CAP` coalesce to `{invalidate:true}`: clear held rows and re-read the paged list once. Other letter events never re-read the list. |
 
 - **Only what you may read is sent.** A private task, a thread you are not in, or a bot whose activity you may
   not read never shows up, not even as a number. Bots cannot open the stream (`403`).

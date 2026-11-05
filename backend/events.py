@@ -180,14 +180,22 @@ _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j
 _PARTIES = ("owner_id", "requester_id", "waiting_on", "guest")
 
 
-def _letters_for_task(task):
-    """A finished letter still needs a row patch when current source access changes."""
+def _letters_for_source(kind, *ids):
+    """Bounded indexed lookup: a source with many letters invalidates the outbox once."""
+    found = ("SELECT DISTINCT letter_id FROM letter_sources WHERE source_type='" + kind + "' AND source_id IN ("
+             + ",".join(ids) + f") LIMIT {FAN_CAP + 1}")
+    many = f"(SELECT count(*) FROM ({found}))>{FAN_CAP}"
     return ("INSERT INTO changes(topic,kind,subject_id,created_at) "
-            f"SELECT 'letters','access',l.id,{_NOW} FROM letters l WHERE l.task_id={task} OR "
-            f"EXISTS(SELECT 1 FROM json_each(l.source_provenance,'$.tasks') t WHERE t.value={task}) OR "
-            "EXISTS(SELECT 1 FROM conversations cv LEFT JOIN conversations root ON root.id=cv.root_id "
-            f"WHERE (cv.task_id={task} OR root.task_id={task}) AND (cv.id=l.thread_id OR "
-            "EXISTS(SELECT 1 FROM json_each(l.source_provenance,'$.threads') t WHERE t.value=cv.id)));")
+            f"SELECT 'letters','access',letter_id,{_NOW} FROM ({found}) WHERE NOT {many};"
+            f"INSERT INTO changes(topic,kind,created_at) SELECT 'letters','invalidate',{_NOW} WHERE {many};")
+
+
+def _letters_for_task(task):
+    return _letters_for_source("task", task)
+
+
+def _letters_for_thread(thread, root):
+    return _letters_for_source("thread", thread, root)
 
 
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
@@ -199,6 +207,13 @@ TRIGGERS = [
     ("changes_task_letters_delete", "DELETE", "tasks", None, _letters_for_task("OLD.id")),
     ("changes_roles_letters_insert", "INSERT", "task_roles", None, _letters_for_task("NEW.task_id")),
     ("changes_roles_letters_delete", "DELETE", "task_roles", None, _letters_for_task("OLD.task_id")),
+    ("changes_thread_letters_access", "UPDATE", "conversations",
+     _changed("audience", "audience_group_id", "participants", "owner_id"),
+     _letters_for_thread("NEW.id", "COALESCE(NEW.root_id,NEW.id)")),
+    ("changes_members_letters_insert", "INSERT", "thread_members", None,
+     _letters_for_thread("NEW.thread_id", "(SELECT COALESCE(root_id,id) FROM conversations WHERE id=NEW.thread_id)")),
+    ("changes_members_letters_delete", "DELETE", "thread_members", None,
+     _letters_for_thread("OLD.thread_id", "(SELECT COALESCE(root_id,id) FROM conversations WHERE id=OLD.thread_id)")),
     ("changes_meeting_items_insert", "INSERT", "meeting_items", None,
      _row("meeting_items", "items", "NEW.id", ref="NEW.meeting_id")),
     ("changes_meeting_items_update", "UPDATE", "meeting_items", _ANY_COLUMN,
@@ -679,8 +694,9 @@ for _name in ("changes_item_task_access", "changes_item_roles_insert", "changes_
 
 
 for _name in ("changes_task_letters_access", "changes_task_letters_delete", "changes_roles_letters_insert",
-              "changes_roles_letters_delete"):
-    NEEDS[_name] = ("letters.source_provenance", "conversations.root_id", "conversations.task_id")
+              "changes_roles_letters_delete", "changes_thread_letters_access", "changes_members_letters_insert",
+              "changes_members_letters_delete"):
+    NEEDS[_name] = ("letter_sources", "conversations.root_id", "conversations.audience")
 
 
 def ensure(c):
@@ -1840,11 +1856,17 @@ def read_in(c, snapshot, auth, who, after, *, topics=TOPICS, conversations=(), b
         picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
     if by_topic.get("letters"):
         from . import letters
-        newest_letters = {r["subject_id"]: r for r in by_topic["letters"]}
+        invalidations = [r for r in by_topic["letters"] if r["kind"] == "invalidate"]
+        if invalidations and letters.outbox_access(c, auth, who):
+            picked.append(("letters", invalidations[-1], {"invalidate": True}))
+        newest_letters = {r["subject_id"]: r for r in by_topic["letters"] if r["subject_id"] is not None}
         for ident, change in newest_letters.items():
             try:
                 letter = letters.get(c, auth, who, ident, metadata=True)
             except Problem:
+                row = c.execute("SELECT acting_bot_id FROM letters WHERE id=?", (ident,)).fetchone()
+                if letters.outbox_access(c, auth, who, row if row is not None else {"acting_bot_id": None}):
+                    picked.append(("letters", change, {"id": ident, "gone": True}))
                 continue
             picked.append(("letters", change, {"id": ident, "letter": letters.public(letter)}))
     for topic in ('meeting_items', 'presence'):

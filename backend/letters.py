@@ -238,6 +238,40 @@ def readable(c, auth, who, row):
     return record_access(c, auth, who, row) == "full"
 
 
+def outbox_access(c, auth, who, row=None):
+    """Who may receive outbox invalidations, independently of access to a letter's contents."""
+    if who.task_actor and who.task_actor != who.actor:
+        try:
+            other = bot_identity(c, who.task_actor, attempt_id=who.attempt_id)
+        except Problem:
+            return False
+        return outbox_access(c, auth, replace(who, task_actor=""), row) and outbox_access(c, auth, other, row)
+    if admin(auth, who) or can_send(c, auth, who):
+        return True
+    bots = [row["acting_bot_id"]] if row is not None else [bot["id"] for bot in H.bots(c)]
+    return any(bot and auth.bot_manager(c, who, bot) for bot in bots)
+
+
+def freeze_sources(c, ident):
+    """The reverse map stays with immutable provenance, so access changes never scan letter contents."""
+    row = c.execute("SELECT task_id,thread_id,source_provenance FROM letters WHERE id=?", (ident,)).fetchone()
+    saved = H._json(row["source_provenance"], {}) or {}
+    tasks = set(saved.get("tasks", [])) | ({row["task_id"]} if row["task_id"] else set())
+    threads = set(saved.get("threads", [])) | ({row["thread_id"]} if row["thread_id"] else set())
+    pending = set(threads)
+    for _ in range(2):
+        roots = set()
+        for part in H.chunks(sorted(pending)):
+            for room in c.execute(f"SELECT id,root_id,task_id FROM conversations WHERE id IN ({','.join('?' * len(part))})", part):
+                if room["task_id"]:
+                    tasks.add(room["task_id"])
+                roots.add(room["root_id"] or room["id"])
+        pending = roots - threads
+        threads.update(roots)
+    c.executemany("INSERT OR IGNORE INTO letter_sources(letter_id,source_type,source_id) VALUES(?,?,?)",
+                  [(ident, kind, source) for kind, ids in (("task", tasks), ("thread", threads)) for source in sorted(ids)])
+
+
 def get(c, auth, who, ident, *, metadata=False):
     row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
     level = record_access(c, auth, who, row) if row else None
@@ -441,6 +475,7 @@ class Letters:
                 body.thread_id, dump(recipient), hashlib.sha256(dump(recipient).encode()).hexdigest(),
                 dump(company["return_address"]), body.mail_class, int(body.color), int(body.duplex), source["id"], original,
                 who.attempt_id or None, int(must_ask), reason, dump(sources), now, now))
+            freeze_sources(c, ident)
             get(c, self.auth, who, ident)
         try:
             self.requote(ident)
