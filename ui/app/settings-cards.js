@@ -58,7 +58,7 @@ const SETTINGS_CARDS = [
   ['#settings-mail-access', 'mail access', 'Who can read letters and scans delivered to the company.'],
   ['#settings-mail-legal', 'legal mail', 'Where legal letters go and who receives a notice when one arrives.'],
   ['#inbox-access', 'inbox access', 'Which people and bots can use this postal inbox.'],
-  ['#inboxes-letters-out', 'Letters out', 'How this team sends letters, including its return address and monthly sending limit.'],
+  ['#set-inboxes [data-ib-section=\"letters-out\"] .ib-card', 'Letters out', 'How this team sends letters, including its return address and monthly sending limit.'],
   ['#lo-access', 'Letters out access', 'Which people and bots may send letters for this team.'],
   ['#lo-automations', 'Letters out automations', 'Rules that automatically handle letters this team sends.'],
   ['#lo-activity', 'Letters out activity', 'Letters this team has sent and their latest status.'],
