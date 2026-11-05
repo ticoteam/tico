@@ -937,7 +937,7 @@
       ],
       "type": "string"
      },
-     "maxItems": 21,
+     "maxItems": 20,
      "title": "Capabilities",
      "type": "array"
     },
