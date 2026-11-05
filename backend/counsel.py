@@ -444,26 +444,36 @@ REMOVED_PAGE = "A page you can no longer open was removed"
 
 
 def page_copies(c):
-    """Only restricted page copies need an extra gate; neutral provenance is shared within a snapshot."""
+    """Read copied-page provenance once, without loading document text into the authorization snapshot."""
     from . import read_cache
-    if not F.restricted_pages(c):
-        return {}
-    return read_cache.value(c, ("counsel_page_copies",), lambda: {
-        r["task_id"]: dict(r) for r in c.execute(
-            "SELECT r.*,t.body FROM rule_reads r JOIN pages p ON p.file_id=r.file_id "
-            "JOIN tasks t ON t.id=r.task_id WHERE p.audience IS NOT NULL")
-    }, shared=True)
+    def build():
+        import sqlite3
+        try:
+            return {r["read_task"]: {"task_id": r["read_task"], "file_id": r["id"], "version": r["version"],
+                                     "requested_by": r["requested_by"], "removed": r["copy_removed"], "page": dict(r)}
+                    for r in c.execute(
+                        "SELECT r.task_id AS read_task,r.requested_by,r.version,t.body=? AS copy_removed,f.* "
+                        "FROM rule_reads r JOIN pages p ON p.file_id=r.file_id JOIN bot_files f ON f.id=p.file_id "
+                        "JOIN tasks t ON t.id=r.task_id", (REMOVED_PAGE,))}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return {}                   # standalone hubdb and pre-Counsel migration databases
+    F.privacy.snapshot(c)
+    return read_cache.value(c, ("counsel_page_copies",), build, shared=True)
 
 
 def page_copy_readable(c, read, viewer=None, auth=None):
     """A copied page remains the asker's and the run's read, never a lasting grant from the task."""
     from . import teammate_access
-    row = F.restricted_pages(c).get(read["file_id"])
+    copied = page_copies(c).get(read.get("task_id"))
+    row = copied["page"] if copied else F.restricted_pages(c).get(read["file_id"])
     if not row:
         return True
     asker = teammate_access._viewer_for(c, read["requested_by"])
     principals = [asker, Identity("bot:" + SLUG, "bot"), *([viewer] if viewer else [])]
     return (all(who and F.page_audience_visible(c, auth, who, row, {}) for who in principals)
+            and (not row["task_id"] or F.privacy.task_readable(c, asker, H.task(c, row["task_id"])))
             and (auth is None or F.file_visible(c, auth, asker, row, {})))
 
 
@@ -471,7 +481,7 @@ def denied_page_copies(c, viewer, auth=None):
     from . import read_cache
     return read_cache.value(c, ("denied_page_copies", viewer.actor, getattr(viewer, "task_actor", ""), auth is not None), lambda: {
         tid for tid, read in page_copies(c).items()
-        if read["body"] != REMOVED_PAGE and not page_copy_readable(c, read, viewer, auth)
+        if not read["removed"] and not page_copy_readable(c, read, viewer, auth)
     }, shared=True)
 
 
@@ -480,7 +490,7 @@ def revoke_page_copies(c, auth, fid=None):
     for tid, read in list(page_copies(c).items()):
         if fid and read["file_id"] != fid:
             continue
-        if read["body"] != REMOVED_PAGE and not page_copy_readable(c, read, auth=auth):
+        if not read["removed"] and not page_copy_readable(c, read, auth=auth):
             c.execute("UPDATE tasks SET body=?,updated_at=? WHERE id=?", (REMOVED_PAGE, H.now(), tid))
 
 

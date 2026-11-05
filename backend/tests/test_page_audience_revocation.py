@@ -98,6 +98,21 @@ def test_deleted_group_cannot_regain_grants_when_legal_is_recreated(api):
     assert read(api, fid, "ben-test").status_code == 200
 
 
+def test_removed_person_and_archived_bot_lose_explicit_page_grants(api):
+    fid, _ = promoted(api)
+    pid = post(api, "people", {"name": "New member", "email": "new-member@acme.example"})["person"]
+    edit(api, fid, {"people": [pid], "bots": ["finance"]})
+    post(api, "people/" + pid, {"left": True})
+    removed = api.delete("/api/v2/humans/" + pid, headers=headers("ana-test"))
+    assert removed.status_code == 200, removed.text
+    assert post(api, "people", {"name": "Replacement", "email": "new-member@acme.example"})["person"] == pid
+    with api.app.state.store.transaction() as c:
+        from backend.settings_admin import archive_bot
+        archive_bot(c, "human:ana", "finance")
+        audience = json.loads(c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()[0])
+        assert audience["people"] == audience["bots"] == [] and not audience["everyone"]
+
+
 def test_page_refs_are_redacted_on_sql_timeline_and_undecorated_events(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Read the attached plan", "body": "Review", "private": False})
     tid = task["id"]

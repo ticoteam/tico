@@ -44,6 +44,12 @@ MCP uses `hub_page_publish`'s `audience` and `hub_page_access`. A new version ke
 one. `PATCH /api/v2/pages/{id}` accepts the access audience object, or `null` to clear it. Everyone still needs access
 to where the page is filed. Restricted pages use a per-reader visual address, never the shared hosted copy.
 
+Narrowing access removes revoked page text from Counsel's read task, including queued work. Counsel rechecks the
+asker and its run on later reads. Signed visuals also recheck the person and any bot acting for them. Messages keep
+only “A page you can't open” for a page outside the reader's audience. Group membership changes refresh open pages;
+deleting a group or person, or archiving a bot, removes their explicit page grants. An empty audience leaves access
+to the page's managers.
+
 ## The status line
 
 Tico draws one line above every page, as a card and at full size. The page cannot change it.

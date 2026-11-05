@@ -977,7 +977,7 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         from . import counsel
         copied = counsel.page_copies(c).get(row["id"])
-        if copied and copied["body"] != counsel.REMOVED_PAGE and not counsel.page_copy_readable(c, copied, who, self):
+        if copied and not copied["removed"] and not counsel.page_copy_readable(c, copied, who, self):
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
