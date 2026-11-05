@@ -24,7 +24,7 @@ from pydantic import Field
 
 from clients import gateway as G
 from . import blobs, gateway_connection, hubdb as H, lifecycle
-from .auth import Identity, validate_identity
+from .auth import bot_identity, validate_identity
 from .models import Contract
 from .store import Problem
 
@@ -146,8 +146,11 @@ def record_access(c, auth, who, row):
     """A delegated read qualifies independently as the person and the actual bot."""
     auth.task_snapshot(c)
     other = who.task_actor
-    principals = (who,) if not other or other == who.actor else (
-        replace(who, task_actor=""), replace(who, actor=other, role="bot", email="", task_actor="", via=""))
+    try:
+        principals = (who,) if not other or other == who.actor else (
+            replace(who, task_actor=""), bot_identity(c, other, attempt_id=who.attempt_id))
+    except Problem:
+        return None
     levels = [_access(c, auth, principal, row) for principal in principals]
     return None if None in levels else "full" if all(level == "full" for level in levels) else "status"
 
@@ -173,13 +176,14 @@ def _access(c, auth, who, row):
             auth.task(c, who, row["task_id"])
         if row["thread_id"]:
             reader = who
-            if who.role == "bot" and who.actor == row["requested_by"] and row["attempt_id"]:
-                reader = replace(who, attempt_id=row["attempt_id"])
+            if who.role == "bot" and H.actor_id(who.actor) == row["acting_bot_id"] and row["attempt_id"]:
+                reader = bot_identity(c, who.actor, attempt_id=row["attempt_id"])
             auth.conversation(c, reader, row["thread_id"])
         if not privacy.blob_readable(c, privacy.actor(who), row["source_blob_id"]):
             raise Problem("privacy", "The letter's source is no longer readable", 403)
     except Problem:
-        return "status" if admin(auth, who) else None
+        own = who.actor == row["requested_by"] or (H.is_bot(who.actor) and H.actor_id(who.actor) == row["acting_bot_id"])
+        return "status" if admin(auth, who) or own else None
     return "full"
 
 
@@ -665,10 +669,10 @@ class Letters:
                      else later(BACKOFF[min(row["attempts"], len(BACKOFF)-1)]), H.now(), ident))
 
     def check_sender(self, c, row):
-        who = (Identity(row["requested_by"], "bot", attempt_id=row["attempt_id"] or "") if H.is_bot(row["requested_by"]) else
+        who = (bot_identity(c, row["requested_by"], attempt_id=row["attempt_id"] or "") if H.is_bot(row["requested_by"]) else
                self.auth.identity_for_actor(c, row["requested_by"]))
         if row["acting_bot_id"] and not H.is_bot(who.actor):
-            who = replace(who, task_actor="bot:" + row["acting_bot_id"])
+            who = replace(who, task_actor="bot:" + row["acting_bot_id"], attempt_id=row["attempt_id"] or "")
         company, own, mode = authorize(c, self.auth, who, deferred=True)
         if not readable(c, self.auth, who, row):
             raise Problem("forbidden", "The sender can no longer read this letter's source", 403)

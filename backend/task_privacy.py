@@ -1364,9 +1364,15 @@ LETTER_MESSAGE_SQL = ("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_e
 
 def letter_content_readable(c, principals, row):
     from . import letters
+    from .auth import bot_identity
     for principal in principals if isinstance(principals, tuple) else (principals,):
-        if H.is_bot(principal) and not letters.bot_reader(c, principal, row):
-            return False
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
     return blob_readable(c, principals, row["source_blob_id"])
 
 
@@ -1378,9 +1384,15 @@ def has_letters(c):
 
 def letter_blob_readable(c, principals, row, seen, memo):
     from . import letters
+    from .auth import bot_identity
     for principal in principals if isinstance(principals, tuple) else (principals,):
-        if H.is_bot(principal) and not letters.bot_reader(c, principal, row):
-            return False
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
     sources = H._json(row["source_provenance"], {}) or {}
     tasks = set(sources.get("tasks", [])) | ({row["task_id"]} if row["task_id"] else set())
     attempts = set(sources.get("attempts", [])) | ({row["attempt_id"]} if row["attempt_id"] else set())
@@ -1394,15 +1406,18 @@ def letter_blob_readable(c, principals, row, seen, memo):
         for cid in rooms:
             room = H.conversation(c, cid)
             for principal in principals if isinstance(principals, tuple) else (principals,):
-                viewer = threads.actor_viewer(c, principal)
+                try:
+                    viewer = (threads.Viewer(None, bot_identity(c, principal)) if H.is_bot(principal)
+                              else threads.actor_viewer(c, principal))
+                except Problem:
+                    return False
                 viewers = [viewer] if viewer else []
-                if viewer and H.is_bot(principal):
-                    from dataclasses import replace
+                if viewer and H.is_bot(principal) and not viewer.who.agent:
                     # A stored proof keeps the original bot run's thread grant, with current task privacy.
                     for aid in attempts:
                         attempt = read_cache.one(c, "SELECT bot_id FROM attempts WHERE id=?", (aid,))
                         if attempt and "bot:" + attempt["bot_id"] == principal:
-                            viewers.append(threads.Viewer(None, replace(viewer.who, attempt_id=aid)))
+                            viewers.append(threads.Viewer(None, bot_identity(c, principal, attempt_id=aid)))
                 if not any(threads.denial(c, candidate, room) is None for candidate in viewers):
                     return False
     return not row["original_blob_id"] or blob_readable(c, principals, row["original_blob_id"], seen, memo)

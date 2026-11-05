@@ -686,6 +686,122 @@ def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq
     assert cancelled["status"] == "cancelled" and cancelled["redacted"]
 
 
+def external_thread_letter(api, audience, *, explicit=False):
+    import base64
+    from backend.tests.threads_e2e import create_thread
+
+    ident, token = bot(api)
+    grant(api, ident)
+    group = post(api, "groups", {"name": "Marketing", "add": {"bots": [ident]}}) if audience == "team" else None
+    thread = create_thread(api, title="Letter source", audience=audience,
+                           group=group["id"] if group else None, members=["bot:" + ident])
+    failed, uploaded = call(api, "hub_file_publish", {"name": "letter.pdf", "scope": "bot", "content_base64":
+        base64.b64encode(L.render("A complete source letter with searchable text for the recipient review.")).decode()}, token=token)
+    assert not failed, uploaded
+    message = post(api, "threads/" + thread["id"] + "/messages", {"text": "The letter PDF."}, token=token)
+    with api.app.state.store.transaction() as c:
+        original = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=1",
+                             (uploaded["file"]["id"],)).fetchone()[0]
+        c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (message["id"], original))
+    fields = {"thread_id": thread["id"]} if explicit else {}
+    row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT, **fields}, token=token)
+    return ident, token, thread, row
+
+
+@pytest.mark.parametrize("audience", ["company", "team"])
+def test_external_sender_losing_an_inferred_source_thread_gets_only_metadata(api, hq, audience):
+    ident, token, thread, row = external_thread_letter(api, audience)
+    assert not row["redacted"] and row["thread_id"] is None
+    with api.app.state.store.read() as c:
+        saved = c.execute("SELECT source_blob_id,source_provenance FROM letters WHERE id=?", (row["id"],)).fetchone()
+        source = saved["source_blob_id"]
+        assert thread["id"] in json.loads(saved["source_provenance"])["threads"]
+    assert api.get(row["proof"], headers=headers(token)).status_code == 200
+    removed = api.delete("/api/v2/threads/" + thread["id"] + "/members/bot:" + ident, headers=headers())
+    assert removed.status_code == 200 and removed.json()["removed"]
+    get(api, "threads/" + thread["id"], token, expected=404)
+    assert fetch(api, row, token)["redacted"]
+    listed = next(item for item in get(api, "letters", token)["items"] if item["id"] == row["id"])
+    assert listed["redacted"] and not {"recipient", "return_address", "proof"}.intersection(listed)
+    get(api, "files/" + source, token, expected=403)
+    get(api, row["proof"].removeprefix("/api/v2/"), token, expected=403)
+
+
+@pytest.mark.parametrize("phase,audience", [("queued", "company"), ("uncertain", "team")])
+def test_external_deferred_send_cannot_gain_internal_thread_standing(api, hq, phase, audience):
+    ident, token, thread, row = external_thread_letter(api, audience, explicit=True)
+    row = send(api, row, token)
+    if phase == "uncertain":
+        hq.timeout_before_claim, hq.resolve_supported = True, False
+        approve(api, row)
+        assert fetch(api, row)["status"] == "submitting"
+    removed = api.delete("/api/v2/threads/" + thread["id"] + "/members/bot:" + ident, headers=headers())
+    assert removed.status_code == 200
+    count = len([path for path, _ in hq.calls if path == ""])
+    if phase == "queued":
+        approve(api, row)
+        assert fetch(api, row)["error"] == "forbidden"
+    else:
+        due(api, row)
+        api.app.state.letters.drain()
+        assert fetch(api, row)["status"] == "needs_review"
+        assert any(path.startswith("/keys/") for path, _ in hq.calls)
+    assert len([path for path, _ in hq.calls if path == ""]) == count and hq.provider_submits == 0
+
+
+def test_revoked_external_identity_stops_deferred_send_instead_of_becoming_internal(api, hq):
+    ident, token, _, row = external_thread_letter(api, "company", explicit=True)
+    row = send(api, row, token)
+    post(api, "bots/" + ident + "/agent-credential/revoke", {})
+    approve(api, row)
+    assert fetch(api, row)["error"] == "identity" and hq.provider_submits == 0
+    with api.app.state.store.read() as c:
+        from backend.auth import bot_identity
+        from backend.store import Problem
+        with pytest.raises(Problem):
+            bot_identity(c, "bot:no-longer-registered")
+
+
+def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(api, hq):
+    from backend import events
+
+    task = post(api, "tasks", {"owner": "human:cara", "title": "Review source", "body": "Source packet.",
+                               "private": False}, token="cara-test")
+    variants = [({"task_id": task["id"]}, {}), ({}, {"tasks": [task["id"]]}),
+                ({"thread_id": task["conversation_id"]}, {}), ({}, {"threads": [task["conversation_id"]]})]
+    rows = [quote(api) for _ in variants]
+    unrelated = quote(api)
+    for index, (row, (columns, frozen)) in enumerate(zip(rows, variants)):
+        api.app.state.letters.update(row["id"], {"letter_id": "lt_finished_" + str(index), "status": "delivered",
+                                               "billing": "billed", "charged_micros": 1500000})
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE letters SET task_id=?,thread_id=?,source_provenance=? WHERE id=?",
+                      (columns.get("task_id"), columns.get("thread_id"), json.dumps(frozen), row["id"]))
+    assert all(not fetch(api, row)["redacted"] for row in rows)
+    with api.app.state.store.read() as c:
+        before = events.latest(c)
+        originals = {r["id"]: r["updated_at"] for r in c.execute("SELECT id,updated_at FROM letters")}
+    post(api, "tasks/" + task["id"], {"version": task["version"], "private": True}, token="cara-test")
+    owner = api.app.state.auth.settings.test_identities["ana-test"]
+    with api.app.state.store.read() as c:
+        changes = events.read(c, api.app.state.auth, owner, before, topics=("letters",))[0]
+        assert all(r["updated_at"] == originals[r["id"]] for r in c.execute("SELECT id,updated_at FROM letters"))
+        assert c.execute("SELECT count(*) FROM letters WHERE status='delivered' AND next_sync_at IS NULL").fetchone()[0] == 4
+    patched = {event[2]["id"]: event[2]["letter"] for event in changes}
+    assert set(patched) == {row["id"] for row in rows} and unrelated["id"] not in patched
+    assert all(row["redacted"] and not {"recipient", "return_address", "proof"}.intersection(row) for row in patched.values())
+    # Changing a private task's parties can also restore access, without touching the letter or polling a list.
+    task = get(api, "tasks/" + task["id"], "cara-test")["task"]
+    with api.app.state.store.read() as c:
+        before = events.latest(c)
+    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "human:ben"}, token="cara-test")
+    with api.app.state.store.read() as c:
+        ben = api.app.state.auth.settings.test_identities["ben-test"]
+        restored = events.read(c, api.app.state.auth, ben, before, topics=("letters",))[0]
+    assert {event[2]["id"] for event in restored} == set(patched)
+    assert all(not event[2]["letter"]["redacted"] for event in restored)
+
+
 def test_status_sync_patches_one_letter_and_emits_authorized_live_change(api, hq):
     from backend import events
     row = send(api, quote(api))
