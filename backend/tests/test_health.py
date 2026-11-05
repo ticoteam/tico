@@ -1001,7 +1001,7 @@ def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(
 
 def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico_bug(environment):
     """Past its drain a computer due an update claims nothing while any turn runs: its queued work waits on that."""
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     api = environment()
     runner = enrolled(api)
     heartbeat(api, runner)
@@ -1032,10 +1032,10 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
         [turn] = row["turns"]
         assert turn["run"] == "a-dev" and turn["bot"] == "dev" and turn["task_title"] == ""   # a chat: no task
         since = turn["since"][11:16]
-        found = {f["check_id"]: f for f in health_monitor.findings(c, api.app.state.store.settings)}
+        found = {f["check_id"]: f for f in maintenance_health.findings(c, api.app.state.store.settings)}
     assert "queue_idle" not in found
     held = found["runner_outdated"]
-    assert held["kind"] == health_monitor.SETUP
+    assert held["kind"] == maintenance_health.SETUP
     assert (f"Team box is holding new work to update to Tico 0.4.48: it starts once dev's turn (running since {since} "
             "UTC) ends; it holds 1 queued job(s) for ops.") in held["detail"]
     # Nothing to update by hand, and nothing to watch: BotOps is told not to hold its own computer watching this one.
@@ -1054,7 +1054,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
         with store.transaction() as c:
             c.execute("UPDATE runner_versions SET " + ",".join(f"{k}=?" for k in change) + " WHERE runner_id=?",
                       (*change.values(), runner))
-            found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}["runner_outdated"]["fix"]
+            found = {f["check_id"]: f for f in maintenance_health.findings(c, store.settings)}["runner_outdated"]["fix"]
             c.execute("UPDATE runner_versions SET release='0.4.46',update_state='waiting',update_error='' WHERE runner_id=?",
                       (runner,))
         return found

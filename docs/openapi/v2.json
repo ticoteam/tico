@@ -18916,10 +18916,10 @@
         ]
       }
     },
-    "/api/v2/health-monitor": {
+    "/api/v2/health/findings": {
       "get": {
-        "summary": "Owners, admins and the Health Monitor: whether it is on, whether it files reports without asking, and what the last hourly scan found",
-        "operationId": "getHealthMonitor",
+        "summary": "What Check health found on this install: each open problem with its count, last seen time and Tico-bug report, plus botops (whether BotOps is there to take findings) and reports_without_asking (the team rule)",
+        "operationId": "getHealthFindings",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -18955,9 +18955,9 @@
         ]
       }
     },
-    "/api/v2/health-monitor/findings/{key}/report": {
+    "/api/v2/health/findings/{key}/report": {
       "post": {
-        "summary": "The Health Monitor or the owner: report a finding (key or signature) as a Tico bug: one ticket per signature with the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off",
+        "summary": "People and BotOps: report a finding (key or signature) as a Tico bug: one ticket per problem with the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off",
         "operationId": "reportHealthFinding",
         "parameters": [
           {
@@ -19021,186 +19021,6 @@
         },
         "tags": [
           "Health"
-        ]
-      }
-    },
-    "/api/v2/health-monitor/local-findings": {
-      "post": {
-        "summary": "The Health Monitor: record a process or container its watcher saw busy, as a finding it can report",
-        "operationId": "recordLocalHealthFinding",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LocalFinding"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Health"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/health-monitor/turn-off": {
-      "post": {
-        "summary": "Owner only: pause the Health Monitor",
-        "operationId": "turnOffHealthMonitor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Empty"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Health"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/health-monitor/turn-on": {
-      "post": {
-        "summary": "Owner only: add the Health Monitor from the catalog (or wake a paused one) and activate it",
-        "operationId": "turnOnHealthMonitor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Empty"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Health"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
         ]
       }
     },
@@ -58424,36 +58244,6 @@
           "linked"
         ],
         "additionalProperties": true
-      },
-      "LocalFinding": {
-        "properties": {
-          "process": {
-            "type": "string",
-            "pattern": "^(process|container):[A-Za-z0-9._-]{1,40}$",
-            "title": "Process"
-          },
-          "cpu": {
-            "type": "number",
-            "maximum": 100000.0,
-            "minimum": 0.0,
-            "title": "Cpu"
-          },
-          "mb": {
-            "type": "number",
-            "maximum": 10000000.0,
-            "minimum": 0.0,
-            "title": "Mb"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "process",
-          "cpu",
-          "mb"
-        ],
-        "title": "LocalFinding",
-        "description": "A process the bot's watcher saw busy on its computer: a name and two numbers, never free text."
       },
       "Location": {
         "type": "object",

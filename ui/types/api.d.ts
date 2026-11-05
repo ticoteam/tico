@@ -3159,12 +3159,6 @@ export type LinkedDocResult = {
   linked: LinkedDoc;
 };
 
-export type LocalFinding = {
-  cpu: number;
-  mb: number;
-  process: string;
-};
-
 export type Location = {
   address: Record<string, unknown>;
   archived_at?: string | null;
@@ -7371,10 +7365,10 @@ export type GetHealthParams = Record<string, never>;
 export type GetHealthBody = never;
 export type GetHealthResponse = Health;
 
-/** GET /api/v2/health-monitor */
-export type GetHealthMonitorParams = Record<string, never>;
-export type GetHealthMonitorBody = never;
-export type GetHealthMonitorResponse = unknown;
+/** GET /api/v2/health/findings */
+export type GetHealthFindingsParams = Record<string, never>;
+export type GetHealthFindingsBody = never;
+export type GetHealthFindingsResponse = unknown;
 
 /** GET /api/v2/inbound/cursor */
 export type GetInboundCursorParams = {
@@ -9255,13 +9249,6 @@ export type ReadRuleDocumentParams = {
 export type ReadRuleDocumentBody = RuleRead;
 export type ReadRuleDocumentResponse = unknown;
 
-/** POST /api/v2/health-monitor/local-findings */
-export type RecordLocalHealthFindingParams = {
-  "Idempotency-Key": string;
-};
-export type RecordLocalHealthFindingBody = LocalFinding;
-export type RecordLocalHealthFindingResponse = unknown;
-
 /** POST /api/v2/strategy-bot/level3-offer */
 export type RecordStrategyBotLevel3OfferParams = {
   "Idempotency-Key": string;
@@ -9555,7 +9542,7 @@ export type ReplyToUpdateParams = {
 export type ReplyToUpdateBody = UpdateReply;
 export type ReplyToUpdateResponse = unknown;
 
-/** POST /api/v2/health-monitor/findings/{key}/report */
+/** POST /api/v2/health/findings/{key}/report */
 export type ReportHealthFindingParams = {
   "Idempotency-Key": string;
   key: string;
@@ -10382,13 +10369,6 @@ export type TestScreeningParams = {
 export type TestScreeningBody = ScreeningTest;
 export type TestScreeningResponse = unknown;
 
-/** POST /api/v2/health-monitor/turn-off */
-export type TurnOffHealthMonitorParams = {
-  "Idempotency-Key": string;
-};
-export type TurnOffHealthMonitorBody = Empty;
-export type TurnOffHealthMonitorResponse = unknown;
-
 /** POST /api/v2/task-manager/turn-off */
 export type TurnOffTaskManagerParams = {
   "Idempotency-Key": string;
@@ -10409,13 +10389,6 @@ export type TurnOnGoalManagerParams = {
 };
 export type TurnOnGoalManagerBody = Empty;
 export type TurnOnGoalManagerResponse = unknown;
-
-/** POST /api/v2/health-monitor/turn-on */
-export type TurnOnHealthMonitorParams = {
-  "Idempotency-Key": string;
-};
-export type TurnOnHealthMonitorBody = Empty;
-export type TurnOnHealthMonitorResponse = unknown;
 
 /** POST /api/v2/librarian/turn-on */
 export type TurnOnLibrarianParams = {
