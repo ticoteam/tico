@@ -397,7 +397,9 @@ def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, rev
     [first] = children(api, task)
     if case == "hold":
         with api.app.state.store.transaction() as c:
-            H.task_update(c, task["owner_id"], task["id"], status="waiting", waiting_on="human:ana", note="Wait for the owner.")
+            blocker = H.task_create(c, "human:ana", "Choose the review window", "Pick a time.", "human:ana")
+            H.TR.add_blocker(c, "human:ana", task["id"], blocker["id"])
+            H.task_update(c, "human:ana", task["id"], status="waiting", note="Wait for the owner.")
         finish(api, first, head=head)
     else:
         # A historical check has a settled attempt, but this route did not record its delivery.
@@ -414,7 +416,7 @@ def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, rev
         dispatch(api)
         assert children(api, task) == []
         with api.app.state.store.transaction() as c:
-            H.task_update(c, "human:ana", task["id"], waiting_on="", note="Continue.")
+            H.task_update(c, "human:ana", blocker["id"], status="done", note="The window is set.")
         # Clearing the hold routes General checks immediately, without a board check step.
         assert bool(handoffs(api, task, "merge")) == (reviews == 1)
         if reviews == 2:
