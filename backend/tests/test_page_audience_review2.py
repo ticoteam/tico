@@ -38,7 +38,9 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     machine, attempt = counsel_run(api)
     aid = attempt["id"]
     post(api, "tasks/" + tid + "/comments", {"text": "The document reports 42 deals."}, token=attempt["token"])
-    post(api, f"attempts/{aid}/events", {"events": [{"seq": 1, "kind": "message", "payload": {"text": original}}]}, token=machine["token"])
+    output = [{"seq": 1, "kind": "message", "payload": {"text": original}},
+              {"seq": 2, "kind": "delta", "payload": {"text": original}}]
+    post(api, f"attempts/{aid}/events", {"events": output}, token=machine["token"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET checkpoint=?,resume=? WHERE id=?", (original, json.dumps({"text": original}), tid))
         c.execute("UPDATE attempts SET result=?,final_text=?,summary=? WHERE id=?",
@@ -60,8 +62,9 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
             saved = [dict(r) for r in c.execute(f"SELECT * FROM {table} WHERE {where}", args)]
             assert "42 deals" not in json.dumps(saved), (table, saved)
     # Output already in flight must not restore the copied text after the transaction scrubbed it.
-    post(api, f"attempts/{aid}/events", {"events": [{"seq": 2, "kind": "message", "payload": {"text": original}}]}, token=machine["token"])
-    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "last_seq": 2, "text": original}, token=machine["token"])
+    post(api, f"attempts/{aid}/events", {"events": output}, token=machine["token"])
+    post(api, f"attempts/{aid}/events", {"events": [{"seq": 3, "kind": "message", "payload": {"text": original}}]}, token=machine["token"])
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "last_seq": 3, "text": original}, token=machine["token"])
     assert "42 deals" not in json.dumps(get(api, "tasks/" + tid, token="cara-test"))
     with api.app.state.store.read() as c:
         delivered, _, reset, _ = events.read(c, api.app.state.auth,

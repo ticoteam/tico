@@ -496,7 +496,7 @@ def revoke_page_copies(c, auth, fid=None):
 
 def scrub_page_task(c, tid):
     """A read task's prose is derived from its document, including edits, replies and run output."""
-    from .execution import Execution
+    from .execution import bump_bot_session_epoch
     task = H.task(c, tid)
     messages = list(c.execute("SELECT m.id FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id "
                               f"WHERE ({H.MESSAGE_TASK_SQL})=?", (tid,)))
@@ -515,12 +515,21 @@ def scrub_page_task(c, tid):
         c.execute("UPDATE messages SET body=?,revision=revision+1 WHERE id=?", (REMOVED_PAGE, mid))
     for attempt in attempts:
         aid = attempt["id"]
-        Execution.forget_held_reply(c, attempt, aid, task["conversation_id"], REMOVED_PAGE)
-        c.execute("UPDATE attempts SET final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
+        c.execute("DELETE FROM deltas WHERE attempt_id=?", (aid,))
+        c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
+        if attempt["thread_id"]:
+            c.execute("DELETE FROM bot_sessions WHERE bot=? AND thread_id=?", (attempt["bot_id"], attempt["thread_id"]))
+        c.execute("UPDATE attempts SET thread_id=NULL,final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
                   "WHERE id=?", (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, aid))
+        # Keep sequence receipts so a runner can safely retry output already acknowledged before revocation.
         c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (json.dumps({"text": REMOVED_PAGE}), aid))
         c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,))
         c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
+    if attempts:
+        c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+                  "epoch=epoch+1,updated_at=excluded.updated_at", (task["conversation_id"], H.now()))
+        for bot in {a["bot_id"] for a in attempts}:
+            bump_bot_session_epoch(c, bot)
     # Mutation receipts can contain the task or a claim's original context and must not replay its old prose.
     ids = {tid, *(mid for (mid,) in messages), *(a["id"] for a in attempts)}
     def clean(value):
