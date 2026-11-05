@@ -68,7 +68,7 @@ Tico draws one line above every page, as a card and at full size. The page canno
 
 ## Live blocks
 
-A page can carry three live tags. The server replaces each one, when the page is shown, with a short list made for
+A page can carry four live tags. The server replaces each one, when the page is shown, with a short list made for
 the one person or bot viewing it. The page itself stays static: no script runs and nothing is fetched.
 
 - `<tico-tasks waiting-on="viewer" [bot="SLUG"] [parent="TASK"] [limit="N"]></tico-tasks>`: the tasks waiting on the
@@ -76,6 +76,18 @@ the one person or bot viewing it. The page itself stays static: no script runs a
 - `<tico-task id="TASK"></tico-task>`: one task's title, status and a link. Nothing when the viewer may not see it.
 - `<tico-files task="TASK" [kind="page|document|image|data|media|video|audio"] [limit="N"]></tico-files>`: the files on a task
   the viewer may see. A page links to its page view, any other file to the task. `video` and `audio` mean `media`.
+- `<tico-kpi bot="SLUG" name="KPI" [period="7d|30d"]></tico-kpi>`: one of the bot's automatic KPIs
+  ([KPIs](goals-and-kpis.md)), its current value and its change on the previous period. `name` is the KPI's key:
+  `tasks_done_7d`, `first_response_min`, `approval_rate_30d`, `failed_runs_7d` or `cost_7d`, or its name. `period` is
+  optional and must be the KPI's own window.
+- `<tico-kpi id="KPI_ID"></tico-kpi>`: a stored KPI, such as "Booked demos" ([KPIs](goals-and-kpis.md)). The id is in
+  `hub kpi list`. It shows the latest reading's value and unit, and its change on the reading closest to one cadence
+  period before (the previous reading when the KPI has no cadence), such as `▲ 3 demos vs previous week`. `period`
+  does not apply to `id`. Readings marked partial, and readings a correction replaced, are not used.
+
+A KPI tag shows nothing when the viewer may not read its owner, when the name or id is not a KPI, when a stored KPI is
+archived, or when there is no reading yet. A stored KPI owned by a bot is hidden from a viewer who may not read that
+bot, as its API route hides it. A KPI never shows a zero for a missing value.
 
 `limit` defaults to 10 and is at most 50. Links open the task in the app in a new tab. A list uses the same rules as
 Needs you, the task page and the Library, so a viewer never sees a title, a count or a name they could not open.
@@ -84,8 +96,22 @@ gets a different page.
 
 ## Where pages show
 
-- **A card** shows the top of the page at the card's width. Tap it to open the page full size at `#/page/<id>`, on a
-  computer or a phone.
+- **A card** shows the page at the card's width, at a small, medium or large size. Tap it to open the page full size at
+  `#/page/<id>`, on a computer or a phone. Without a widget view (below) a card shows the top of the page.
+- **Widget view.** In a card, Tico's height script sets `data-tico-view="card"` on the page's `<html>` and
+  `data-tico-size` to `small`, `medium` or `large`. A card has a fixed height: 180 px for `small` (what a sidebar pin
+  draws), 320 px for `medium` and 520 px for `large`, and a taller page fades at the bottom. At full size the script
+  sets `data-tico-view="full"` and `data-tico-size="full"`. Design for the card's width and the small height first: a
+  headline and one or two numbers. Use `[data-tico-size=medium]` or `[data-tico-size=large]` to show more, such as a
+  chart or a list. A page's own CSS can give a card its own layout and keep the full report for `full`:
+
+      .card-only { display: none; }
+      [data-tico-view=card] .full-only { display: none; }
+      [data-tico-view=card] .card-only { display: block; }
+      [data-tico-view=card] body { height: 100vh; overflow: hidden; }
+
+  The `100vh` rule applies only in the card view: the page fills the fixed card and does not scroll. A page with no
+  such CSS looks as it always did. The bot's guide (`AGENT.md`, "Widget view") has the short form.
 - **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
   **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).
 - **A task** shows the pages pinned to it as cards at the top, a replaced page left out. **Link page** searches
