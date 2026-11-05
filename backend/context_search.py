@@ -37,7 +37,7 @@ def readable(c, who, rid, *, auth=None):
                          "WHERE l.imported_meeting_id=? AND b.bot=? AND b.joined_by=l.owner_actor LIMIT 1",
                          (rid, who.actor.removeprefix("bot:"))).fetchone()
     if (not row or row.get("review_state", "live") != "live" or (deleted and deleted[0]) or row["metadata"].get("kind") != "meeting"
-            or row["metadata"].get("private") is not False and not attached):
+            or (media.effective_audience(row["metadata"]) != "team" or row["metadata"].get("private") is not False) and not attached):
         raise Problem("not_found", "Meeting not found or unavailable", 404)
     from . import turn_scope
     turn_scope.require_meeting(c, who, row, auth)

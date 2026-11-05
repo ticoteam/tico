@@ -61,6 +61,7 @@ class TaskRow(TypedDict):
     check_back_at: str | None
     check_back_note: str | None
     conversation_id: str | None
+    live_meeting_id: str | None
     created_at: str | None
     updated_at: str | None
     done_at: str | None
@@ -102,6 +103,15 @@ class TaskRow(TypedDict):
     request_id: str | None
     version: int
     acceptance: str
+
+
+class PresenceRow(TypedDict):
+    """One open window at a task or meeting; expires without heartbeats."""
+    id: str
+    place: str
+    actor: str
+    session_id: str
+    seen_at: str
 
 
 class TaskCheckBackWakeRow(TypedDict):
