@@ -342,3 +342,12 @@ def test_health_catches_recipients_who_lose_task_or_source_access(api, source):
         found, = health.unreadable_waits(c)
         assert (found["id"], found["recipient"]) == (task["id"], "human:cara")
         assert H.message(c, msg["id"])["recipient_id"] == "human:cara"
+
+
+def test_a_task_note_to_its_system_requester_keeps_the_original_recipient(api):
+    token = bot_token(api)
+    with api.app.state.store.transaction() as c:
+        task = system_task(c)
+    msg = post(api, "messages", {"to": "keeper", "text": "The public draft is ready.",
+                                 "conversation_id": task["conversation_id"], "refs": {"task": task["id"]}}, token=token)
+    assert msg["recipient_id"] == H.KEEPER and msg["kind"] == "say"
