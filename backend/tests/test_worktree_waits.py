@@ -72,9 +72,9 @@ def wakes(api, tid):
                 (tid,))
 
 
-def free(api, filler, link):
+def free(api, filler, link, readiness=READY):
     """A finished worktree on the other task is removed by its computer: the event a waiting task needs."""
-    return beat(api, [{'link_id': link, 'state': 'removed', 'branch': None}])
+    return beat(api, [{'link_id': link, 'state': 'removed', 'branch': None}], readiness=readiness)
 
 
 def test_only_the_limit_for_the_turns_own_task_records_a_wait(prepared):
@@ -400,12 +400,13 @@ def test_served_wait_restores_a_removed_human_link_before_preparing(prepared, re
         old.update(id='old', token_hash='old-token', revoked_at=H.now() if revoked else None)
         c.execute(f"INSERT INTO runners({','.join(old)}) VALUES({','.join('?' * len(old))})", tuple(old.values()))
         c.execute("UPDATE task_links SET computer_id='old' WHERE id=?", (link['link_id'],))
-    filler, links = setup_wait(api, tid, readiness={**READY, 'worktree_recovery': True})
+    readiness = {**READY, 'worktree_recovery': True}
+    filler, links = setup_wait(api, tid, readiness=readiness)
     refusal = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
     assert refusal.status_code == 409 and refusal.json()['error']['wait']['state'] == 'waiting'
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='a1'")
-    actions = free(api, filler, links[0])
+    actions = free(api, filler, links[0], readiness=readiness)
     action = 'prepare' if revoked else 'restore'
     assert [(a['link_id'], a['action']) for a in actions] == [(link['link_id'], action)]
     reserved = rows(api, 'SELECT * FROM worktree_waits')[0]
@@ -416,18 +417,18 @@ def test_served_wait_restores_a_removed_human_link_before_preparing(prepared, re
     assert ('recovery' in json.loads(reused['detail'])) == revoked
     assert not wakes(api, tid)
     # Both restore and guarded recovery fetch saved history before setup can finish this allocation.
-    assert [(a['link_id'], a['action']) for a in beat(api)] == [(link['link_id'], action)]
+    assert [(a['link_id'], a['action']) for a in beat(api, readiness=readiness)] == [(link['link_id'], action)]
     assert runner_patch(api, tid, link['link_id'], state='pending', checkout_state='checkout_ready',
                         setup_pending=True, expected_head='c' * 40,
                         checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64).status_code == 200
-    assert [(a['link_id'], a['action']) for a in beat(api)] == [(link['link_id'], 'prepare')]
+    assert [(a['link_id'], a['action']) for a in beat(api, readiness=readiness)] == [(link['link_id'], 'prepare')]
     assert not wakes(api, tid)
     ready = runner_patch(api, tid, link['link_id'], state='present', checkout_state='ready',
                          setup_pending=False, expected_head='c' * 40,
                          checkout_target='refs/heads/' + link['branch'], expected_base='b' * 64)
     assert ready.status_code == 200, ready.text
     assert len(wakes(api, tid)) == 1 and rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
-    assert beat(api) == [] and len(wakes(api, tid)) == 1
+    assert beat(api, readiness=readiness) == [] and len(wakes(api, tid)) == 1
 
 
 def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
