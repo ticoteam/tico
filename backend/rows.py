@@ -32,6 +32,7 @@ class SuggestionRow(TypedDict):
     cooldown_days: int
     status: str
     update_batch_id: str | None
+    message_id: str | None
     delivered_at: str | None
     cooldown_until: str | None
     outcome: str | None
