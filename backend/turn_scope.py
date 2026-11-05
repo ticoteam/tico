@@ -226,7 +226,18 @@ def project_attempt(c, auth, aid, payload):
     if not attempt:
         raise Problem("not_found", "Execution not found", 404)
     who = auth.assistant_principal(c, attempt) or Identity("bot:" + attempt["bot_id"], "bot", attempt_id=aid)
-    return project(c, scope(c, who), payload, auth=auth)
+    scoped = scope(c, who)
+    if scoped and scoped.make_page and isinstance(payload, dict):
+        # A claim saved before the boundary changed must not replay its private prompt layers.
+        wire = payload.get("attempt")
+        if isinstance(wire, dict) and wire.get("id") == aid:
+            message = wire.get("message")
+            payload = {**payload, "attempt": {**wire, "learned": None,
+                       "history": [message] if message else [], "next_run": [], "notes": [],
+                       "updates": None, "worktrees": []}}
+        elif "messages" in payload:
+            payload = {**payload, "messages": []}
+    return project(c, scoped, payload, auth=auth)
 
 
 def tasks(c, auth, who, scoped):

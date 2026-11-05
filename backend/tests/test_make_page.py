@@ -25,7 +25,8 @@ def start(api, tid, person="ben-test", key=None, machine=None):
         assign(api, machine, "coo")
         ready(api, machine, ["coo"])
     sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
-    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"])["attempt"]
+    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"],
+                   key="claim:" + sent["message"]["id"])["attempt"]
     assert attempt["message"]["id"] == sent["message"]["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "make-page-test"}, machine["token"])
     return machine, attempt, sent["message"]
@@ -343,9 +344,20 @@ def test_private_messages_and_both_learned_layers_never_reach_make_page(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (earlier["id"],))
     t = task(api, private=False)
-    _, attempt, _ = start(api, t["id"], person="ana-test")
+    machine, attempt, initiating = start(api, t["id"], person="ana-test")
     assert attempt["learned"] is None
     assert marker not in json.dumps(attempt)
+    key = "claim:" + initiating["id"]
+    with api.app.state.store.transaction() as c:
+        saved = c.execute("SELECT response FROM idempotency WHERE key=?", (key,)).fetchone()
+        payload = json.loads(saved["response"])
+        payload["attempt"].update(learned={"personal": [marker], "company": {"vision": marker}},
+                                  history=[earlier, initiating], notes=[{"text": marker}])
+        c.execute("UPDATE idempotency SET response=? WHERE key=?", (encode(payload), key))
+    replay = post(api, "jobs/claim", {"next_run": True}, machine["token"], key=key)
+    assert marker not in json.dumps(replay)
+    assert replay["attempt"]["learned"] is None
+    assert [m["id"] for m in replay["attempt"]["history"]] == [initiating["id"]]
     token, cid = attempt["token"], earlier["conversation_id"]
     for path in (f"messages/{earlier['id']}", f"conversations/{cid}/messages", f"conversations/{cid}/snapshot",
                  f"threads/{cid}", f"threads/{cid}/timeline", "threads/search?q=" + marker,
