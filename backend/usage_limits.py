@@ -34,6 +34,8 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 from .store import H
 
+log = logging.getLogger(__name__)
+
 KEY = "usage_limits"                       # the default's count_subscription switch, in registry_metadata
 WARN = 80
 MAX_USD = 10_000_000
@@ -313,9 +315,14 @@ def label(c, scope, default=None):
 
 
 # ------------------------------------------------------------------------------------------------ spend
+def clock():
+    """The moment spend is read at when none is given: the real one, unless a demo build pins its own."""
+    return datetime.now(timezone.utc)
+
+
 def bounds(at=None):
     """The current period's key and its [from, to) timestamps: {hourly: (key, from, to), daily: ..., weekly: ..., monthly: ...}."""
-    at = at or datetime.now(timezone.utc)
+    at = at or clock()
     hour = at.replace(minute=0, second=0, microsecond=0)
     half_hour = at.replace(minute=30 if at.minute >= 30 else 0, second=0, microsecond=0)
     day = at.strftime("%Y-%m-%d")
@@ -462,9 +469,34 @@ def budget_cutoff(c, bot, at=None, default=None):
     return {"scope": "budget", "name": cut.name, "period": cut.period, "budget_id": cut.budget_id, "until": cut.until}
 
 
+# The holds already logged by this process, {(scope, period, window)}, so repeated claims log a hold once.
+LOGGED = set()
+
+
 def blocked(c, bot, at=None, default=None, mine=None):
-    """The period (`hourly`, `daily`, `weekly` or `monthly`) when the bot may take no new job, else None."""
-    return state(c, bot, at, default, mine)["blocked"]
+    """The period of the cap or Finance budget holding the bot from new work, else None."""
+    found = state(c, bot, at, default, mine)
+    met = found["blocked_by"]
+    if met:
+        budget = met["scope"] == "budget"
+        scope = "budget:" + met["budget_id"] if budget else "bot:" + bot if met["scope"] == "bot" else met["scope"]
+        # Finance has fiscal quarters, years and one-time budgets, outside the usage cap's UTC windows.
+        window = met["until"] if budget else bounds(at)[met["period"]][0]
+        key = (scope, met["period"], window)
+        if key not in LOGGED:
+            if len(LOGGED) > 1000:
+                LOGGED.clear()
+            LOGGED.add(key)
+            going = c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running')").fetchone()[0]
+            if budget:
+                # Cutoffs carry no amounts; do not present missing figures as zero spend against a zero cap.
+                log.warning("usage limit holds %s (%s) until %s: %d runs going across the team",
+                            scope, met["period"], window or "raised", going)
+            else:
+                # Runs still going are priced when they end, so the period's final total can pass the cap by them.
+                log.warning("usage limit holds %s for %s: $%.2f finished against $%.2f, %d runs going across the team",
+                            scope, window, met["spent"], met["limit"], going)
+    return found["blocked"]
 
 
 def why(met):

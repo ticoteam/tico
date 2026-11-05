@@ -36,6 +36,7 @@ from . import task_caps
 from . import teammate_access as TA
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 KINDS = ("internal", "external")
 SOURCE_KINDS = ("vendor", "customer", "government", "other")
@@ -607,7 +608,8 @@ def settings_for(c, bot, ctx=None):
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
     mail = mail_settings.stored(c, bot)
-    sends = bool(mail and mail["outbound_send"])
+    from .google_workspace import permissions
+    sends = bool(mail and mail["outbound_send"]) and permissions(c)["send_mail"]   # the company's Send mail too
     out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
                 "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
 
@@ -635,7 +637,7 @@ def settings_for(c, bot, ctx=None):
                 out.append({"text": f"Spends up to ${caps[key]:g} a {PERIOD_WORDS[key[:-4]]} across {label}",
                             "source": "usage_limits", "edit": {"page": "strategy", "anchor": "budget", "path": path}})
 
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     declared = turn_budgets._declared(config["config"] if config else None)
     own = turn_budgets.own(declared)
     shared = turn_budgets.limits(c, declared)

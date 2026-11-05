@@ -458,10 +458,19 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('[data-ob-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
     assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research']);
-    // A long name wraps to two whole lines on the chart, never cut off, and the full name is its tooltip.
-    const sdrName = await page.locator('#ob-chart [data-oc-label=sdr-research]').evaluate(el => ({
-      cut: el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1, lines: Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight))}));
-    assert.ok(!sdrName.cut && sdrName.lines >= 2, JSON.stringify(sdrName));
+    // A long name is never cut off on the chart, and the full name is its tooltip. It wraps to two whole lines when it
+    // cannot fit on one (ui/styles/first-run.css); the type decides which, so the line count is checked only then.
+    const sdrName = await page.locator('#ob-chart [data-oc-label=sdr-research]').evaluate(el => {
+      const probe = el.cloneNode(true);
+      probe.setAttribute('style', 'position:absolute;visibility:hidden;display:block;white-space:nowrap');
+      el.parentNode.append(probe);
+      const oneLine = probe.getBoundingClientRect().width <= el.getBoundingClientRect().width;
+      probe.remove();
+      return {
+        cut: el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1,
+        lines: Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)), oneLine};
+    });
+    assert.ok(!sdrName.cut && (sdrName.oneLine || sdrName.lines >= 2), JSON.stringify(sdrName));
     assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .oc-bnode').getAttribute('title'), 'Sales Development Representative');
     await page.locator('[data-ob-bot=partnerships]').click();
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research', 'partnerships']);

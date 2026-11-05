@@ -81,6 +81,7 @@ function subsUsageHTML(sub) {
     const level = used >= 95 ? ' bad' : used >= 80 ? ' warn' : '';
     return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${used}%"></b></span><span class="tnum">${used}%</span><span class="sr-only"> used</span></span>`;
   }
+  if (usage.reason) return `<span class="subs-usage muted">${esc(usage.reason)}</span>`;
   if (typeof usage.cost_usd_month === 'number') {
     const cost = usage.cost_usd_month >= 100 ? Math.round(usage.cost_usd_month).toLocaleString() : usage.cost_usd_month.toFixed(2).replace(/\.00$/, '');
     return `<span class="subs-usage tnum">$${esc(cost)} this month</span>`;

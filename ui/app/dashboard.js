@@ -127,6 +127,12 @@ function dashAudienceWords(aud) {
 // ---- the page
 // A place seen before is drawn at once from what it showed last (S.lastRead.places), then read again; the grid is drawn
 // again only when the answer differs, so its page widgets are not reloaded for nothing.
+// Startup asks for My dashboard (or the company's) beside the roster when it is the page the app opens on, a round
+// trip sooner (boot.js); pageDashboard's read then takes that answer (api.js getPrefetch).
+function dashPrefetch() {
+  const place = location.hash === HOME ? 'person:me' : location.hash === OVERVIEW ? 'dashboard' : '';
+  if (place) getPrefetch(dashApi(place));
+}
 async function pageDashboard(place, {month = ''} = {}) {
   const team = place.startsWith('team:'), own = DASH_PLACES[place];
   const state = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now()};

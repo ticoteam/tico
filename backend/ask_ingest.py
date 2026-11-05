@@ -17,12 +17,16 @@ on their Needs you, snoozed ones left out), in this order:
 
 Sent back means the write succeeds but the item stays with the bot that filed it: the reply says why, with the fix
 and the bot's manager from the org chart. It is never a refusal and counts toward no quarantine. Mode Off asks
-nothing; Rehearsal (the default) asks and records what On would have done, and changes nothing.
+nothing; On, the default, asks and acts. (Rehearsal, an earlier mode, is gone: a stored one reads as On.)
 
 Fail open: Off, no decision model, rehearsal install, the month's spend cap, the day's call cap, an error, no answer
 within `DEADLINE` seconds, a malformed answer, or an answer the outcome depends on under its threshold all let the
 item through as before. Each call is one `judge.call` row (label, model, tokens, latency, cost, the answers and the
 outcome); never the item's text. Each gated item is one `ask_ingest_items` row (ids, outcome and reason; never text).
+
+Source access: a repeat is offered only the open items its bot may read in full (`source_readable`, the task-read
+check). The merge is rechecked under the write (still on the plate, still readable by the asker), and a reply is
+forwarded to a merged asker only while it can still read the item; a lost right fails open with no title named.
 
 Bounded: at most `CONCURRENCY` calls run at once in this process (`call_slots.Calls`, a pool of its own apart
 from the rule checks'). With every slot in use, or the breaker open after repeated failures, the item fails open
@@ -47,10 +51,11 @@ CONCURRENCY = 8               # calls at once, per process; the rule checks have
 MAX_ITEMS = 100               # the person's open items offered as `covered` options, newest first
 MAX_TEXT = 1500               # the item's text the model sees
 MAX_CRITERIA, MAX_CRITERION = 10, 200
-OFF, REHEARSAL, ON = "off", "rehearsal", "on"
-MODES = (OFF, REHEARSAL, ON)
+OFF, ON = "off", "on"
+MODES = (OFF, ON)
+RETIRED = "rehearsal"         # the mode this release removed: a request that sends it is saved as On (docs/api.md)
 TEAM = "*"                    # the team default's row in ask_ingest_settings
-DEFAULTS = {"mode": REHEARSAL, "budget": 10, "chores_budget": 5, "criteria": [
+DEFAULTS = {"mode": ON, "budget": 10, "chores_budget": 5, "criteria": [
     "Strategy and positioning",
     "Words that go out under the company's name",
     "Architecture and product direction",
@@ -91,6 +96,7 @@ def _row_settings(row):
         criteria = [str(x) for x in json.loads(row["criteria"] or "[]")][:MAX_CRITERIA]
     except (TypeError, ValueError):
         criteria = list(DEFAULTS["criteria"])
+    # A stored mode that is not Off or On reads as the default, On: a retired 'rehearsal' (migration 0066 moves it).
     return {"mode": row["mode"] if row["mode"] in MODES else DEFAULTS["mode"], "budget": int(row["budget"]),
             "chores_budget": int(row["chores_budget"]), "criteria": criteria}
 
@@ -111,8 +117,9 @@ def settings(c, person):
 def clean(body):
     """{mode, budget, chores_budget, criteria} checked, or ValueError with a sentence for the person."""
     mode = str(body.get("mode") or "").strip().lower()
+    mode = ON if mode == RETIRED else mode      # a request that worked keeps working: saved as On
     if mode not in MODES:
-        raise ValueError("mode is off, rehearsal or on")
+        raise ValueError("mode is off or on")
     try:
         budget, chores = int(body.get("budget")), int(body.get("chores_budget"))
     except (TypeError, ValueError):
@@ -170,11 +177,40 @@ def load(c, person):
     return len(ids) - chores + approvals, chores
 
 
-def open_items(c, person):
-    """{option name: (task id, title)} for the person's open items a new one may be the same as, newest first."""
+def source_readable(c, asker, task):
+    """Whether the bot `asker` may read `task` in full: the ordinary task-read check (`auth.Auth.task_row`, the rule
+    every task page applies), from the database alone, so the offer, the write and a reply forwarding judge it alike.
+    A private task admits its parties, their managers and its guest; a company task admits its parties, and otherwise
+    each bot it involves must let the asker read its activity. Similarity of a question never grants it."""
+    from . import teammate_access
+    from .auth import Identity
+    if not task or not str(asker).startswith("bot:") or not H.task_private_readable(c, asker, task):
+        return False
+    if H.task_private(c, task) or H.task_participant(c, asker, task):
+        return True
+    bots = [H.actor_id(a) for a in (task["owner_id"], task["requester_id"]) if str(a).startswith("bot:")]
+    levels = teammate_access.bot_levels(c, Identity(asker, "bot"), bots) if bots else {}
+    return all(level["read"] for level in levels.values())
+
+
+def open_items(c, person, asker):
+    """{option name: (task id, title)} for the person's open items a new one may be the same as, newest first, only the
+    ones `asker` may read in full (`source_readable`): no title it may not see reaches the model."""
     plate = H.needs_you(c, person)
-    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created_at") or "", reverse=True)[:MAX_ITEMS]
-    return {f"item-{n}": (t["id"], t.get("title") or "") for n, t in enumerate(rows, 1)}
+    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created_at") or "", reverse=True)
+    out = {}
+    for t in rows:
+        if len(out) >= MAX_ITEMS:
+            break
+        if source_readable(c, asker, H.task(c, t["id"])):
+            out[f"item-{len(out) + 1}"] = (t["id"], t.get("title") or "")
+    return out
+
+
+def on_plate(c, person, task_id):
+    """Whether the task is still on the person's Needs you, the list `open_items` offers from."""
+    plate = H.needs_you(c, person)
+    return any(t["id"] == task_id for t in plate["tasks"] + plate["waiting"])
 
 
 def manager_of(c, bot_actor):
@@ -371,7 +407,7 @@ def preflight(store, primary, who, target, title, text, kind="task", asked=None)
                 return {**verdict, "error": "spend_cap"} if over_spend_cap(c, store.settings) else None
             if used_today(c, H.KEEPER) >= daily_cap(store.settings, "bot"):
                 return {**verdict, "error": "budget"}
-            items = open_items(c, person)
+            items = open_items(c, person, who.actor)
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind,
@@ -497,9 +533,9 @@ def apply(c, verdict):
         error = verdict.get("error")
     except Exception as exc:
         # A read that fails inside the write does not stop the write: the item is a failed open, and it acts on no
-        # plate (the mode is the verdict's, or Rehearsal when even that is unknown).
+        # plate (the mode is the verdict's, or the default when even that is unknown).
         LOG.warning("Ask ingest read failed inside the write: %s", type(exc).__name__)
-        own = {"mode": verdict.get("mode") or REHEARSAL, "budget": DEFAULTS["budget"],
+        own = {"mode": verdict.get("mode") or DEFAULTS["mode"], "budget": DEFAULTS["budget"],
                "chores_budget": DEFAULTS["chores_budget"]}
         decisions, chores = 0, 0
         error = verdict.get("error") or "error"
@@ -509,24 +545,26 @@ def apply(c, verdict):
         would, reason = decide(verdict["answers"], own["budget"], own["chores_budget"], decisions, chores)
     mode = own["mode"]
     name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
+    # Off by the write (turned off since the call) acts on nothing: the item goes through, and no reply says otherwise.
     outcome = would if mode == ON or would == FAILED_OPEN else THROUGH
     text, merged_into = "", None
-    if would == MERGED:
+    if outcome == MERGED:
         merged_into = (verdict.get("items") or {}).get(verdict["answers"]["covered"])
         open_item = H.task(c, merged_into) if merged_into else None
-        if not open_item or open_item["status"] not in H.ACTIVE_STATUSES:
-            would, reason, merged_into = FAILED_OPEN, "covered_gone", None     # it ended since the call
+        # Rechecked here, under the writer: it may have ended, left the person's plate, or become unreadable to the
+        # asker since the call. Then it goes through as before, and the reply names no source.
+        if (not open_item or open_item["status"] not in H.ACTIVE_STATUSES or not on_plate(c, person, merged_into)
+                or not source_readable(c, asker, open_item)):
+            would, reason, merged_into = FAILED_OPEN, "covered_gone", None
             outcome = would
         else:
             text = (f"Not sent to {name}: they already have this open as \u201c{open_item['title']}\u201d. Their answer "
                     "there comes back to you here. Nothing was refused.")
-    if would == SENT_BACK:
+    if outcome == SENT_BACK:
         _, manager_name = manager_of(c, asker)
         text = message(reason, name, decisions, chores, manager_name)
-    elif would == FYI:
+    elif outcome == FYI:
         text = f"Not put on {name}'s plate: it reads as a status update, listed for them as FYI. Nothing was refused."
-    if mode != ON and text:
-        text = "Rehearsal, nothing changed. With the filter on: " + text
     return {"mode": mode, "outcome": outcome, "would": would, "reason": reason, "text": text, "load": decisions,
             "merged_into": merged_into, "acts": mode == ON and outcome in OFF_PLATE}
 
@@ -538,11 +576,12 @@ def matches(verdict, person):
 
 def record(c, verdict, decided, ref, message_id=None):
     """One `ask_ingest_items` row for the gated item `ref` (a task id; `message_id` the question asked on it), and
-    the call's `decision.outcome`."""
+    the call's `decision.outcome`; returns the row id for an owner-history link."""
     merged_into = decided.get("merged_into") if decided["outcome"] == MERGED else None
+    item_id = H.new_id()
     c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,message_id,mode,outcome,would,reason,load,call_id,"
               "created_at,merged_into) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              (H.new_id(), verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
+              (item_id, verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
                decided["outcome"], decided["would"], decided["reason"], decided["load"], verdict.get("call"), H.now(),
                merged_into))
     if merged_into:
@@ -551,8 +590,8 @@ def record(c, verdict, decided, ref, message_id=None):
                        "here goes to them too.", wake=False)
     if verdict.get("call"):
         H.event(c, H.KEEPER, "decision.outcome", verdict["call"],
-                {"label": QUESTION_SET, "verdict": decided["would"],
-                 "action": decided["outcome"] if decided["mode"] == ON else "rehearsal"})
+                {"label": QUESTION_SET, "verdict": decided["would"], "action": decided["outcome"]})
+    return item_id
 
 
 def skipped(c, verdict, why):
@@ -640,8 +679,11 @@ def on_reply(c, actor, task_id, text):
     name = H.person_name(c, H.actor_id(actor)) or H.actor_id(actor)
     answer = str(text).strip()[:2000]
     for row in rows:
-        # The person's item is named only to a bot that may read it; the answer is what was asked for.
-        on = f' on \u201c{item.get("title") or ""}\u201d' if item and H.task_private_readable(c, row["asker"], item) else ""
+        # Forwarded only while the asker can still read the item in full (access lost or the item made private since
+        # the merge: nothing is forwarded). Then the title goes with it, and the answer is what was asked for.
+        if not source_readable(c, row["asker"], item):
+            continue
+        on = f' on \u201c{item.get("title") or ""}\u201d' if item.get("title") else ""
         said = f'{name} answered this{on}: "{answer}"'
         if row["kind"] == "loose":
             H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={"ask_ingest": row["id"]})
@@ -663,7 +705,7 @@ def withdraw_loose(c, asker, message_id, person):
 
 def reply(*decided):
     """What the write's reply says of the gate: only when it has something to tell the asker (sent back, FYI, or
-    what On would have done); an item that went through, or failed open, reads as before. A write that put two
+    merged into an open one); an item that went through, or failed open, reads as before. A write that put two
     items on people (a handoff and a wait) reads as the first with something to say, with both sentences."""
     said = [d for d in decided if d and d["text"]]
     if not said:
@@ -675,11 +717,12 @@ def reply(*decided):
 # ---- what the person reads and sets -------------------------------------------------------------------------------
 
 def filtered(c, person, since):
-    """What the gate kept off this person's plate since `since`, or would have in Rehearsal, newest first: each with
-    the asking bot, the outcome and reason, and the item's title when the person may read it."""
+    """What the gate kept off this person's plate since `since`, newest first: each with the asking bot, the outcome and
+    reason, and the item's title when the person may read it. A row the filter did not act on (a retired Rehearsal's,
+    which went through) is not in it."""
     out = []
     for row in H._rows(c.execute(
-            "SELECT * FROM ask_ingest_items WHERE person=? AND created_at>=? AND would IN (?,?,?) "
+            "SELECT * FROM ask_ingest_items WHERE person=? AND created_at>=? AND outcome IN (?,?,?) "
             "ORDER BY created_at DESC LIMIT 200", (person, since, *OFF_PLATE))):
         if row["kind"] == "loose":
             said = H.message(c, row["ref"])
@@ -716,7 +759,7 @@ def let_through(c, person, item_id):
     if row["kind"] != "loose" and (not task or task["status"] not in H.ACTIVE_STATUSES):
         raise LookupError("that task has ended")
     if row["kind"] == "task":
-        H.task_update(c, asker, task["id"], owner=person)
+        H.task_update(c, asker, task["id"], owner=person, owner_event_data={"ask_ingest_item": row["id"]})
     elif row["kind"] == "wait":
         H.task_update(c, asker, task["id"], status="waiting", waiting_on=person)
     else:
@@ -741,39 +784,82 @@ def let_through(c, person, item_id):
 
 def outcome_counts(c, start, end):
     """For the decisions readout (backend/decide_readout.py): the gated items in the window by what the gate decided
-    ({outcome: n}, Rehearsal's would-have counted under its own key), and how many people let through."""
-    outcomes, rehearsal, let = {}, {}, 0
+    ({outcome: n}), and how many people let through. A row the filter did not act on (a retired Rehearsal's) is left
+    out: it went through as it was filed."""
+    outcomes, let = {}, 0
     for row in c.execute("SELECT mode, outcome, would, let_through_at FROM ask_ingest_items WHERE created_at>=? AND "
                          "created_at<?", (start, end)):
         if row["mode"] == ON or row["would"] == FAILED_OPEN:
             outcomes[row["outcome"]] = outcomes.get(row["outcome"], 0) + 1
-        else:
-            rehearsal[row["would"]] = rehearsal.get(row["would"], 0) + 1
         let += bool(row["let_through_at"])
-    return {"outcomes": dict(sorted(outcomes.items())), "rehearsal": dict(sorted(rehearsal.items())),
-            "let_through": let}
+    return {"outcomes": dict(sorted(outcomes.items())), "let_through": let}
 
 
 REPLAY_PAGE = 25
+
+
+def _reads(auth, c, who, task):
+    """Whether `who` may read this task, by the task routes' own rule (auth.task_row)."""
+    try:
+        auth.task_row(c, who, task)
+        return True
+    except Problem:
+        return False
 
 
 def _next_day(day):
     import datetime as dt
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
 _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
-              "AND COALESCE(snoozed_until,'')<=?")
+              "AND NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+              "AND sh.released_at IS NULL AND sh.until_at>?)")
+
+
+# The owner then is the old owner of the task's first owner change (its history, hubdb `_task_event`), and today's owner
+# where it never changed hands. The gate's judgment of a filing is an ask row written no later than that first owner
+# change: a filing is judged in its own request, before any change. A handoff always has an owner change before its
+# own ask row, so a handoff's ask row is never that judgment.
+_FIRST_OWNER_CHANGE = ("(SELECT MIN(julianday(h.created_at)) FROM history_events h WHERE h.subject_type='task' "
+                       "AND h.subject_id=t.id AND h.kind='owner')")
+_OWNER_THEN = ("COALESCE((SELECT h.old FROM history_events h WHERE h.subject_type='task' AND h.subject_id=t.id "
+               "AND h.kind='owner' ORDER BY julianday(h.created_at), h.rowid LIMIT 1), t.owner_id)")
 
 
 def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
-    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then. A
+    filed for them and questions asked of them (on a task or loose). The owner then comes from the owner history
+    (`_OWNER_THEN`), today's owner where a task never changed hands. A task the filter acted on (sent back, FYI or
+    merged) stays with its bot, so it is found by its ask row for this person as well: a replay counts what On would
+    have kept off, not only what landed. Each ask row the filter wrote for the person is one placement, listed on its
+    own day. Bot owner changes to the person are also placements when the filter was off and wrote no ask row. A
     question carries its structured questions (refs.questions); a task row carries none, its questions are the ask
     messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
-    out = [{"kind": "task", "ref": r["id"], "asker": r["requester_id"], "title": r["title"] or "", "text": r["body"] or "",
-            "asked": None, "created_at": r["created_at"]}
-           for r in c.execute("SELECT id,title,body,requester_id,created_at FROM tasks WHERE owner_id=? AND created_at>=? AND "
-                              "created_at<? AND requester_id LIKE 'bot:%' AND requester_id<>?", (person, start, end, skip))]
+    # A task counts on the day it was filed for them, while they owned it, unless the gate judged that filing: an ask row
+    # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
+    # lists every ask row the filter wrote for them on its own day, so a judged filing shows once, and each handoff
+    # shows on the day it was handed back, wherever the task was created and whoever owns it now. When the filter was
+    # off there is no ask row, so owner history supplies that handoff. New On handoffs and let-through owner events
+    # link back to their ask row; the nearby-row check keeps older history single where that link is absent.
+    out = [{"kind": "task", "ref": r["id"], "asker": r["asker"], "title": r["title"] or "", "text": r["body"] or "",
+            "asked": None, "created_at": r["at"]}
+           for r in c.execute("SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at FROM tasks t "
+                              f"WHERE {_OWNER_THEN}=? AND t.created_at>=? AND t.created_at<? "
+                              "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
+                              "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
+                              f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
+                              "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
+                              "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
+                              "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? "
+                              "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at FROM history_events h "
+                              "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='owner' "
+                              "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
+                              "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
+                              "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
+                              "AND i.asker=h.actor_id AND (json_extract(h.data,'$.ask_ingest_item')=i.id OR "
+                              "abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400))",
+                              (person, start, end, skip, person, person, start, end, skip,
+                               person, skip, start, end, person))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
@@ -789,32 +875,49 @@ def replay_items(c, person, start, end, assistant_bot=None):
     return sorted(out, key=lambda it: it["created_at"])
 
 
-def load_at(c, person, at):
-    """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out."""
-    return c.execute(f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT}", (person, at, at, at, at)).fetchone()[0]
+def _leave_out(it):
+    """The task a replayed item leaves out of its own plate: a task is itself, so it does not count itself. A question
+    is about a task already on the plate, which counts there once, as the live gate counted it."""
+    return it["ref"] if it["kind"] == "task" else ""
 
 
-def open_items_at(c, person, at, leave_out=""):
-    """The person's items open just before `at`, as the gate would have offered them as `covered`, the replayed
-    item itself left out."""
-    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC LIMIT ?",
-                     (person, at, at, at, at, leave_out, MAX_ITEMS)).fetchall()
-    return {f"item-{n}": (r["id"], r["title"] or "") for n, r in enumerate(rows, 1)}
+def load_at(c, person, at, leave_out=""):
+    """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out, and the
+    replayed item itself (put on them after it was created, it may already be theirs)."""
+    return c.execute(f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT} AND id<>?",
+                     (person, at, at, at, at, leave_out)).fetchone()[0]
 
 
-def _shown(c, viewer, person, it):
-    """Whether `viewer` may read a replayed item's title: the person always; anyone else (an owner or admin) only a
-    task they may read, never a bot's question to the person outside any task."""
-    if viewer in (None, person):
-        return True
+def open_items_at(c, person, at, leave_out="", asker=""):
+    """The person's items open just before `at`, as the gate would have offered them as `covered` to `asker` (only those
+    it may read in full), the replayed item itself left out."""
+    out = {}
+    for r in c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created_at DESC",
+                       (person, at, at, at, at, leave_out)):
+        if len(out) >= MAX_ITEMS:
+            break
+        if source_readable(c, asker, H.task(c, r["id"])):
+            out[f"item-{len(out) + 1}"] = (r["id"], r["title"] or "")
+    return out
+
+
+def _shown(c, viewer, person, it, can_read=None):
+    """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
+    filter kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
+    a bot's question to the person outside any task. `can_read(c, task)` is the full task-read policy for the viewer
+    (auth.task_row: a private task's guests, Read on every bot it involves); without it, privacy alone decides."""
     if it["kind"] == "loose":
-        return False
+        return viewer in (None, person)
     task = H.task(c, it["ref"])
-    return bool(task) and H.task_private_readable(c, viewer, task)
+    if not task:
+        return False
+    if task["owner_id"] == person and viewer in (None, person):
+        return True
+    return can_read(c, task) if can_read else H.task_private_readable(c, viewer or person, task)
 
 
-def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, viewer=None):
-    """Rehearsal over a past day: each bot item put on `person` in [start, end) judged as it would have been, with
+def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, viewer=None, can_read=None):
+    """Replay a past day: each bot item put on `person` in [start, end) judged as it would have been, with
     the person's settings now and their plate just before it, decided as if the filter were On. Writes only the
     judge.call rows; nothing on any plate moves. A `viewer` other than the person reads only the titles they may
     read. Returns {items, total, next_offset}, or raises LookupError with no model."""
@@ -829,8 +932,9 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
             raise LookupError("today's decision calls would pass the daily cap")
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        prepared = [(it, load_at(c, person, it["created_at"]), open_items_at(c, person, it["created_at"], it["ref"]),
-                     _bot_line(c, it["asker"]), _shown(c, viewer, person, it)) for it in page]
+        prepared = [(it, load_at(c, person, it["created_at"], _leave_out(it)),
+                     open_items_at(c, person, it["created_at"], _leave_out(it), it["asker"]),
+                     _bot_line(c, it["asker"]), _shown(c, viewer, person, it, can_read)) for it in page]
     out = []
     for it, plate, items, asker, shown in prepared:
         answers, _, error = _judge(store, engine, qset, own, items, asker, person_name, it["title"], it["text"],
@@ -873,8 +977,8 @@ def install(app, store, auth):
 
     @app.put("/api/v2/ask-ingest/settings")
     def ingest_settings_save(request: Request, body: Settings):
-        """Save the caller's own settings, or with `"team": true` the team default (an owner or admin). The next item
-        uses them; nothing already on a plate moves."""
+        """Save the caller's own settings, or with `"team": true` the team default (an owner or admin). `mode` is `off`
+        or `on`; `rehearsal`, retired, is saved as `on`. The next item uses them; nothing already on a plate moves."""
         who = request.state.identity
         auth.domain(who)
         person = person_of(who)
@@ -906,8 +1010,8 @@ def install(app, store, auth):
 
     @app.post("/api/v2/ask-ingest/replay")
     def ingest_replay(request: Request, body: Replay):
-        """Rehearsal over one past day (UTC) for a person, a page at a time, before anyone turns the filter On: what
-        On would have done with each bot item. The person, or an owner or admin. Nothing on any plate moves."""
+        """Replay one past day (UTC) for a person, a page at a time, before the filter is turned On: what On would do
+        with each bot item. The person, or an owner or admin. Nothing on any plate moves."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -922,7 +1026,8 @@ def install(app, store, auth):
         except ValueError:
             raise Problem("validation", "date is YYYY-MM-DD", 422)
         try:
-            return replay(store, app.state.judge, person, start, end, body.offset, body.limit, viewer=who.actor)
+            return replay(store, app.state.judge, person, start, end, body.offset, body.limit, viewer=who.actor,
+                          can_read=lambda c, task: _reads(auth, c, who, task))
         except LookupError as exc:
             raise Problem("state", str(exc), 409)
 
@@ -942,7 +1047,7 @@ def install(app, store, auth):
 
     @app.get("/api/v2/ask-ingest/filtered")
     def ingest_filtered(request: Request, hours: int = 24):
-        """Filtered for you: what the gate kept off the caller's plate (or would have, in Rehearsal)."""
+        """Filtered for you: what the gate kept off the caller's plate."""
         who = request.state.identity
         auth.domain(who)
         person = person_of(who)

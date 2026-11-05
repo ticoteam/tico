@@ -18,7 +18,7 @@ TICO = {"input_tokens": 500, "cached_tokens": 0, "output_tokens": 50, "model": "
 
 
 def turn(c, tid, bot="ops"):
-    c.execute("INSERT INTO turns(id,bot,started_at) VALUES(?,?,?)", (tid, bot, H.now()))
+    c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES(?,?,?)", (tid, bot, H.now()))
 
 
 def facts(c, run_id):
@@ -48,7 +48,7 @@ def test_a_run_that_counted_nothing_keeps_no_fact_until_a_late_result_measures_i
         turn(c, "r2")
         H.turn_finish(c, H.KEEPER, "r2", exit_code="interrupted", usage_reason="no_result")
         assert facts(c, "r2") == []
-        assert c.execute("SELECT usage_reason FROM turns WHERE id='r2'").fetchone()[0] == "no_result"
+        assert c.execute("SELECT usage_reason FROM attempts WHERE id='r2'").fetchone()[0] == "no_result"
         H.turn_finish(c, H.KEEPER, "r2", usage={**TICO, "segments": [TICO]})
         assert [r["model"] for r in facts(c, "r2")] == ["tico-general-medium-1.0"]
 
@@ -184,6 +184,6 @@ def test_a_late_report_leaves_the_runs_own_usage_columns_as_its_facts_have_them(
         H.turn_finish(c, H.KEEPER, "r6", usage={**TICO, "input_tokens": 1500, "segments": [TICO]})
         H.turn_finish(c, H.KEEPER, "r6", usage={**SONNET, "segments": [SONNET]})
         H.turn_finish(c, H.KEEPER, "r6", exit_code="interrupted", usage_reason="no_result")
-        row = c.execute("SELECT input_tokens, model, est_cost_usd, usage_reason FROM turns WHERE id='r6'").fetchone()
+        row = c.execute("SELECT input_tokens, usage_model, est_cost_usd, usage_reason FROM attempts WHERE id='r6'").fetchone()
         assert tuple(row) == (1500, TICO["model"], TICO["est_cost_usd"], None)
         assert [(r["model"], r["cost_nano"]) for r in facts(c, "r6")] == [(TICO["model"], 2_000_000)]

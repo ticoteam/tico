@@ -1,13 +1,15 @@
 """Screening: outside text checked for prompt injection at the doors it comes in by, before a bot reads it
 (questions/injection-screen.json, docs/permissions.md "Screening").
 
-Four doors, each with its own mode (off, warn or hold; Settings > System > Screening):
+Six doors, each with its own mode (off, warn or hold; Settings > System > Screening):
 
   webhook  a call whose automation opens a task or starts a bot's turn, and a `create_task` rule on `webhook.received`
   mail     an inbound message (backend/inbound.py) a bot reads
   idea     the public roadmap's suggestion form (backend/public_roadmaps.py)
   watcher  a watcher's new task (backend/watchers.py), except the Support Agent's HQ tickets, which support triage
            checks (backend/support_triage.py)
+  document a document's text as Counsel reads it (backend/counsel.py)
+  slack    an inbound Slack message (backend/slack_threads.py, backend/slack_gateway.py)
 
 Layers, each on its own: the fencing of outside text as data, which every door already does and is not a switch; then
 two detectors, each switched on or off for all doors (`layers`, on by default); then the door's mode. Patterns first:

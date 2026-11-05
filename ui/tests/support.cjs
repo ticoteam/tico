@@ -2,7 +2,7 @@
 // the Search row) opens one ongoing conversation with the Tico team: every ticket's messages merged in time order as
 // bubbles (theirs with the writer's name when it changes, a date line where the day changes), one box and a paperclip
 // for diagnostics. No list, no form, no statuses. Sending writes to the open ticket, or starts a new one with the
-// message (email and install details filled in). A reply puts a dot on the ?; opening the chat reads it. A #/support
+// message (email and install details filled in). A reply on the person's own request opens the chat once and puts a dot on the ?; a bot's report is not in the chat at all. A #/support
 // link, Report this, Want help setting up?, old #/help links and Let the Tico team in all work through it; with
 // support off the ? is gone and the chat says so. Nothing a message says is rendered as HTML.
 const {chromium} = require('playwright');
@@ -49,11 +49,14 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
-      const hq = {full: [], tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
+      const hq = {full: [], tickets: seed, seen: Object.fromEntries(seed.map(t => [t.id, t.seen || 0])), reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
       const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
-      const out = t => ({...t, unread: unread(t)});
-      const view = () => ({enabled, tickets: hq.tickets.slice(0, 50).map(out),   // the server lists at most 50
-      unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
+      // A bot's report (sent.source) is not in the person's chat, as the server lists it: not listed, not counted.
+      const source = t => t.sent?.source || 'person';
+      const listedTickets = () => hq.tickets.filter(t => source(t) === 'person');
+      const out = t => ({...t, source: 'person', unread: unread(t)});
+      const view = () => ({enabled, tickets: listedTickets().slice(0, 50).map(out),   // the server lists at most 50
+      unread: listedTickets().reduce((n, t) => n + unread(t), 0)});
       page.on('pageerror', e => errors.push(e.message));
       page.on('dialog', d => { hq.asked.push(d.message()); return hq.confirm ? d.accept() : d.dismiss(); });
       await page.route('**/*', async route => {
@@ -210,20 +213,36 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.equal((await active(page)).inPop, true);
     // Esc closes it and gives focus back to the ?; words typed but not sent are there again on reopening.
     await box.fill('half a thought');
+    // The close event (which hands focus back to the ?) is dispatched after Escape: wait for it, so it cannot take focus
+    // from a field the test focuses later.
+    await page.evaluate(() => { window.__closed = new Promise(done => document.getElementById('support-pop').addEventListener('close', done, {once: true})); });
     await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__closed);
     await page.locator('#support-pop').waitFor({state: 'hidden'});
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'support-open');
-    // A reply while it is closed: a dot on the ?, a toast that opens the chat, and opening reads it.
+    // A reply while the person is typing in another field: the ? gets its dot and the chat waits. It opens by itself once
+    // the field is left (the unsent words are still in its box), and opening reads the reply. No notice, no toast.
+    const focused = await page.evaluate(() => {
+      window.__focus = [];
+      for (const type of ['focusin', 'focusout']) document.addEventListener(type, e => window.__focus.push(type + ' ' + (e.target.id || e.target.tagName)), true);
+      const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus();
+      return document.activeElement?.id;
+    });
+    assert.equal(focused, 't-elsewhere', 'the field being typed in has focus');
     v.hq.reply = true;
     await page.evaluate(() => window.supportPoll());
     await page.locator('#support-open.has-unread').waitFor();
-    assert.equal(await q.getAttribute('aria-label'), 'Tico team, 1 new');
+    const {log, ...waiting} = await page.evaluate(() => ({unread: window.supportState().unread, active: document.activeElement?.id,
+      open: document.getElementById('support-pop').open, label: document.getElementById('support-open').getAttribute('aria-label'), log: window.__focus.slice()}));
+    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Tico team, 1 new'},
+      `the reply waits while the field has focus; focus: ${JSON.stringify(log)}; calls: ${v.calls.slice(-6).join(' | ')}`);
     assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
-    await page.locator('.toast button', {hasText: 'Open'}).click();
+    await page.evaluate(() => document.getElementById('t-elsewhere').blur());
     await pop.locator('.support-msg.them').waitFor();
     assert.equal(await box.inputValue(), 'half a thought', 'unsent words survive');
     await page.locator('#support-open:not(.has-unread)').waitFor();
     assert.ok(v.calls.includes('POST tickets/sup_1/read'));
+    assert.equal(await page.locator('.toast', {hasText: 'replied'}).count(), 0, 'no notice for the reply');
     // Theirs: the name above, in a bubble on the left; text, never HTML.
     assert.equal(await pop.locator('.support-msg.them .support-who').innerText(), 'Tico team');
     assert.match(await pop.locator('.support-msg.them .support-body').innerText(), /^Try the latest release\. <img src=x/);
@@ -246,6 +265,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // A click outside closes it, and so does ✕.
     await page.mouse.click(1200, 100);
     await page.locator('#support-pop').waitFor({state: 'hidden'});
+    await page.evaluate(() => window.supportPoll());
+    assert.equal(await page.locator('#support-pop').evaluate(el => el.open), false, 'opened once, not again');
     await q.click();
     await pop.getByRole('button', {name: 'Close'}).click();
     await page.locator('#support-pop').waitFor({state: 'hidden'});
@@ -267,9 +288,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
         messages: [{id: 1, created_at: atDay(3 * 24 * 60 - 4), from: 'staff', body: 'Yes.'}, {id: 2, created_at: atDay(3 * 24 * 60 - 5), from: 'person', body: 'Thanks'}]},
     ]});
     ({page} = v);
-    await page.waitForFunction(() => window.supportState().unread === 4);
-    await page.locator('#support-open.has-unread').waitFor();
-    await page.locator('#support-open').click();
+    // Replies that were waiting when the page opened: the chat opens by itself, once, with them. It reads them as it
+    // opens, so the count is not waited on (it passes through 4 and back to 0 before a wait could see it).
     const chat = page.locator('#support-pop');
     await chat.locator('.support-msg.them', {hasText: 'Anything else?'}).waitFor();
     const order = await chat.locator('[data-thread] > *').evaluateAll(els => els.map(el => el.matches('.support-day') ? 'day'
@@ -383,7 +403,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
 
     // ---- A phone: the ? in the More drawer, a 44 px icon at the Search row's end; the chat a full page above the tab
     // bar, square, with a close control; nothing sideways.
-    v = await visit({viewport: {width: 390, height: 844}, theme: 'dark', seed: [{id: 'sup_3', created_at: at(20), status: 'answered', message: 'Phone question', sent: {},
+    v = await visit({viewport: {width: 390, height: 844}, theme: 'dark', seed: [{id: 'sup_3', created_at: at(20), status: 'answered', message: 'Phone question', sent: {}, seen: 1,
       messages: [{id: 1, created_at: at(10), from: 'staff', body: 'A longer answer that wraps over a few lines on a phone screen, with a link-like-word-that-is-very-long-indeed'}]}]});
     ({page} = v);
     await page.locator('#mobile-more').click();
@@ -635,6 +655,26 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       assert.equal(await chat.locator('[name=message]').isDisabled(), false, 'the box works again');
       assert.deepEqual(v.errors, []);
     }
+    await v.ctx.close();
+
+    // ---- A bot's report the team answered is not in the person's chat: no bubble, no read, no dot, no opening. The
+    // person's own ticket (sup_2, no reply) shows the chat has listed what it lists before the bot's absence is checked.
+    v = await visit({seed: [
+      {id: 'sup_1', created_at: at(30), status: 'answered', message: 'Bot report', sent: {source: 'bot_report'},
+        messages: [{id: 1, created_at: at(5), from: 'staff', body: 'The report is with the team.'}]},
+      {id: 'sup_2', created_at: at(10), status: 'open', message: 'My own question', sent: {}, messages: []}]});
+    await v.page.waitForFunction(() => window.supportState().enabled === true);
+    await v.page.evaluate(() => window.supportPoll());
+    // The chat is built the first time it opens: before that there is no dialog to look at.
+    assert.equal(await v.page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'a bot report does not open the chat');
+    assert.equal(await v.page.locator('#support-open.has-unread').count(), 0, 'nor a dot on the ?');
+    assert.equal(await v.page.evaluate(() => window.supportState().unread), 0, 'nor a count');
+    await openSupport(v.page);
+    await v.page.locator('#support-pop .support-msg.you', {hasText: 'My own question'}).waitFor();
+    assert.equal(await v.page.getByText('The report is with the team.').count(), 0, 'the bot report is not in the chat');
+    assert.equal(await v.page.locator('#support-pop .support-msg.them').count(), 0, 'no reply from the team in the chat');
+    assert.ok(!v.calls.some(c => c.includes('tickets/sup_1')), 'nothing is read or answered on it');
+    assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
     // ---- Support turned off: no ?; a #/support link still opens the chat, which says so, with no box.

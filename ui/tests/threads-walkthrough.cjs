@@ -168,24 +168,21 @@ const shell = (page, route, waitFor = '#main') => async () => {
   await sleep(600);
 };
 
-// A message's own menu. Its actions show on hover (threads.css: .th-msg:hover .th-acts), so hover the message first.
-async function messageMenu(page, text, item) {
+// A message's own action (React, Reply or Copy). The bar shows on hover (threads.css: .th-msg:hover .th-acts); a phone
+// has no hover, so there the click goes to the button itself, as the long press's sheet would.
+async function messageAct(page, text, label, phone) {
   const row = page.locator('[data-message]', {hasText: text}).first();
+  const button = row.locator(`.th-acts [aria-label="${label}"]`);
+  if (phone) { await button.dispatchEvent('click'); return; }
   await row.hover();
-  const more = row.locator('[data-th-more]');
-  await more.click({timeout: 10000}).catch(async () => {
-    const info = await more.evaluate(el => {
+  await button.click({timeout: 10000}).catch(async () => {
+    const info = await button.evaluate(el => {
       const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
       return JSON.stringify({rect: [r.x, r.y, r.width, r.height].map(Math.round), hit: hit ? hit.tagName + '.' + String(hit.className).slice(0, 60) : 'none'});
     }).catch(e => 'no element: ' + String(e.message).split('\n')[0]);
-    throw new Error(`message menu button for "${text}" not clicked: ${info}`);
-  });
-  await page.locator('.thv-pop [role="menuitem"]', {hasText: item}).click({timeout: 10000}).catch(async () => {
-    const items = await page.locator('.thv-pop [role="menuitem"]').allInnerTexts().catch(() => []);
-    throw new Error(`menu item "${item}" not clicked; the menu shows ${JSON.stringify(items)}`);
+    throw new Error(`${label} on "${text}" not clicked: ${info}`);
   });
 }
-
 (async () => {
   const hub = await startHub({seeds: ['org', 'groups', 'connection', 'toured', 'judge']});
   let browser;
@@ -244,46 +241,56 @@ async function messageMenu(page, text, item) {
       });
     });
 
-    // ------------------------------------------------------------------ sidebar: threads, DMs, unread, Needs attention
+    // ------------------------------------------------------------------ the Threads link, the rail, Catch up
     await journey(browser, hub, 'sidebar', 'omar', async (page, phone, name) => {
       // The phone has no sidebar: its threads are the Threads tab.
       await step(page, 'sidebar threads', phone, name, async () => {
-        if (phone) {
-          await shell(page, '#/threads')();
-          await page.getByText('Launch plan').first().waitFor({timeout: WAIT});
-        } else {
-          // Inbox: its header opens Inbox, the most important chats under it.
-          await shell(page, '#/tasks', '#th-list')();
-          await page.locator('#nav-inbox-link').waitFor({timeout: WAIT});
-        }
+        await shell(page, '#/tasks', phone ? '#mobile-threads' : '#nav-threads')();
+        await page.locator(phone ? '#mobile-threads:not([hidden])' : '#nav-threads:not([hidden])').waitFor({timeout: WAIT});
         await snap(page, 'sidebar-threads', phone);
       });
-      await step(page, 'threads page', phone, name, async () => {
-        await shell(page, '#/threads')();
-        await snap(page, 'threads-page', phone);
+      await step(page, 'thread rail', phone, name, async () => {
+        await shell(page, '#/threads', '#thread-rail')();
+        await page.locator('#thread-rail [data-tr-new]').first().waitFor({timeout: WAIT});
+        await sleep(600);
+        await snap(page, 'thread-rail', phone);
       });
-      await step(page, 'dms page', phone, name, async () => {
-        await shell(page, '#/threads?view=dms')();
-        await snap(page, 'dms-page', phone);
+      // Omar reads the company thread without being in it, so it is in Browse threads rather than on his rail.
+      await step(page, 'Browse threads', phone, name, async () => {
+        const open = page.locator('#thread-rail [data-tr-browse]:not([hidden])');
+        if (!await open.count()) return;     // a server without the rail has no Browse
+        await open.click();
+        await page.locator(`#thread-browse li[data-thread="${S.plan.id}"]`).waitFor({timeout: WAIT});
+        await snap(page, 'browse-threads', phone);
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.querySelector('#thread-browse')?.open, null, {timeout: WAIT});
+      });
+      await step(page, 'Catch up', phone, name, async () => {
+        const open = page.locator('#thread-rail [data-tr-catch]:not([hidden])');
+        if (!await open.count()) return;     // a server without the rail has no Catch up
+        await open.click();
+        await page.locator('#catch-up[open]').waitFor({timeout: WAIT});
+        await sleep(600);
+        await snap(page, 'catch-up', phone);
+        await page.keyboard.press('Escape');
       });
     });
 
     // ------------------------------------------------------------------ new thread: private, then to a team and the company
     await journey(browser, hub, 'new thread', 'dana', async (page, phone, name) => {
       await step(page, 'open new thread', phone, name, async () => {
-        await shell(page, '#/threads')();
-        await page.locator('[data-thp-new]').click();
-        await page.locator('dialog[open]').first().waitFor({timeout: WAIT});
+        await shell(page, '#/threads', '#thread-rail')();
+        await page.locator('#thread-rail [data-tr-new]').click();
+        await page.locator('#thread-new[open]').waitFor({timeout: WAIT});
         await snap(page, 'new-thread-dialog', phone);
       });
       await step(page, 'private by default', phone, name, async () => {
-        const checked = await page.locator('dialog[open] input[name="audience"]:checked').getAttribute('value');
-        assert.equal(checked, 'members', 'a new thread is private to its members');
+        const pressed = await page.locator('#thread-new [data-aud][aria-pressed="true"]').getAttribute('data-aud');
+        assert.equal(pressed, 'members', 'a new thread is private to its members');
       });
       await step(page, 'create it', phone, name, async () => {
-        const dialog = page.locator('dialog[open]').first();
-        await dialog.locator('input[type="text"], input:not([type])').first().fill('Q4 pricing draft');
-        await dialog.locator('textarea').first().fill('Draft the Q4 price list for review.');
+        const dialog = page.locator('#thread-new[open]');
+        await dialog.locator('#nt-name').fill('Q4 pricing draft');
         await dialog.locator('button[type="submit"]').click();
         await page.waitForURL(/#\/thread\//, {timeout: WAIT});
         await page.locator('.thv-composer .p-text').waitFor({timeout: WAIT});
@@ -291,57 +298,40 @@ async function messageMenu(page, text, item) {
       });
       await step(page, 'make it public to a team', phone, name, async () => {
         await page.locator('[data-thv-menu]').first().click();
-        await page.locator('.thv-pop [role="menuitem"]', {hasText: 'Who can read'}).click();
-        const dialog = page.locator('dialog[open]').first();
+        const dialog = page.locator('#thread-settings[open]');
         await dialog.waitFor({timeout: WAIT});
         await snap(page, 'who-can-read-private', phone);
-        await dialog.locator('input[name="audience"][value="team"]').check();
+        await dialog.locator('input[name="audience"][value="team"]').check();   // saves as it changes
+        await sleep(800);
         await snap(page, 'who-can-read-team-picked', phone);
-        await dialog.locator('button[type="submit"]').click();
-        await page.locator('dialog[open]').first().waitFor({state: 'detached', timeout: WAIT}).catch(() => {});
+        await dialog.locator('footer [data-close]').click();
         await snap(page, 'thread-shared-to-team', phone);
       });
       await step(page, 'make it public to the company', phone, name, async () => {
         await page.locator('[data-thv-menu]').first().click();
-        await page.locator('.thv-pop [role="menuitem"]', {hasText: 'Who can read'}).click();
-        const dialog = page.locator('dialog[open]').first();
+        const dialog = page.locator('#thread-settings[open]');
         await dialog.waitFor({timeout: WAIT});
         await dialog.locator('input[name="audience"][value="company"]').check();
-        await dialog.locator('button[type="submit"]').click();
         await sleep(800);
+        await dialog.locator('footer [data-close]').click();
         await snap(page, 'thread-shared-to-company', phone);
       });
     });
 
-    // ------------------------------------------------------------------ a thread with sub-threads, and Make task
-    await journey(browser, hub, 'sub-threads', 'dana', async (page, phone, name) => {
-      await step(page, 'thread with inline sub-threads', phone, name, async () => {
+    // ------------------------------------------------------------------ a thread with replies, flat
+    await journey(browser, hub, 'replies', 'dana', async (page, phone, name) => {
+      await step(page, 'thread with replies quoting what they answer', phone, name, async () => {
         await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
-        await page.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`).first().waitFor({timeout: WAIT});
-        await snap(page, 'thread-with-subthreads', phone);
+        await page.locator('.th-msg', {hasText: RISKS}).locator('.th-quote').first().waitFor({timeout: WAIT});
+        await snap(page, 'thread-with-replies', phone);
       });
-      await step(page, 'tap into the sub-thread', phone, name, async () => {
-        await page.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`).first().click();
-        await page.waitForURL(new RegExp('#/thread/' + S.risks.thread_id), {timeout: WAIT});
-        await page.getByText(RISKS).waitFor({timeout: WAIT});
-        await snap(page, 'subthread-page-breadcrumb', phone);
-      });
-      await step(page, 'reply in sub-thread', phone, name, async () => {
-        await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
-        await messageMenu(page, 'Price list draft v1', 'Reply in sub-thread');
-        await page.locator('.th-reply-text').first().fill('Reply from the walkthrough.');
-        await page.locator('[data-th-reply-send]').first().click();
-        await page.getByText('Reply from the walkthrough.').first().waitFor({timeout: WAIT});
-        await snap(page, 'reply-in-subthread', phone);
-      });
-      await step(page, 'make task from a message', phone, name, async () => {
-        await messageMenu(page, 'Kickoff notes', 'Make task');
-        const dialog = page.locator('dialog[open]').first();
-        await dialog.waitFor({timeout: WAIT});
-        await snap(page, 'make-task-dialog', phone);
-        await dialog.locator('button[type="submit"]').click();
-        await sleep(800);
-        await snap(page, 'make-task-done', phone);
+      await step(page, 'reply from the message', phone, name, async () => {
+        await messageAct(page, 'Price list draft v1', 'Reply', phone);
+        await page.locator('.thv-replying:not([hidden])').waitFor({timeout: WAIT});
+        await page.locator('.thv-composer .p-text').fill('Reply from the walkthrough.');
+        await clickOrExplain(page, '.thv-composer .p-send', 'reply send');
+        await page.locator('.th-msg', {hasText: 'Reply from the walkthrough.'}).locator('.th-quote').first().waitFor({timeout: WAIT});
+        await snap(page, 'reply-with-quote', phone);
       });
     });
 
@@ -426,14 +416,11 @@ async function messageMenu(page, text, item) {
       });
     });
 
-    // ------------------------------------------------------------------ held message and held edit (an org rule through the API)
+    // ------------------------------------------------------------------ held message (an org rule through the API)
     let ruleMade = false;
-    await journey(browser, hub, 'held message and edit', 'dana', async (page, phone, name) => {
+    await journey(browser, hub, 'held message', 'dana', async (page, phone, name) => {
       await step(page, 'set up the rule', phone, name, async () => {
         if (ruleMade) return;
-        // A message to edit per pass, made before the rule: a held edit leaves its message with a pending edit, and a
-        // message with one shows no Edit (thread-view.js thvMsgMenu: "one edit at a time").
-        for (const pass of ['desktop', 'phone']) await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: `Price list draft ${pass}`, kind: 'say'});
         await api(hub, 'dana', 'POST', '/v2/rules', {kind: 'internal', text: 'Do not post the Q4 price list in company threads',
           who: {everyone: true}, if_broken: 'block'});
         ruleMade = true;
@@ -450,21 +437,6 @@ async function messageMenu(page, text, item) {
         assert.ok(await heldWithText(hub, S.plan.id, HELD), 'the person\'s message is held in this thread');
         const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
         assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held message is not in the thread timeline');
-      });
-      await step(page, 'held edit', phone, name, async () => {
-        // This pass's own draft (made in the set-up step, so the held message step's page load shows it).
-        const draftText = `Price list draft ${phone ? 'phone' : 'desktop'}`;
-        await dismissRunnerCard(page);
-        await messageMenu(page, draftText, 'Edit');
-        await page.locator('[data-message]', {hasText: draftText}).first().locator('textarea').first().fill(HELD);
-        await clickOrExplain(page, '[data-th-edit-save]', 'held edit save');
-        await sleep(2500);
-        await snap(page, 'held-edit', phone);
-        // Through the API: the edit is held, so the draft keeps its text and the new text is not in the timeline.
-        const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
-        assert.ok(JSON.stringify(timeline).includes(draftText), 'the draft keeps its text after a held edit');
-        assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held edit is not in the thread timeline');
-        assert.ok(await heldWithText(hub, S.plan.id, HELD), 'the held edit is listed as a hold');
       });
     });
 
@@ -512,7 +484,7 @@ async function messageMenu(page, text, item) {
       }
     }
 
-    // ------------------------------------------------------------------ Connect: Slack, search, Catch up, Make task
+    // ------------------------------------------------------------------ Connect: Slack, Find a thread, Summarize
     await journey(browser, hub, 'connect', 'dana', async (page, phone, name) => {
       await step(page, 'connections page', phone, name, async () => {
         await shell(page, '#/library/connections', '#cn-slack')();
@@ -522,20 +494,19 @@ async function messageMenu(page, text, item) {
         await page.locator('#cn-slack').scrollIntoViewIfNeeded();
         await snap(page, 'connect-slack', phone);
       });
-      await step(page, 'search threads', phone, name, async () => {
-        await shell(page, '#/threads')();
-        await page.locator('#th-search').click();
-        await page.locator('#thp-q').fill('Launch');
-        await sleep(1200);
-        await snap(page, 'thread-search', phone);
+      await step(page, 'find a thread', phone, name, async () => {
+        await shell(page, '#/threads', '#thread-rail')();
+        await page.locator('#tr-find').fill('Launch');
+        await sleep(400);
+        await snap(page, 'thread-find', phone);
       });
-      await step(page, 'Catch up', phone, name, async () => {
+      await step(page, 'Summarize', phone, name, async () => {
         await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
-        // Catch up is an item in the thread menu (threads-page.js: threadMenuOpen), not a button on the page.
+        // Summarize is in Thread settings (threads-page.js: threadSettingsOpen), not a button on the page.
         await page.locator('[data-thv-menu]').first().click();
-        await page.locator('.thv-pop [role="menuitem"]', {hasText: 'Catch up'}).click();
+        await page.locator('#thread-settings[open] [data-ths="catchup"]').click();
         await sleep(1000);
-        await snap(page, 'catch-up', phone);
+        await snap(page, 'summarize', phone);
       });
     });
 

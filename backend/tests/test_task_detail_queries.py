@@ -43,7 +43,8 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
         for k in range(people_comments):
             H.task_comment(c, "human:ben", tid, f"Ben note {k}", wake=False, extra_refs={"task": [kids[k]]})
         for k in range(events):
-            c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
+                      "VALUES(?,'task',?,?,?,?,?,?,?)",
                       (f"ev{k}", tid, H.now(), "human:ana", "status", "open", "doing", ""))
     return tid
 

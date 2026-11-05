@@ -104,14 +104,13 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 (on a shared bot, the caller's own branch, where POST files it), or else the newest one finished in the last day, or `{dream: null}`. `state` is `starting`, `dreaming`, `asking`
 (an open question to the requester: `questions` is `{message_id, text, mine}`), `done` or `stopped`.
 
-**Auto dream** is the same dream started by the night, without a click. At 02:00 Pacific time (**Settings > System**,
-"Auto dream", on by default) it starts one for each bot whose memory changed a lot since its last dream, and only then.
+**Auto dream** is the same dream started without a click: the **Dream** step of the [Maintenance](maintenance.md) run, once a day, on by default. It starts one for each bot whose memory changed a lot since its last dream, and only then.
 A bot is due when it is active, keeps memory, has no open dream, its last dream of either kind started at least 48
 hours ago (a bot that never dreamed must be 48 hours old), and its memory since that dream's start, or 14 days back if
 that is later, changed at least 200 lines over at least 10 memory turns. Counted: `memory/` except `memory/state.md`,
 and AGENT.md, AGENTS.md and CLAUDE.md (the runner reports only `memory/` and `knowledge/` today, so instruction-file
-changes do not count yet). A dream's own commits and memory tidy passes' commits do not count. At most three start a
-night, most changed lines first; the scheduled run claims its night once, so a restart does not start them twice.
+changes do not count yet). A dream's own commits and memory tidy passes' commits do not count. At most "Most bots per run" start a
+run (three by default), most changed lines first; a restart does not start them twice.
 `backend/dream_auto.py` holds the rule.
 
 The requester is the bot's nearest human manager (the first person above it in its reporting chain, if still on the

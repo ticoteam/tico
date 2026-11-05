@@ -9,14 +9,15 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
 from backend.tests.test_strategy_bot import as_bot
+from backend import bot_settings as BS
 
 
 def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES('goal-manager',?,'ana')",
-                  ('{"runtime":"fake","host":"keeper"}',))
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:
+            BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
     return as_bot(api, "goal-manager")
 
 
@@ -40,11 +41,12 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
 
 
 def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):
-    import time
-    started = time.monotonic()
+    # At once means the first draft is composed from the catalog and never reaches the model, so nothing waits on one.
+    # Checked by the calls made, not by the clock, which a loaded runner can stretch.
+    model_calls = []
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *args, **kwargs: model_calls.append(args) or "")
     drafted = post(api, "seats/draft", {"title": "Customer support lead", "team": "Support"})
-    assert time.monotonic() - started < 1
-    assert drafted["source"] == "catalog"
+    assert drafted["source"] == "catalog" and model_calls == []
     text = drafted["description"]
     assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
     monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(RuntimeError("no key")))
@@ -515,7 +517,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
         "onboarding", "coo", "Support Desk", "Support Desk")
     with api.app.state.store.read() as c:
         hired_id = H.resolve_bot(c, slug)["id"]          # config and events are keyed by the bot's id, not its slug
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (hired_id,)).fetchone()[0])
+        config = BS.read(c, hired_id)
         assert config["model"] == other
         # The repository is built from this definition once the bot exists (the computer's `materialize`).
         assert config["materialize"] is True and config["template"] == pick["template"]

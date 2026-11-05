@@ -2386,6 +2386,7 @@ exit 2
 
     #[test]
     fn clear_and_replace_the_computers_own_codex_key() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         const CHILD: &str = "TICO_TEST_MODEL_KEYS";
         let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
             // A process of its own: PATH, HOME and CODEX_HOME point at a stand-in CLI and a scratch home.

@@ -463,14 +463,49 @@ pub fn remember_weekly(profile: &str, runtime: &str, event: &Value) {
         reset = crate::util::iso(&json!(at));
     }
     let status = event["status"].as_str().filter(|s| ["allowed", "allowed_warning", "rejected"].contains(s)).map_or(Value::Null, |s| json!(s));
+    // Whose login the reading is, as the turn or the read named it (backend/model_subscriptions.py `provenance`): a company
+    // subscription with its id, or the computer's own login. Anything else is kept as neither, so it counts for no plan.
+    let (origin, subscription) = match event["origin"].as_str() {
+        Some("subscription") => match event["subscription_id"].as_str().filter(|id| !id.is_empty() && id.len() <= 80) {
+            Some(id) => (json!("subscription"), json!(id)),
+            None => (Value::Null, Value::Null),
+        },
+        Some("login") => (json!("login"), Value::Null),
+        _ => (Value::Null, Value::Null),
+    };
     let now = crate::util::iso(&json!(crate::util::epoch_s()));
-    weekly().lock().unwrap().insert((profile.into(), runtime.into(), window), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status}));
+    weekly().lock().unwrap().insert((profile.into(), runtime.into(), window), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status, "origin": origin, "subscription_id": subscription}));
 }
 
 /// The usage windows kept for `profile`'s `runtime` login, as `weekly` / `five_hour` fields.
 pub fn windows(profile: &str, runtime: &str) -> Map<String, Value> {
     let weekly = weekly().lock().unwrap();
     ["weekly", "five_hour"].into_iter().filter_map(|w| weekly.get(&(profile.to_string(), runtime.to_string(), w)).map(|v| (w.to_string(), v.clone()))).collect()
+}
+
+/// Whether the server reads a usage window's `origin` and `subscription_id` (the heartbeat answer's
+/// `subscription_usage_sources`): an older server refuses those fields, and with them the whole window.
+static SERVER_USAGE_SOURCES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_server_takes_usage_sources(on: bool) {
+    SERVER_USAGE_SOURCES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `windows` as the server takes them: each window's origin and subscription id only where the server reads them.
+pub fn windows_for_server(profile: &str, runtime: &str) -> Map<String, Value> {
+    let takes = SERVER_USAGE_SOURCES.load(std::sync::atomic::Ordering::Relaxed);
+    windows(profile, runtime).into_iter().map(|(w, v)| (w, for_server(v, takes))).collect()
+}
+
+/// A usage window without its origin and subscription id unless `takes` (the server reads them).
+pub fn for_server(mut window: Value, takes: bool) -> Value {
+    if !takes {
+        if let Some(fields) = window.as_object_mut() {
+            fields.remove("origin");
+            fields.remove("subscription_id");
+        }
+    }
+    window
 }
 
 /// When `profile`'s `runtime` login can work again after a usage limit: the latest reset of a kept window the
@@ -617,6 +652,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
         }
     };
     let weekly = weekly().lock().unwrap();
+    let takes = SERVER_USAGE_SOURCES.load(std::sync::atomic::Ordering::Relaxed);
     rows.into_iter()
         .map(|mut p| {
             let name = text_of(&p["name"]);
@@ -624,7 +660,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                 for (runtime, state) in rts.iter_mut() {
                     for window in ["weekly", "five_hour"] {
                         if let Some(w) = weekly.get(&(name.clone(), runtime.clone(), window)) {
-                            state[window] = w.clone();
+                            state[window] = for_server(w.clone(), takes);
                         }
                     }
                     // The account only beside a login that is not known to be signed out.
@@ -791,6 +827,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_window_names_whose_login_it_is_only_as_the_turn_or_the_read_did() {
+        let reading = |origin: Value, id: Value| json!({"used_percent": 40, "window_minutes": 10080, "origin": origin, "subscription_id": id});
+        let kept = || {
+            let weekly = windows("origin-test", "claude")["weekly"].clone();
+            (weekly["origin"].clone(), weekly["subscription_id"].clone())
+        };
+        remember_weekly("origin-test", "claude", &reading(json!("subscription"), json!("sub-a")));
+        assert_eq!(kept(), (json!("subscription"), json!("sub-a")));
+        // A subscription turn without its id, a login that names one, and a reading with no origin count for no plan.
+        remember_weekly("origin-test", "claude", &reading(json!("subscription"), json!("")));
+        assert_eq!(kept(), (Value::Null, Value::Null));
+        remember_weekly("origin-test", "claude", &reading(json!("login"), json!("sub-a")));
+        assert_eq!(kept(), (json!("login"), Value::Null));
+        remember_weekly("origin-test", "claude", &json!({"used_percent": 40, "window_minutes": 10080}));
+        assert_eq!(kept(), (Value::Null, Value::Null));
+        forget_windows("origin-test", "claude");
+    }
+
+    #[test]
+    fn a_window_is_sent_with_its_origin_only_to_a_server_that_reads_it() {
+        let window = json!({"used_percent": 40, "origin": "login", "subscription_id": null});
+        assert_eq!(for_server(window.clone(), true), window);
+        assert_eq!(for_server(window, false), json!({"used_percent": 40}));
+    }
+
+    #[test]
     fn a_spent_window_gives_the_limits_reset() {
         let now = crate::util::epoch_s();
         let at = |s: f64| crate::util::iso(&json!(now + s));
@@ -821,6 +883,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_signed_out_profile_forgets_its_account() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("tico-signout-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("codex")).unwrap();
         let config = json!({"profiles": {"out-test": {"dir": dir.to_string_lossy()}}});
@@ -845,6 +908,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_profile_added_or_taken_out_is_reported_at_once_not_from_the_minute_cache() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("tico-report-set-{}", uuid::Uuid::new_v4().simple()));
         let names = |rows: &[Value]| rows.iter().map(|r| text_of(&r["name"])).filter(|n| n.starts_with("set-")).collect::<Vec<_>>();
         let one = json!({"profiles": {"set-one": {"dir": dir.join("one").to_string_lossy()}}});
@@ -857,6 +921,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn rows_probed_while_a_sign_in_finished_are_not_kept() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::sync::atomic::{AtomicUsize, Ordering};
         let dir = std::env::temp_dir().join(format!("tico-report-race-{}", uuid::Uuid::new_v4().simple()));
         let config = json!({"profiles": {"race-test": {"dir": dir.to_string_lossy()}}});

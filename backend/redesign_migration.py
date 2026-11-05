@@ -23,6 +23,7 @@ import sys
 
 from . import automation_flow as F
 from .store import H, Problem
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.redesign_migration")
 CUTOVER = "redesign_cutover"                 # registry_metadata: {state: running|done, migration, at, ...}
@@ -328,6 +329,12 @@ def _builtins(c, done, me):
     return out
 
 
+def _instructions_text(size, bot_name):
+    """The flag an inbox whose Inbox Manager had its own instructions carries: what was not copied, and where it is."""
+    return (f"The Inbox Manager's own instructions ({size:,} characters) are not in this automation: it runs on a "
+            f"short routing prompt. They stay with {bot_name}, as its mail instructions")
+
+
 def _inboxes(c, done):
     from . import people as P, routines, views
     roster = views.roster(c)
@@ -340,13 +347,12 @@ def _inboxes(c, done):
         name = person.get("name") or box["person_id"]
         found = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (box["bot"],)).fetchone() \
             if _table(c, "mail_agent_instructions") else None
-        prompt = (found["content"] if found and (found["content"] or "").strip() else DEFAULT_PROMPT.format(name=name))
-        prompt = prompt.rstrip() + MESSAGE_PART
-        flags = []
-        if len(prompt) > F.MAX_PROMPT:
-            flags.append(_flag(oid, "too_long", f"The Inbox Manager's instructions are longer than {F.MAX_PROMPT:,} "
-                                                "characters; the inbox stays with its bot until they are shorter",
-                               keeps=True))
+        content = (found["content"] or "").strip() if found else ""
+        # Every inbox runs on the short routing prompt. The Inbox Manager's own instructions (written for the whole
+        # mailbox) made the turns wander and fail on one message, so they are not copied in; they stay on the bot.
+        prompt = DEFAULT_PROMPT.format(name=name) + MESSAGE_PART
+        flags = [_flag(oid, "instructions", _instructions_text(len(content), _bot_name(c, box["bot"])))] \
+            if content else []
         bot = H.bot(c, box["bot"]) or {}
         flow = {"name": f"{name}'s inbox"[:120], "owner": "person:" + box["person_id"], "enabled": True,
                 "trigger": {"type": "message", "inbox": box["address"]},
@@ -449,7 +455,7 @@ def _budgets(c, done):
     if ("turn_budget", "budget:team") not in done:
         out.append({"kind": "turn_budget", "id": "budget:team", "title": "Team turn budgets", "becomes": after,
                     "flags": [], "_do": ("budget_team", {"raise": after != team and bool(stored)})})
-    for row in c.execute("SELECT bot, config FROM bot_config ORDER BY bot").fetchall():
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot").fetchall():
         mine = {k: v for k, v in TB.own(_json(row["config"], {})).items() if v is not None}
         if not mine or ("turn_budget", "budget:" + row["bot"]) in done:
             continue
@@ -554,11 +560,11 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     if kind == "budget_bot":
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (args["bot"],)).fetchone()
+        row = c.execute(BS.ONE_SQL, (args["bot"],)).fetchone()
         declared = _json(row["config"] if row else None, {})
         declared.update(args["values"])
-        c.execute("UPDATE bot_config SET config=?, revision=revision+1 WHERE bot=?",
-                  (json.dumps(declared, sort_keys=True), args["bot"]))
+        BS.write(c, args["bot"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (args["bot"],))
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     raise AssertionError(kind)
@@ -820,6 +826,82 @@ def repair_stale_review(c):
     return removed
 
 
+PROMPT_REPAIR = "inbox_prompt_repair"   # registry_metadata: set once the cutover's inbox prompts are repaired
+
+
+def repair_inbox_prompts(c):
+    """Move the inbox automations the cutover made with the Inbox Manager's whole instructions onto the short routing
+    prompt, once, at startup (backend/store.py). Only the ones nobody changed are moved: one version, one llm step,
+    whose prompt is exactly what the cutover built from the bot's instructions as they stand now. An edited automation,
+    or one whose bot's instructions changed since, is left alone. Each inbox is repaired in a savepoint of its own. One
+    whose owner or mailbox no longer validates stays as it is, and its mark's reason says why; one that fails for any
+    other reason is logged and left for the next start. The marker is set only when no inbox failed, so a failure is
+    tried again. Returns the automation ids it moved. Later starts find the marker and do nothing."""
+    from . import views
+    if _meta(c, PROMPT_REPAIR):
+        return []
+    moved, skipped, failed = [], [], []
+    # No marks on an install the cutover has not reached (its table is made there): nothing to move.
+    marks = c.execute("SELECT * FROM redesign_migrated WHERE kind='inbox' AND automation IS NOT NULL").fetchall() \
+        if _table(c, "redesign_migrated") else []
+    roster = views.roster(c) if marks else {}
+    for mark in marks:
+        c.execute("SAVEPOINT inbox_prompt")
+        try:
+            if _repair_inbox_prompt(c, mark, roster):
+                moved.append(mark["automation"])
+            c.execute("RELEASE inbox_prompt")
+        except Problem as exc:
+            c.execute("ROLLBACK TO inbox_prompt")
+            c.execute("RELEASE inbox_prompt")
+            log.warning("redesign prompt repair: %s keeps the Inbox Manager's instructions: %s",
+                        mark["automation"], exc)
+            why = f"Not moved to the short routing prompt, so it keeps the Inbox Manager's instructions: {exc}"
+            c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?", (why[:1000], mark["id"]))
+            skipped.append(mark["automation"])
+        except Exception:  # noqa: BLE001 - startup goes on; the next start tries this inbox again
+            c.execute("ROLLBACK TO inbox_prompt")
+            c.execute("RELEASE inbox_prompt")
+            log.exception("redesign prompt repair failed for %s; it is tried again at the next start",
+                          mark["automation"])
+            failed.append(mark["automation"])
+    if not failed:
+        _set_meta(c, PROMPT_REPAIR, json.dumps({"at": _now(), "moved": moved, "skipped": skipped}, sort_keys=True))
+    return moved
+
+
+def _repair_inbox_prompt(c, mark, roster):
+    """Moves one inbox's automation onto the short routing prompt if it is still the cutover's own. Returns whether it
+    moved. Raises Problem when its owner or mailbox no longer validates (`_checked`)."""
+    from . import automations, people as P
+    row = c.execute("SELECT * FROM automations WHERE id=? AND deleted_at IS NULL", (mark["automation"],)).fetchone()
+    if not row or row["version"] != 1:
+        return False
+    flow = automations.flow_of(row)
+    steps = flow.get("steps") or []
+    bot = next((s.get("id") for s in flow.get("source") or [] if s.get("kind") == "bot"), None)
+    if len(steps) != 1 or steps[0].get("type") != "llm" or steps[0].get("choose") is not None or not bot:
+        return False
+    if c.execute("SELECT count(*) FROM automation_versions WHERE automation_id=?", (row["id"],)).fetchone()[0] != 1:
+        return False
+    found = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone() \
+        if _table(c, "mail_agent_instructions") else None
+    if not found or not (found["content"] or "").strip():
+        return False   # no instructions were copied: the prompt it has is already the short one
+    if steps[0].get("prompt") != (found["content"].rstrip() + MESSAGE_PART)[:F.MAX_PROMPT]:
+        return False
+    person_id = str(flow.get("owner") or "").partition(":")[2]
+    name = (P.person(person_id, roster) or {}).get("name") or person_id
+    prompt = (DEFAULT_PROMPT.format(name=name) + MESSAGE_PART)[:F.MAX_PROMPT]
+    moved_flow = {**flow, "steps": [{**steps[0], "prompt": prompt}]}
+    automations._save(c, H.KEEPER, row["id"], automations._checked(c, moved_flow, wake_steps=False), flow,
+                      summary="Short routing prompt in place of the Inbox Manager's instructions",
+                      via="migration repair")
+    c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?",
+              (_instructions_text(len(found["content"].strip()), _bot_name(c, bot))[:1000], mark["id"]))
+    return True
+
+
 def _wakes_of(c, scope_kind, scope_id):
     """The "What wakes" automations of one scope, oldest first."""
     from . import automations
@@ -981,6 +1063,8 @@ def wake_rules_of(aid, flow):
     trigger = flow.get("trigger") or {}
     if trigger.get("type") != "event" or trigger.get("name") != "tico.wake":
         raise ValueError("its trigger stays the wake rules' own (event tico.wake)")
+    if flow.get("destinations"):   # the wake executor (rules.py) runs one action per rule; it cannot run a destination
+        raise ValueError("a wake rule takes no destinations: its one action is its outcome")
     out = []
     for n, step in enumerate(flow.get("steps") or []):
         if step.get("type") != "filter":
@@ -988,6 +1072,8 @@ def wake_rules_of(aid, flow):
         for i, rule in enumerate(step.get("rules") or []):
             where = f"step {step.get('id')} rule {i + 1}"
             then = rule.get("then") or []
+            if rule.get("to") is not None or rule.get("next") is not None:
+                raise ValueError(f"{where}: a wake rule takes no 'to' or 'next': it does its one action and stops")
             if len(then) != 1:
                 raise ValueError(f"{where}: a wake rule does one thing (wake, note, archive or leave for you)")
             if rule.get("stop") is False:
@@ -1146,7 +1232,9 @@ RUNS_FROM = {"routine": "Automations", "wake_rule": "rules.py, read from its Wha
              "task_rule": "the task rules engine; shown read-only", "system_job": "the scheduler; shown read-only",
              "health_monitor": "its bot; shown read-only"}
 GONE_JOBS = {"job:routine_timer": "Bot routine timer: the automations tick runs schedules now",
-             "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor"}
+             "job:task_roundup": "Task roundup: scheduled lists moved to Maintenance Find stuck",
+             "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor",
+             "job:health_scan": "Health scan: Check health runs in Maintenance now"}
 
 
 def inventory(c):
@@ -1349,7 +1437,7 @@ def pending(c):
 
     add("turn_budget", int(low(_json(_meta(c, TB.TEAM_KEY), {}))))
     if _table(c, "bot_config"):
-        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config FROM bot_config")))
+        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")))
     row = bots.get(strategy_bot.SLUG)
     if row and row != "archived" and ("bot", "bot:" + strategy_bot.SLUG) not in done:
         name = (c.execute("SELECT "

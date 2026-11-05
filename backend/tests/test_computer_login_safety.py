@@ -8,6 +8,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, get, post, runner  # noqa: F401
 from backend.tests.test_subscriptions import set_runtime
 from backend.tests.test_openapi_v2 import conforms
+from backend import bot_settings as BS
 
 
 def beat(api, machine, *, codex='ready', kind='api_key', selected=None):
@@ -65,9 +66,9 @@ def test_health_flags_an_unusable_fallback_before_work_is_queued_and_ignores_ina
     assign(api, machine, 'ops')
     set_runtime(api, 'claude')
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config['fallback'] = {'harness': 'codex', 'model': 'gpt-5-codex'}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
+        BS.write(c, 'ops', config)
         c.execute("INSERT INTO subscription_assignments VALUES('bot','ops','old-plan',NULL,NULL)")
         H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
         assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()

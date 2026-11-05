@@ -5,6 +5,8 @@ message in the bot's chat."""
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from backend import updates
 from backend.store import H, Problem, digest
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
@@ -27,6 +29,38 @@ def bot_id(c, slug):
 def bid(api, slug):
     with api.app.state.store.read() as c:
         return bot_id(c, slug)
+
+
+@pytest.mark.parametrize("kind", ["daily", "weekly"])
+def test_update_requests_never_wake_counsel_which_cannot_publish(api, kind):
+    from backend.tests.test_counsel import counsel_on
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        # Older installs may have both switches on. The posting boundary still applies.
+        c.execute("INSERT OR REPLACE INTO update_settings(bot,daily,weekly) VALUES(?,1,1)", (H.COUNSEL,))
+        updates.build_queue(c, "2026-09-29", kind)
+        assert not c.execute("SELECT 1 FROM update_queue WHERE bot=?", (H.COUNSEL,)).fetchone()
+        assert c.execute("SELECT 1 FROM update_queue WHERE bot='ops'").fetchone()
+        assert H.COUNSEL not in updates.redo(c, kind, "2026-09-29")
+        with pytest.raises(Problem):
+            updates.redo(c, kind, "2026-09-29", [H.COUNSEL])
+        assert updates.settings(c, H.COUNSEL) == {"daily": False, "weekly": False}
+        with pytest.raises(Problem):
+            updates.set_settings(c, H.COUNSEL, **{kind: True})
+
+
+def test_an_old_queued_counsel_update_is_skipped_without_sending_a_request(api):
+    from backend.tests.test_counsel import counsel_on
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,'daily',?,0,'queued')",
+                  ("old-counsel-update", H.COUNSEL, MORNING.date().isoformat()))
+        assert updates.dispatch(c, MORNING) is None
+        row = c.execute("SELECT state,message_id FROM update_queue WHERE id='old-counsel-update'").fetchone()
+        assert tuple(row) == ("skipped", None)
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (H.COUNSEL,)).fetchone()
 
 
 def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
@@ -450,3 +484,40 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
     hers = get(api, "updates/tree?scope=all", token="cara-test")
     assert find(hers["roots"], "b:" + bid(api, "boss")) is None and "Planned the launch" not in str(hers)
     assert find(hers["roots"], "b:" + bid(api, "analyst"))["update"]["body"] == "- Sized the market"
+
+
+def test_the_feed_counts_replies_in_one_read_and_homes_card_shows_the_same_updates(api, monkeypatch):
+    """Nov 4 web pass: the feed counted each update's replies with its own scan of every message (40 a page, ~500 ms on
+    a busy hub), and Home's Updates card built the whole feed to show five headlines."""
+    from backend.tests.test_health_queries import counted
+    store = api.app.state.store
+    with store.transaction() as c:
+        bots = [bot_id(c, slug) for slug in ("ops", "finance", "product-design")]
+        made = [updates.post(c, b, f"- Shipped part {n}", kind="daily", day=f"2026-10-0{n + 1}")["id"] for n, b in enumerate(bots)]
+    assert len(made) == 3
+    for uid, n in zip(made, (2, 1, 0)):
+        for k in range(n):
+            post(api, f"updates/{uid}/reply", {"text": f"Thanks {k}"})
+    page = "/api/v2/updates?limit=40&include_archive=true"         # with history: older days of the same bots
+    feed, few = counted(api, monkeypatch, page)
+    assert {u["id"]: u["replies"] for u in feed["updates"]} == dict(zip(made, (2, 1, 0)))
+    get(api, "places/person:me")                                       # the first open saves the place
+    _, card_few = counted(api, monkeypatch, "/api/v2/places/person:me")
+    with store.transaction() as c:
+        now = H.now()
+        c.executemany("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,inputs,meetings) "
+                      "VALUES(?,?,'daily',?,?,'- x',?,?,'[]',0)",
+                      [(H.new_id(), bots[n % 3], f"2026-08-{n + 1:02d}", f"Older {n}", H.shift(now, days=-40 - n),
+                        H.shift(now, days=-40 - n)) for n in range(30)])
+    history, many = counted(api, monkeypatch, page)
+    assert len(history["updates"]) == 33 and many == few, "thirty more updates on the page take no more statements"
+    assert {u["id"]: u["replies"] for u in history["updates"] if u["id"] in made} == dict(zip(made, (2, 1, 0)))
+    feed = get(api, "updates")
+    home, card_many = counted(api, monkeypatch, "/api/v2/places/person:me")
+    assert card_many == card_few
+    card = next(p["card"]["data"] for p in home["pins"] if p.get("card", {}).get("template") == "updates")
+    shown = len(card["updates"])
+    assert shown and card["unread"] == feed["unread"]
+    assert card["updates"] == [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
+                                "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}
+                               for u in feed["updates"][:shown]]

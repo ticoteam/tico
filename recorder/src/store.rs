@@ -938,6 +938,13 @@ impl Store {
         self.db()?.execute("INSERT INTO deliveries VALUES(?,?,?) ON CONFLICT(recording_id,destination_id) DO UPDATE SET document=excluded.document",params![id,value.destination_id,serde_json::to_string(value)?])?;
         Ok(())
     }
+    pub fn remove_delivery(&self, id: &str, destination: &str) -> Result<()> {
+        self.db()?.execute(
+            "DELETE FROM deliveries WHERE recording_id=? AND destination_id=?",
+            params![id, destination],
+        )?;
+        Ok(())
+    }
     pub fn delete(&self, id: &str) -> Result<()> {
         ensure!(
             self.get(id)?.state != "recording",

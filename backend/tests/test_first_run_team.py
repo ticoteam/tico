@@ -12,6 +12,7 @@ from backend import releases, routines
 from backend.tests.test_api import claim, headers, post, ready
 from backend.tests.test_onboarding import (ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person, build_team,  # noqa: F401
                                            draft, environment, machine, signed_in)
+from backend import bot_settings as BS
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
 
@@ -59,7 +60,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []   # no BotOps task
     assert support_routine(api)["automation"] and enabled(api) == 0
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='support'").fetchone()[0])["materialize"] is True
+        assert BS.read(c, 'support')["materialize"] is True
 
     # Nothing wakes it but a person: a task notice waits, the person's own message is claimed.
     ready(api, computer, ["support"])

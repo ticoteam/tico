@@ -3,7 +3,7 @@
 Six tables in the hub database. A reporter files prose.
 The Librarian (`bot:librarian`) curates: it and the company owner are the only actors who change an
 entity, an edge, a piece of evidence, or a market page. Nothing is deleted: an edge is ended, an entity is
-retired or merged, and every changed field is a `market_events` row.
+retired or merged, and every changed field is a `history_events` row (subject_type `market_<kind>`).
 
 With the redesign on, a change made in a bot turn an automation started (a listening match's Market listening, the
 daily briefing) also names that turn and what started it (`market_turn_sources`), and the graph shows it as each
@@ -68,7 +68,7 @@ PAGES = (
     ("market/open-questions", "Open questions", "Market / Questions",
      "What the graph cannot answer yet."),
     ("market/weekly-delta", "Weekly delta", "Market / Delta",
-     "What changed in the market graph this week. Refreshed on Mondays from market_events."),
+     "What changed in the market graph this week. Refreshed on Mondays from the market history."),
     ("market/customer-themes", "Customer themes", "Market / Customers",
      "What customers keep asking for, complaining about and objecting to, from team meetings and calls. Each theme is a thesis with evidence."),
 )
@@ -108,6 +108,10 @@ def _day(conn, value, actor, label):
     text = str(value).strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(T.*)?", text):
         H.refuse(conn, actor, "date", f"{label} must be a date (YYYY-MM-DD)")
+    try:
+        date.fromisoformat(text[:10])
+    except ValueError:
+        H.refuse(conn, actor, "date", f"{label} must be a real calendar date (YYYY-MM-DD), not {text[:10]}")
     return text[:10]
 
 
@@ -122,16 +126,18 @@ def require_writer(who):
     raise Problem("forbidden", "Only the Librarian and the company owner can change the market graph", 403)
 
 
+# The market's history rows, read the way the old market_events rows were (the API's `events` keep that shape).
+EVENT_COLUMNS = ("id, substr(subject_type, 8) AS subject_kind, subject_id, created_at, actor_id AS actor, kind AS field, "
+                 "old, new, json_extract(data, '$.insight_id') AS insight_id, note")
+EVENTS = f"history_events WHERE subject_type IN {H.MARKET_SUBJECTS_SQL}"
+
+
 def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note="", trip=True):
-    """One `market_events` row. `trip=False` keeps the strategy's fit check out of it: a proposed size is not yet
+    """One market history row. `trip=False` keeps the strategy's fit check out of it: a proposed size is not yet
     a change to what a bet rests on."""
-    eid = H.new_id()
     # `field` is the column name when the event was written, so older rows may say last_verified, valid_from or valid_until.
-    conn.execute("INSERT INTO market_events (id, subject_kind, subject_id, created_at, actor, field, old, new, insight_id, note) "
-                 "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                 (eid, kind, subject, H.now(), actor, field,
-                  None if old is None else str(old), None if new is None else str(new),
-                  insight_id, note or ""))
+    eid = H.history_event(conn, "market_" + kind, subject, actor, field, old, new, note or "",
+                          {"insight_id": insight_id} if insight_id is not None else None)
     if H.RUN.get():
         _from_turn(conn, eid, kind, subject)
     if actor != SEED_ACTOR and trip:
@@ -391,7 +397,8 @@ def show(conn, entity_id, today=None):
         else:
             bucket["in"].append(item)
     events = H._rows(conn.execute(
-        "SELECT * FROM market_events WHERE subject_kind='entity' AND subject_id=? ORDER BY created_at DESC LIMIT ?",
+        f"SELECT {EVENT_COLUMNS} FROM history_events WHERE subject_type='market_entity' AND subject_id=? "
+        "ORDER BY created_at DESC LIMIT ?",
         (entity_id, EVENT_LIMIT)))
     return {"entity": row, "edges": grouped, "evidence": _evidence_for(conn, entity_id, edges), "events": events}
 
@@ -457,7 +464,8 @@ def delta(conn, since="7d"):
     raw = str(since or "7d").strip()
     window = re.fullmatch(r"(\d+)d", raw)
     bound = H.shift(H.now(), days=-int(window.group(1))) if window else raw
-    events = H._rows(conn.execute("SELECT * FROM market_events WHERE created_at>=? ORDER BY created_at, id", (bound,)))
+    events = H._rows(conn.execute(f"SELECT {EVENT_COLUMNS} FROM {EVENTS} AND created_at>=? ORDER BY created_at, id",
+                                  (bound,)))
     groups = {}
     for ev in events:
         if ev["subject_kind"] == "edge":
@@ -620,6 +628,7 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     ids = []
     if actor != SEED_ACTOR:
         ids = _need_evidence(conn, actor, evidence_ids)
+    last_verified_at = _day(conn, last_verified_at, actor, "last_verified_at")
     now = H.now()
     row = {"id": eid, "type": type, "name": name, "aliases": dumps(aliases), "external_ids": dumps(external_ids),
            "tier": tier or None, "summary": str(summary or ""), "properties": dumps(properties or {}),
@@ -887,7 +896,7 @@ def resolve(conn, actor, insight_id, status, resolution="", applied_events=None)
         H.refuse(conn, actor, "lint", "say in one sentence why it is " + status)
     events = list(applied_events or [])
     if status == "applied" and not events:
-        H.refuse(conn, actor, "evidence", "an applied insight names the market_events it produced")
+        H.refuse(conn, actor, "evidence", "an applied insight names the market events it produced")
     now = H.now()
     conn.execute("UPDATE market_insights SET status=?, resolution=?, applied_events=?, resolved_at=?, resolved_by=? WHERE id=?",
                  (status, resolution, dumps(events), now, actor, insight_id))
@@ -1210,7 +1219,7 @@ def write_page(conn, actor, doc_id, title, body, category, *, replace=False, ins
                  "ON CONFLICT(id) DO UPDATE SET title=excluded.title, category=excluded.category, "
                  "body=excluded.body, seeded=excluded.seeded, updated_at=excluded.updated_at",
                  (doc_id, title, category, body, 1 if actor == SEED_ACTOR else 0, now))
-    # The weekly delta is a projection of market_events. Recording that write would make the
+    # The weekly delta is a projection of the market's history. Recording that write would make the
     # next Monday refresh see a new event and rewrite the page again.
     if record:
         _event(conn, "document", doc_id, actor, "created" if not existing else "body", None, title, insight_id,
@@ -1231,10 +1240,10 @@ def _bullets(rows, empty):
 
 
 def delta_body(conn, today):
-    """The weekly delta page, from market_events. Seed writes this; Monday refresh writes it again."""
+    """The weekly delta page, from the market's history. Seed writes this; Monday refresh writes it again."""
     start = (today - timedelta(days=7)).isoformat()
     events = H._rows(conn.execute(
-        "SELECT * FROM market_events WHERE created_at>=? ORDER BY created_at, id", (start,)))
+        f"SELECT {EVENT_COLUMNS} FROM {EVENTS} AND created_at>=? ORDER BY created_at, id", (start,)))
     lines = ["# Weekly delta", "", f"Changes since {start}.", ""]
     if not events:
         lines.append("No market changes in this week.")
@@ -1301,6 +1310,9 @@ def seed_pages(conn, actor=SEED_ACTOR):
     """
     bodies = narrative(conn, datetime.now(timezone.utc).date())
     placeholders = {body for _id, _title, _category, body in PAGES}
+    # The first boots wrote these two one-line placeholders (the second names the old table); a later boot replaces
+    # them, so both texts stay here verbatim.
+    placeholders.add("What changed in the market graph this week. Refreshed on Mondays from market_events.")
     placeholders.add("Weekly changes are filled from market_events each Monday.")
     written = []
     for doc_id, title, category, _fallback in PAGES:
@@ -1344,7 +1356,7 @@ def mark_seeded_pages(conn):
 
 
 def refresh_delta(conn, actor, today=None):
-    """Monday rewrites the weekly delta from market_events. Any other day leaves it alone."""
+    """Monday rewrites the weekly delta from the market's history. Any other day leaves it alone."""
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
     today = today or datetime.now(timezone.utc).date()
@@ -1781,7 +1793,7 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/market/ask")
     def market_ask(request: Request, body: M.MarketAsk):
         # Each model call spends the enabled server provider's key: a `market.ask` event, counted per person per day
-        # under the decision caps (backend/judge.py). Rehearsal sends nothing out and answers from the rows.
+        # under the decision caps (backend/judge.py). Rehearsal and the demo send nothing out and answer from the rows.
         from .judge import daily_cap, used_today
         who = request.state.identity
         auth.domain(who)
@@ -1793,8 +1805,10 @@ def install(app, store, auth, mutate):
                               "until midnight UTC", 429)
             try:
                 from .updates import writer_for
-                writer = writer_for(c, store.settings, store=store, vault=getattr(app.state, "vault", None))
-                result, call = ask(c, body.question, use_model=not store.settings.rehearsal, writer=writer)
+                use_model = not (store.settings.rehearsal or store.settings.demo)
+                vault = getattr(app.state, "vault", None)
+                writer = writer_for(c, store.settings, store=store, vault=vault) if use_model else None
+                result, call = ask(c, body.question, use_model=use_model, writer=writer)
             except Exception as exc:
                 raise Problem("market_ask", f"The market model call failed: {exc}", 503, True) from exc
         if call is not None:
@@ -1967,7 +1981,7 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/market/pages/{name}")
     def page_write(request: Request, name: str, body: M.MarketPage):
         """The curator rewrites one of the eight narrative pages from the graph (#488). The weekly
-        delta is a projection of market_events and only `delta/refresh` writes it."""
+        delta is a projection of the market's history and only `delta/refresh` writes it."""
         who = request.state.identity
         doc_id = "market/" + name
         pages = {page[0]: page for page in PAGES if page[0] != "market/weekly-delta"}

@@ -50,6 +50,7 @@ class World:
         self.ci_fail = ci_fail   # chance a CI run on a new head fails (a flaky or broken change)
         self.ci = {}             # pr number -> (head, when its checks finish, passed)
         self.ci_skip = 0.0       # chance a new PR's only CI check is skipped or neutral on every head (a path filter)
+        self.ci_skip_first = False   # the first new PR's only CI check is skipped too, so a run always has one
         self.tick = dt.timedelta(minutes=tick_minutes)
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-sim-"))
         self.prs = {}        # pr number -> {"task": id, "head": sha, "merged": bool}
@@ -77,6 +78,7 @@ class World:
         from fastapi.testclient import TestClient
         from backend.app import create_app
         from backend.auth import Identity
+        from backend import bot_settings
         from backend.config import Settings
         from backend.scheduler import Scheduler
         from backend.store import H, encode
@@ -101,8 +103,8 @@ class World:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "engineering", "ana"))
+                c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
+                bot_settings.write(c, slug, config)
             if "release-manager" in bots:   # signed in as an agent, as an external Release Manager is
                 c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
                           "VALUES('release-manager','hermes','x-release',?,'human:ana')", (H.now(),))
@@ -395,6 +397,8 @@ class World:
         self.prs[number]["heads"] = [(self.now(), self.prs[number]["head"])]
         if self.ci_skip and self.rng.random() < self.ci_skip:
             self.prs[number]["skip_ci"] = True
+        if self.ci_skip_first and not any(p.get("skip_ci") for p in self.prs.values()):
+            self.prs[number]["skip_ci"] = True
         self.post(f"tasks/{task_id}/links", {"url": self.pr_url(number)}, token=token)
         self.hook("pull_request", self.pr_payload(number, "opened"))
         self.start_ci(number)
@@ -511,8 +515,10 @@ class World:
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
-        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
-                        "t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
+        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,b.created_at blocked_since,"
+                        "t.updated_at,t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "
+                        "LEFT JOIN task_holds b ON b.task_id=t.id AND b.kind='blocked' AND b.released_at IS NULL "
+                        "WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
             r["labels"] = json.loads(r.pop("labels") or "[]")
@@ -533,8 +539,8 @@ class World:
         no check at the step failed. A round that timed out at a failed head is recorded as skipped too, but sends the
         ticket to the step's on_fail (backend/verdict_moves.py `timeouts`), so it clears nothing."""
         entered = self.step_entered_at(task_id) or ""
-        for e in self.sql("SELECT field, new FROM task_events WHERE task_id=? AND created_at>=? "
-                          "AND field IN ('step_skipped','round_skipped')", (task_id, entered)):
+        for e in self.sql("SELECT kind AS field, new FROM history_events WHERE subject_type='task' AND subject_id=? AND created_at>=? "
+                          "AND kind IN ('step_skipped','round_skipped')", (task_id, entered)):
             step_id, _, head = str(e["new"] or "").partition(":")
             step = self.sql("SELECT name FROM task_steps WHERE id=?", (step_id,))
             if e["field"] == "step_skipped" or not (step and self.failed_at(task_id, step[0]["name"], head)):
@@ -557,7 +563,7 @@ class World:
     def judged_head(self, check):
         """The head a check was filed for (its newest review_head), which a check done with no verdict judged, as
         backend/verdict_moves.py `_judged_head` reads it."""
-        filed = self.sql("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+        filed = self.sql("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (check["id"],))
         return str(filed[0]["new"] if filed else "").split(",")[0].lower()
 
@@ -567,8 +573,8 @@ class World:
     def check_step(self, child):
         """The board step a check subtask was filed for: where its ticket was when the check was made."""
         parent = self.parent_of(child["id"])
-        found = self.sql("SELECT s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                         "AND e.field='step' AND e.created_at<=? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1",
+        found = self.sql("SELECT s.name FROM history_events e JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? "
+                         "AND e.kind='step' AND e.created_at<=? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1",
                          (parent, child["created_at"]))
         return found[0]["name"] if found else None
 
@@ -612,14 +618,14 @@ class World:
         (as `keeper`), and that is no reason to call the notice stale. Nor is a hold clearing: the ticket goes back
         to its step because of the news the notice brings."""
         hold = next((st["id"] for st in self.dev["steps"] if st["name"] == self.board.hold_step), "")
-        found = self.sql("SELECT max(created_at) created_at FROM task_events WHERE task_id=? AND field='step' AND created_at<? "
+        found = self.sql("SELECT max(created_at) created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at<? "
                          "AND coalesce(old,'')<>?", (task_id, self.H.now(), hold))
         return found[0]["created_at"] if found else None
 
     def step_spans(self, task_id, until=None):
         """[(step name, hours there)] in order, the last one up to `until` (default now)."""
-        rows = self.sql("SELECT e.created_at, s.name FROM task_events e LEFT JOIN task_steps s ON s.id=e.new "
-                        "WHERE e.task_id=? AND e.field='step' ORDER BY e.created_at, e.rowid", (task_id,))
+        rows = self.sql("SELECT e.created_at, s.name FROM history_events e LEFT JOIN task_steps s ON s.id=e.new "
+                        "WHERE e.subject_type='task' AND e.subject_id=? AND e.kind='step' ORDER BY e.created_at, e.rowid", (task_id,))
         out = []
         for row, nxt in zip(rows, rows[1:] + [{"created_at": until or self.H.now()}]):
             span = self.H.parse_ts(nxt["created_at"]) - self.H.parse_ts(row["created_at"])
@@ -630,8 +636,8 @@ class World:
         """[(step name, hours)] per stay at a step, each ended by the first thing that settles it: leaving the step, a
         verdict move, a skipped round or a merge wake. Read for check steps: what follows a settled check (the owner's
         merge) is the owner's time, not the check's."""
-        rows = self.sql("SELECT e.created_at, e.field, s.name FROM task_events e LEFT JOIN task_steps s ON s.id=e.new "
-                        "WHERE e.task_id=? AND e.field IN ('step','verdict_move','round_skipped','merge_wake') "
+        rows = self.sql("SELECT e.created_at, e.kind AS field, s.name FROM history_events e LEFT JOIN task_steps s ON s.id=e.new "
+                        "WHERE e.subject_type='task' AND e.subject_id=? AND e.kind IN ('step','verdict_move','round_skipped','merge_wake') "
                         "ORDER BY e.created_at, e.rowid", (task_id,))
         out, stay = [], None
         for row in rows + [{"created_at": until or self.H.now(), "field": "end", "name": None}]:

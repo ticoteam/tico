@@ -13,7 +13,7 @@ from .live_privacy import sources as meeting_sources
 
 def _task(c, tid):
     # Authorization uses task identity and parties; display tags are unrelated to access.
-    return H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
+    return H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,))
 
 
 def snapshot(c):
@@ -406,11 +406,17 @@ def readable_messages(c, actor, messages):
     """The messages message_readable passes, each checked against its row as stored, read together in this snapshot
     rather than one query per message. A message not stored is checked as given, as message_readable does."""
     snapshot(c)
-    ids = sorted({dict(m).get("id") for m in messages} - {None, ""})
+    # A page checks the same messages more than once in one snapshot (the status page's job list, then its queue
+    # counts): each stored message's answer for this reader is kept until the snapshot ends or anything is written.
+    values = read_cache.cache(c)
+    known = values.setdefault(("readable_messages", actor), {}) if values is not None else {}
+    ids = sorted({dict(m).get("id") for m in messages} - {None, ""} - set(known))
     stored = H.prime_messages(c, ids)
     prime_messages(c, list(stored.values()))
-    return [m for m in messages if (message_readable(c, actor, stored[mid], current=True)
-                                    if (mid := dict(m).get("id")) in stored else message_readable(c, actor, m))]
+    for mid, row in stored.items():
+        known[mid] = message_readable(c, actor, row, current=True)
+    return [m for m in messages if (known[mid] if (mid := dict(m).get("id")) in known
+                                    else message_readable(c, actor, m))]
 
 
 def require_message(c, who, message):
@@ -690,7 +696,7 @@ def question_party(c, who, person, parent=None, guest=None):
     Being a party gives them nothing they could not read before, beyond the parent `guest` names (guest_for)."""
     if parent and not _reads(c, person, parent, guest):
         return False
-    return not who.attempt_id or all(_reads(c, person, H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,)), guest)
+    return not who.attempt_id or all(_reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), guest)
                                      for tid in attempt_tasks(c, who.attempt_id))
 
 

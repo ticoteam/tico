@@ -9,6 +9,7 @@ from backend import login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401 (fixture)
 from backend.tests.test_login_holds import CLAUDE, at, limit, providers_on, signed_in
+from backend import bot_settings as BS
 
 
 def revision(api, bot="ops"):
@@ -27,7 +28,7 @@ def test_a_limited_bot_with_a_turn_running_can_be_moved_to_another_model(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
 
@@ -102,7 +103,7 @@ def limited_with_a_retry_running(api, monkeypatch, machine, model="gpt-6-luna"):
     """The bot on `model` hits its plan's limit, a person writes, and the retry's turn is running: Rate limited."""
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/model", {"model": model, "expected_revision": revision(api)})
     post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
@@ -202,9 +203,9 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
         for model, held in (("tico-mid-1.0", "gateway"), ("claude-haiku-5-5", "")):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = BS.read(c, 'ops')
             config.update({"model": model, "runtime": "pi" if held else "claude"})
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
             assert execution.model_change_hold(c, settings, "ops") == held
 
 

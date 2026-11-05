@@ -4,12 +4,29 @@ import re
 
 from .rows import AttemptRow
 from .store import H
+from . import bot_settings as BS
 
 STALL_MINUTES = 5
 # The server's own cap (cap below): a silent run ends this long past its bot's max_run_minutes, on the server's clock.
 # The runner enforces the limit itself, but a frozen computer cannot, so the server must not wait for it.
 MAX_RUN_MINUTES, MAX_RUN_GRACE_MINUTES = 60, 5
 CAP_EVENT = 'attempt.max-run-cap'
+# The computer's own reports that it stopped a turn itself. A restart is a synthetic completion text from the runner's
+# recovery (runner-rs state.rs). A clean stop is never a completion text (that is the model's reply): the runner saves it
+# as a diagnostic event, read by clean_stop_reported. Both relax generic tool uncertainty (execution.restart_reported).
+RESTART_TEXT = 'Runner restarted during execution'
+CLEAN_STOP = 'Runner stopped during execution'
+HANDED_BACK = 'Its computer handed the run back before starting it'
+
+
+def clean_stop_reported(c, attempt_id):
+    """The end reason of a stop the computer reported in its own diagnostic (the runner saves it as an event when it
+    stops a turn: runner-rs drive.rs), or None. A clean stop reaches the hub this way, not as the completion's text,
+    which is the reply and usually empty, and it stays readable when the completion never arrived."""
+    found = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='diagnostic' "
+                      "AND json_extract(payload,'$.end_reason')=? ORDER BY seq DESC LIMIT 1",
+                      (attempt_id, CLEAN_STOP)).fetchone()
+    return CLEAN_STOP if found else None
 TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
@@ -54,22 +71,38 @@ def keep_stderr(c, row: AttemptRow, text):
     return {'kept': True, 'bytes': len(value.encode())}
 
 
+def stop_supersedes(stop_requested_at, outcome):
+    """A Stop wins over an interrupted or failed turn, while an already completed turn stays finished."""
+    return bool(stop_requested_at) and outcome != 'completed'
+
+
 def reason(c, row: AttemptRow, outcome, summary=''):
-    if row['stop_requested_at'] and outcome != 'completed':
+    if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
-        return stopped_by(c, row) or 'Canceled by ' + row['stop_requested_at']
+        return stopped_by(c, row) or f"Canceled by {row['stop_requested_at']}"
     if outcome in ('completed', 'ok'):
         return 'Finished'
+    # The computer said it stopped the turn itself (its clean stop), even when its completion never reached the hub.
+    stopped = clean_stop_reported(c, row['id'])
+    if stopped:
+        return stopped
+    result = json.loads(row['result'] or '{}')
+    if result.get('text') == RESTART_TEXT:
+        return RESTART_TEXT
+    # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
+    from .login_waits import paused
+    yielded = paused(c, row['id'], row['state'], row['result'], row['stop_requested_at'])
+    if yielded:
+        return scrub(yielded)[:500]
     if row['state'] == 'expired':
         capped = c.execute("SELECT detail FROM events WHERE target=? AND action=? LIMIT 1",
                            (row['id'], CAP_EVENT)).fetchone()
         if capped:
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
+        if not row['started_at'] and row['final_text'] == HANDED_BACK + '.':
+            return HANDED_BACK
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
-    result = json.loads(row['result'] or '{}')
-    if result.get('text') == 'Runner restarted during execution':
-        return 'Runner restarted during execution'
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()
@@ -144,7 +177,7 @@ def sweep(c, at=None, listening_since=None):
 
 def max_run_minutes(c, bot):
     """The bot's own limit, read as the runner reads it (runner-rs execute.rs): a number or a numeric text."""
-    row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         return float(H._json(row[0], {}).get('max_run_minutes') or MAX_RUN_MINUTES) if row else MAX_RUN_MINUTES
     except (TypeError, ValueError):
