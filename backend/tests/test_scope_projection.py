@@ -27,10 +27,12 @@ def all_shapes(fid, bid, digest, title, mid):
             "answer": {"target": {"file": fid, "version": 1}, "reviewed": [{**review, "verdict": "approve"}],
                        "review": [review], "files": [review]},
             "message": {"refs": {"attachments": [attachment]}},
+            "page": {"path": "#/page/" + fid, "title": title},
             "pages": [{"id": fid, "title": title}, {"file_id": fid, "title": title},
                       {"page": fid, "title": title}, {"page_id": fid, "title": title},
                       {"ref": "page:" + fid, "title": title}, {"url": "/?page=" + fid, "title": title},
                       {"href": "#/page/" + fid, "title": title},
+                      {"path": "#/page/" + fid, "title": title},
                       {"src": "/api/v2/pages/" + quote(fid, safe=""), "title": title}],
             "versions": [{"id": bid, "title": title}, {"digest": digest, "title": title}],
             "meetings": [{"id": mid, "title": "Forbidden meeting title"}],
@@ -44,6 +46,7 @@ def append_allowed(refs, fid, bid, digest):
     refs["files"].append(fid + "@1")
     refs["review"]["files"].append({"file": fid, "version": 1, "digest": digest})
     refs["pages"].append({"page": fid, "title": "Allowed page title"})
+    refs["pages"].append({"path": "#/page/" + fid, "title": "Allowed page title"})
 
 
 def no_sources(value, secrets):
