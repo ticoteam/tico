@@ -92,6 +92,18 @@ def require_person(who, bot=""):
                                    "with their own token" + (". " + mail_settings_hint(bot) if bot else ""), 403)
 
 
+def message_sender_can_approve_send(c, auth, row):
+    """A message's human sender may approve mail for its bot addressee when they may manage its sending."""
+    sender, recipient = str(row.get("sender_id") or ""), str(row.get("recipient_id") or "")
+    if not sender.startswith("human:") or not recipient.startswith("bot:"):
+        return False
+    try:
+        who = auth.identity_for_actor(c, sender)
+    except Problem:
+        return False
+    return auth.bot_manager(c, who, H.actor_id(recipient))
+
+
 def update(c, auth, who, bot, body):
     require_person(who, bot)
     if not H.bot(c, bot):

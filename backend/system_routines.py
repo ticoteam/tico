@@ -122,10 +122,7 @@ ACTIONS = {
                            ("finance", "rules", "digest")),
     "wake_rules_digest": ("open the week's rules digest task for the Bookkeeper when there are new rules",
                           ("finance", "rules", "digest", "wake")),
-    "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
-                      ("learnings", "chat", "slack", "mail", "meetings")),
     "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
-    "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
                  ("ask", "question", "deadline", "expire")),
@@ -216,9 +213,6 @@ JOBS = [
     Job("memory_tidy", "Nightly memory tidy",
         "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
         LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
-    Job("learnings", "Nightly learnings",
-        "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
-        LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
         REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
@@ -331,7 +325,6 @@ WAITS_FOR_ANCHOR = (THREE_DAILY,)
 AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
 CONFIG_KEY = "system_routines"
 AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-NIGHT_CLAIMS = ("learnings",)   # one run a night, claimed per company night (next_night reads the claim)
 
 
 @dataclass(frozen=True)
@@ -347,8 +340,6 @@ class Control:
 CONTROLS = {
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
-    "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
     "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
@@ -402,7 +393,7 @@ def schedule_words(key, cfg):
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
     words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy") else words
+    return "Nightly at " + cfg["at"] if key == "memory_tidy" else words
 
 
 def may_change(auth, who, key):
@@ -692,8 +683,6 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     if cfg is not None:
         if not cfg["on"]:
             return None
-        if job.key in NIGHT_CLAIMS and c is not None:
-            return next_night(c, cfg, now, job.key)
         return next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
@@ -704,21 +693,6 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
         return None
     started = H.parse_ts(last["started_at"])
     return max(started + timedelta(seconds=every), now)
-
-
-def next_night(c, cfg, now, key="learnings"):
-    """A nightly run (NIGHT_CLAIMS) runs once per company night (backend/learnings.py `nightly`, backend/dream_auto.py
-    `nightly`), not once after each time: tonight's start while tonight is unclaimed, else tomorrow's. The scheduled
-    claim never retries a night that is claimed (only Run now does), so an unconfigured, capped or failed night also
-    waits for tomorrow."""
-    from . import learnings
-    hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
-    start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    night = learnings.night_of(now)
-    claimed = c.execute("SELECT 1 FROM learning_runs WHERE night=?", (night,)).fetchone()
-    if claimed:
-        return start + timedelta(days=1)
-    return max(start, now)
 
 
 def directory_minutes(c):
@@ -890,13 +864,14 @@ def install(app, store, auth, mutate):
     def system_routine_run(key: str, request: Request, body: M.Empty):
         """Run one of the controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
         review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
-        asks Decide works on its own thread. 409 while it is off or already running. The retired task_roundup runs
-        Maintenance Find stuck and returns {run, started}."""
+        asks Decide works on its own thread. 409 while it is off or already running. The retired task_roundup and
+        learnings jobs run Maintenance Find stuck and Learn respectively and return {run, started}."""
         who = request.state.identity
-        if key == "task_roundup":
+        if key in ("task_roundup", "learnings"):
             from . import maintenance
             maintenance.may_change(auth, who)
-            run, started = maintenance.run_now(store, auth, who.actor, step="find_stuck",
+            step = "find_stuck" if key == "task_roundup" else "learn"
+            run, started = maintenance.run_now(store, auth, who.actor, step=step,
                                                key=request.headers.get("idempotency-key"))
             return {"run": run, "started": started}
         may_change(auth, who, key)

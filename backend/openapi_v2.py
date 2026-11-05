@@ -655,9 +655,10 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running. "
-     "task_roundup runs Maintenance Find stuck and returns {run, started}.", None),
+     "The retired task_roundup and learnings jobs run Maintenance Find stuck and Learn respectively and return "
+     "{run, started}.", None),
     ("/api/v2/maintenance", "get", "Health", "getMaintenance",
-     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, the last run, the live run, the next run, and whether the viewer may change it", None),
+     "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, Learn's seven-day stats, the last run, the live run, the next run, and whether the viewer may change it", None),
     ("/api/v2/maintenance", "patch", "Health", "saveMaintenance",
      "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes", "MaintenanceUpdate"),
     ("/api/v2/maintenance/runs", "get", "Health", "listMaintenanceRuns",
@@ -741,6 +742,9 @@ SCHEMAS = {
                     "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
                    sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
                    recipient_name={"type": "string", "description": "Display name of recipient_id"},
+                   sender_can_approve_send={"type": "boolean", "description": "On GET /messages/{mid}: whether the human sender "
+                       "currently may manage the bot addressee's mail sending (Auth.bot_manager); false for bot senders "
+                       "or non-bot addressees. This checks authority only, not send intent or the draft's contents"},
                    body_raw={"type": "string", "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"},
                    edited_at={"type": ["string", "null"], "description": "When the author last changed a task comment's text; "
                               "null when never edited"},
