@@ -1085,7 +1085,7 @@ def actor_reads_task(c, actor, row):
                                                 lambda: set(access.owner_and_admin_emails(c)))
         if opened and row:
             row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
-        who = teammate_access._viewer_for(c, actor)
+        who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
         if who is None:
             return False
         policy.task_row(c, who, row)

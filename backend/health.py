@@ -1469,7 +1469,8 @@ SILENT_WAIT_HOURS = 1       # a task set waiting on a person this long with noth
 
 def unreadable_waits(c):
     """Name held questions whose recipient cannot sign in, run, or read every task source."""
-    from . import ask_routing
+    from . import ask_routing, task_privacy
+    task_privacy.snapshot(c)
     fields = "t.id,t.title,t.owner_id,t.requester_id,t.private,t.guest"
     rows = c.execute(
         f"SELECT * FROM (SELECT {fields},m.recipient_id AS recipient,m.id AS message_id FROM tasks t "
@@ -1480,18 +1481,29 @@ def unreadable_waits(c):
         "WHERE t.status='waiting' AND t.waiting_on IS NOT NULL) w "
         "ORDER BY w.id")
     found, seen = [], set()
-    for r in rows:
-        row = dict(r)
-        key = row["id"], row["recipient"]
-        if key in seen:
-            continue
-        source = H.message(c, row.pop("message_id"))
-        if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source):
-            continue
-        seen.add(key)
-        found.append(row)
-        if len(found) == 20:
-            break
+    for batch in iter(lambda: rows.fetchmany(500), []):
+        # Health polls the whole queue: load its question ancestry and task reads together.
+        messages = H.prime_messages(c, {r["message_id"] for r in batch})
+        task_privacy.prime_messages(c, messages.values())
+        tids = {r["id"] for r in batch}
+        for message in messages.values():
+            try:
+                tids.update(task_privacy.message_tasks(c, message))
+            except Problem:
+                pass                    # The individual check refuses unreadable provenance.
+        H.prime_tasks(c, tids)
+        for r in batch:
+            row = dict(r)
+            key = row["id"], row["recipient"]
+            if key in seen:
+                continue
+            source = messages.get(row.pop("message_id"))
+            if ask_routing.can_answer(c, row["recipient"], {"task": row["id"]}, source=source):
+                continue
+            seen.add(key)
+            found.append(row)
+            if len(found) == 20:
+                return found
     return found
 
 
