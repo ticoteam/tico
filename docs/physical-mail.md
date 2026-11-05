@@ -63,6 +63,15 @@ covers all addresses or one Gateway assignment. Only an owner or admin may grant
 who granted it and when, and both actions leave audit events. A grant covers letter content and its scan, without
 opening the private task. Revocation removes this access immediately; task-party rights and other grants still apply.
 
+When the Assistant or BotOps reads for a person, both the person and the actual bot must independently qualify by
+a mail grant or the letter's existing access policy. A person's grant alone never grants the Assistant access.
+This applies to letters, hub/MCP reads, raw scan downloads and exact file-version downloads.
+
+The built-in Counsel also supports these tools inside its claimed runs. A grant permits only the letters and scans
+within its scope; without a grant, Counsel reads the legal letter handled by its current task. Its restrictions on
+other files, document versions, credentials and outgoing actions still apply. Bots whose hosts only sync chat cannot
+use physical mail; both the API and pickers explain this restriction.
+
 Without a grant, a filed letter shows to whoever may read its task. Every kind but Other is a private task (account numbers and amounts
 are not the whole company's to read), so it shows only to the owner and the bot it went to, not to admins. A letter with no task (just in, failed, or archived as junk) shows in full only to the
 owner; admins see that it came and its status, so they can retry it, but not its sender, summary or scan. The scan
@@ -96,6 +105,7 @@ chosen address); Recent letters, with Retry on a failed one for an owner or admi
 | `PUT /api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}` | Give Read with `{"level":"read"}`; owner or admin, idempotent. `grantee_type` is `bot` or `person`; a bot id or slug is accepted and stored as its stable id. |
 | `DELETE /api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}` | Revoke that grant; owner or admin. |
 | `GET` / `PUT /api/v2/postal/settings` | Legal routing: `{"legal_bot_id":null}` for the owner (default), or an active bot's id or slug; only an owner or admin writes. |
+| `GET /api/v2/postal/bots` | Owner/admin mail pickers: paged bot ids, slugs and read/routing errors; the server enforces these same restrictions. |
 
 For a Gateway address, use its `assignment_id` from `GET /api/v2/postal/addresses`. The letter's `address_id` is the
 same assignment from the relay delivery; older deliveries and email intake use their exact `address` instead.

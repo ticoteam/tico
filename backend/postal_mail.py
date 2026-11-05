@@ -32,6 +32,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+from dataclasses import replace
 from email.utils import parseaddr
 from types import SimpleNamespace
 
@@ -48,6 +49,7 @@ from .auth import validate_identity
 from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
+from . import read_cache
 
 LOG = logging.getLogger("tico.postal_mail")
 TRANSPORT = None                 # tests' fake HQ, never the live one
@@ -71,6 +73,7 @@ TIMEOUT = 30
 LISTED = 100
 GRANT_BYTES = 64 * 1024
 ALL_ADDRESSES = "all"
+SCANS_SQL = "SELECT * FROM mail_items WHERE blob_id=?"
 # `bookkeeper` is the built-in Bookkeeper; `bookkeeping` is the retired template, kept for the bots built from it.
 FINANCE_TEMPLATES = ("finance-lead", "controller", "bookkeeper", "bookkeeping", "accounts-payable", "tax")
 READABLE = {"application/pdf": "pdf", "image/png": "image", "image/jpeg": "image", "image/webp": "image",
@@ -149,7 +152,17 @@ def target(c, settings, auth, to):
 def legal_bot(c):
     row = c.execute("SELECT legal_bot_id FROM postal_mail_settings WHERE id=1").fetchone()
     bot = H.bot(c, row[0]) if row and row[0] else None
-    return bot["id"] if bot and bot["state"] == "active" else None
+    return bot["id"] if bot and not bot_problem(c, bot, routing=True) else None
+
+
+def bot_problem(c, bot, *, routing=False):
+    """Use the task model's restrictions for bots whose host only syncs chat, and for routing task recipients."""
+    if not bot or bot["state"] != "active":
+        return "Choose an active bot for physical mail"
+    refusal = H.task_taking_refusal(c, H.KEEPER, H.bot_actor(bot["id"]))
+    if refusal and (routing or refusal[0] == "external-bot"):
+        return "Physical mail is unavailable: " + refusal[1]
+    return None
 
 
 # ----------------------------------------------------------------------------- providers
@@ -739,15 +752,41 @@ def address_id(row):
     return assignment if isinstance(assignment, str) and assignment else row["address"]
 
 
+def granted(c, actor, row):
+    if not (H.is_bot(actor) or H.is_human(actor)):
+        return False
+    return bool(read_cache.one(c,
+        "SELECT 1 FROM postal_mail_grants WHERE grantee_type=? AND grantee_id=? AND address_id IN (?,?)",
+        ("bot" if H.is_bot(actor) else "person", H.actor_id(actor), ALL_ADDRESSES, address_id(row))))
+
+
+def scan_granted(c, actor, blob_id):
+    """An explicit scan grant for one principal; a represented person's grant never grants its bot anything."""
+    return any(granted(c, actor, row) for row in read_cache.rows(c, SCANS_SQL, (blob_id,)))
+
+
 def access(c, auth, who, row):
+    """A delegated read must independently qualify as both the represented person and the actual bot."""
+    other = getattr(who, "task_actor", "")
+    if not other or other == who.actor:
+        return _access(c, auth, who, row)
+    people = (replace(who, task_actor=""),
+              replace(who, actor=other, role="bot", email="", task_actor="", via=""))
+    levels = [_access(c, auth, principal, row) for principal in people]
+    return None if None in levels else "full" if all(level == "full" for level in levels) else "status"
+
+
+def _access(c, auth, who, row):
     """How much of a letter `who` sees: "full", "status" (`redacted`) or None. An explicit Read grant includes private
     letters at its address. Otherwise a filed letter follows its task. A letter with no task
     (new, failed, archived) is the owner's alone; other owners and admins see only its status."""
-    grantee_type = "bot" if who.role == "bot" else "person"
-    if who.role in ("owner", "human", "bot") and c.execute(
-            "SELECT 1 FROM postal_mail_grants WHERE grantee_type=? AND grantee_id=? AND address_id IN (?,?)",
-            (grantee_type, H.actor_id(who.actor), ALL_ADDRESSES, address_id(row))).fetchone():
+    if who.role == "bot" and bot_problem(c, H.bot(c, H.actor_id(who.actor))):
+        return None
+    if who.role in ("owner", "human", "bot") and granted(c, who.actor, row):
         return "full"
+    from . import counsel
+    if counsel.is_counsel(who):
+        return "full" if counsel.postal_task(c, who, row) else None
     if row["task_id"]:
         try:
             auth.task(c, who, row["task_id"])
@@ -764,7 +803,7 @@ def access(c, auth, who, row):
 def scan_access(c, auth, who, blob_id):
     """For the file download (media.blob_for): None when the blob is no letter's scan, else whether `who` may open it
     under `access`."""
-    rows = c.execute("SELECT * FROM mail_items WHERE blob_id=?", (blob_id,)).fetchall()
+    rows = read_cache.rows(c, SCANS_SQL, (blob_id,))
     if not rows:
         return None
     return any(access(c, auth, who, row) == "full" for row in rows)
@@ -796,11 +835,13 @@ def install(app, settings, store, auth):
         if not admin(who):
             raise Problem("forbidden", f"An owner or admin {what}", 403)
 
-    def grantee(c, kind, ident):
+    def grantee(c, kind, ident, *, routing=False):
         if kind == "bot":
             bot = H.resolve_bot(c, ident)
             if not bot or bot["state"] == "archived":
                 raise Problem("not_found", "No such bot", 404)
+            if reason := bot_problem(c, bot, routing=routing):
+                raise Problem("validation", reason, 422)
             return bot["id"]
         person = H.human(c, ident)
         if not person:
@@ -820,6 +861,28 @@ def install(app, settings, store, auth):
             size += added
         more = len(rows) > len(out)
         return {"address_id": scope, "grants": out, "next": out[-1]["id"] if more and out else None}
+
+    @app.get("/api/v2/postal/bots")
+    def mail_bots(request: Request, after: str = Query(default="", max_length=120),
+                  limit: int = Query(default=50, ge=1, le=LISTED)):
+        """Bots for the mail pickers, with shared server-side read/routing restrictions. Owner or admin; paged."""
+        who = request.state.identity
+        need_admin(who, "chooses mail bots")
+        with store.read() as c:
+            member(c, who)
+            rows = c.execute("SELECT * FROM bots WHERE id>? AND state!='archived' ORDER BY id LIMIT ?",
+                             (after, limit + 1)).fetchall()
+            out, size = [], 256
+            for bot in rows[:limit]:
+                item = {"id": bot["id"], "slug": bot["slug"], "display_name": bot["display_name"],
+                        "state": bot["state"], "read_error": bot_problem(c, bot),
+                        "routing_error": bot_problem(c, bot, routing=True)}
+                added = len(json.dumps(item).encode()) + 2
+                if out and size + added > GRANT_BYTES:
+                    break
+                out.append(item)
+                size += added
+            return {"bots": out, "next": out[-1]["id"] if len(rows) > len(out) and out else None}
 
     @app.get("/api/v2/postal/addresses/{address_id}/grants")
     def mail_grants(request: Request, address_id: str = Path(min_length=1, max_length=300),
@@ -894,9 +957,7 @@ def install(app, settings, store, auth):
         need_admin(who, "sets legal mail routing")
         with store.transaction() as c:
             member(c, who)
-            ident = grantee(c, "bot", body.legal_bot_id) if body.legal_bot_id is not None else None
-            if ident and H.bot(c, ident)["state"] != "active":
-                raise Problem("validation", "Choose an active bot", 422)
+            ident = grantee(c, "bot", body.legal_bot_id, routing=True) if body.legal_bot_id is not None else None
             c.execute("UPDATE postal_mail_settings SET legal_bot_id=?,updated_by_id=?,updated_at=? WHERE id=1",
                       (ident, who.actor, H.now()))
             H.event(c, who.actor, "mail.routing", "legal", {"legal_bot_id": ident})

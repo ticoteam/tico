@@ -70,6 +70,11 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/bots') return json([{id: 'legal', slug: 'legal', display_name: 'Counsel', state: 'active'}]);
+    if (p === '/api/v2/postal/bots') return json({bots: [
+      {id: 'tico-counsel', slug: 'legal', display_name: 'Counsel', state: 'active', read_error: null, routing_error: null},
+      {id: 'synced', slug: 'synced', display_name: 'Chat bot', state: 'active',
+        read_error: 'Physical mail is unavailable: this bot only syncs chat', routing_error: 'Physical mail is unavailable: this bot only syncs chat'},
+    ], next: null});
     if (p === '/api/v2/needs-you') return json({items: []});
     if (p === '/api/v2/operations') return json({machines: [], services: []});
     if (p === '/api/v2/postal/addresses') {
@@ -159,28 +164,32 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       assert.deepEqual(await intake.locator('option').allInnerTexts(), ['None', 'Mail · mail@acme.example']);
       const legal = pane.locator('[data-pm-legal]');
       await legal.waitFor();
-      await legal.selectOption('legal');
+      assert.equal(await legal.locator('option[value="synced"]').isDisabled(), true, 'unsupported routing bot is disabled');
+      assert.match(await legal.locator('option[value="synced"]').innerText(), /only syncs chat/);
+      assert.equal(await pane.locator('[data-pm-grantee] option[value="bot:synced"]').isDisabled(), true,
+        'unsupported scan reader is disabled');
+      await legal.selectOption('tico-counsel');
       await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
-      assert.equal(state.legal_bot_id, 'legal', 'route legal mail to Counsel');
+      assert.equal(state.legal_bot_id, 'tico-counsel', 'route legal mail to Counsel by its stable id');
       state.routingFail = true;
       await legal.selectOption('');
       await pane.locator('[data-pm-access-error]', {hasText: 'Not saved'}).waitFor();
-      assert.equal(await legal.inputValue(), 'legal', 'failed routing changes restore the saved bot');
+      assert.equal(await legal.inputValue(), 'tico-counsel', 'failed routing changes restore the saved bot');
       state.routingFail = false;
       await legal.selectOption('');
       await page.waitForFunction(() => document.querySelector('[data-pm-legal]')?.disabled === false);
       assert.equal(state.legal_bot_id, null, 'restore owner routing');
       await pane.locator('[data-pm-scope]').selectOption('as_1');
-      await pane.locator('[data-pm-grantee]').selectOption('bot:legal');
+      await pane.locator('[data-pm-grantee]').selectOption('bot:tico-counsel');
       await pane.locator('[data-pm-grant-form] button').click();
       await pane.locator('[data-pm-grants]', {hasText: 'Counsel · Read'}).waitFor();
-      const access = state.sent.find(s => s.path === '/api/v2/postal/addresses/as_1/grants/bot/legal');
+      const access = state.sent.find(s => s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel');
       assert.equal(access.method, 'PUT'); assert.deepEqual(access.body, {level: 'read'});
       assert.ok(access.key, 'grant carries an Idempotency-Key');
       await pane.locator('[data-pm-revoke]').click();
       await pane.locator('[data-pm-grants]', {hasText: 'No grants'}).waitFor();
       assert.equal(state.grants.length, 0, 'remove a per-address grant');
-      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path.endsWith('/as_1/grants/bot/legal')));
+      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path.endsWith('/as_1/grants/bot/tico-counsel')));
       await shot(page, 'desktop');
       // Senders alone save nothing; with an inbox picked both go in one save.
       const from = pane.locator('[data-pm-intake-senders]'), puts = () => state.sent.filter(s => s.path === '/api/v2/postal/intake').length;

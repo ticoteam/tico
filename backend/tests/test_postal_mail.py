@@ -315,6 +315,127 @@ def test_mail_grants_are_paged(api):
     assert first["grants"][0]["id"] != second["grants"][0]["id"] and second["next"] is None
 
 
+def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
+    from backend import task_privacy
+    from backend.tests.test_assistant import assistant_turn
+
+    letter(api, "161", "legal", summary="Private court papers")
+    deliver(hq, "161", assignment_id="as_de")
+    service(api).tick()
+    drain(api)
+    row = items(api)["161"]
+    put(api, "postal/addresses/as_de/grants/person/ben", {})
+    _, attempt = assistant_turn(api, "ben-test")
+    token = attempt["token"]
+    assert get(api, "me", token)["actor"] == "human:ben"
+    paths = ["postal/items/" + row["id"], "files/" + row["blob_id"],
+             f"files/{row['file_id']}?v=1", f"files/{row['file_id']}/versions/1"]
+
+    def denied():
+        assert get(api, "postal/items", token)["items"] == []
+        for path in paths:
+            get(api, path, token, expected=404)
+        assert call(api, "hub_mail_list", {}, token=token)[1]["items"] == []
+        assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[0]
+        with api.app.state.store.read() as c:
+            assert not task_privacy.blob_readable(c, ("human:ben", "bot:coo"), row["blob_id"])
+
+    assert scan(api, row, "ben-test") == 200
+    denied()  # Ben's grant alone cannot carry the letter into the Assistant's turn.
+    bot_grant = "postal/addresses/as_de/grants/bot/coo"
+    put(api, bot_grant, {})
+    assert get(api, "postal/items", token)["items"][0]["summary"] == "Private court papers"
+    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == "Private court papers"
+    for path in paths[1:]:
+        response = api.get("/api/v2/" + path, headers=headers(token))
+        assert response.status_code == 200 and response.content.startswith(b"%PDF"), response.text
+    get(api, "tasks/" + row["task_id"], token, expected=404)
+    assert api.delete("/api/v2/postal/addresses/as_de/grants/person/ben", headers=headers()).status_code == 200
+    denied()  # The bot's grant alone cannot carry the letter to Ben either.
+    put(api, "postal/addresses/as_de/grants/person/ben", {})
+    assert api.delete("/api/v2/" + bot_grant, headers=headers()).status_code == 200
+    denied()
+
+
+def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, mail):
+    from backend.auth import Identity
+    from backend.blobs import register
+    from backend.tests.test_counsel import counsel_on, counsel_run, store_file
+
+    counsel_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET slug='legal' WHERE id=?", (H.COUNSEL,))
+    grant_path = "postal/addresses/all/grants/bot/legal"
+    assert put(api, grant_path, {})["grant"]["grantee_id"] == H.COUNSEL
+    assert put(api, "postal/settings", {"legal_bot_id": "legal"})["settings"]["legal_bot_id"] == H.COUNSEL
+    letter(api, "171", "legal", summary="Summons for Counsel")
+    deliver(hq, "171")
+    service(api).tick()
+    drain(api)
+    put(api, "postal/settings", {"legal_bot_id": None})
+    letter(api, "172", "legal", summary="Owner's private legal mail")
+    deliver(hq, "172")
+    service(api).tick()
+    drain(api)
+    got = items(api)
+    routed, owner = got["171"], got["172"]
+    assert task(api, routed["task_id"])["owner_id"] == "bot:" + H.COUNSEL
+    _, attempt = counsel_run(api)
+    token = attempt["token"]
+    assert {"hub_mail_list", "hub_mail_read"} <= {
+        t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
+    assert {i["external_id"] for i in get(api, "postal/items", token)["items"]} == {"171", "172"}
+    for row in (routed, owner):
+        assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == row["summary"]
+        assert scan(api, row, token) == 200
+        for path in (f"files/{row['file_id']}?v=1", f"files/{row['file_id']}/versions/1"):
+            response = api.get("/api/v2/" + path, headers=headers(token))
+            assert response.status_code == 200 and response.content.startswith(b"%PDF"), response.text
+    # Its existing restrictions still fence other documents and other versions of the scan's file.
+    unrelated, _ = store_file(api, "A private document that is not postal mail")
+    get(api, "files/" + unrelated, token, expected=403)
+    with api.app.state.store.transaction() as c:
+        data = b"Unrelated private file version"
+        digest = api.app.state.blobs.put(data, "text/plain")
+        blob = register(c, Identity("human:ana", "owner"), digest, len(data), "notes.txt", "text/plain")
+        api.app.state.files.insert_task_version(c, routed["file_id"], 2, blob["id"], digest, len(data),
+                                               "notes.txt", "text/plain", "human:ana", H.now())
+    get(api, f"files/{routed['file_id']}/versions/2", token, expected=403)
+    get(api, "postal/settings", token, expected=403)
+    get(api, "postal/addresses/all/grants", token, expected=403)
+    assert api.delete("/api/v2/" + grant_path, headers=headers()).status_code == 200
+    # The carried legal task still authorizes its own letter; other private mail loses access immediately.
+    assert [i["external_id"] for i in get(api, "postal/items", token)["items"]] == ["171"]
+    assert scan(api, routed, token) == 200
+    get(api, "postal/items/" + owner["id"], token, expected=404)
+    assert scan(api, owner, token) == 403
+    get(api, f"files/{owner['file_id']}/versions/1", token, expected=403)
+
+
+def test_mail_bots_reject_chat_only_hosts_in_the_server_and_picker_data(api):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"harness": "grokbot"})
+    choices = {b["id"]: b for b in get(api, "postal/bots")["bots"]}
+    assert "only syncs its chat" in choices["ops"]["read_error"]
+    assert "only syncs its chat" in choices["ops"]["routing_error"]
+    response = put(api, "postal/addresses/all/grants/bot/ops", {}, expected=422)
+    assert "only syncs its chat" in response["error"]["detail"]
+    put(api, "postal/settings", {"legal_bot_id": "ops"}, expected=422)
+    first = get(api, "postal/bots?limit=1")
+    second = get(api, "postal/bots?limit=1&after=" + first["next"])
+    assert first["bots"][0]["id"] != second["bots"][0]["id"]
+
+
+def test_mail_migration_replay_keeps_routing_and_grant_attribution(api):
+    put(api, "postal/settings", {"legal_bot_id": "ops"})
+    put(api, "postal/addresses/all/grants/bot/ops", {})
+    before = get(api, "postal/settings"), get(api, "postal/addresses/all/grants")
+    migration = Path(__file__).resolve().parents[1] / "migrations/20261105040742_postal_mail_grants_and_routing.sql"
+    with api.app.state.store.transaction() as c:
+        H._apply(c, migration.read_text())
+    assert (get(api, "postal/settings"), get(api, "postal/addresses/all/grants")) == before
+
+
 def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
     cases = {"201": ("government_tax", None, "bot:finance"), "202": ("bill", None, "bot:finance"),
              "203": ("financial", None, "bot:finance"), "204": ("check", None, "human:ana"),

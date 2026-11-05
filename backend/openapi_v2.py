@@ -3216,10 +3216,14 @@ SCHEMAS.update({
     "PostalMailGrants": obj({"address_id": "s", "grants": items(ref("PostalMailGrant")), "next": "n"}),
     "PostalMailGrantResult": obj({"grant": ref("PostalMailGrant")}),
     "PostalMailRevoked": obj({"ok": "b"}),
+    "PostalMailBots": obj({"bots": items(obj({"id": "s", "slug": "s", "display_name": "s", "state": "s",
+                                            "read_error": "n", "routing_error": "n"})), "next": "n"}),
     "PostalMailSettings": obj({"settings": obj({"id": "i", "legal_bot_id": "n", "updated_by_id": "n",
                                                "created_at": "s", "updated_at": "s"})}),
 })
 STABLE.extend([
+    ("/api/v2/postal/bots", "get", "Physical mail", "listPostalMailBots",
+     "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin", "PostalMailBots"),
     ("/api/v2/postal/addresses/{address_id}/grants", "get", "Physical mail", "listPostalMailGrants",
      "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin", "PostalMailGrants"),
     ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "put", "Physical mail", "grantPostalMailRead",

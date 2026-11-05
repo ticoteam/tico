@@ -55,19 +55,27 @@ async function pmAccess(run) {
   const host = $('#set-mail [data-pm-access]'); if (!host) return;
   try {
     const admin = settingsIsAdmin();
+    const loadBots = async () => {
+      const bots = []; let after = '';
+      do {
+        const page = await get('/v2/postal/bots?limit=100' + (after ? '&after=' + encodeURIComponent(after) : ''), {fresh: true});
+        bots.push(...page.bots); after = page.next;
+      } while (after);
+      return bots;
+    };
     const [routing, bots, people] = await Promise.all([get('/v2/postal/settings', {fresh: true}),
-      admin ? get('/v2/bots') : [], admin ? get('/people') : {people: []}]);
+      admin ? loadBots() : [], admin ? get('/people') : {people: []}]);
     if (run !== PM.run) return;
     PM.members = [...(Array.isArray(bots) ? bots : []).filter(b => b.state === 'active').map(b =>
-      ({type: 'bot', id: b.id || b.slug, name: b.display_name || b.slug})),
+      ({type: 'bot', id: b.id || b.slug, name: b.display_name || b.slug, read_error: b.read_error, routing_error: b.routing_error})),
     ...(people.people || []).filter(p => !p.hidden).map(p => ({type: 'person', id: p.id, name: p.name || p.id}))];
     const selected = routing.settings.legal_bot_id || '';
     if (!admin) { host.innerHTML = `<p>Legal mail: ${esc(selected || 'Owner')}</p>`; return; }
-    const option = (id, name, chosen) => `<option value="${esc(id)}"${id === chosen ? ' selected' : ''}>${esc(name)}</option>`;
+    const option = (id, name, chosen, error = '') => `<option value="${esc(id)}"${id === chosen ? ' selected' : ''}${error ? ' disabled' : ''}>${esc(name + (error ? ' — ' + error : ''))}</option>`;
     const legal = PM.members.filter(p => p.type === 'bot');
     if (selected && !legal.some(b => b.id === selected)) legal.push({id: selected, name: selected});
     host.innerHTML = `<div class="pm-access-controls"><label>Legal mail<select data-pm-legal>
-        ${option('', 'Owner', selected)}${legal.map(b => option(b.id, b.name, selected)).join('')}</select></label>
+        ${option('', 'Owner', selected)}${legal.map(b => option(b.id, b.name, selected, b.routing_error)).join('')}</select></label>
       <p class="muted">The owner receives every legal letter.</p>
       <h3>Who can use it</h3><label>Address<select data-pm-scope>${option('all', 'All addresses', 'all')}
         ${(PM.addresses || []).filter(a => a.assignment_id || a.id || a.status === 'active' && a.address)
@@ -75,7 +83,7 @@ async function pmAccess(run) {
             a.status === 'active' && a.address ? a.address : pmStateName(a.state), 'all')).join('')}</select></label>
       <p class="muted">Read includes private letters and scans.</p><div data-pm-grants></div>
       <form data-pm-grant-form><label>Person or bot<select data-pm-grantee required>
-        <option value="">Choose…</option>${PM.members.map(p => option(`${p.type}:${p.id}`, p.name, '')).join('')}</select></label>
+        <option value="">Choose…</option>${PM.members.map(p => option(`${p.type}:${p.id}`, p.name, '', p.read_error)).join('')}</select></label>
         <button type="submit">Give Read access</button></form><p class="err" data-pm-access-error role="status"></p></div>`;
     const error = host.querySelector('[data-pm-access-error]'), scope = host.querySelector('[data-pm-scope]');
     const legalSelect = host.querySelector('[data-pm-legal]');

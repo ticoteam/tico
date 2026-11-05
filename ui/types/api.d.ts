@@ -3745,6 +3745,18 @@ export type PostalLegalRouting = {
   legal_bot_id: string | null;
 };
 
+export type PostalMailBots = {
+  bots: Array<{
+  display_name: string;
+  id: string;
+  read_error: string | null;
+  routing_error: string | null;
+  slug: string;
+  state: string;
+}>;
+  next: string | null;
+};
+
 export type PostalMailGrant = {
   address_id: string;
   created_at: string;
@@ -8797,6 +8809,14 @@ export type ListPagesParams = {
 };
 export type ListPagesBody = never;
 export type ListPagesResponse = PageList;
+
+/** GET /api/v2/postal/bots */
+export type ListPostalMailBotsParams = {
+  after?: string;
+  limit?: number;
+};
+export type ListPostalMailBotsBody = never;
+export type ListPostalMailBotsResponse = PostalMailBots;
 
 /** GET /api/v2/postal/addresses/{address_id}/grants */
 export type ListPostalMailGrantsParams = {

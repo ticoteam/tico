@@ -7771,12 +7771,12 @@ def kind_of(me):
 
 
 # Counsel (backend/counsel.py) has no credentials and sends nothing, so it is offered only the tools it needs: its rules,
-# the document it reads, and its own task. A web search or fetch, a message to anyone, and every other tool are not its
+# the document it reads, authorized physical mail, and its own task. A web search or fetch, a message to anyone, and every other tool are not its
 # to call. The server still decides every call; this keeps those tools out of its list and refuses them if it asks.
 COUNSEL = "counsel"                 # its kind of caller, the role offered_to names
 COUNSEL_BOT = "tico-counsel"        # its slug (backend/hubdb.py COUNSEL)
 COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "hub_file_read", "hub_task_comment",
-                           "hub_task_close"})
+                           "hub_task_close", "hub_mail_list", "hub_mail_read"})
 
 
 # The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
