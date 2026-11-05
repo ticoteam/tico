@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import bot_settings as BS, check_pools as P, health, hubdb as H, verdict_moves as V
+from backend import bot_settings as BS, check_pools as P, health, hubdb as H, pr_identity as PR, verdict_moves as V
 from backend.tests.test_check_pools import team
 from backend.tests.test_github import api, headers  # noqa: F401
 from backend.tests.test_review_gate import HEAD, OLD
@@ -363,22 +363,159 @@ def test_done_task_with_open_pr_returns_to_review_and_human_pr_is_skipped(api):
         assert H.task(c, task["id"])["status"] == "review"
 
 
-def test_two_prs_at_same_head_each_need_their_own_review(api):
+@pytest.mark.parametrize("second_head", [HEAD, OLD], ids=["same-head", "different-heads"])
+def test_pr_1_and_12_each_need_their_own_review(api, second_head):
     setup(api)
     task = task_pr(api)
     with api.app.state.store.transaction() as c:
-        second = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/atlas/pull/13")
+        second = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/atlas/pull/1")
         first = next(p for p in H.task_links(c, task["id"]) if p["number"] == 12)
         c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable='clean',detail=? WHERE id=?",
-                  (first["detail"], second["id"]))
+                  (json.dumps({**H._json(first["detail"], {}), "head_sha": second_head}), second["id"]))
     dispatch(api)
     dispatch(api)
     reviews = children(api, task)
-    assert {r["title"] for r in reviews} == {"Review 1: PR #12", "Review 1: PR #13"}
-    finish(api, next(r for r in reviews if "#12" in r["title"]))
-    assert all("merge PR #13" not in m["body"] for m in handoffs(api, task, "merge"))
-    finish(api, next(r for r in reviews if "#13" in r["title"]))
-    assert any("merge PR #13" in m["body"] for m in handoffs(api, task, "merge"))
+    assert {r["title"] for r in reviews} == {"Review 1: PR #12", "Review 1: PR #1"}
+    dispatch(api)
+    dispatch(api)
+    assert {r["id"] for r in children(api, task)} == {r["id"] for r in reviews}
+    finish(api, next(r for r in reviews if r["title"] == "Review 1: PR #12"))
+    [notice] = handoffs(api, task, "merge")
+    assert PR.matches(notice, "https://github.com/Acme/atlas/pull/12")
+    assert not PR.matches(notice, "https://github.com/Acme/atlas/pull/1")
+    finish(api, next(r for r in reviews if r["title"] == "Review 1: PR #1"), head=second_head)
+    dispatch(api)
+    assert len(handoffs(api, task, "merge")) == 2
+
+
+@pytest.mark.parametrize("reviews", [1, 2], ids=["merge-next", "review-2-next"])
+@pytest.mark.parametrize("case,head", [("backfill", HEAD), ("backfill-done", HEAD), ("hold", HEAD), ("old-head", OLD)])
+def test_undelivered_approval_replays_once_at_current_head(api, monkeypatch, reviews, case, head):
+    setup(api, reviews=reviews)
+    task = task_pr(api)
+    dispatch(api)
+    [first] = children(api, task)
+    if case == "hold":
+        with api.app.state.store.transaction() as c:
+            H.task_update(c, "human:ana", task["id"], status="waiting", note="Wait for the owner.")
+        finish(api, first, head=head)
+    else:
+        # A historical check has a settled attempt, but this route did not record its delivery.
+        with monkeypatch.context() as patch:
+            patch.setattr(V, "after_verdict", lambda *args: None)
+            finish(api, first, head=head)
+    with api.app.state.store.read() as c:
+        assert not (V.delivery(c, H.task(c, first["id"])) or {}).get("consumed")
+    assert not handoffs(api, task, "merge")
+    if case == "backfill-done":
+        with api.app.state.store.transaction() as c:
+            H.task_update(c, H.KEEPER, task["id"], status="done", strict=False)
+    if case == "hold":
+        dispatch(api)
+        assert children(api, task) == []
+        with api.app.state.store.transaction() as c:
+            H.task_update(c, "human:ana", task["id"], status="doing", note="Continue.")
+        # Clearing the hold routes General checks immediately, without a board check step.
+        assert bool(handoffs(api, task, "merge")) == (reviews == 1)
+        if reviews == 2:
+            assert children(api, task)[0]["title"] == "Review 2: PR #12"
+    else:
+        dispatch(api)
+    expected_title = "Review 1: PR #12" if head == OLD else "Review 2: PR #12"
+    active = children(api, task)
+    assert [r["title"] for r in active] == ([expected_title] if head == OLD or reviews == 2 else [])
+    assert len(handoffs(api, task, "merge")) == int(head == HEAD and reviews == 1)
+    with api.app.state.store.transaction() as c:
+        assert bool((V.delivery(c, H.task(c, first["id"])) or {}).get("consumed")) == (head == HEAD)
+        V.resumed(c, task["id"])
+        V.resumed(c, task["id"])
+    dispatch(api)
+    dispatch(api)
+    assert {r["id"] for r in children(api, task)} == {r["id"] for r in active}
+    assert len(handoffs(api, task, "merge")) == int(head == HEAD and reviews == 1)
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://github.com/Acme/atlas/pull/1", True),
+    ("https://GITHUB.com/ACME/ATLAS/pull/1/?tab=files#review-12", True),
+    ("https://github.com/Acme/atlas/pull/12", False),
+    ("https://github.example/Acme/atlas/pull/1", False),
+    ("https://github.com/Other/atlas/pull/1", False),
+    ("https://github.com/Acme/other/pull/1", False),
+    ("https://github.com/Acme/atlas/pull/1extra", False),
+    ("", False),
+])
+def test_review_reuse_requires_the_full_identity_even_when_title_matches(url, expected):
+    check = {"title": "Review 1: PR #1", "body": f"Check this PR: ({url})."}
+    assert V.for_pr(check, {"url": "https://github.com/Acme/atlas/pull/1", "number": 1}) is expected
+
+
+@pytest.mark.parametrize("other_url", [
+    "https://github.com/Acme/other/pull/12",
+    "https://github.com/Other/atlas/pull/12",
+    "https://github.example/Acme/atlas/pull/12",
+])
+def test_queued_reviews_keep_equal_numbers_on_distinct_prs(api, other_url):
+    setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        first = H.task_links(c, task["id"])[0]
+        other = H.task_link(c, "human:ana", task["id"], other_url, kind="pr")
+        identity = PR.identity(other_url)
+        c.execute("UPDATE task_links SET state='open',repo=?,number=12,checks='passing',mergeable='clean',detail=? WHERE id=?",
+                  (f"{identity[1]}/{identity[2]}", first["detail"], other["id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=?", (H.shift(H.now(), minutes=-10),))
+    dispatch(api)
+    dispatch(api)
+    with api.app.state.store.read() as c:
+        waits = P.waiting(c, task["id"])
+        assert {w["pr_url"] for w in waits} == {first["url"], other_url}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=?", (H.now(),))
+    dispatch(api)
+    reviews = children(api, task)
+    assert len(reviews) == 2
+    own = next(r for r in reviews if V.for_pr(r, first))
+    other_review = next(r for r in reviews if V.for_pr(r, other))
+    assert own["id"] != other_review["id"]
+    finish(api, own)
+    [notice] = handoffs(api, task, "merge")
+    assert PR.matches(notice, first) and not PR.matches(notice, other)
+    dispatch(api)
+    assert [r["id"] for r in children(api, task)] == [other_review["id"]]
+
+
+def test_hand_filed_review_with_equal_numbers_needs_a_full_link(api):
+    setup(api)
+    task = task_pr(api)
+    with api.app.state.store.transaction() as c:
+        other = H.task_link(c, "human:ana", task["id"], "https://github.com/Acme/other/pull/12")
+        first = next(p for p in H.task_links(c, task["id"]) if PR.same(p, "https://github.com/Acme/atlas/pull/12"))
+        c.execute("UPDATE task_links SET checks='passing',detail=? WHERE id=?", (first["detail"], other["id"]))
+        with pytest.raises(H.Refused, match="full PR link"):
+            H.task_create(c, "human:ana", "Review 1: PR #12", "Check the PR.", "bot:rev-a", parent_id=task["id"])
+        own = H.task_create(c, "human:ana", "Review 1: PR #12", first["url"], "bot:rev-a", parent_id=task["id"])
+        second = H.task_create(c, "human:ana", "Review 1: PR #12", other["url"], "bot:rev-b", parent_id=task["id"])
+        with pytest.raises(H.Refused, match="already open"):
+            H.task_create(c, "human:ana", "Review 1: PR #12", other["url"], "bot:rev-c", parent_id=task["id"])
+    assert own["id"] != second["id"]
+
+
+def test_replayed_approval_keeps_the_fresh_ci_read(api, monkeypatch):
+    setup(api)
+    task = task_pr(api)
+    dispatch(api)
+    [first] = children(api, task)
+    with monkeypatch.context() as patch:
+        patch.setattr(V, "after_verdict", lambda *args: None)
+        finish(api, first)
+    from backend import review_gate
+    monkeypatch.setattr(review_gate, "snapshot", lambda service, prs: {
+        p["id"]: {"head_sha": HEAD, "checks": {"required": "failing"}} for p in prs})
+    P.retry_prs(api.app.state.store, service=api.app.state.github_app)
+    assert not handoffs(api, task, "merge")
+    with api.app.state.store.read() as c:
+        assert V.delivery(c, H.task(c, first["id"]))["consumed"]
 
 
 def test_fresh_failed_checks_do_not_allow_merge_from_a_green_cache(api, monkeypatch):

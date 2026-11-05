@@ -7,6 +7,7 @@ import httpx
 from jwt.exceptions import InvalidKeyError
 
 from . import test_receipts
+from . import pr_identity as PR
 
 
 
@@ -41,12 +42,12 @@ def reviewing(c, actor, row):
 
 
 
-def heads(c, parent, snapshots=None):
+def heads(c, parent, snapshots=None, *, prs=None):
     """The pull request heads a check on this ticket would judge now: the fresh read when there is one, else the
     head the link last recorded. Empty when none is known."""
     from . import hubdb as H
     out = set()
-    for pr in links(c, parent):
+    for pr in links(c, parent) if prs is None else prs:
         detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail"), {}) or {}
         head = str(detail.get("head_sha") or "").lower()
         if not detail.get("error") and test_receipts.SHA.fullmatch(head):
@@ -54,7 +55,21 @@ def heads(c, parent, snapshots=None):
     return out
 
 
-def refuse_second(c, actor, parent, title, snapshots=None):
+def bind_prs(c, actor, parent, title, body):
+    """Save full references on hand-filed checks so later routing never guesses from a PR number."""
+    step = check_of(c, parent, title)
+    prs = links(c, parent) if step else []
+    if not prs:
+        return body
+    selected = PR.requested({"title": title, "body": body}, prs, all_if_unspecified=not step.get("detached"))
+    if step.get("detached") and not selected:
+        from . import hubdb as H
+        H.refuse(c, actor, "kind", "Include the full PR link so Tico knows which PR to review.")
+    return str(body or "") + "".join("\n" + p["url"] for p in selected
+                                     if not PR.matches({"title": title, "body": body}, p))
+
+
+def refuse_second(c, actor, parent, title, snapshots=None, *, body=""):
     """One open Review 1, Review 2 or QA subtask per ticket and pull request head: a second request for the same
     check on the same head (or one whose head is unknown) points at the one already open instead of buying a
     second reviewer turn. A push gives a new head, and with it a new check."""
@@ -65,13 +80,14 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         return
     from . import step_flow
     kind = step_flow.label(step)
-    wanted = heads(c, parent, snapshots)
+    requested = {"title": title, "body": body}
+    prs = links(c, parent) if step.get("detached") else []
+    wanted = heads(c, parent, snapshots, prs=[p for p in prs if PR.matches(requested, p)]
+                   if step.get("detached") else None)
     from . import check_pools
     for wait in check_pools.waiting(c, parent["id"], step["id"]):
         if step.get("detached"):
-            numbers = set(re.findall(r"#\d+\b", str(title)))
-            waited_numbers = set(re.findall(r"#\d+\b", wait["title"]))
-            if numbers and waited_numbers and not numbers & waited_numbers:
+            if not any(PR.matches(requested, p) and check_pools.wait_for_pr(c, wait, p) for p in prs):
                 continue
         judged = set(filter(None, wait["heads"].split(",")))
         if wanted and judged and not wanted & judged:
@@ -86,9 +102,7 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
         if step.get("detached"):
-            numbers = set(re.findall(r"#\d+\b", str(title)))
-            other_numbers = set(re.findall(r"#\d+\b", str(other.get("title"))))
-            if numbers and other_numbers and not numbers & other_numbers:
+            if not any(PR.matches(requested, p) and PR.matches(other, p) for p in prs):
                 continue
         seen = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                          "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
@@ -105,7 +119,10 @@ def refuse_second(c, actor, parent, title, snapshots=None):
 def remember_heads(c, actor, child_id, parent, snapshots=None):
     """Record the heads a check was asked for, so a later request for the same head finds it (refuse_second)."""
     from . import hubdb as H
-    seen = heads(c, parent, snapshots)
+    child = H.task(c, child_id)
+    step = check_of(c, parent, child["title"])
+    prs = [p for p in links(c, parent) if PR.matches(child, p)] if step and step.get("detached") else None
+    seen = heads(c, parent, snapshots, prs=prs)
     if seen:
         H._task_event(c, child_id, actor, "review_head", None, ",".join(sorted(seen)), "")
 

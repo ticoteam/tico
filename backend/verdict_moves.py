@@ -23,10 +23,10 @@ bot's queued jobs a claim hands out (HANDOFF_FIRST_SQL). Each wakes the turn of 
 """
 import json
 import logging
-import re
 
 from . import hubdb as H
 from . import review_gate
+from . import pr_identity as PR
 from . import step_flow as F
 from . import task_relations as TR
 from .check_independence import assess as assess_independence
@@ -127,7 +127,7 @@ def review_checks(c, row, *, evidence=None):
 
 def for_pr(check, pr):
     """Keep separate PRs separate even when they point at the same commit."""
-    return pr["url"] in (check.get("body") or "") or bool(re.search(r"#" + str(pr.get("number")) + r"\b", check.get("title") or ""))
+    return PR.matches(check, pr)
 
 
 def _checks(c, row, step, *, evidence=None, pr=None):
@@ -216,7 +216,7 @@ def _judged_head(c, check, *, evidence=None):
     return str(found["new"] if found else "").split(",")[0]
 
 
-def after_capture(c, check_id, head, attempt_id):
+def after_capture(c, check_id, head, attempt_id, *, snapshots=None):
     """Consume a verdict only after its exact judging attempt has captured usage and settled."""
     check = H.task(c, check_id)
     verdict = _verdict(check or {})
@@ -264,7 +264,7 @@ def after_capture(c, check_id, head, attempt_id):
                   json.dumps({"verdict": verdict, "head": head, **out}, sort_keys=True), "")
     if step.get("detached"):
         from . import check_pools
-        check_pools.entered(c, H.KEEPER, ticket)
+        check_pools.entered(c, H.KEEPER, ticket, snapshots=snapshots)
     if out.get("handoff"):
         refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
         if out["handoff"] == "merge":
@@ -275,22 +275,32 @@ def after_capture(c, check_id, head, attempt_id):
 
 
 def resumed(c, task_id):
-    """The ticket is back at a check step from a hold (task_blocked.reconcile): a verdict its check there gave while it
-    was held, at the head its pull request is at now, moves it as it would have then. A verdict moves only a ticket at
-    the check's own step, so one given during the hold moved nothing, and the ticket would sit on a settled check."""
+    """Replay settled checks after a hold, including PR reviews on tasks without board check steps."""
     ticket = _ticket(c, H.task(c, task_id))
+    if ticket and F.pr_checks(c, ticket):
+        from . import check_pools
+        return check_pools.entered(c, H.KEEPER, ticket)
     step = ticket and F.step(c, ticket.get("step_id"))
     if not step or not F.is_check(step):
         return None
     # A replay must keep the same audience as the child's normal result delivery.
     last = next((t for t in reversed(_checks(c, ticket, step))
                  if _verdict(t) and H._subtask_result_parent(c, t)), None)
-    if not last or (delivery(c, last) or {}).get("consumed") or not after_verdict(c, last):
+    return replay(c, last) if last else None
+
+
+def replay(c, check, *, snapshots=None):
+    """Consume an undelivered verdict once, through the normal head, audience and capture checks."""
+    check = H.task(c, check["id"])
+    if (not check or check.get("status") != "done" or (delivery(c, check) or {}).get("consumed")
+            or not H._subtask_result_parent(c, check)):
         return None
     attempt = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
-                        (last["id"],)).fetchone()
-    head = str(last.get("verdict_head") or _judged_head(c, last) or "").lower()
-    return after_capture(c, last["id"], head, attempt["id"]) if attempt else None
+                        (check["id"],)).fetchone()
+    if not attempt or not after_verdict(c, check):
+        return None
+    head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
+    return after_capture(c, check["id"], head, attempt["id"], snapshots=snapshots)
 
 
 def _failed(c, ticket, step, verdict, head, passed=None, *, pr=None):
@@ -483,12 +493,22 @@ def merge_text(c, row, pr, head, *, announce=True):
             + (f"; Tico then moves this ticket to {landing['name']}." if landing else "."))
 
 
+def pr_notice_seen(c, row, kind, pr, head):
+    """Saved notices use full PR identities too, including older URL spellings."""
+    for event in c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=?",
+                           (row["id"], kind)):
+        url, _, saved_head = str(event["new"] or "").rpartition("@")
+        if saved_head == head and PR.same(url, pr):
+            return True
+    return False
+
+
 def _merge_woken(c, row, head, pr=None):
     """Record the merge wake for this head; False when one was already sent for it."""
     key = f"{pr['url']}@{head}" if pr else head
-    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='merge_wake' "
-                 "AND new=? LIMIT 1",
-                 (row["id"], key)).fetchone():
+    if (pr_notice_seen(c, row, "merge_wake", pr, head) if pr else
+            c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='merge_wake' "
+                      "AND new=? LIMIT 1", (row["id"], key)).fetchone()):
         return False
     H._task_event(c, row["id"], H.KEEPER, "merge_wake", None, key, "")
     return True
@@ -512,8 +532,7 @@ def merge_wake(c, row, snapshots=None):
                 verified.append({**pr, "checks": "passing" if green else "pending", "detail": json.dumps(detail)})
             prs = verified
         ready = next((ready for pr in prs if (ready := merge_ready(c, row, pr=pr))
-                      and not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='merge_wake' AND new=?",
-                                        (row["id"], f"{pr['url']}@{ready[1]}")).fetchone()), None)
+                      and not pr_notice_seen(c, row, "merge_wake", pr, ready[1])), None)
     else:
         ready = row and merge_ready(c, row)
     sources = (merge_sources(c, row, ready[1], pr=ready[0]) or [row["id"]]) if ready else []

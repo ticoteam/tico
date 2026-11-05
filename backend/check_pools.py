@@ -26,6 +26,7 @@ import re
 
 from . import hubdb as H
 from . import bot_settings as BS
+from . import pr_identity as PR
 
 log = logging.getLogger("tico.check_pools")
 
@@ -60,7 +61,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS check_waits(
   id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, step_id TEXT NOT NULL, title TEXT NOT NULL,
   heads TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'waiting',
-  child_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, attempt_id TEXT);
+  child_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, attempt_id TEXT, pr_url TEXT);
 CREATE INDEX IF NOT EXISTS check_waits_open ON check_waits(state, created_at);
 CREATE INDEX IF NOT EXISTS check_waits_ticket ON check_waits(ticket_id, state);
 """
@@ -621,7 +622,7 @@ def _dispatch(c, ticket, step, slugs, limit, prs, snapshots):
         return None
     for r in waiting(c, ticket["id"]):
         if r["step_id"] == step["id"]:
-            if step.get("detached") and r["title"] != title:
+            if step.get("detached") and not wait_for_pr(c, r, prs[0]):
                 continue
             if set(filter(None, r["heads"].split(","))) == set(heads):
                 return r
@@ -646,6 +647,19 @@ def bot_pr(c, ticket, pr):
                                     "WHERE lower(s.github_login)=? LIMIT 1", (author,)).fetchone())
 
 
+def wait_pr(c, wait):
+    """Resolve legacy queue rows only when their title has one possible linked PR."""
+    if wait.get("pr_url"):
+        return wait["pr_url"]
+    prs = H.task_links(c, wait["ticket_id"])
+    selected = PR.requested(wait, [p for p in prs if p["kind"] == "pr"])
+    return selected[0]["url"] if len(selected) == 1 else None
+
+
+def wait_for_pr(c, wait, pr):
+    return PR.same(wait_pr(c, wait), pr)
+
+
 def _unboard(c, ticket, snapshots=None):
     from . import step_flow as F, verdict_moves as V
     if ticket.get("status") not in (*H.ACTIVE_STATUSES, "done") or ticket.get("blocked_since"):
@@ -654,9 +668,11 @@ def _unboard(c, ticket, snapshots=None):
     for pr in sorted(_prs(c, ticket, board[0]), key=lambda p: (p["created_at"], p["id"])):
         if pr.get("state") != "open" or not bot_pr(c, ticket, pr):
             continue
-        canonical = c.execute("SELECT l.task_id FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                              "WHERE l.url=? AND l.kind='pr' AND l.state='open' AND t.status NOT IN ('closed','declined') "
-                              "ORDER BY l.created_at,l.id LIMIT 1", (pr["url"],)).fetchone()
+        canonical = next((dict(p) for p in c.execute(
+            "SELECT l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+            "WHERE lower(l.repo)=? AND l.number=? AND l.kind='pr' AND l.state='open' "
+            "AND t.status NOT IN ('closed','declined') ORDER BY l.created_at,l.id",
+            (str(pr.get("repo") or "").lower(), pr.get("number"))) if PR.same(dict(p), pr)), None)
         if canonical and canonical["task_id"] != ticket["id"]:
             continue
         detail = H._json(pr.get("detail"), {}) or {}
@@ -669,8 +685,7 @@ def _unboard(c, ticket, snapshots=None):
         if (pr.get("mergeable") == "conflict" or detail.get("mergeable_state") == "behind"
                 or fresh.get("mergeable") is False or fresh.get("mergeable_state") in ("dirty", "behind")):
             key = f"{pr['url']}@{head}"
-            if not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='pr_rebase' AND new=?",
-                             (ticket["id"], key)).fetchone():
+            if not V.pr_notice_seen(c, ticket, "pr_rebase", pr, head):
                 H._task_event(c, ticket["id"], H.KEEPER, "pr_rebase", None, key, "")
                 V.forward(c, ticket, ticket["owner_id"], f"PR #{pr['number']}: rebase on main and push.",
                           {V.HANDOFF: "merge_conflict", "pr_head": head}, sources=[ticket["id"]])
@@ -686,6 +701,12 @@ def _unboard(c, ticket, snapshots=None):
             if verdict:
                 if verdict not in V.GOOD:
                     break
+                if ticket["status"] == "done":
+                    ticket = H.task_update(c, H.KEEPER, ticket["id"], status="review", strict=False,
+                                           note="The open PR still needs review and merge.")
+                for check in reversed(V._checks(c, ticket, step, pr=pr)):
+                    if V.verdict_at([check], head) in V.GOOD:
+                        V.replay(c, check, snapshots=snapshots)
                 if not any(V.verdict_at([t], head) in V.GOOD and (V.delivery(c, t) or {}).get("consumed")
                            for t in V._checks(c, ticket, step, pr=pr)):
                     break
@@ -710,9 +731,9 @@ def _wait(c, ticket, step, title, heads, reason, attempt_id=None):
     ts = H.now()
     row = {"id": H.new_id(), "ticket_id": ticket["id"], "step_id": step["id"], "title": title,
            "heads": ",".join(heads), "reason": reason, "state": "waiting", "created_at": ts, "updated_at": ts,
-           "attempt_id": attempt_id}
-    c.execute("INSERT INTO check_waits(id,ticket_id,step_id,title,heads,reason,state,created_at,updated_at,attempt_id) "
-              "VALUES(:id,:ticket_id,:step_id,:title,:heads,:reason,:state,:created_at,:updated_at,:attempt_id)", row)
+           "attempt_id": attempt_id, "pr_url": step["pr"]["url"] if step.get("pr") else None}
+    c.execute("INSERT INTO check_waits(id,ticket_id,step_id,title,heads,reason,state,created_at,updated_at,attempt_id,pr_url) "
+              "VALUES(:id,:ticket_id,:step_id,:title,:heads,:reason,:state,:created_at,:updated_at,:attempt_id,:pr_url)", row)
     H._task_event(c, ticket["id"], H.KEEPER, "check_waiting", None, row["id"], f"{title}: waiting, {reason}")
     return row
 
@@ -739,7 +760,7 @@ def _take_plan(c, wait, only=None, snapshots=None):
     # or already know a head whose webhook is late; an older saved link cannot consume that newer wait.
     prs = _prs(c, ticket, step)
     if detached:
-        prs = [p for p in prs if _title(step, [p]) == wait["title"]]
+        prs = [p for p in prs if wait_for_pr(c, wait, p)]
         if not prs or not all(bot_pr(c, ticket, p) for p in prs):
             return {"drop": "the PR is no longer open"}
         step = {**step, "pr": prs[0]}

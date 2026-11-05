@@ -72,7 +72,9 @@ The same pool rules pick the reviewer. A `qa` task also needs QA. Code and docs 
 PRs that mix both. Owners can also file `hub task child <task> --owner <reviewer> --role review --title "PR #N"`.
 Add `--check-model` only when asking for a check on another model.
 
-Each PR head has one open request per review. A push closes the old request as superseded and gets a new review;
+Each PR head has one open request per review. Reviews match the full PR link: host, owner, repo and number.
+PR #1 and PR #12, or equal numbers in different repos, keep their own reviews even at the same head.
+A push closes the old request as superseded and gets a new review;
 an old-head approval never clears the new head. Changes wake the owner with the findings. Once the current head
 has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.
 If the owner lacks repo write access, an existing repo manager, Release Manager or repo owner with write access
@@ -83,7 +85,9 @@ A wake or saved result stays limited by both the source check and the task it re
 Merge tasks hold the work instructions; their approval notice keeps the checks' readers too.
 
 The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at most three new checks per reviewer
-per hour and within each pool's open-check limit. Conflicting PRs and branches reported behind main go back to the
+per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
+runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
+a hold clears; an old-head approval does not count. Conflicting PRs and branches reported behind main go back to the
 owner to rebase. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
 read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.
 

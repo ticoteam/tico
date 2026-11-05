@@ -5123,9 +5123,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if kind == "pr" and match:
         # GitHub treats owner and repository names case-insensitively, so one pull request is one link.
         # A duplicate made before this matched by exact URL stays reachable through its own URL.
-        have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
-                          "ORDER BY url=? DESC, created_at LIMIT 1",
-                    (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url))
+        from . import pr_identity as PR
+        candidates = _rows(conn.execute(
+            "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
+            "ORDER BY url=? DESC, created_at",
+            (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url)))
+        have = next((p for p in candidates if PR.same(p, url)), None)
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
@@ -6411,10 +6414,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
+    if parent:
+        body = review_gate.bind_prs(conn, actor, parent, title, body)
     if parent and review_gate.is_review(conn, parent, title):
         review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
-        review_gate.refuse_second(conn, actor, parent, title, review_prs)
+        review_gate.refuse_second(conn, actor, parent, title, review_prs, body=body)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -7314,6 +7319,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, verdict_moves.skip, after)
         else:
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
+    elif row.get("blocked_since") and not after.get("blocked_since"):
+        from . import check_pools, verdict_moves
+        check_pools.safely(conn, verdict_moves.resumed, task_id)
     from . import task_check_backs
     task_check_backs.ensure(conn, after)
     if check_back_at is not None or check_back_note is not None:

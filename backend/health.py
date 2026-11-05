@@ -1822,7 +1822,7 @@ def _unfiled_pr_checks(c, who, auth, full, kind):
             continue
         seen.add(pr["url"])
         head = V._head(pr)
-        if any(t["judged_head"] and head.startswith(t["judged_head"].lower())
+        if any(V.for_pr(t, pr) and t["judged_head"] and head.startswith(t["judged_head"].lower())
                for t in V.review_checks(c, ticket)
                if H.task_private_readable(c, who.actor, t) and F.check_kind(F.child_check(c, t, ticket)) == "review"):
             continue
