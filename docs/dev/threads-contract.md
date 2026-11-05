@@ -536,7 +536,7 @@ every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler'
 
 ```python
 threads.mark_read(c, viewer, thread_id, seq) -> {"thread_id", "last_read_seq"}
-threads.mark_all_read(c, viewer, thread_id) -> {"threads": n}        # the whole subtree
+threads.mark_all_read(c, viewer, thread_id, ago_ms=None) -> {"threads": n}   # the whole subtree; ago_ms: only what was there that long ago
 threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
