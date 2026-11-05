@@ -6451,6 +6451,16 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
         # Nothing else on the task waits on them: the next move is the bot's, and it leaves their Needs you.
         conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
         _task_event(conn, task_id, actor, "waiting_on", person, None, "")
+    if quote is None:
+        # A withdrawal ends the question's hold, so the Blocked reason follows the holds (backend/task_holds.py), as an
+        # answer does (`_answered_holds`). The same rule as there: the asker's own question, or one a person or the
+        # wait on this person held, names what cleared; another bot's question on a bot's task changes only its words.
+        from . import task_holds
+        own = row["owner_id"] == asker
+        held = own or row.get("waiting_on") == person or is_human(row["owner_id"])
+        whose = "your" if own else f"{task_holds.name(conn, asker)}'s"
+        task_holds.refresh(conn, task_id, (f"{task_holds.name(conn, actor)} withdrew {whose} question to "
+                                           f"{task_holds.name(conn, person)}") if held else None)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     recount(conn, [row["owner_id"], row["requester_id"], asker])
     event(conn, actor, "ask.answered_elsewhere" if reply else "ask.withdrawn", message_id,
