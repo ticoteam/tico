@@ -1125,14 +1125,12 @@ def routing_refs(value):
 
 
 def routing_refs_sql(column):
-    """The same control-only refs for SQLite's message deduplication trigger."""
-    keys = ','.join("'" + key + "'" for key in SOURCED_TEXT_SOURCES)
-    source = f"SELECT fullkey FROM json_tree(refs.value) WHERE key IN ({keys})"
-    # Remove whole source containers, including those beside a nested answer, using native SQLite so a
-    # persisted trigger also works for migrations and maintenance writers without Python callbacks.
-    return (f"(WITH RECURSIVE control_refs(value) AS (SELECT json({column}) UNION ALL "
-            f"SELECT json_remove(refs.value,({source} LIMIT 1)) FROM control_refs refs WHERE EXISTS({source})) "
-            f"SELECT refs.value FROM control_refs refs WHERE NOT EXISTS({source}))")
+    """Control-only refs for SQLite's message deduplication trigger: provenance at the top level and beside an
+    answer, where notices keep it. A flat json_remove, not a json_tree walk: ALTER TABLE RENAME COLUMN must be able to
+    rewrite the persisted trigger (an older database renames refs_json -> refs at boot), and the trigger runs on every
+    job insert. Provenance deeper than this only makes two copies of one event wake twice, never cancels a wake."""
+    paths = ",".join(f"'$.{where}{key}'" for where in ("", "answer.") for key in SOURCED_TEXT_SOURCES)
+    return f"(CASE WHEN json_valid({column}) THEN json_remove({column},{paths}) ELSE {column} END)"
 
 
 def clear_sourced_text(value, shown, rejected, *, hidden=False, replacement=""):
