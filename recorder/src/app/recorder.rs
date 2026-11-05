@@ -1868,6 +1868,7 @@ impl Recorder {
         };
         self.adding = Some(id);
         if self.context.live_id.is_empty() {
+            self.reset_saved();
             if self.config.destinations.len() == 1 {
                 self.destination = self.config.destinations[0].id.clone();
                 self.load_roster();
@@ -2612,6 +2613,9 @@ impl Recorder {
             match connected {
                 Some(id) => {
                     if self.context.live_destination.is_empty() {
+                        if self.destination != id {
+                            self.reset_saved();
+                        }
                         self.destination = id;
                         self.choosing_org = false;
                         self.roster_for.clear();
