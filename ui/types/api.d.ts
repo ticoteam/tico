@@ -69,6 +69,10 @@ export type ApprovalRequested = {
   status?: string;
 };
 
+export type AsksSeen = {
+  asks: Array<string>;
+};
+
 export type Assistant = {
   actions: Record<string, unknown>;
   actors?: Record<string, string>;
@@ -9890,6 +9894,13 @@ export type ModerateTaskCommentParams = {
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
 
+/** POST /api/v2/needs-you/seen */
+export type NeedsYouSeenParams = {
+  "Idempotency-Key": string;
+};
+export type NeedsYouSeenBody = AsksSeen;
+export type NeedsYouSeenResponse = unknown;
+
 /** POST /api/v2/threads/{thread_id}/open-earlier */
 export type OpenEarlierMessagesParams = {
   "Idempotency-Key": string;
@@ -11330,6 +11341,14 @@ export type TakeRecommendationParams = {
 };
 export type TakeRecommendationBody = TakeRecommendation;
 export type TakeRecommendationResponse = unknown;
+
+/** POST /api/v2/tasks/{tid}/seen */
+export type TaskSeenParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type TaskSeenBody = Empty;
+export type TaskSeenResponse = unknown;
 
 /** POST /api/v2/alerts/me/test */
 export type TestMyAlertsParams = {

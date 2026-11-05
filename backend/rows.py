@@ -278,6 +278,23 @@ class AttemptRow(TypedDict):
     usage_reason: str | None
 
 
+class CloudMachineDeletionRow(TypedDict):
+    """Deletion intent stays tied to the live HQ machine id across replacements."""
+    machine_id: str
+    bot: str
+    runner_id: str | None
+    reason: str
+    next_try_at: float | None
+    failures: int
+    created_at: float | None
+
+
+class CloudMachineEnrollmentFailureRow(TypedDict):
+    """Each live HQ machine id spends the enrollment retry budget at most once."""
+    machine_id: str
+    bot: str
+
+
 class RunnerRow(TypedDict):
     """One `runners` row (SELECT *): the computer's identity and its owner's settings."""
     id: str

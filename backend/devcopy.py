@@ -65,6 +65,8 @@ EMPTY = (
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
     "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
+    # Deletion retries and enrollment failures belong to live HQ machines; a copy must never resume them.
+    "cloud_machine_deletions", "cloud_machine_enrollment_failures",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
     # Browse through: a computer's sharing and a bot's choice open tunnels through a real person's internet; the relay's

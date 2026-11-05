@@ -3800,7 +3800,7 @@ def create_app(settings=None):
             items = views.needs_items(c, auth, who, task_view)
             snapshot = views.fleet_snapshot(c, auth, who, task_view)
             scope = body.bot if body.bot == batch.NEXT else (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
-            return batch.start(c, who.actor, items, snapshot, scope=scope)
+            return batch.start(c, who.actor, items, snapshot, scope=scope, reader=privacy.actor(who))
         return mutate(request, body, work)
 
     @app.get("/api/v2/live/brief")
@@ -3884,7 +3884,7 @@ def create_app(settings=None):
     def batch_next(request: Request, bid: str, body: M.Empty):
         who = request.state.identity
         views.human_only(who)
-        return mutate(request, body, lambda c: batch.next_item(c, who.actor, bid))
+        return mutate(request, body, lambda c: batch.next_item(c, who.actor, bid, reader=privacy.actor(who)))
 
     @app.post("/api/v2/batch/{bid}/respond")
     def batch_respond(request: Request, bid: str, body: M.BatchRespond):
@@ -4026,6 +4026,29 @@ def create_app(settings=None):
             auth.conversation(c, who, asked["conversation_id"], write=True)
             privacy.require_message(c, who, asked)
             return views.take_recommendation(c, auth, who, asked, body.version)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/needs-you/seen")
+    def needs_seen(request: Request, body: M.AsksSeen):
+        """The person's Needs you shows these questions to them: each is delivered (a question withdrawn later says it
+        was withdrawn after they saw it only once they open it: POST /api/v2/tasks/{id}/seen)."""
+        who = request.state.identity
+        views.human_only(who)
+        def work(c):
+            readable = [m for m in (H.message(c, mid) for mid in body.asks)
+                        if m and m["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), m)]
+            return {"delivered": H.asks_seen(c, who.actor, [m["id"] for m in readable])}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/seen")
+    def task_seen(request: Request, tid: str, body: M.Empty):
+        """The person opened the task, in Needs you or on its own: its open questions to them are read."""
+        who = request.state.identity
+        views.human_only(who)
+        def work(c):
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            mine = [a["id"] for a in H.open_task_asks(c, row, actor=privacy.actor(who)) if a["recipient_id"] == who.actor]
+            return {"read": H.asks_seen(c, who.actor, mine, read=True)}
         return mutate(request, body, work)
 
     def task_filters(c, owner=None, requester=None, status=None, lane=None, label=None, type=None, step=None,

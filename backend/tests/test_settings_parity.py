@@ -115,6 +115,7 @@ NOT_PROVEN = {
     "inbound.phone_request": "tap 409: inbound is not configured",
     "inbound.phone_request.accept": "422: needs the price shown (and inbound is not configured)",
     "bot.cloud_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "bot.cloud_machine.replace": "tap 409: the fixture company is not on Tico Cloud",
     "cloud.shared_machine": "tap 409: the fixture company is not on Tico Cloud",
     "mail.address.order": "422: the body shape (an address order with its Idempotency-Key)",
 }

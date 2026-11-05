@@ -1833,7 +1833,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
         msg["refs"] = H._json(msg.get("refs"), {}) or {}
-        ask = {k: msg[k] for k in ("id", "sender_id", "recipient_id", "body", "created_at", "conversation_id", "refs")}
+        ask = {k: msg[k] for k in ("id", "sender_id", "recipient_id", "body", "created_at", "conversation_id", "refs",
+                                   "delivered_at", "read_at")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
                 "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester_id": msg["sender_id"],
                 "origin_actor": msg["sender_id"], "conversation_id": msg["conversation_id"],
