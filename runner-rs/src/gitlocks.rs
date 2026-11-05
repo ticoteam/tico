@@ -50,7 +50,6 @@ fn inaccessible_git(process: &Path) -> bool {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn related(cwd: &Path, args: &[String], environment: &[String], roots: &[PathBuf]) -> Option<bool> {
     let inside = |p: &Path| -> Option<bool> {
         let p = p.canonicalize().ok()?;
@@ -136,9 +135,36 @@ async fn unused(_path: &Path, lock: &std::fs::Metadata, roots: &[PathBuf], stric
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn unused(_path: &Path, _lock: &std::fs::Metadata, _roots: &[PathBuf], _strict: bool) -> bool {
-    // lsof/ps cannot establish writer exclusion. Keep the lock for Health and a person or BotOps.
-    false
+async fn output(program: &str, args: &[&str]) -> Option<std::process::Output> {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args).kill_on_drop(true);
+    tokio::time::timeout(Duration::from_secs(5), cmd.output()).await.ok()?.ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn unused(path: &Path, _lock: &std::fs::Metadata, roots: &[PathBuf], strict: bool) -> bool {
+    // lsof may silently omit another user's descriptors. Instruction backups keep their inode on macOS.
+    if strict { return false; }
+    let Some(out) = output("/usr/sbin/lsof", &["-F", "p", "--", &path.to_string_lossy()]).await else { return false };
+    if out.status.code() != Some(1) || !out.stdout.is_empty() || !out.stderr.is_empty() { return false; }
+    let Some(out) = output("ps", &["-axo", "pid=,comm="]).await else { return false };
+    if !out.status.success() || !out.stderr.is_empty() { return false; }
+    let Ok(processes) = String::from_utf8(out.stdout) else { return false };
+    for line in processes.lines() {
+        let Some((pid, name)) = line.trim().split_once(char::is_whitespace) else { return false };
+        if !Path::new(name.trim()).file_name().is_some_and(|n| n.to_string_lossy().starts_with("git")) { continue; }
+        let Some(cwd) = output("/usr/sbin/lsof", &["-a", "-p", pid, "-d", "cwd", "-Fn"]).await else { return false };
+        let Some(args) = output("ps", &["eww", "-p", pid, "-o", "command="]).await else { return false };
+        if !cwd.status.success() || !args.status.success() || !cwd.stderr.is_empty() || !args.stderr.is_empty() { return false; }
+        let (Ok(cwd), Ok(args)) = (String::from_utf8(cwd.stdout), String::from_utf8(args.stdout)) else { return false };
+        let names: Vec<_> = cwd.lines().filter_map(|s| s.strip_prefix('n')).collect();
+        if names.len() != 1 || args.trim().is_empty() || args.contains(['\'', '"', '\\']) { return false; }
+        let words: Vec<String> = args.split_whitespace().map(String::from).collect();
+        if related(Path::new(names[0]), &words, &words, roots) != Some(false) { return false; }
+        // ps does not preserve argv/environment boundaries; path arguments may contain spaces.
+        if words.iter().any(|w| w.contains("GIT_DIR=") || w.contains("GIT_COMMON_DIR=") || w == "-C" || w.starts_with("--git-dir")) { return false; }
+    }
+    true
 }
 
 pub async fn no_open_file(path: &Path, metadata: &std::fs::Metadata) -> bool { unused(path, metadata, &[], true).await }
@@ -165,6 +191,8 @@ fn quarantine(path: &Path, before: &std::fs::Metadata, archive: Option<&Path>) -
 
 /// Called under the common directory's sidecar, including the first stat and all process inspection.
 async fn move_abandoned(path: &Path, roots: &[PathBuf], common: &Path) -> Result<bool, String> {
+    // lsof/ps remain useful for non-lock repairs, but cannot authorize moving a Git lock.
+    if !cfg!(target_os = "linux") { return Ok(false); }
     let Some(before) = old_file(path) else { return Ok(false) };
     if !path.parent().and_then(|p| p.canonicalize().ok()).is_some_and(|p| roots.iter().any(|r| p.starts_with(r)))
         || !unused(path, &before, roots, false).await { return Ok(false); }
@@ -606,7 +634,8 @@ mod tests {
         let lock = root.join("index.lock");
         std::fs::write(&lock, "owner unknown").unwrap();
         age(&lock);
-        assert!(!unused(&lock, &lock.metadata().unwrap(), &[], false).await);
+        assert!(!move_abandoned(&lock, std::slice::from_ref(&root), &root).await.unwrap());
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "owner unknown");
         std::fs::remove_dir_all(root).unwrap();
     }
 
