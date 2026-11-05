@@ -1243,7 +1243,8 @@ def create_app(settings=None):
             token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or privacy.private_execution(c, source))
             path = org_rule_check.PATH.set(request.url.path)     # a hold keeps its route, for Send anyway's guard
             try:
-                tid = request.path_params.get("tid")
+                # Only bot refusals count; human-only routes also address tasks in the trash.
+                tid = request.path_params.get("tid") if H.is_bot(request.state.identity.actor) else None
                 task_id = auth.resolve_task(c, request.state.identity, tid) if tid else None
                 with H.refusal_task(task_id):
                     return fn(c)

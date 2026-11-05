@@ -189,6 +189,7 @@ def test_external_validation_refusals_keep_the_task_scope_through_rollback(api, 
     token = credential(api)["token"]
     task = new_task(api, "Check the export", owner="scout")
     other = new_task(api, "Check the archive", owner="scout")
+    actor = task["owner_id"]
     if mutation == "snooze":
         body, rule = {"until": H.shift(H.now(), days=-1)}, "date"
     else:
@@ -198,8 +199,8 @@ def test_external_validation_refusals_keep_the_task_scope_through_rollback(api, 
         assert result["error"]["code"] == rule
     assert [row["task_id"] for row in holds(api)] == [task["id"]]
     with api.app.state.store.read() as c:
-        assert H.bot(c, "scout")["state"] == "active"
-        rows = c.execute("SELECT detail FROM refusals WHERE actor='bot:scout' AND rule=?", (rule,)).fetchall()
+        assert H.bot(c, H.actor_id(actor))["state"] == "active"
+        rows = c.execute("SELECT detail FROM refusals WHERE actor=? AND rule=?", (actor, rule)).fetchall()
         assert len(rows) == H.QUARANTINE_AT + 1
         assert {H._json(row["detail"], {}).get("scope") for row in rows} == {"task:" + task["id"]}
         assert H.task(c, task["id"])["snoozed_until"] is None
@@ -215,6 +216,7 @@ def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, 
     token = credential(api)["token"]
     task = new_task(api, "Check the export", owner="scout")
     other = new_task(api, "Check the archive", owner="scout")
+    bot = H.actor_id(task["owner_id"])
 
     def write(row, expected=200):
         if mutation == "thread":
@@ -230,14 +232,14 @@ def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, 
                     token, expected=expected)
 
     with api.app.state.store.transaction() as c:
-        Q.hold(c, "scout", "task:" + task["id"], "Repeated refusals", {"rule": "identity"})
+        Q.hold(c, bot, "task:" + task["id"], "Repeated refusals", {"rule": "identity"})
         before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
     assert write(task, expected=403)["error"]["code"] == "quarantined"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
         assert c.execute("SELECT count(*) FROM bot_files").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM bot_file_versions").fetchone()[0] == 0
-        assert H.bot(c, "scout")["state"] == "active"
+        assert H.bot(c, bot)["state"] == "active"
     write(other)
     post(api, "bots/scout/quarantine/clear", {})
     write(task)
