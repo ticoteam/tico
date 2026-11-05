@@ -5283,27 +5283,22 @@ def support_send(api, args):
     return api.post("support/tickets/from-approval", {"approval": args["approval"]}, key=_key(args))
 
 
-@tool("hub_health_monitor_findings", "The Health Monitor: what the last hourly scan of this install found, and the report "
-      "filed for each signature.", {})
-def health_monitor_findings(api, args):
-    return api.get("health-monitor")
+@tool("hub_health_findings", "What Check health found on this install: each open problem with its count, last seen time and "
+      "Tico-bug report, whether BotOps is there to take findings, and whether bug reports go without asking.", {})
+def health_findings(api, args):
+    return api.get("health/findings")
 
 
-@tool("hub_health_monitor_report", "The Health Monitor: report a finding as a Tico bug. The server writes the report from the "
-      "finding and attaches the redacted diagnostics bundle; one ticket per signature, a message on it when it happens again. "
-      "With the team rule off it drafts a support approval instead.",
-      {"key": _s("The finding's key or signature, from its task"),
-       "process": _s("Instead of a key: what the watcher saw busy, process:<name> or container:<name>"),
-       "cpu": {"type": "number"}, "mb": {"type": "number"}}, writes=True)
-def health_monitor_report(api, args):
+@tool("hub_health_report", "Report a health finding as a Tico bug. The server writes the report from the finding and attaches the "
+      "redacted diagnostics bundle: one ticket per problem, and a message on it when it happens again. With the team rule "
+      "off it drafts a support approval instead.",
+      {"key": _s("The finding's key or signature, from its task")}, writes=True)
+def health_report(api, args):
     key = args.get("key") or ""
-    if args.get("process"):
-        key = api.post("health-monitor/local-findings", {"process": args["process"], "cpu": args.get("cpu") or 0,
-                                                         "mb": args.get("mb") or 0}, key=_key(args))["key"]
     if not key:
-        raise ValueError("name a finding's key, or --process")
+        raise ValueError("name a finding's key")
     from urllib.parse import quote
-    return api.post("health-monitor/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
+    return api.post("health/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
 
 
 @tool("hub_task_manager", "The Task Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
