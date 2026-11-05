@@ -1966,12 +1966,14 @@ mod tests {
         sh(&mirror, &["update-ref", "refs/heads/bot-work", &original]);
         std::fs::write(mirror.join("config"), "[broken\n").unwrap();
         let result = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
-        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/bot-work is unpublished")));
+        let reason = match &result { Err(Fail::Msg(m)) => m.as_str(), _ => "unexpected mirror preservation result" };
+        assert!(matches!(&result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/bot-work is unpublished")), "{reason}");
         std::fs::remove_file(mirror.join("refs/heads/bot-work")).unwrap();
         sh(&f.seed, &["commit", "--allow-empty", "-qm", "new remote head"]);
         sh(&f.seed, &["push", "-q"]);
         let result = manager.preserve_mirror("acme/web", f.remote.to_str().unwrap(), &[], &f.env, 10).await;
-        assert!(matches!(result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/main is unpublished or differs")));
+        let reason = match &result { Err(Fail::Msg(m)) => m.as_str(), _ => "unexpected mirror preservation result" };
+        assert!(matches!(&result, Err(Fail::Msg(m)) if m.contains("local ref refs/heads/main is unpublished or differs")), "{reason}");
         assert_eq!(mirror_refs(&mirror).ok().unwrap()["refs/heads/main"], original);
         assert_eq!(std::fs::read_to_string(mirror.join("config")).unwrap(), "[broken\n");
     }
