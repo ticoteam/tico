@@ -27087,6 +27087,16 @@
                       "task",
                       "bot"
                     ]
+                  },
+                  "audience": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/AccessAudience"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }
@@ -27262,7 +27272,7 @@
         ]
       },
       "patch": {
-        "summary": "Change a page's cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
+        "summary": "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
         "operationId": "editPage",
         "parameters": [
           {
@@ -62406,6 +62416,21 @@
       "Page": {
         "type": "object",
         "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only returned to managers on a single page read or write; null inherits where it is filed"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Only returned to managers, including on lists and cards"
+          },
           "file_id": {
             "type": "string"
           },
@@ -62552,6 +62577,16 @@
               }
             ],
             "title": "Archived"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessAudience"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

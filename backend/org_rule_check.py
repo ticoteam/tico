@@ -815,11 +815,22 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    body = (replay or {}).get("body") or {}
+    if operation == "task_answer":
+        asked = H.answer_question(c, body.get("target") or {})
+        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
+    elif operation in ("answer", "reply"):
+        text, text_refs = H.answer_text(H.message(c, replay["message"]),
+                                        replay.get("text") or body.get("text") or "", text=text)
+    else:
+        text_refs = {}
+    from .files import page_references
+    text, text_refs = H.sourced_text(text, [{"file": fid} for fid in sorted(page_references(replay, c))], text_refs)
     # The run the output came from: Send anyway writes as the bot with it, so the run's private tasks and meetings are
     # checked against the destination again, as the original write was.
     # The check's own input (`input`) too: a rule changed since is checked on what this check was shown, and Send anyway
     # refuses once the object moved. `path` is the write's route, whose privacy guard Send anyway runs again.
-    stored = {"text": text, "replay": replay,
+    stored = {"text": text, **text_refs, "replay": replay,
               "provenance": {"attempt_id": verdict.get("attempt_id") or "", "path": PATH.get(),
                              "authenticated": verdict.get("sender") or author, "via": verdict.get("via") or "",
                              "place": verdict.get("place"), "origin": verdict.get("origin")},
@@ -999,6 +1010,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload"] or "{}")
+    if not summary:
+        from .files import readable_page_refs
+        stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
     destinations = json.loads(hold["destinations"] or "[]")

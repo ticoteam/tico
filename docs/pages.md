@@ -31,6 +31,30 @@ removes scripts and outside addresses when the page is published, and the answer
 [Visuals in replies](visuals.md#what-gets-embedded-in-a-page). Put the headline and the key numbers first: a card
 shows the top of the page.
 
+## Who can see it
+
+A page starts with **Everyone who can see where it's filed**. Its maintainer bot and anyone who may manage it can
+choose **Who can see it** in the full view: humans, groups (including their nested groups and bots) and bots.
+This only narrows the file's inherited visibility. A pin, task link, live block or embed never widens past it.
+The maintainer and page managers always pass the audience check. Only managers see the chosen names and lock icon.
+
+`hub page publish report.html --audience ben,group:legal,bot:analyst` sets it when publishing.
+`hub page access ID` shows it to managers; `hub page access ID --audience everyone` clears it.
+MCP uses `hub_page_publish`'s `audience` and `hub_page_access`. A new version keeps the setting unless publishing sets
+one. `PATCH /api/v2/pages/{id}` accepts the access audience object, or `null` to clear it. Everyone still needs access
+to where the page is filed. Restricted pages use a per-reader visual address, never the shared hosted copy.
+
+Narrowing access removes revoked page text from Counsel's read task, its edit history, comments, notes and saved run
+output, including queued work. Counsel rechecks the asker and its run on later reads. Signed visuals also recheck
+the person and any bot acting for them; old five-field addresses expire immediately and reloading gets a new one.
+Archived bots match no audience. Messages and runner context keep only “A page you can't open” for a page outside
+the reader's audience, or “A deleted page” after deletion. Deletion purges the content and keeps its audience and
+identity provenance; saved citations also show only the deleted-page placeholder. Copied review labels, answers and
+file history follow the same restriction. Recreating identical content creates a live identity whose review can be
+answered; the old page stays deleted. Group membership changes refresh open pages;
+deleting a group or person, or archiving a bot, removes their explicit page grants. An empty audience leaves access
+to the page's managers.
+
 ## The status line
 
 Tico draws one line above every page, as a card and at full size. The page cannot change it.
@@ -93,11 +117,14 @@ Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
 | `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
 | `GET /api/v2/pages?bot=&task=` | Pages newest first, paged with `limit` and `cursor`; `task` includes pages filed on or pinned to that task |
-| `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived` |
+| `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived`, `audience` (null clears it) |
 
 `src` is a fresh address to frame the current version, or `null` when this install cannot show pages inline. A page
 the caller may not read is a 404. `replaced_by` is `null` when the caller may not read the newer page. Lists carry no
 totals, so a count never says what a reader cannot see.
+
+Managers get `audience` on single-page reads and writes, and a small `restricted` flag on summaries and cards.
+Other readers get neither field.
 
 `hub page list --task ID` and MCP's `hub_page_list` include both filed and linked pages with the same paging.
 

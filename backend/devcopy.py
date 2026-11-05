@@ -155,7 +155,7 @@ KEEP = frozenset((
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys",
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_task_links", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
-    "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
+    "message_links_seen", "notes", "pages", "page_identities", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",

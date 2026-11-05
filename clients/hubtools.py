@@ -3060,7 +3060,10 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "How o
 
 
 def _page_fields(args):
-    return {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    fields = {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    if "audience" in args and args["audience"] is not None:
+        fields["audience"] = audience(args["audience"])
+    return fields
 
 
 @tool("hub_page_publish", "Publish a page: one self-contained .html file (inline CSS, SVG charts, no scripts; "
@@ -3068,6 +3071,7 @@ def _page_fields(args):
       "top. Publishing the same name again adds a version. With `task` it shows at the top of that task.",
       {"name": _s("File name ending .html, e.g. weekly-review.html"), "text": _s("The page's HTML"),
        "title": _s("What people see"), "cadence": CADENCE,
+       "audience": _s("everyone, or ben,group:legal,bot:analyst; narrows inherited visibility; omitted keeps it"),
        "as_of": _s("The date the data is from (YYYY-MM-DD) when it differs from today"),
        "task": _s("The task it is for; it shows at the top of that task"),
        "replaces": _s("The id of an older page of yours this one takes the place of"),
@@ -3102,6 +3106,20 @@ def pages_archive(api, args):
     return _as_person(api).patch("pages/" + args["id"], {"archived": not args.get("restore")}, key=_key(args))
 
 
+@tool("hub_page_access", "Show or change who can see a page, within where it is filed. Only its maintainer and "
+      "managers see or change the audience. everyone clears the narrowing.",
+      {"id": _s("Page id"), "audience": _s("everyone, or ben,group:legal,bot:analyst")}, required=("id",), writes=True)
+def pages_access(api, args):
+    client = _as_person(api)
+    path = "pages/" + args["id"]
+    if args.get("audience") is not None:
+        return client.patch(path, {"audience": audience(args["audience"])}, key=_key(args))
+    result = client.get(path)
+    if "audience" not in result.get("page", {}):
+        raise ValueError("Only page managers see access")
+    return {"audience": result["page"]["audience"]}
+
+
 def pages_publish_path(client, args):
     """`hub page publish <path>`: the CLI reads the .html file (inside this checkout only) and sends the bytes."""
     from clients import bot_files as BF
@@ -3110,6 +3128,8 @@ def pages_publish_path(client, args):
     except BF.Refused as exc:
         return {"refused": "page", "detail": str(exc)}
     query = {"name": name, "path": relative, **_page_fields(args)}
+    if "audience" in query:
+        query["audience"] = json.dumps(query["audience"], separators=(",", ":"))
     return client.request("POST", "/api/v2/pages?" + BF.urlencode(query), raw=data, key=_key(args))
 
 
@@ -7851,6 +7871,7 @@ AUDIENCE = {
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "hub_file_delete": ("owner", "botops"),
     "hub_page_archive": PEOPLE + BOTS,
+    "hub_page_access": PEOPLE + BOTS,
     # Reads that go over POST, which the Assistant may not make on its own.
     **{name: NOT_ASSISTANT for name in ("hub_sql", "hub_classify", "hub_decision_ask", "hub_decision_outcome",
                                          "hub_market_ask")},

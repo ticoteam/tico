@@ -231,6 +231,18 @@ class Auth:
         self._credential_followed = None
         self.proxy = identity_proxy.build(self.settings, store)
 
+    @classmethod
+    def read_policy(cls, c):
+        """The database's read rules for native gates without a web server or sign-in settings."""
+        def build():
+            from . import access, teammate_access
+            policy = cls.__new__(cls)
+            policy.bot_admins = set(access.owner_and_admin_emails(c))
+            # Native reads use the same stored built-in bot set as teammate access.
+            policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
+            return policy
+        return read_cache.value(c, ("native_read_policy",), build, shared=True)
+
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
         or a list change effective at once, with no restart."""
@@ -772,6 +784,10 @@ class Auth:
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
                          f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
+        from . import counsel
+        denied = counsel.denied_page_copies(c, who, self)
+        if denied:
+            audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
 
     def operator(self, c, who, bot):
@@ -976,6 +992,10 @@ class Auth:
         self.domain(who)
         if not row:
             raise Problem("not_found", "Task not found", 404)
+        from . import counsel
+        copied = counsel.page_copies(c).get(row["id"])
+        if copied and (not copied["removed"] or copied["page"]["state"] == "deleted") and not counsel.page_copy_readable(c, copied, who, self):
+            raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
@@ -1076,20 +1096,17 @@ class Auth:
 
 
 def actor_reads_task(c, actor, row):
-    """Whether an actor may read this task under every rule in Auth.task_row, without server sign-in settings.
+    """Whether an actor may read this task under every rule in Auth.task_row, using the stored read policy.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
-    from . import access, teammate_access
-    policy = Auth.__new__(Auth)
+    from . import teammate_access
     opened = not c.in_transaction
     if opened:
         c.execute("SAVEPOINT actor_reads_task")
     try:
-        if H.is_human(actor):
-            policy.bot_admins = read_cache.value(c, ("task_read_admins",),
-                                                lambda: set(access.owner_and_admin_emails(c)))
+        policy = Auth.read_policy(c)
         if opened and row:
-            row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
+            row = H.task(c, row["id"])
         who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
         if who is None:
             return False

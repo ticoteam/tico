@@ -9,6 +9,7 @@ app from these fields, outside the page, so a page cannot fake it.
 
 import asyncio
 import hashlib
+import json
 import re
 from datetime import date
 
@@ -27,7 +28,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages(
  file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
- as_of TEXT, replaced_by_id TEXT, archived INTEGER NOT NULL DEFAULT 0,
+ as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
 """
@@ -52,6 +53,7 @@ class PageEdit(M.Contract):
     as_of: str | None = Field(default=None, max_length=10)
     replaced_by: str | None = Field(default=None, max_length=100)
     archived: bool | None = None
+    audience: M.AccessAudience | None = None
 
 
 def check_cadence(value):
@@ -105,6 +107,67 @@ def prime_views(c, rows):
     read_cache.prime(c, VIEW_VERSION_SQL, {(fid, ver): found.get(fid) for fid, ver in current.items()})
 
 
+def may_manage(c, auth, who, row):
+    """The maintainer bot and the people who may manage the page, shared with file visibility."""
+    if who.role == "bot":
+        bot = H.bot(c, H.actor_id(who.actor))
+        return bool(bot and bot.get("state") != "archived" and bot["id"] == row["bot_id"])
+    if who.role == "owner":
+        return True
+    if who.role != "human":
+        return False
+    if auth is None:
+        from . import people, teammate_access, views
+        archived = {bot["id"] for bot in H.bots(c) if bot.get("state") == "archived"}
+        return teammate_access.is_admin(c, who) or people.manages(
+            H.actor_id(who.actor), "bot", row["bot_id"], views.roster(c), views.entries(c), archived, True)
+    return auth.bot_admin(who) or auth.manages(c, who, "bot", row["bot_id"])
+
+
+def checked_audience(c, value):
+    if value is None:
+        return None
+    from . import teammate_access
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError as exc:
+            raise Problem("validation", "audience is an access audience or null", 422) from exc
+    if value is None:
+        return None
+    level = teammate_access.parse_audience(c, value)
+    return None if level["everyone"] else json.dumps(level, sort_keys=True, separators=(",", ":"))
+
+
+def access_reset(c):
+    """Group changes can revoke a page just as an edit to its audience can."""
+    c.execute("INSERT INTO changes(topic,kind,ref,created_at) VALUES('tasks','bulk','page_access',?)", (H.now(),))
+
+
+def group_access_changed(c):
+    from . import files, counsel
+    if any(H._json(row["audience"], {}).get("teams") for row in files.restricted_pages(c).values()):
+        counsel.revoke_page_copies(c, None)
+        access_reset(c)
+
+
+def forget_audience_member(c, actor, field, ident):
+    """Deletion never leaves a grant for a later teammate or group that reuses this identifier."""
+    from . import audit_log, counsel, files
+    changed = False
+    for row in list(files.restricted_pages(c).values()):
+        before = H._json(row["audience"], {})
+        if ident not in before.get(field, []):
+            continue
+        after = {**before, field: [v for v in before[field] if v != ident]}
+        c.execute("UPDATE pages SET audience=?,updated_at=? WHERE file_id=?", (json.dumps(after), H.now(), row["id"]))
+        audit_log.write(c, actor, "page:" + row["id"] + ":access", before, after, "teammate-removed")
+        changed = True
+    if changed:
+        counsel.revoke_page_copies(c, None)
+        access_reset(c)
+
+
 class Pages:
     def __init__(self, app, store, auth, files):
         self.app, self.store, self.auth, self.files = app, store, auth, files
@@ -118,7 +181,7 @@ class Pages:
             return None
         return visuals.src_for(self.app, self.store.settings, c, who, row["id"], version)
 
-    def view(self, c, who, row, page, cache, names_=None):
+    def view(self, c, who, row, page, cache, names_=None, *, include_audience=False):
         """The contract's page read: what the status line and a card need."""
         v = read_cache.one(c, VIEW_VERSION_SQL, (row["id"], row["current_version"]))
         updated = v["created_at"] if v else row["last_activity_at"]
@@ -130,6 +193,7 @@ class Pages:
             else:
                 replaced = None             # a replacement the reader may not see is not named
         by = v["actor"] if v else None
+        manager = self.may_manage(c, who, row)
         names_ = names_ if names_ is not None else names.lookup(c, {"bot:" + row["bot_id"], *([by] if by else [])})
         return {"file_id": row["id"], "title": row["title"], "bot_id": row["bot_id"],
                 "bot_name": names_.get("bot:" + row["bot_id"], row["bot_id"]), "version": row["current_version"],
@@ -139,13 +203,15 @@ class Pages:
                 "replaced_by_id": replaced, "replaced_by_title": replaced_title,
                 "archived": bool(page["archived"] or row["archived"]),
                 "task_id": row["task_id"] if row["task_id"] and self.files.task_info(c, who, row["task_id"], {}) else None,
-                "src": self.src(c, who, row, row["current_version"]) if v else None}
+                "src": self.src(c, who, row, row["current_version"]) if v else None,
+                **({"restricted": page["audience"] is not None} if manager else {}),
+                **({"audience": H._json(page["audience"], None)} if manager and include_audience else {})}
 
     def rows(self, c, ids):
         found = {}
         for part in H.chunks(ids):
             marks = ",".join("?" * len(part))
-            for r in c.execute(f"SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.archived AS page_archived "
+            for r in c.execute(f"SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived "
                                f"FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id IN ({marks}) "
                                f"AND f.state<>'deleted'", part):
                 found[r["id"]] = r
@@ -154,7 +220,7 @@ class Pages:
     @staticmethod
     def page_of(r):
         return {"cadence": r["cadence"], "as_of": r["as_of"], "replaced_by_id": r["replaced_by_id"],
-                "archived": r["page_archived"]}
+                "archived": r["page_archived"], "audience": r["audience"]}
 
     def read(self, who, fid):
         with self.store.read() as c:
@@ -162,7 +228,7 @@ class Pages:
             if not r or not self.files.visible(c, who, r, {}):
                 raise Problem("not_found", "Page not found", 404)
             # What the full view offers this reader: Archive for its managers, Delete for the owner.
-            return {"page": self.view(c, who, r, self.page_of(r), {}), "can_manage": self.may_manage(c, who, r),
+            return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True), "can_manage": self.may_manage(c, who, r),
                     "can_delete": who.role == "owner",
                     "pinned": cards.pinned_places(cards.Ctx(c, self.auth, who, self.store.settings), fid)}
 
@@ -206,9 +272,10 @@ class Pages:
             if task:
                 self.auth.task(c, who, task)
             cache = {}
-            found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.archived AS page_archived FROM pages p "
+            found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived FROM pages p "
                               "JOIN bot_files f ON f.id=p.file_id", where, params, limit, cursor,
-                              lambda r: self.files.visible(c, who, r, cache))
+                              lambda r: self.files.visible(c, who, r, cache),
+                              cursor_key=visuals.key_for(self.app, self.store.settings))
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in found} | self._authors(c, found))
             return {"pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in found],
                     "has_more": nxt is not None, "next_cursor": nxt}
@@ -217,7 +284,8 @@ class Pages:
     def publish(self, request, who, fields, data):
         """A bot publishes a page: cleaned HTML stored as a version of its file, and the page row beside it, in one
         transaction. The same path (or name) again is a new version of the same page."""
-        fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items()}
+        audience_set, audience = "audience" in fields, fields.get("audience")
+        fields = {k: (v if isinstance(v, (str, int, bool)) else "") for k, v in fields.items() if k != "audience"}
         name = str(fields.get("name") or str(fields.get("path") or "").rsplit("/", 1)[-1] or "")
         if not name.lower().endswith((".html", ".htm")):
             raise Problem("file_refused", "A page is an .html file", 422)
@@ -241,6 +309,12 @@ class Pages:
                       "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
                       "archived=CASE WHEN ? THEN 0 ELSE archived END",
                       (row["id"], cadence or "none", as_of, now, now, cadence, as_of, now, int(bool(changed))))
+            if audience_set:
+                editor = who
+                if who.role == "runner":
+                    from .auth import Identity
+                    editor = Identity("bot:" + row["bot_id"], "bot")
+                self.set_audience(c, editor, row, checked_audience(c, audience))
             if replaces:
                 old = c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
                                 (replaces,)).fetchone()
@@ -255,10 +329,11 @@ class Pages:
             if task and row["task_id"] == task:
                 self.pin_to_task(c, row, task)
             return {"page": self.view(c, who, row, c.execute("SELECT * FROM pages WHERE file_id=?",
-                                                              (row["id"],)).fetchone(), {}),
+                                                              (row["id"],)).fetchone(), {}, include_audience=True),
                     "unembedded": unembedded}
         return self.files.publish(request, who, fields, cleaned, extra=extra,
-                                  extra_body={"cadence": cadence or "", "as_of": as_of or "", "replaces": replaces})
+                                  extra_body={"cadence": cadence or "", "as_of": as_of or "", "replaces": replaces,
+                                              **({"audience": audience} if audience_set else {})})
 
     @staticmethod
     def pin_to_task(c, row, task):
@@ -273,15 +348,25 @@ class Pages:
         cards.file_activity(c, row["id"], "bot:" + row["bot_id"], "pinned", place)
 
     def may_manage(self, c, who, row):
-        """The maintainer bot, the owner, bot administrators and the people above the bot on the org chart archive
-        and restore a page; everyone else is refused."""
-        if who.role == "bot":
-            return H.actor_id(who.actor) == row["bot_id"]
-        if who.role == "owner":
-            return True
-        if who.role != "human":
-            return False
-        return self.auth.bot_admin(who) or self.auth.manages(c, who, "bot", row["bot_id"])
+        return may_manage(c, self.auth, who, row)
+
+    def set_audience(self, c, who, row, value):
+        if not self.may_manage(c, who, row):
+            raise Problem("forbidden", "Only page managers change access", 403)
+        before = c.execute("SELECT audience FROM pages WHERE file_id=?", (row["id"],)).fetchone()[0]
+        if before == value:
+            return
+        now = H.now()
+        c.execute("UPDATE pages SET audience=?,updated_at=? WHERE file_id=?", (value, now, row["id"]))
+        from . import counsel
+        counsel.revoke_page_copies(c, self.auth, row["id"])
+        detail = {"before": H._json(before, None), "after": H._json(value, None)}
+        self.files.activity(c, row["id"], who.actor, "page.access_changed", now=now, detail=detail)
+        H.event(c, who.actor, "page.access_changed", row["id"], detail)
+        # Task readers receive refreshed files; all open surfaces receive the existing reset invalidation.
+        if row["task_id"]:
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now, row["task_id"]))
+        access_reset(c)
 
     def edit(self, request, fid, body):
         who = request.state.identity
@@ -293,6 +378,9 @@ class Pages:
             if not self.may_manage(c, who, r):
                 raise Problem("forbidden", "Only the page's bot, its managers, the owner and admins change a page", 403)
             H._writer(c, who.actor, task_id=r["task_id"])
+            if "audience" in body.model_fields_set:
+                value = body.audience.model_dump() if body.audience is not None else None
+                self.set_audience(c, who, r, checked_audience(c, value))
             fields = {}
             if body.cadence is not None:
                 fields["cadence"] = check_cadence(body.cadence)
@@ -316,8 +404,8 @@ class Pages:
                                     detail={"page": sorted(fields), **({"restored": True} if fields.get("archived") == 0 else {})})
                 H.event(c, who.actor, "page.edit", fid, {"fields": sorted(fields)})
             r = self.rows(c, [fid])[fid]
-            return {"page": self.view(c, who, r, self.page_of(r), {})}
-        return self.files.write(request, who, {"id": fid, **body.model_dump()}, work)
+            return {"page": self.view(c, who, r, self.page_of(r), {}, include_audience=True)}
+        return self.files.write(request, who, {"id": fid, **body.model_dump(exclude_unset=True)}, work)
 
 
 def install_pages(app, store, auth, files):
@@ -330,7 +418,8 @@ def install_pages(app, store, auth, files):
             "name": {"type": "string"}, "text": {"type": "string"}, "content_base64": {"type": "string"},
             "title": {"type": "string"}, "cadence": {"enum": list(CADENCES)}, "as_of": {"type": "string"},
             "task": {"type": "string"}, "replaces": {"type": "string"}, "path": {"type": "string"},
-            "scope": {"enum": ["task", "bot"]}}}}}}}
+            "scope": {"enum": ["task", "bot"]},
+            "audience": {"anyOf": [{"$ref": "#/components/schemas/AccessAudience"}, {"type": "null"}]}}}}}}}
 
     @app.post("/api/v2/pages", openapi_extra=publish_doc)
     async def publish(request: Request):

@@ -98,3 +98,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 }
 .pg-pinned{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .pg-pinned a{color:var(--link-quiet)}
+
+.pg-access { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; }
+.pg-access button { text-align: left; white-space: normal; }
+.pg-lock { font-size: 14px; vertical-align: middle; }
