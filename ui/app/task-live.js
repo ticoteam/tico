@@ -77,7 +77,8 @@ function taskLiveBind(d, task) {
     title.contentEditable = live.titleEditing ? 'plaintext-only' : 'false';
     if (live.titleEditing) title.setAttribute('role', 'textbox'); else title.removeAttribute('role');
   };
-  titleMode(live.titleEditing);
+  title.tabIndex = may ? 0 : -1;
+  titleMode(live.titleEditing || (live.focus?.field === title && !!live.focus.text));
   title.onclick = () => { if (may) { titleMode(true); title.focus(); } };
   if (may) { title.dataset.taskField = 'title'; title.setAttribute('aria-label', 'Title'); }
   else { delete title.dataset.taskField; title.removeAttribute('role'); title.removeAttribute('aria-label'); }
@@ -168,9 +169,12 @@ async function taskLiveSave(d, live) {
         if (live.revoked) throw new Error('Access lost');
         const reply = await post('/v2/tasks/' + encodeURIComponent(live.id), {...patch, version});
         if (!reply.task) throw new Error('Not saved');
+        if (live.revoked) return reply.task;
         if (d.taskLive === live && Number(reply.task.version) >= Number(d.liveTask?.version || 0)) d.liveTask = reply.task;
         // Text edits update the held list directly, with no whole-list read.
-        if (TASKS_ST) { TASKS_ST.tasks = mergeTaskRows(TASKS_ST.tasks, [reply.task]); tasksRender(TASKS_ST); }
+        if (TASKS_ST?.tasks.some(task => String(task.id) === live.id)) {
+          TASKS_ST.tasks = mergeTaskRows(TASKS_ST.tasks, [reply.task]); tasksRender(TASKS_ST);
+        }
         return reply.task;
       };
       return d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run);
@@ -182,7 +186,7 @@ async function taskLiveSave(d, live) {
       catch (failed) { if ([403, 404].includes(failed.status)) taskLiveGone(d, live); return null; }
     },
     settled: () => {
-      if (d.taskLive !== live && !live.draft.error && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
+      if (d.taskLive !== live && TASK_EDIT_DRAFTS.get(live.id) === live.draft && !live.draft.error && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
       taskLivePaint(d, live);
       if (!live.draft.error) return taskLiveRead(d, live);
     }

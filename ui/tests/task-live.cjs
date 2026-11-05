@@ -66,6 +66,11 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await fillTitle('Final title');
    await title.evaluate(el => { const selection = getSelection(); selection.setBaseAndExtent(el.firstChild, 2, el.firstChild, 7); });
    const caret = () => title.evaluate(el => [document.activeElement === el, getSelection().anchorOffset, getSelection().focusOffset]);
+   if (process.env.TICO_TASK_DEBUG) console.log('Task details state', await b.evaluate(() => {
+    const d = taskModal(), body = d.querySelector('[data-task-edit-body]');
+    return {route:S.route, me:S.me, open:d.open, classes:d.className, rights:taskPropRights(d.liveTask), html:body?.outerHTML,
+     ancestors:body ? [body, body.parentElement, body.parentElement.parentElement, body.parentElement.parentElement.parentElement].map(el => ({tag:el.tagName,cls:el.className,hidden:el.hidden,open:el.open,display:getComputedStyle(el).display,rect:el.getBoundingClientRect().toJSON()})) : []};
+   }));
    await b.getByRole('button', {name: 'Edit details', exact: true}).click();
    await b.getByRole('textbox', {name: 'Details', exact: true}).fill('Sam changed only details');
    await b.locator('[data-task-more]').click(); await b.keyboard.press('Escape');
@@ -148,10 +153,15 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    const delayed = gate(); readHold = delayed; readStarted = gate();
    await a.evaluate(() => { window.leavingLive = taskModal().taskLive; });
    await update(); await readStarted.promise;
+   const lateWrite = gate(); hold = lateWrite;
+   await fillTitle('Words from a departed editor');
+   await a.waitForFunction(() => !!leavingLive.draft.flight);
    await emit({topic: 'tasks', body: {task_id: task.id, gone: true}});
    await a.waitForFunction(() => !taskModal().open && !taskModal().taskLive);
-   delayed.resolve();
-   await a.waitForFunction(() => !leavingLive.reading);
+   await a.evaluate(id => { TASKS_ST.tasks = TASKS_ST.tasks.filter(task => task.id !== id); }, task.id);
+   delayed.resolve(); lateWrite.resolve();
+   await a.waitForFunction(() => !leavingLive.reading && !leavingLive.draft.flight);
+   assert.equal(await a.evaluate(id => TASKS_ST.tasks.some(task => task.id === id), task.id), false, 'a late save cannot reinsert a revoked task');
    assert.equal(await a.evaluate(() => TASK_EDIT_DRAFTS.size), 0);
    await b.waitForFunction(async () => !(await get('/v2/presence?place=task:t-checkout', {fresh: true})).actors.length);
    assert.equal(sessions.size, 0);

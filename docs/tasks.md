@@ -70,6 +70,7 @@ new title as its subject.
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
+Click the title, or focus it and press Enter, to edit it; **Edit** opens the details editor.
 The task window saves title and details edits on blur or after 700 ms without typing, one write at a time.
 Only changed fields are sent with the version that was read. A conflict keeps the draft and adopts the current
 values for untouched fields; **Not saved · Retry** retries the edited fields against that version. Live changes

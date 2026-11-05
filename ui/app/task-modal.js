@@ -885,6 +885,7 @@ async function taskChatRead(state) {
     if ([403, 404].includes(e.status)) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
+      if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
       state.dialog.close(); state.dialog.innerHTML = '';
       if (TASKS_ST) void tasksLoad(TASKS_ST);
       return;
