@@ -573,7 +573,7 @@
     const create = it.sending
       ? `<span class="spin" style="margin:0 8px"></span>`
       : `<button class="btn small" data-act="create-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${esc(why)}">${anyway ? 'Create anyway' : 'Create'}</button>`;
-    const link = it.proposed_task_id && it.can_link ? `<button class="btn small" data-act="accept-link-item" data-id="${id}">Link #${esc(it.proposed_number)}</button>` : '';
+    const link = it.proposed_task_id && it.can_link ? `<button class="btn small" data-act="accept-link-item" data-id="${id}">Link${it.proposed_number ? ' #' + esc(it.proposed_number) : ''}</button>` : '';
     return `<li class="item proposal ${picking ? 'picking' : ''}">
       <span class="check dashed"></span>
       <div class="content"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Task">${esc(it.title)}</span><div class="sub">${at}${owner}${doc}<button class="link" data-act="task-detail" data-id="${id}">Details</button></div>${anyway ? `<div class="error">May quote paused speech</div>` : ''}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>

@@ -230,7 +230,7 @@ const path = require('node:path');
     await page.getByRole('button',{name:'Link #45',exact:true}).click();
     await page.waitForFunction(()=>window.pendingFixture.linkAction==='link');
     assert.deepEqual(await page.evaluate(()=>window.pendingFixture.linkBody),{});
-    assert.equal(await page.locator('[data-shared-row="link-proposal"]').count(),0);
+    await page.locator('[data-shared-row="link-proposal"]').waitFor({state:'detached'});
     assert.equal(await page.getByText('Linked pricing',{exact:false}).count(),1);
     await page.getByRole('button',{name:'Add',exact:true}).click();
     await page.getByRole('textbox',{name:'Add a task',exact:true}).fill('Added after Save');
