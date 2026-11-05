@@ -301,6 +301,9 @@ def view(c, who, rid, *, auth, include_transcripts=False):
               "can_edit": may_write(who, record)}
     result["outcome"] = note_outcomes.outcome(c, result, who.actor, who.role == "owner")
     result["outbox"] = outbox(c, rid, who, auth)
+    # The live meeting it was filed from holds its chat and attached bots; that read keeps the live meeting's own rules.
+    live = c.execute("SELECT id FROM live_meetings WHERE imported_meeting_id=? AND discarded_at IS NULL", (rid,)).fetchone()
+    result["live_meeting_id"] = live["id"] if live else None
     if include_transcripts:
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],

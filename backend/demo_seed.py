@@ -413,8 +413,6 @@ class Builder:
                 if entry.get("send_status") and sent.get("task"):
                     self.write(lambda c: hubdb.task_update(c, "bot:" + entry["send_to"], sent["task"], status=entry["send_status"],
                                                            note="Reading the call for follow-ups."))
-            for actor, text, at in entry["comments"]:
-                self.call("POST", f"/api/meetings/{result['id']}/comments", {"text": text, "at_ms": at})
         self.granola()
 
     def granola(self):

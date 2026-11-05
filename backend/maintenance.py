@@ -34,7 +34,8 @@ from . import sources as SRC
 LOG = logging.getLogger("tico.maintenance")
 REGISTRY_KEY = "maintenance"      # registry_metadata: the run's schedule, pause and monthly cap
 STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}   # what a step's keeper lines are
-ORDER = ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
+# Find stuck gets the shared BotOps wake first; Check health keeps a refused wake for the next run.
+ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
 NAMES = {"collect": "Collect", "clean_up": "Clean up", "check_health": "Check health", "find_stuck": "Find stuck",
          "learn": "Learn", "suggest": "Suggest", "update": "Update", "dream": "Dream"}
 EVERY_RUN = ("collect", "clean_up", "check_health")   # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)

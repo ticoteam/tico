@@ -1,0 +1,159 @@
+{
+  "me": "human:ana",
+  "people": [
+    {
+      "actor": "human:ana",
+      "name": "Ana Rivera"
+    },
+    {
+      "actor": "human:dana",
+      "name": "Dana Lee"
+    },
+    {
+      "actor": "human:eli",
+      "name": "Eli Park"
+    },
+    {
+      "actor": "human:casey",
+      "name": "Casey Morgan"
+    },
+    {
+      "actor": "bot:guest-relations",
+      "name": "Guest Relations",
+      "job": "Concierge: negotiate supplier quotes above customer budgets."
+    },
+    {
+      "actor": "human:blair",
+      "name": "Blair Ellis",
+      "job": "Concierge team lead"
+    }
+  ],
+  "cases": [
+    {
+      "id": "ping-photo-delivery",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll ping Dana about shipping the photo delivery bug soon."
+        }
+      ],
+      "owner": "human:ana"
+    },
+    {
+      "id": "return-reviewed-pr",
+      "lines": [
+        {
+          "speaker": "Dana Lee",
+          "text": "I'll send the reviewed PR back to Eli."
+        }
+      ],
+      "owner": "human:dana"
+    },
+    {
+      "id": "named-review-request",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Eli, review the code again before we merge."
+        }
+      ],
+      "owner": "human:eli"
+    },
+    {
+      "id": "have-named-reviewer",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Have Eli review the code again."
+        }
+      ],
+      "owner": "human:eli"
+    },
+    {
+      "id": "concierge-role",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Let's open a ticket to concierge to negotiate quotes above the customer's price."
+        }
+      ],
+      "owner": "bot:guest-relations"
+    },
+    {
+      "id": "ping-two-recipients",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll ping Dana and Casey again about the bed/bath count service issue."
+        }
+      ],
+      "owner": "human:ana"
+    },
+    {
+      "id": "direct-ping-request",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Dana, ping Casey again about the bed/bath count service issue."
+        }
+      ],
+      "owner": "human:dana"
+    },
+    {
+      "id": "unknown-speaker-commitment",
+      "lines": [
+        {
+          "speaker": "Speaker 1",
+          "text": "I'll ping Dana about the photo delivery bug soon."
+        }
+      ],
+      "owner": ""
+    },
+    {
+      "id": "absent-reviewer",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Eli, review the code again."
+        }
+      ],
+      "owner": "",
+      "omit": [
+        "human:eli"
+      ]
+    },
+    {
+      "id": "ticket-opening-commitment",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll open a ticket to concierge to negotiate quotes above the customer's price."
+        }
+      ],
+      "owner": "human:ana"
+    },
+    {
+      "id": "named-speaker-first-person",
+      "lines": [
+        {
+          "speaker": "Casey Morgan",
+          "text": "I'll ping Dana about the photo delivery bug soon."
+        }
+      ],
+      "owner": "human:casey"
+    },
+    {
+      "id": "concierge-lead",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "The concierge team needs to negotiate the quotes above the customer budget. Please assign that to their team lead."
+        }
+      ],
+      "owner": "human:blair",
+      "omit": [
+        "bot:guest-relations"
+      ]
+    }
+  ]
+}
