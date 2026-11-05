@@ -420,9 +420,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('.tl-head h1').click();
     assert((await searchRow()).box <= 34, 'emptied, it is an icon again');
     // The filter bar scrolls sideways on a narrow phone: its edge fades while more is to the right, not at the end.
-    // Needs you's bar holds the most (whose plate, Catch up, group).
-    await page.locator('#task-view [data-view="foryou"]').click();
-    await page.locator('#task-body .tl').waitFor();
+    // On Open with a filter chip, the bar is wider than a 330px phone.
+    await page.evaluate(() => { TASKS_ST.filters = {...TASKS_ST.filters, owner: ['human:reviewer']}; tasksTools(TASKS_ST); });
     await page.setViewportSize({width: 330, height: 844});
     await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'), null, {timeout: t(5000)}).catch(async e => {
       const bar = await page.locator('#task-bar').evaluate(b => ({cls: b.className, sw: b.scrollWidth, cw: b.clientWidth, sl: b.scrollLeft,
@@ -432,6 +431,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = bar.scrollWidth; });
     await page.waitForFunction(() => !document.querySelector('#task-bar').classList.contains('more'));
     await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = 0; });
+    await page.evaluate(() => { const {owner, ...rest} = TASKS_ST.filters; TASKS_ST.filters = rest; tasksTools(TASKS_ST); });
     await page.setViewportSize({width: 375, height: 844});
     await page.locator('#task-filter').click();
     await page.waitForFunction(() => document.querySelector('#task-filter-pop').matches(':popover-open'));
