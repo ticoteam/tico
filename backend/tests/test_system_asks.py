@@ -350,12 +350,19 @@ def test_synced_manager_counts_while_its_ask_is_delivered_through_its_desktop_qu
 
 
 def test_legacy_roomless_message_receipt_replays_without_rerouting_or_accepting_other_content(api):
-    from backend import models as M
+    from backend import bot_home_merge, models as M
     from backend.store import digest, encode
+    from backend.tests.test_bot_home_merge import room
 
+    with api.app.state.store.transaction() as c:
+        old_room = room(c, "human:ana", "ops")
+        assert not bot_home_merge.merge(c)["errors"]
+        home = bot_home_merge.home_for(c, old_room)
+        assert home
     token = bot_token(api)
     body = {"to": "human:ben", "text": "Please review the release scope."}
     first = post(api, "messages", body, token=token, key="before-upgrade")
+    assert first["conversation_id"] == home
     with api.app.state.store.transaction() as c:
         # Main's checks mutated the request before Store hashed it. Reproduce its
         # persisted receipt, rather than generating it with the upgraded handler.

@@ -2,7 +2,7 @@
 import logging
 
 from . import hubdb as H
-from . import reach, task_privacy
+from . import reach, read_cache, task_privacy
 from .auth import Identity
 from .store import Problem
 
@@ -18,9 +18,9 @@ def readable(c, target):
     from .harnesses import SYNCED_SQL
     # Synced inboxes take only their person's chat messages. Independent external
     # agents read asks themselves; a synced bot needs its desktop delivery queue.
-    return not c.execute(
+    return not read_cache.one(c,
         "SELECT EXISTS(SELECT 1 FROM bot_settings WHERE bot_id=? AND harness IN (" + SYNCED_SQL + ")) AND "
-        + external_bot_sql("?"), (H.actor_id(target), target)).fetchone()[0]
+        + external_bot_sql("?"), (H.actor_id(target), target))[0]
 
 
 def can_answer(c, target, refs=None, conversation_id=None, in_reply_to=None, source=None):
