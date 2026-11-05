@@ -41,6 +41,7 @@
 .ib-section{scroll-margin-top:48px;margin:0 0 20px;min-width:0}
 .ib-section>h2{font-size:var(--t-base);margin:0 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
 .ib-card header{flex-wrap:wrap;gap:4px 12px}
+.ib-card>header:last-child{margin-bottom:0}
 .ib-title{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin:0 0 12px}
 .ib-title-text{min-width:0;flex:1 1 260px}
 .ib-title h2{margin:0 0 4px;overflow-wrap:anywhere}

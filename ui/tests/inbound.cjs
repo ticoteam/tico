@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {googleFake} = require('./support/google-fake.cjs');
-const {mailboxesFake} = require('./support/mailboxes-fake.cjs');
+const {mailboxesFake, shot} = require('./support/mailboxes-fake.cjs');
 const settled = page => page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
 const fits = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
@@ -134,7 +134,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       await settled(page);
       assert.ok(await fits(page), 'connection preview fits ' + width);
       assert.ok(await connectionTarget.evaluate(target => target.scrollWidth <= target.clientWidth), 'company name and ID are readable at ' + width);
-      if (process.env.TICO_SHOTS) await page.screenshot({path: process.env.TICO_SHOTS + '/inbound-connection-' + width + '.png'});
+      await shot(page, `inbound-connection-${width}.png`);
     }
     await page.setViewportSize({width: 1440, height: 1000});
     await page.locator('#inbound-connection-form input[name=consent]').check();
@@ -187,7 +187,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       await page.setViewportSize({width, height: 1000});
       await settled(page);
       assert.ok(await fits(page), 'page fits ' + width);
-      if (process.env.TICO_SHOTS) await page.screenshot({path: process.env.TICO_SHOTS + '/inbound-' + width + '.png'});
+      await shot(page, `inbound-${width}.png`);
     }
     await page.setViewportSize({width: 1440, height: 1000});
 

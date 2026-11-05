@@ -100,16 +100,21 @@ function inboxesCtx(run) {
   };
 }
 
+// Another view than the one drawn. Settings holds a redraw while someone types in the pane, but not a move to
+// another view: a filter typed on an inbox's page must not keep its address from opening the list or Settings.
+const inboxesMoved = () => $('#set-inboxes')?.dataset.ibShown !== INBOXES_VIEW;
+
 async function renderSettingsInboxes() {
   const el = $('#set-inboxes'); if (!el) return;
   inboxesBind(el);
   const run = ++IB.run, ctx = inboxesCtx(run);
+  el.dataset.ibShown = INBOXES_VIEW;
   const [head, ...rest] = INBOXES_VIEW.split('/');
   el.dataset.ibView = head || 'list';
   if (!(head && INBOX_KINDS[head])) delete el.dataset.ibOpen;
   if (head === 'settings') return inboxesSettingsPage(el, rest[0] || '', ctx);
   if (head && INBOX_KINDS[head]) return inboxesDetail(el, head, rest.join('/'), ctx);
-  if (head) { INBOXES_VIEW = ''; settingsAddress(); }
+  if (head) { INBOXES_VIEW = el.dataset.ibShown = ''; settingsAddress(); }
   return inboxesHome(el, ctx);
 }
 
@@ -261,8 +266,11 @@ async function inboxesFirstRun(el, ctx) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- Settings
+// Built once a visit (and again when the viewer's role changes), then drawn card by card in place: each card keeps
+// what it shows until its own read answers, so a redraw never takes a control away mid-save.
 async function inboxesSettingsPage(el, section, ctx) {
-  el.innerHTML = `<div class="ib-settings" data-ib-settings-page>
+  const page = el.querySelector('[data-ib-settings-page]');
+  if (!page || page.dataset.ibAdmin !== String(ctx.admin)) el.innerHTML = `<div class="ib-settings" data-ib-settings-page data-ib-admin="${ctx.admin}">
     <nav class="ib-crumb" aria-label="Breadcrumb"><a href="#/settings/inboxes">Inboxes</a> / <span>Settings</span></nav>
     <nav class="ib-jump" aria-label="Sections">${INBOX_SECTIONS.map(([k, l]) => `<button type="button" class="linkish" data-ib-jump="${k}">${esc(l)}</button>`).join('')}</nav>
     ${INBOX_SECTIONS.map(([k, l]) => `<section class="ib-section" id="inboxes-${k}" data-ib-section="${k}"><h2>${esc(l)}</h2>
@@ -279,8 +287,8 @@ async function inboxesSettingsPage(el, section, ctx) {
 // A card in Inboxes > Settings, or on an inbox's page.
 const inboxesCard = (id, title, body, action = '') =>
   `<section class="card ib-card"${id ? ` id="${esc(id)}"` : ''}><header><h2>${esc(title)}</h2>${action}</header>${body}</section>`;
-const inboxesSoon = (id, title, line = '') =>
-  inboxesCard(id, title, `<p class="muted" data-ib-soon>${esc(line || 'Coming soon.')}</p>`, '<span class="pill">Coming soon</span>');
+// A placeholder: the card's title and its Coming soon pill, nothing under them.
+const inboxesSoon = (id, title) => inboxesCard(id, title, '', '<span class="pill" data-ib-soon>Coming soon</span>');
 
 // ---------------------------------------------------------------------------------------------------------- One inbox
 async function inboxesDetail(el, kind, id, ctx) {
@@ -323,7 +331,7 @@ async function inboxesAutomations(ctx, address) {
     : '<p class="muted" data-ib-autos-none>None</p>';
 }
 const inboxesAutomationsLink = address =>
-  `<a class="ghost settings-head-act" href="#/automations${address ? '?q=' + encodeURIComponent(address) : ''}">Automations</a>`;
+  `<a class="ghost settings-head-act" href="#/automations${address ? '?q=' + encodeURIComponent(address) : ''}">Open</a>`;
 
 // ---------------------------------------------------------------------------------------------------------- Give inboxes to bots
 inboxesStep('bots', {order: 50, title: 'Give inboxes to bots', optional: true,
