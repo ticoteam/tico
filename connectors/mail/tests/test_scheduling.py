@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import json
 import sqlite3
 import tempfile
@@ -141,7 +142,7 @@ def test_rebooking_excludes_only_the_unchanged_canceled_hold_and_keeps_other_bus
     def event(ident, begin):
         return {'id': ident, 'start': {'dateTime': begin.isoformat()}, 'end': {'dateTime': (begin+s.DURATION).isoformat()}}
     service.events_by_calendar['primary'] = [event('canceled-hold', start), event('unrelated', start)]
-    hold = {'id': 'canceled-hold', 'bounds': (start, start+s.DURATION)}
+    hold = {'id': 'canceled-hold', 'bounds': (start, start+s.DURATION), 'event': copy.deepcopy(service.events_by_calendar['primary'][0])}
     assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == [(start, start+s.DURATION)]
     service.events_by_calendar['primary'].pop()
     assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == []
@@ -150,21 +151,45 @@ def test_rebooking_excludes_only_the_unchanged_canceled_hold_and_keeps_other_bus
     assert calendar.busy(start, start+s.DURATION, exclude_hold=hold) == [(changed, changed+s.DURATION)]
 
 
-def test_hold_cleanup_refuses_an_event_edited_after_verification():
-    import copy
+@pytest.mark.parametrize('mutation', ['sequence', 'organizer', 'conference_notes'])
+def test_hold_material_cannot_be_redefined_by_a_later_read(mutation):
     from connectors.mail.tests.fake import FakeCalendarService
     service = FakeCalendarService(calendars=['primary'])
     calendar = cal.Calendar(service, 'ana@acme.example')
     start = datetime(2030, 1, 8, 10, tzinfo=s.TZ)
     event = calendar.create_scheduling_event(start, start+s.DURATION, 'guest@vendor.example', 'hold', 'Agenda')
     verified = copy.deepcopy(event)
-    event['etag'], event['summary'] = '"changed"', 'Edited meeting'
-    with pytest.raises(Failure) as refused:
-        calendar.delete_scheduling_hold(verified)
-    assert refused.value.status == 412 and not service.deleted and 'hold' in service.created_events
-    # A changed event with the same times remains busy even if a prior scan excluded its snapshot.
+    if mutation == 'sequence':
+        event['sequence'] = 42
+    elif mutation == 'organizer':
+        event['organizer'] = {'email': 'other@vendor.example'}
+    else:
+        event['conferenceData']['notes'] = 'User added notes'
+    assert not cal.unchanged_hold(event, verified)
     assert calendar.busy(start, start+s.DURATION, exclude_hold=[{'id': 'hold', 'bounds': (start, start+s.DURATION),
                                                                'event': verified}]) == [(start, start+s.DURATION)]
+    with pytest.raises(cal.ConferencePending, match='Review the calendar hold') as refused:
+        calendar.reuse_scheduling_event(verified)
+    assert refused.value.event == verified and not service.deleted
+
+
+def test_conference_patch_refuses_an_event_edited_after_verification():
+    from connectors.mail.tests.fake import FakeCalendarService
+    service = FakeCalendarService(calendars=['primary'])
+    calendar = cal.Calendar(service, 'ana@acme.example')
+    start = datetime(2030, 1, 8, 10, tzinfo=s.TZ)
+    event = calendar.create_scheduling_event(start, start+s.DURATION, 'guest@vendor.example', 'hold', 'Agenda')
+    event.pop('hangoutLink')
+    event['conferenceData']['createRequest']['status'] = {'statusCode': 'failure'}
+    verified, patcher, execute = copy.deepcopy(event), service.patch, calendar._exec
+    def race(**kwargs):
+        event['etag'], event['summary'] = '"changed"', 'Edited meeting'
+        return patcher(**kwargs)
+    with patch.object(calendar, '_exec', side_effect=lambda req, what: copy.deepcopy(execute(req, what))), \
+            patch.object(service, 'patch', side_effect=race):
+        with pytest.raises(Failure) as refused:
+            calendar.reuse_scheduling_event(verified)
+    assert refused.value.status == 412 and not service.deleted and event['summary'] == 'Edited meeting'
 
 
 class PermissionGrant(unittest.TestCase):

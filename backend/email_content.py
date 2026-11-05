@@ -92,8 +92,21 @@ def body_parts(msg, primary=True):
 
 def file_parts(msg):
     leaves = [p for p in msg.walk() if not p.is_multipart()]
-    nested = [p for p in msg.walk() if p.is_multipart() and (p.get_content_type() == "message/rfc822" or p.get_content_disposition() == "attachment")]
+    nested = [p for p in msg.walk() if p.is_multipart()]
     return leaves + nested
+
+
+def attachment_parts(msg):
+    """Inline text can be both visible content and an attachment; alternatives remain bodies."""
+    result = set()
+    for parent in msg.walk():
+        if parent.get_content_disposition() == "attachment":
+            result.add(id(parent))
+        if parent.is_multipart():
+            result.update(id(part) for part in parent.iter_attachments())
+            if parent.get_content_type() == "multipart/mixed":
+                result.update(id(part) for part in list(parent.iter_parts())[1:] if part.get_filename())
+    return result
 
 
 def part_bytes(part):
@@ -117,23 +130,30 @@ def snapshot(raw, mailbox):
         bodies, files, texts, visible = body_parts(msg), [], [], []
         complete = all(not body.is_multipart() for body in bodies)
         leaves = file_parts(msg)
-        attached_children = {id(child) for parent in leaves if parent.is_multipart() for child in list(parent.walk())[1:]}
+        attachments = attachment_parts(msg)
+        attached_children = {id(child) for parent in leaves if parent.is_multipart() and id(parent) in attachments
+                             for child in list(parent.walk())[1:]}
         for index, part in enumerate(leaves):
-            if id(part) in attached_children:
-                continue
             for key in ("content-type", "content-disposition", "content-transfer-encoding", "content-id"):
                 if len(part.get_all(key, [])) > 1:
                     raise ValueError("Ambiguous MIME header")
-            payload = part_bytes(part)
             is_body = any(part is body for body in bodies)
+            is_file = id(part) in attachments and id(part) not in attached_children
+            payload = part_bytes(part) if not part.is_multipart() or is_file or is_body else b""
             supported = part.get_content_type() in ("text/plain", "text/html")
-            unsupported_body = not supported and is_body
+            visible_text = is_body or part.get_content_maintype() == "text"
+            unsupported_body = not supported and visible_text
             if unsupported_body:
                 complete = False
-            if not is_body:
+            if is_file:
                 name = str(part.get_filename() or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin"))[:255]
                 files.append({"name": name, "sha256": digest(payload), "size": len(payload),
                               "type": part.get_content_type(), "part": index})
+            if part.is_multipart():
+                if is_body:
+                    visible.append({"type": part.get_content_type(), "text": base64.b64encode(payload).decode()})
+                continue
+            if not visible_text:
                 continue
             if not supported and part.get_content_maintype() != "text":
                 # An opaque primary body still needs an inert, complete representation for review.
@@ -164,7 +184,9 @@ def snapshot(raw, mailbox):
     body = "\n".join(texts) if texts else "\n".join(p["text"] for p in visible)
     parts = [{"type": p.get_content_type(), "parameters": sorted((k, str(v)) for k, v in p.get_params()[1:] if k != "boundary") if p.get_params() else [],
               "name": p.get_filename(), "content_id": p.get("Content-ID"), "content_location": p.get("Content-Location"),
-              "disposition": p.get_content_disposition(), "sha256": digest(part_bytes(p))}
+              "disposition": p.get_content_disposition(),
+              "children": len(list(p.iter_parts())) if p.is_multipart() else 0,
+              "sha256": digest(part_bytes(p)) if not p.is_multipart() or id(p) in attachments or p.get_content_type() == "message/rfc822" else None}
              for p in leaves]
     material_headers = {key: str(msg.get(key) or "") for key in ("from", "sender", "reply-to", "in-reply-to", "references")}
     groups = {key: sorted(a.lower() for _, a in getaddresses(msg.get_all(key, [])) if a) for key in ("to", "cc", "bcc")}

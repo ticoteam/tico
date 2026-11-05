@@ -18,7 +18,7 @@ import re
 import time
 import uuid
 
-from . import DEFAULT_TZ, Failure, zone
+from . import DEFAULT_TZ, Failure, Refused, zone
 from .gmail import gmail_hint
 from . import oauth
 
@@ -34,9 +34,10 @@ MAX_EVENTS_PER_CALENDAR = 100
 class ConferencePending(Failure):
     """No invitation has been frozen; the caller can retry conference preparation."""
 
-    def __init__(self, msg, hint="", status=None, event=None):
+    def __init__(self, msg, hint="", status=None, event=None, request_id=""):
         super().__init__(msg, hint, status)
         self.event = copy.deepcopy(event)
+        self.request_id = request_id
 
 
 MEETING_URL = re.compile(
@@ -141,7 +142,7 @@ class Calendar:
                         raise ValueError("invalid event")
                     holds = ([exclude_hold] if isinstance(exclude_hold, dict) else exclude_hold) or []
                     if any(event.get("id") == hold["id"] and tuple(bounds) == hold["bounds"]
-                           and (not hold.get("event") or unchanged_hold(event, hold["event"])) for hold in holds):
+                           and hold.get("event") and unchanged_hold(event, hold["event"], hold.get("conference_request_id")) for hold in holds):
                         continue
                     spans.append(tuple(bounds))
                 except (KeyError, TypeError, ValueError):
@@ -200,7 +201,7 @@ class Calendar:
                 self.service.events().get(calendarId=calendar_id, eventId=event_id),
                 "events.get after duplicate")
 
-    def create_scheduling_event(self, start, end, attendee, event_id, description, summary="Meeting"):
+    def create_scheduling_event(self, start, end, attendee, event_id, description, summary="Meeting", on_insert=None):
         oauth.require(self.granted, "calendar-write", self.mailbox, "add calendar events")
         oauth.company_allows(self.company, "calendar-write", self.mailbox, "add calendar events")
         body = {"id": event_id, "summary": summary, "status": "confirmed",
@@ -209,80 +210,61 @@ class Calendar:
                 "attendees": [{"email": attendee}], "description": description,
                 "conferenceData": {"createRequest": {"requestId": event_id,
                     "conferenceSolutionKey": {"type": "hangoutsMeet"}}}}
-        return self.ready_conference(self._exec(self.service.events().insert(calendarId="primary", body=body,
-                            sendUpdates="none", conferenceDataVersion=1), "events.insert"))
+        event = self._exec(self.service.events().insert(calendarId="primary", body=body,
+                            sendUpdates="none", conferenceDataVersion=1), "events.insert")
+        snapshot = copy.deepcopy(event)
+        if on_insert:
+            on_insert(copy.deepcopy(snapshot))
+        return self.ready_conference(event, snapshot=snapshot)
 
-    def scheduling_hold(self, event_id, start, end, attendee, description, summary, snapshot=None):
-        """Read only a known non-sent booking's hold, retaining all material edits as busy."""
+    def scheduling_hold(self, event_id, start, end, attendee, description, summary, snapshot=None, request_id=""):
+        """Only the insert response can establish the material of a reusable hold."""
+        if not snapshot:
+            raise Refused("Review the calendar hold: its original snapshot is unavailable.")
         try:
             event = self._exec(self.service.events().get(calendarId="primary", eventId=event_id), "events.get hold")
         except Failure as exc:
             if exc.status == 404:
                 return None
             raise
-        if snapshot:
-            matches = unchanged_hold(event, snapshot)
-        else:
-            # Older receipts predate snapshots. Accept only the exact original booking shape.
-            defaults = {"eventType": "default", "transparency": "opaque", "visibility": "default",
-                        "anyoneCanAddSelf": False, "guestsCanInviteOthers": True, "guestsCanModify": False,
-                        "guestsCanSeeOtherGuests": True, "endTimeUnspecified": False, "attendeesOmitted": False,
-                        "privateCopy": False, "locked": False}
-            allowed = EVENT_METADATA | {"id", "summary", "status", "start", "end", "attendees", "description",
-                                        "conferenceData", "hangoutLink", "reminders"} | defaults.keys()
-            conference = (event.get("conferenceData") or {}).get("createRequest") or {}
-            attendees = event.get("attendees") or []
-            guest = attendees[0] if len(attendees) == 1 else {}
-            matches = (not (set(event) - allowed) and event.get("summary") == summary
-                       and event.get("description") == description and event.get("status") == "confirmed"
-                       and guest.get("email") == attendee and guest.get("responseStatus", "needsAction") == "needsAction"
-                       and not (set(guest) - {"email", "responseStatus", "displayName", "id", "organizer", "self"})
-                       and not guest.get("organizer") and not guest.get("self")
-                       and all(event.get(k, v) == v for k, v in defaults.items())
-                       and event.get("reminders") in (None, {"useDefault": True})
-                       and conference.get("requestId") == event_id)
         try:
-            matches = matches and event["id"] == event_id and tuple(iso(event[k]["dateTime"]) for k in ("start", "end")) == (start, end)
+            matches = (unchanged_hold(event, snapshot, request_id) and event["id"] == event_id
+                       and tuple(iso(event[k]["dateTime"]) for k in ("start", "end")) == (start, end)
+                       and event.get("status") == "confirmed")
         except (KeyError, ValueError, TypeError):
             matches = False
-        return copy.deepcopy(event) if matches and event.get("status") == "confirmed" else None
+        if not matches:
+            raise Refused("Review the calendar hold: it changed after creation.")
+        return copy.deepcopy(event)
 
-    def reuse_scheduling_event(self, snapshot):
+    def reuse_scheduling_event(self, snapshot, request_id="", on_request=None):
         oauth.require(self.granted, "calendar-write", self.mailbox, "reuse calendar events")
         oauth.company_allows(self.company, "calendar-write", self.mailbox, "reuse calendar events")
+        snapshot = copy.deepcopy(snapshot)
         event = self._exec(self.service.events().get(calendarId="primary", eventId=snapshot["id"]), "events.get reused hold")
-        if not unchanged_hold(event, snapshot):
-            raise Failure("The calendar hold changed; review it before rescheduling.")
+        self.verify_hold(event, snapshot, request_id)
         request = (event.get("conferenceData") or {}).get("createRequest") or {}
         if (request.get("status") or {}).get("statusCode") == "failure":
             if not event.get("etag"):
-                raise Failure("The calendar hold has no version; review it before retrying its conference.")
-            snapshot = copy.deepcopy(event)
-            snapshot.pop("hangoutLink", None)
-            snapshot["conferenceData"] = {"createRequest": {"requestId": uuid.uuid4().hex,
-                "conferenceSolutionKey": {"type": "hangoutsMeet"}, "status": {"statusCode": "pending"}}}
-            body = copy.deepcopy(snapshot["conferenceData"])
-            body["createRequest"].pop("status")
+                raise Refused("Review the calendar hold: it has no version for retrying its conference.")
+            request_id = uuid.uuid4().hex
+            # The connector records its own request ID; a provider read never replaces the insert snapshot.
+            if on_request:
+                on_request(request_id)
+            conference = copy.deepcopy(snapshot.get("conferenceData") or {})
+            conference["createRequest"]["requestId"] = request_id
+            conference["createRequest"].pop("status", None)
             patch = self.service.events().patch(calendarId="primary", eventId=event["id"],
-                body={"conferenceData": body}, sendUpdates="none", conferenceDataVersion=1)
+                body={"conferenceData": conference}, sendUpdates="none", conferenceDataVersion=1)
             patch.headers["If-Match"] = event["etag"]
             event = self._exec(patch, "events.patch retry conference")
-            if not unchanged_hold(event, snapshot):
-                raise Failure("The calendar hold changed while retrying its conference.")
-        ready = self.ready_conference(event)
-        if not unchanged_hold(ready, snapshot):
-            raise Failure("The calendar hold changed during conference preparation.")
-        return ready
+            self.verify_hold(event, snapshot, request_id)
+        return self.ready_conference(event, snapshot=snapshot, request_id=request_id)
 
-    def delete_scheduling_hold(self, event):
-        """An ETag prevents cleanup from deleting a hold edited after verification."""
-        oauth.require(self.granted, "calendar-write", self.mailbox, "delete calendar events")
-        oauth.company_allows(self.company, "calendar-write", self.mailbox, "delete calendar events")
-        if not event.get("etag"):
-            raise Failure("The stale calendar hold has no version; review it before rescheduling.")
-        request = self.service.events().delete(calendarId="primary", eventId=event["id"], sendUpdates="none")
-        request.headers["If-Match"] = event["etag"]
-        return self._exec(request, "events.delete stale hold")
+    def verify_hold(self, event, snapshot, request_id=""):
+        if not unchanged_hold(event, snapshot, request_id):
+            raise ConferencePending("Review the calendar hold: it changed after creation.", status=409,
+                                    event=snapshot, request_id=request_id)
 
     def create_hub_event(self, start, end, summary, attendees, event_id, description="",
                          add_meet=True):
@@ -304,9 +286,11 @@ class Calendar:
             sendUpdates="none", **kwargs), "events.insert")
         return self.ready_conference(event) if add_meet else event
 
-    def ready_conference(self, event):
+    def ready_conference(self, event, snapshot=None, request_id=""):
         """Freeze invitations only after the asynchronous conference has a usable join URL."""
+        snapshot = copy.deepcopy(snapshot if snapshot is not None else event)
         for attempt in range(16):
+            self.verify_hold(event, snapshot, request_id)
             status = ((event.get("conferenceData") or {}).get("createRequest") or {}).get("status", {}).get("statusCode")
             if status != "pending" and _meeting_url({"hangoutLink": event.get("hangoutLink"), "conferenceData": event.get("conferenceData")}):
                 return event
@@ -316,8 +300,8 @@ class Calendar:
             try:
                 event = self._exec(self.service.events().get(calendarId="primary", eventId=event["id"]), "events.get conference")
             except Failure as exc:
-                raise ConferencePending("Could not read the meeting link; retry this booking before sending its invitation.", status=503, event=event) from exc
-        raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503, event=event)
+                raise ConferencePending("Could not read the meeting link; retry this booking before sending its invitation.", status=503, event=snapshot, request_id=request_id) from exc
+        raise ConferencePending("The meeting link is not ready; retry this booking before sending its invitation.", status=503, event=snapshot, request_id=request_id)
 
     def get_event(self, event_id, calendar_id="primary"):
         """Get one normalized event by ID."""
@@ -337,27 +321,22 @@ class Calendar:
 
 # ---------------------------------------------------------------- pure
 
-EVENT_METADATA = frozenset(("kind", "etag", "created", "updated", "htmlLink", "iCalUID", "sequence", "creator", "organizer"))
+EVENT_METADATA = frozenset(("kind", "etag", "created", "updated", "htmlLink"))
 
 
-def unchanged_hold(event, snapshot):
-    def material(value):
-        return {key: part for key, part in value.items() if key not in EVENT_METADATA}
-    before, after = material(snapshot), material(event)
-    # Conference creation may finish asynchronously; no other writable field may change.
-    request = (snapshot.get("conferenceData") or {}).get("createRequest") or {}
-    if (request.get("status") or {}).get("statusCode") in ("pending", "failure"):
-        current = (event.get("conferenceData") or {}).get("createRequest") or {}
-        if (not request.get("requestId") or {k: v for k, v in request.items() if k != "status"}
-                != {k: v for k, v in current.items() if k != "status"}):
-            return False
-        if any((event.get("conferenceData") or {}).get(k) != v for k, v in (snapshot.get("conferenceData") or {}).items()
-               if k != "createRequest") or (snapshot.get("hangoutLink") and snapshot["hangoutLink"] != event.get("hangoutLink")):
-            return False
-        for value in (before, after):
-            value.pop("conferenceData", None)
-            value.pop("hangoutLink", None)
-    return before == after
+def unchanged_hold(event, snapshot, request_id=""):
+    def material(value, expected_request=""):
+        result = copy.deepcopy({key: part for key, part in value.items() if key not in EVENT_METADATA})
+        result.pop("hangoutLink", None)
+        conference = result.get("conferenceData") or {}
+        conference.pop("entryPoints", None)
+        request = conference.get("createRequest") or {}
+        request.pop("status", None)
+        if expected_request:
+            request["requestId"] = expected_request
+        return result
+    return material(event) == material(snapshot, request_id)
+
 
 def iso(text, tz=None):
     dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))

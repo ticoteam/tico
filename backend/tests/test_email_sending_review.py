@@ -1,6 +1,7 @@
 """Regressions for the twelve send-policy review findings, through real authorization and frozen MIME."""
 
 import base64
+import copy
 import json
 import sqlite3
 from contextlib import closing
@@ -86,6 +87,38 @@ def test_named_inline_bodies_cannot_hide_commitments_from_classification(inbox, 
     assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
 
 
+@pytest.mark.parametrize("subtype", ["plain", "html", "enriched"])
+def test_inline_text_files_are_classified_and_keep_attachment_approval_and_download(inbox, subtype):
+    autonomous(inbox, ask_attachments=True)
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = BOX, CONTACT, "Inline text file " + subtype
+    message.set_content("Please see the attached notes.")
+    text = "Harmless notes" if subtype == "plain" else "<p>Harmless notes</p>"
+    message.add_attachment(text, subtype=subtype, disposition="inline", filename="notes." + subtype)
+    encoded = raw(message)
+    snap = S.snapshot(encoded, BOX)
+    assert len(snap["attachments"]) == 1
+    file = snap["attachments"][0]
+    expected = message.get_payload()[-1].get_payload(decode=True)
+    assert file["name"] == "notes." + subtype and file["sha256"] == S.digest(expected)
+    with mock.patch.object(judge, "server_engine", return_value=object()), \
+            mock.patch.object(judge, "ask", return_value={"answers": {"legal_or_money": {"value": "no"}}}) as ask, \
+            mock.patch.object(judge, "audit_detail", return_value={}):
+        result = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": encoded})["send"]
+    if subtype != "enriched":
+        assert "Harmless notes" in ask.call_args.args[1]["body"]
+        assert "attachments" in result["decision"]["reasons"]
+    else:
+        ask.assert_not_called()
+        assert not snap["classification_complete"]
+    assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
+    response = inbox.get(f'/api/v2/email/sends/{result["id"]}/attachments/{file["part"]}', headers=headers())
+    assert response.status_code == 200 and response.content == expected
+    message.get_payload()[-1].set_payload("Changed notes")
+    changed = S.snapshot(raw(message), BOX)
+    assert changed["attachments"][0]["sha256"] != file["sha256"] and changed["content_sha256"] != snap["content_sha256"]
+
+
 def test_new_old_format_approval_cannot_authorize_an_added_internal_bcc(inbox):
     _, _, attempt = setup_attempt(inbox, "ops")
     original = mime(to=["ben@acme.example"], body="Sensitive legal reply")
@@ -148,7 +181,7 @@ def test_retained_daily_cap_counts_the_union_of_history_and_queue(inbox, synced,
         assert post(inbox, "connectors/email/sends/" + third["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])["send"]
 
 
-@pytest.mark.parametrize("scenario", ["cancel_twice", "conference_twice", "conference_failure_twice", "legacy_duplicates", "changed_hold", "moved_hold", "unrelated"])
+@pytest.mark.parametrize("scenario", ["cancel_twice", "conference_twice", "conference_failure_twice", "trusted_duplicates", "legacy_no_snapshot", "legacy_notes", "legacy_link", "changed_hold", "moved_hold", "unrelated", "edit_create_failure", "edit_create_pending", "edit_reuse_failure", "edit_reuse_ready"])
 def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario):
     from contextlib import nullcontext
     from connectors.mail import __main__ as cli, scheduling, calendar as cal
@@ -160,11 +193,29 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
     service = FakeCalendarService(calendars=["primary"])
     calendar = cal.Calendar(service, BOX)
     original_query, original_insert, original_exec, original_patch = service.query, service.insert, calendar._exec, service.patch
-    conference_requests = []
+    conference_requests, polls = [], []
     def execute(request, what):
         if scenario == "conference_twice" and what == "events.get conference":
             raise cal.Failure("Transient conference read failure", status=503)
-        return original_exec(request, what)
+        if scenario.startswith("edit_") and what == "events.get conference":
+            polls.append(what)
+            # The original insert snapshot is persisted before any poll, including failure paths.
+            receipt = json.loads(connection.execute("SELECT result FROM scheduling_actions WHERE key NOT LIKE 'retired:%'").fetchone()[0])
+            assert receipt["hold_version"] == 1 and receipt["hold"]["summary"] == "Meeting"
+            if scenario.startswith("edit_reuse") and len(polls) == 1:
+                raise cal.Failure("Transient conference read failure", status=503)
+            event = next(iter(service.created_events.values()))
+            if scenario.endswith("pending"):
+                event["conferenceData"]["notes"] = "User added conference notes"
+            else:
+                event["summary"] = "User changed the meeting title"
+                event["attendees"].append({"email": "other@vendor.example"})
+            event["etag"] = '"user-edited"'
+            event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success" if scenario.endswith("ready") else "failure" if scenario.endswith("failure") else "pending"}
+            if scenario.endswith("ready"):
+                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+            return copy.deepcopy(event)
+        return copy.deepcopy(original_exec(request, what))
     def query(body=None):
         service.busy = [(e["start"]["dateTime"], e["end"]["dateTime"]) for e in service.events_by_calendar.get("primary", [])]
         return original_query(body=body)
@@ -177,7 +228,7 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
             event["conferenceData"]["createRequest"]["status"] = {"statusCode": "failure" if scenario == "conference_failure_twice" else "pending"}
             conference_requests.append(event["conferenceData"]["createRequest"]["requestId"])
             return event
-        if scenario in ("conference_twice", "conference_failure_twice"):
+        if scenario in ("conference_twice", "conference_failure_twice") or scenario.startswith("edit_"):
             request.execute = pending
         return request
     def retry_conference(**kwargs):
@@ -210,6 +261,17 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                 mock.patch.object(service, "patch", side_effect=retry_conference), \
                 mock.patch.object(calendar, "_exec", side_effect=execute), mock.patch.object(cal.time, "sleep"):
             first = scheduling.run(ctx, args)
+            if scenario.startswith("edit_"):
+                result = scheduling.run(ctx, args) if scenario.startswith("edit_reuse") else first
+                assert result["retry"] and not result["queued"] and "Review the calendar hold" in result["reason"]
+                assert result["hold"] == first["hold"] and result["hold"]["summary"] == "Meeting"
+                assert result["hold"]["attendees"] == [{"email": CONTACT}]
+                assert "notes" not in result["hold"]["conferenceData"]
+                with pytest.raises(scheduling.Refused, match="Review the calendar hold"):
+                    scheduling.run(ctx, args)
+                enqueue.assert_not_called()
+                assert not service.patch.called and not service.deleted and service.insert.call_count == 1
+                return
             if scenario in ("conference_twice", "conference_failure_twice"):
                 assert first["retry"] and not first["queued"]
                 second = scheduling.run(ctx, args)
@@ -221,6 +283,21 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                     event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
             else:
                 post(inbox, "email/sends/" + first["send_id"] + "/cancel", {})
+                if scenario.startswith("legacy_"):
+                    receipt = json.loads(connection.execute("SELECT result FROM scheduling_actions").fetchone()[0])
+                    if scenario == "legacy_no_snapshot":
+                        receipt.pop("hold")
+                    receipt.pop("hold_version")
+                    connection.execute("UPDATE scheduling_actions SET result=?", (json.dumps(receipt),))
+                    event = service.created_events[first["event"]]
+                    if scenario == "legacy_notes":
+                        event["conferenceData"]["notes"] = "User added dial-in instructions; preserve this meeting."
+                    elif scenario == "legacy_link":
+                        event["hangoutLink"] = "https://meet.google.com/user-link-url"
+                    with pytest.raises(scheduling.Refused, match="Review the calendar hold"):
+                        scheduling.run(ctx, args)
+                    assert enqueue.call_count == 1 and not service.deleted and not service.patch.called
+                    return
                 if scenario in ("changed_hold", "moved_hold", "unrelated"):
                     event = service.created_events[first["event"]]
                     if scenario == "changed_hold":
@@ -229,22 +306,17 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                         event["start"]["dateTime"] = "2030-01-08T10:15:00-08:00"
                     else:
                         service.events_by_calendar["primary"].append({**event, "id": "unrelated"})
-                    with pytest.raises(scheduling.Refused, match="calendar blocks"):
+                    with pytest.raises(scheduling.Refused, match="calendar blocks" if scenario == "unrelated" else "Review the calendar hold"):
                         scheduling.run(ctx, args)
                     assert enqueue.call_count == 1 and not service.deleted
                     return
-                if scenario == "legacy_duplicates":
-                    # Model the older implementation's second definitely-unsent hold without a stored snapshot.
+                if scenario == "trusted_duplicates":
+                    # Every verified original hold is excluded; the newest is reused and none is deleted.
                     receipt = json.loads(connection.execute("SELECT result FROM scheduling_actions").fetchone()[0])
+                    snapshots = []
                     duplicate = calendar.create_scheduling_event(scheduling.datetime.fromisoformat(args.slot),
-                        scheduling.datetime.fromisoformat(args.slot)+scheduling.DURATION, CONTACT, "older-duplicate", receipt["body"])
-                    duplicate.pop("sendUpdates")
-                    duplicate.pop("conferenceDataVersion")
-                    duplicate.update(eventType="default", guestsCanInviteOthers=True, guestsCanModify=False,
-                                     reminders={"useDefault": True})
-                    duplicate["attendees"][0].update(displayName="Guest", responseStatus="needsAction")
-                    receipt.update(event=duplicate["id"], expected_event_id=duplicate["id"], state="canceled", queued=False)
-                    receipt.pop("hold")
+                        scheduling.datetime.fromisoformat(args.slot)+scheduling.DURATION, CONTACT, "older-duplicate", receipt["body"], on_insert=snapshots.append)
+                    receipt.update(event=duplicate["id"], expected_event_id=duplicate["id"], state="canceled", queued=False, hold=snapshots[0])
                     connection.execute("INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)",
                         ("retired:old", BOX, "thread", "book", "2030-01-01", "canceled", json.dumps(receipt)))
                     connection.commit()
@@ -253,11 +325,12 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                 post(inbox, "email/sends/" + second["send_id"] + "/cancel", {})
             third = scheduling.run(ctx, args)
             assert third["queued"] and third["state"] == "waiting_approval"
-            assert first["expected_event_id"] == second["expected_event_id"] == third["expected_event_id"] or scenario == "legacy_duplicates"
-            assert len(service.created_events) == len(service.events_by_calendar["primary"]) == 1
+            assert first["expected_event_id"] == second["expected_event_id"] == third["expected_event_id"] or scenario == "trusted_duplicates"
+            assert second["hold"] == third["hold"]
+            assert len(service.created_events) == len(service.events_by_calendar["primary"]) == (2 if scenario == "trusted_duplicates" else 1)
             assert all(event["sendUpdates"] == "none" for event in service.created_events.values() if "sendUpdates" in event)
-            assert len(service.deleted) == int(scenario == "legacy_duplicates")
-            assert service.insert.call_count == (2 if scenario == "legacy_duplicates" else 1)
+            assert not service.deleted
+            assert service.insert.call_count == (2 if scenario == "trusted_duplicates" else 1)
             if scenario == "conference_failure_twice":
                 assert service.patch.call_count == 2 and len(set(conference_requests)) == 3
             assert scheduling.run(ctx, args)["send_id"] == third["send_id"]

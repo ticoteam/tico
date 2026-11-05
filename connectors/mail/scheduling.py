@@ -238,10 +238,13 @@ def reusable_holds(ctx, thread, starts, attendee, body, summary):
                 or result.get('body') != body or result.get('times') != [start.isoformat() for start in starts]):
             continue
         seen.add(event_id)
+        if result.get('hold_version') != 1 or not result.get('hold'):
+            raise Refused('Review the calendar hold: its trusted insert snapshot is unavailable.')
         event = ctx.calendar.scheduling_hold(event_id, starts[0], starts[0]+DURATION, attendee, body, summary,
-                                             snapshot=result.get('hold'))
+                                             snapshot=result['hold'], request_id=result.get('conference_request_id', ''))
         if event:
-            holds.append({'id': event_id, 'bounds': (starts[0], starts[0]+DURATION), 'event': event})
+            holds.append({'id': event_id, 'bounds': (starts[0], starts[0]+DURATION), 'event': result['hold'],
+                          'conference_request_id': result.get('conference_request_id', '')})
     return holds
 
 
@@ -323,25 +326,32 @@ def run(ctx, args):
         permission(ctx, args.category, attendee, args.thread, args.bd_confirmation)
         holds = reusable_holds(ctx, args.thread, starts, attendee, body, summary) if args.mode == 'book' else []
         check_free(ctx.calendar, starts, exclude_hold=holds)  # notice, calendars and buffers immediately before action
-        # Remove only duplicates verified against their non-sent receipt, with conditional deletes.
-        for stale in holds[1:]:
-            ctx.calendar.delete_scheduling_hold(stale['event'])
         intent_id = hashlib.sha256((key + uuid.uuid4().hex).encode()).hexdigest()
         event_id = holds[0]['id'] if holds else intent_id
         payload['expected_event_id'] = event_id if args.mode == 'book' else None
         if holds:
             payload['hold'] = holds[0]['event']
+            payload['hold_version'] = 1
+            payload['conference_request_id'] = holds[0]['conference_request_id']
         with ctx.conn:
             if old:
                 ctx.conn.execute("UPDATE scheduling_actions SET key=? WHERE key=?", ('retired:' + intent_id, key))
             ctx.conn.execute('INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)',
                              (key,ctx.mailbox,args.thread,args.mode,day,'pending',json.dumps(payload)))
+        def save_hold(snapshot):
+            payload.update(hold=snapshot, hold_version=1)
+            with ctx.conn:
+                ctx.conn.execute('UPDATE scheduling_actions SET result=? WHERE key=?', (json.dumps(payload), key))
+        def save_request(request_id):
+            payload['conference_request_id'] = request_id
+            with ctx.conn:
+                ctx.conn.execute('UPDATE scheduling_actions SET result=? WHERE key=?', (json.dumps(payload), key))
         try:
             if args.mode == 'book':
-                event = (ctx.calendar.reuse_scheduling_event(holds[0]['event']) if holds else
+                event = (ctx.calendar.reuse_scheduling_event(holds[0]['event'],
+                             request_id=holds[0]['conference_request_id'], on_request=save_request) if holds else
                          ctx.calendar.create_scheduling_event(starts[0], starts[0]+DURATION,
-                                                              attendee, event_id, body, summary))
-                payload['hold'] = event
+                                                              attendee, event_id, body, summary, on_insert=save_hold))
                 raw = compose.build([attendee], subject, body, from_addr=ctx.mailbox,
                                     in_reply_to=reply_id, references=refs)
                 raw = compose.with_invitation(raw, event, ctx.mailbox, [attendee], starts[0], starts[0]+DURATION,
@@ -358,8 +368,6 @@ def run(ctx, args):
             status = 'queued'
         except cal.ConferencePending as exc:
             status = 'canceled'
-            if exc.event:
-                payload['hold'] = exc.event
             result = dict(payload, ok=False, sent=False, queued=False, retry=True, reason=str(exc))
         except Exception:
             # A network failure may occur after delivery. Never automatically retry or claim rollback.
