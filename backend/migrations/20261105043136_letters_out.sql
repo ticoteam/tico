@@ -5,10 +5,10 @@ CREATE TABLE letter_outboxes (
 );
 INSERT INTO letter_outboxes(id,created_at,updated_at) VALUES('company',strftime('%Y-%m-%dT%H:%M:%SZ','now'),strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 CREATE TABLE letter_outbox_grants (
-  outbox_id TEXT NOT NULL REFERENCES letter_outboxes(id), principal_type TEXT NOT NULL,
-  principal_id TEXT NOT NULL, level TEXT NOT NULL CHECK(level='send'),
-  granted_by TEXT NOT NULL, created_at TEXT NOT NULL,
-  PRIMARY KEY(outbox_id,principal_type,principal_id)
+  id TEXT PRIMARY KEY, outbox_id TEXT NOT NULL REFERENCES letter_outboxes(id), grantee_type TEXT NOT NULL,
+  grantee_id TEXT NOT NULL, level TEXT NOT NULL CHECK(level='send'),
+  granted_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(outbox_id,grantee_type,grantee_id)
 );
 CREATE TABLE letter_bot_settings (
   bot_id TEXT PRIMARY KEY REFERENCES bots(id), mode TEXT, monthly_cap_micros INTEGER,

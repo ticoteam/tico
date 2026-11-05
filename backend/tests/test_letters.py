@@ -150,6 +150,15 @@ def test_revoke_or_never_before_approval_prevents_submission(api, hq):
     assert post(api, "letters/" + row["id"] + "/send", {}, token=token, expected=403)["error"]["code"] == "letters_disabled"
 
 
+def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
+    ident, token = bot(api)
+    grant(api, ident)
+    row = send(api, quote(api, token=token), token=token)
+    post(api, "approvals/" + row["approval_id"], {"decision": "approved"}, token="cara-test", expected=403)
+    post(api, "approvals/" + row["approval_id"], {"decision": "approved"}, token="ben-test")
+    assert fetch(api, row)["status"] == "submitted"
+
+
 def test_company_monthly_cap_counts_accepted_spend_and_approval_cannot_bypass_it(api, hq):
     put(api, "letters/settings", {"monthly_cap_micros": 2000000})
     first = send(api, quote(api))

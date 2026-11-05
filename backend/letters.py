@@ -110,11 +110,11 @@ def can_send(c, auth, who):
     bot = acting_bot(who)
     if bot:
         return bool(c.execute("SELECT 1 FROM letter_outbox_grants WHERE outbox_id='company' "
-            "AND principal_type='bot' AND principal_id=? AND level='send'", (bot,)).fetchone())
+            "AND grantee_type='bot' AND grantee_id=? AND level='send'", (bot,)).fetchone())
     if admin(auth, who):
         return True
     return who.role == "human" and bool(c.execute("SELECT 1 FROM letter_outbox_grants WHERE outbox_id='company' "
-        "AND principal_type='person' AND principal_id=? AND level='send'", (H.actor_id(who.actor),)).fetchone())
+        "AND grantee_type='person' AND grantee_id=? AND level='send'", (H.actor_id(who.actor),)).fetchone())
 
 
 def authorize(c, auth, who, *, deferred=False):
@@ -604,41 +604,49 @@ def install(app, config, store, auth, mutate):
         with store.read() as c:
             require_admin(auth, request.state.identity)
             return {"grants": [dict(r) for r in c.execute("SELECT g.*,s.mode,s.monthly_cap_micros FROM letter_outbox_grants g "
-                "LEFT JOIN letter_bot_settings s ON g.principal_type='bot' AND s.bot_id=g.principal_id WHERE g.outbox_id=? "
-                "ORDER BY g.principal_type,g.principal_id LIMIT 101", (outbox_id,))]}
+                "LEFT JOIN letter_bot_settings s ON g.grantee_type='bot' AND s.bot_id=g.grantee_id WHERE g.outbox_id=? "
+                "ORDER BY g.grantee_type,g.grantee_id LIMIT 101", (outbox_id,))]}
 
-    @app.put("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}")
-    def grant(request: Request, outbox_id: Literal["company"], principal_type: Literal["bot", "person"],
-              principal_id: str, body: Grant):
+    @app.put("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}")
+    def grant(request: Request, outbox_id: Literal["company"], grantee_type: Literal["bot", "person"],
+              grantee_id: str, body: Grant):
         def work(c):
             require_admin(auth, request.state.identity)
-            table = "bots" if principal_type == "bot" else "humans"
-            if not c.execute(f"SELECT 1 FROM {table} WHERE id=?", (principal_id,)).fetchone():
+            teammate = H.resolve_bot(c, grantee_id) if grantee_type == "bot" else H.human(c, grantee_id)
+            if not teammate:
                 raise Problem("not_found", "Teammate not found", 404)
-            if c.execute("SELECT count(*) FROM letter_outbox_grants").fetchone()[0] >= 100:
+            ident = teammate["id"]
+            exists = c.execute("SELECT 1 FROM letter_outbox_grants WHERE outbox_id=? AND grantee_type=? AND grantee_id=?",
+                               (outbox_id, grantee_type, ident)).fetchone()
+            if not exists and c.execute("SELECT count(*) FROM letter_outbox_grants").fetchone()[0] >= 100:
                 raise Problem("grants_cap", "At most 100 Letters out grants", 409)
-            c.execute("INSERT INTO letter_outbox_grants VALUES(?,?,?,'send',?,?) ON CONFLICT(outbox_id,principal_type,principal_id) "
-                "DO UPDATE SET level='send',granted_by=excluded.granted_by", (outbox_id, principal_type, principal_id,
-                request.state.identity.actor, H.now()))
+            c.execute("INSERT INTO letter_outbox_grants VALUES(?,?,?,?,'send',?,?,?) ON CONFLICT(outbox_id,grantee_type,grantee_id) "
+                "DO UPDATE SET level='send',granted_by_id=excluded.granted_by_id,updated_at=excluded.updated_at",
+                (H.new_id(), outbox_id, grantee_type, ident, request.state.identity.actor, H.now(), H.now()))
             H.event(c, request.state.identity.actor, "letter.access.granted", outbox_id,
-                    {"principal_type": principal_type, "principal_id": principal_id, "level": "send"})
-            return {"principal_type": principal_type, "principal_id": principal_id, "level": "send"}
+                    {"grantee_type": grantee_type, "grantee_id": ident, "level": "send"})
+            return dict(c.execute("SELECT * FROM letter_outbox_grants WHERE outbox_id=? AND grantee_type=? AND grantee_id=?",
+                                  (outbox_id, grantee_type, ident)).fetchone())
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}")
-    def revoke(request: Request, outbox_id: Literal["company"], principal_type: Literal["bot", "person"], principal_id: str):
+    @app.delete("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}")
+    def revoke(request: Request, outbox_id: Literal["company"], grantee_type: Literal["bot", "person"], grantee_id: str):
         def work(c):
             require_admin(auth, request.state.identity)
-            c.execute("DELETE FROM letter_outbox_grants WHERE outbox_id=? AND principal_type=? AND principal_id=?",
-                      (outbox_id, principal_type, principal_id))
+            teammate = H.resolve_bot(c, grantee_id) if grantee_type == "bot" else H.human(c, grantee_id)
+            ident = teammate["id"] if teammate else grantee_id
+            c.execute("DELETE FROM letter_outbox_grants WHERE outbox_id=? AND grantee_type=? AND grantee_id=?",
+                      (outbox_id, grantee_type, ident))
             H.event(c, request.state.identity.actor, "letter.access.revoked", outbox_id,
-                    {"principal_type": principal_type, "principal_id": principal_id})
+                    {"grantee_type": grantee_type, "grantee_id": grantee_id})
             return {"revoked": True}
         return mutate(request, Contract(), work)
 
     @app.get("/api/v2/letters/bots/{bot_id}/settings")
     def bot_settings(request: Request, bot_id: str):
         with store.read() as c:
+            if not H.bot(c, bot_id):
+                raise Problem("not_found", "Bot not found", 404)
             if not auth.bot_manager(c, request.state.identity, bot_id):
                 raise Problem("forbidden", "Only this bot's manager reads its settings", 403)
             row = c.execute("SELECT * FROM letter_bot_settings WHERE bot_id=?", (bot_id,)).fetchone()
@@ -647,6 +655,8 @@ def install(app, config, store, auth, mutate):
     @app.put("/api/v2/letters/bots/{bot_id}/settings")
     def save_bot_settings(request: Request, bot_id: str, body: BotSettings):
         def work(c):
+            if not H.bot(c, bot_id):
+                raise Problem("not_found", "Bot not found", 404)
             if not auth.bot_manager(c, request.state.identity, bot_id) or request.state.identity.via:
                 raise Problem("forbidden", "Only this bot's manager changes its settings", 403)
             company = settings(c)

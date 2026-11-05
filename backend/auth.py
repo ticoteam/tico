@@ -1065,6 +1065,13 @@ class Auth:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
             allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
+        if row["kind"] == "letter":
+            from . import letters
+            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
+            if letter and who.role in ("owner", "human"):
+                allowed = letters.readable(c, self, who, letter) if not decide else (
+                    letters.admin(self, who) or (letter["acting_bot_id"] and
+                    self.bot_manager(c, who, letter["acting_bot_id"])))
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row

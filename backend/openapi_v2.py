@@ -77,6 +77,7 @@ EVENTS_DESCRIPTION = (
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
@@ -3219,9 +3220,9 @@ SCHEMAS["LetterOutPage"] = obj({"items": items(ref("LetterOut")), "next_before":
 SCHEMAS["LettersSettings"] = obj({"id": "s", "mode": "s", "return_address": {"type": ["object", "null"]},
     "monthly_cap_micros": {"type": ["integer", "null"]}, "availability": "s", "checked_at": "n", "created_at": "s", "updated_at": "s"})
 SCHEMAS["LettersAccess"] = obj({"send": "b", "outbox_id": "s"})
-SCHEMAS["LettersGrants"] = obj({"grants": items(obj({"outbox_id": "s", "principal_type": "s", "principal_id": "s",
-    "level": "s", "granted_by": "s", "created_at": "s"}))})
-SCHEMAS["LettersGrant"] = obj({"principal_type": "s", "principal_id": "s", "level": "s"})
+SCHEMAS["LettersGrants"] = obj({"grants": items(obj({"outbox_id": "s", "grantee_type": "s", "grantee_id": "s",
+    "level": "s", "granted_by_id": "s", "created_at": "s"}))})
+SCHEMAS["LettersGrant"] = obj({"grantee_type": "s", "grantee_id": "s", "level": "s"})
 SCHEMAS["LettersRevoked"] = obj({"revoked": "b"})
 SCHEMAS["LetterBotSettings"] = obj({"bot_id": "s", "mode": "n", "monthly_cap_micros": {"type": ["integer", "null"]}})
 STABLE.extend([
@@ -3234,8 +3235,8 @@ STABLE.extend([
     ("/api/v2/letters/settings", "put", "Letters out", "setLettersSettings", "Owner or admin sets company Letters out policy", None),
     ("/api/v2/letters/access", "get", "Letters out", "getLettersAccess", "Whether the caller has sending access", None),
     ("/api/v2/letters/outboxes/{outbox_id}/grants", "get", "Letters out", "listLettersGrants", "Sending grants on the company outbox", None),
-    ("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}", "put", "Letters out", "grantLettersAccess", "Owner or admin grants send access", None),
-    ("/api/v2/letters/outboxes/{outbox_id}/grants/{principal_type}/{principal_id}", "delete", "Letters out", "revokeLettersAccess", "Owner or admin revokes send access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "put", "Letters out", "grantLettersAccess", "Owner or admin grants send access", None),
+    ("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}", "delete", "Letters out", "revokeLettersAccess", "Owner or admin revokes send access", None),
     ("/api/v2/letters/bots/{bot_id}/settings", "get", "Letters out", "getBotLettersSettings", "Bot's sending policy override and optional cap", None),
     ("/api/v2/letters/bots/{bot_id}/settings", "put", "Letters out", "setBotLettersSettings", "Bot manager sets a policy that cannot loosen company policy", None),
 ])
