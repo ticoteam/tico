@@ -3562,6 +3562,56 @@ def relay_wake_url_off(api, args):
     return _as_person(api).call("PUT", "hooks/wake-url", {"url": None}, key=_key(args))
 
 
+ALERT_PREFERENCES = {
+    **{k: {"type": "boolean"} for k in ("urgent_needs", "legal_mail", "bot_stuck", "urgent_calls", "emergency_exception")},
+    **{k: {"type": "string"} for k in ("timezone", "quiet_start", "quiet_end")},
+    "monthly_cap": {"type": "integer", "minimum": 0, "maximum": 10000},
+}
+
+
+@tool("hub_alerts_show", "Your own phone, alert preferences and spend. Only a person acting as themselves; never BotOps or the Assistant.", {})
+def alerts_show(api, args):
+    return api.get("alerts/me")
+
+
+@tool("hub_alerts_set", "Choose alerts, timezone, quiet hours and a monthly USD cap. Empty quiet_start and quiet_end disables quiet hours; emergency_exception is explicit. Only your own preferences.",
+      ALERT_PREFERENCES, writes=True)
+def alerts_set(api, args):
+    return api.call("PUT", "alerts/me", {k: args[k] for k in ALERT_PREFERENCES if args.get(k) is not None}, key=_key(args))
+
+
+@tool("hub_alerts_verify", "Send a free code to your own US/Canada phone. SMS consent is required; call consent is optional and separate.",
+      {"phone": _s("Your own phone"), "sms_consent": {"type": "boolean"}, "call_consent": {"type": "boolean"}},
+      required=("phone", "sms_consent"), writes=True)
+def alerts_verify(api, args):
+    return api.post("alerts/me/phone", {k: args[k] for k in ("phone", "sms_consent", "call_consent") if k in args}, key=_key(args))
+
+
+@tool("hub_alerts_confirm", "Confirm your phone with its six-digit code. A person acting as themselves only.",
+      {"code": _s("The six-digit verification code")}, required=("code",), writes=True)
+def alerts_confirm(api, args):
+    return api.post("alerts/me/phone/confirm", {"code": args["code"]}, key=_key(args))
+
+
+@tool("hub_alerts_remove", "Revoke your phone and cancel queued alerts. Retry removal if HQ is unavailable; local paging stops immediately.", {}, writes=True)
+def alerts_remove(api, args):
+    return api.call("DELETE", "alerts/me/phone", None, key=_key(args))
+
+
+@tool("hub_alerts_test", "Send yourself a test alert. The company pays $1 per accepted alert; caps apply. Use a stable operation_id for retries.",
+      {"accept_charge": {"type": "boolean"}}, required=("accept_charge", "operation_id"), writes=True)
+def alerts_test(api, args):
+    return api.post("alerts/me/test", {"accept_charge": args["accept_charge"]}, key=_key(args))
+
+
+@tool("hub_alerts_company", "Company alert monthly cap/spend in USD; owner/admin acting as themselves. Set monthly_cap to change it; zero stops paid alerts.",
+      {"monthly_cap": {"type": "integer", "minimum": 0, "maximum": 100000}}, writes=True)
+def alerts_company(api, args):
+    if args.get("monthly_cap") is None:
+        return api.get("alerts/company")
+    return api.call("PUT", "alerts/company", {"monthly_cap": args["monthly_cap"]}, key=_key(args))
+
+
 @tool("hub_sleep_status", "Sleep when idle on a server Tico hosts: `hosted`, `hours` (0 = off), `runners` (bot computers stop "
       "with the server), `active`, `idle_since` (the last moment anything happened; null while `blocker` names what keeps "
       "the server up: run_queued, run_in_progress, task_session, runner_job, send_pending or routine_due), `wake_at` (the "
@@ -7736,6 +7786,8 @@ ASSISTANT_WRITES = {"hub_email_cancel", "hub_goal_read_back", "hub_goal_save", "
 AUDIENCE = {
     **{name: HUMANS_AND_ASSISTANT for name in ("hub_email_mailboxes", "hub_email_inbox", "hub_email_search",
                                               "hub_email_thread", "hub_email_message")},
+    **{name: PEOPLE for name in ("hub_alerts_show", "hub_alerts_set", "hub_alerts_verify", "hub_alerts_confirm",
+                                "hub_alerts_remove", "hub_alerts_test", "hub_alerts_company")},
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
     "hub_meeting_link": REQUESTER + ("assistant",),
     "hub_meeting_unlink": REQUESTER + ("assistant",),

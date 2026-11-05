@@ -64,6 +64,7 @@ PAGES = {
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
     "settings-email-sending": page("email/sends", "sends", mailbox="ana@acme.example", pending=True),
+    "settings-alerts": page("alerts/me"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
 }

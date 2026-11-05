@@ -76,7 +76,7 @@
 "backend/google_connect.py" = ["B904"]
 "backend/granola_mcp.py" = ["B023", "BLE001", "S110"]
 "backend/groups.py" = ["B007"]
-"backend/health.py" = ["BLE001", "F401"]
+"backend/health.py" = ["BLE001"]
 "backend/hook_relay.py" = ["B018", "BLE001", "S110"]
 "backend/hosted_updates.py" = ["BLE001", "S110"]
 "backend/hubdb.py" = ["B034", "B905", "BLE001", "S110"]

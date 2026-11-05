@@ -73,6 +73,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
 | Physical mail | Company letters, explicit Read grants and legal mail routing ([guide](physical-mail.md)). |
 | Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
+| Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
