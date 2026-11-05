@@ -30,6 +30,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
+| Set who each teammate may reach, and how often | Rules → Internal (`#/rules`); the org chart, with each party's panel ([Reach](reach.md)) |
 | Connect your Google account, or the whole Workspace (admins) | Settings → Google: pick One account at a time or Whole Workspace |
 | Manage shared email and phone numbers | Settings → More → Email & Phone |
 | Choose AI providers | Settings → Models |
