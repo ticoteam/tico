@@ -15,19 +15,23 @@ REF_FIELDS = frozenset({"file", "file_id", "page", "page_id", "blob_id", "meetin
                         "digest", "source_digest", "sha256", "content_sha256", "body_sha256",
                         "ref", "item", "url", "file_url", "href", "src", "path"})
 SOURCE_LISTS = frozenset({"files", "attachments", "pages", "page_files", "meetings", "reviewed", "citations", "body_sources", "sources"})
+SOURCE_ID = re.compile(r"(?:file-[0-9a-f]{24}|[0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|"
+                       r"(?:file|page|task|message|meeting):[A-Za-z0-9_-]+)(?:@[0-9]+)?")
 
 
 def object_refs(value):
     """Structured identities belong to their object, regardless of its enclosing field's name."""
-    return ((key, item) for key, item in value.items() if key in REF_FIELDS or key == "id")
+    return ((key, item) for key, item in value.items() if key in REF_FIELDS or key == "id" or
+            key not in H.SOURCED_TEXT_FIELDS and isinstance(item, str) and SOURCE_ID.fullmatch(item))
 
 
 def body_sources(value, parent=""):
     """Keep structured source refs beside generated prose, without duplicating the payload's ordinary text."""
     if isinstance(value, dict):
         out = {}
+        refs = dict(object_refs(value))
         for key, item in value.items():
-            if key in REF_FIELDS or key == "id":
+            if key in refs:
                 out[key] = item
             elif isinstance(item, (dict, list)):
                 refs = body_sources(item, key)
@@ -140,22 +144,30 @@ def project(c, scoped, payload, *, auth=None):
                for fid, row in files.items()}
     denied = {fid for fid, ok in visible.items() if not ok}
     from . import task_privacy as privacy
-    for tid, row in tasks.items():
-        try:
-            auth.task_row(c, scoped.who, dict(row))
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
-            denied.add(tid)
-    for mid, row in messages.items():
-        try:
-            auth.conversation(c, scoped.who, row['conversation_id'])
-            if not privacy.message_readable(c, privacy.actor(scoped.who), row, current=True):
-                denied.add(mid)
-        except Problem as exc:
-            if exc.status not in (403, 404):
-                raise
-            denied.add(mid)
+    content_denied = set()
+    # Message access walks stored reply ancestry, whose decorators also call the projector. Read that ancestry
+    # without projecting it recursively; this pass still projects every object in the outgoing payload.
+    reset = turn_scope.WHO.set(None)
+    try:
+        for tid, row in tasks.items():
+            try:
+                auth.task_row(c, scoped.who, dict(row))
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+                content_denied.add(tid)
+        for mid, row in messages.items():
+            try:
+                auth.conversation(c, scoped.who, row['conversation_id'])
+                if not privacy.message_readable(c, privacy.actor(scoped.who), row, current=True):
+                    content_denied.add(mid)
+            except Problem as exc:
+                if exc.status not in (403, 404):
+                    raise
+                content_denied.add(mid)
+    finally:
+        turn_scope.WHO.reset(reset)
+    denied.update(content_denied)
     digest_access = {}
     for bid, row in blobs.items():
         ok = checking(bid, lambda bid=bid: turn_scope.blob_allowed(c, auth, scoped.who, bid)) is True
@@ -235,8 +247,8 @@ def project(c, scoped, payload, *, auth=None):
         if isinstance(value, list):
             return any(has_denied(item) for item in value)
         if isinstance(value, dict):
-            return any(has_denied(item) for key, item in value.items()
-                       if key in REF_FIELDS or key == 'id' or isinstance(item, (dict, list)))
+            return (any(has_denied(item) for _, item in object_refs(value)) or
+                    any(has_denied(item) for item in value.values() if isinstance(item, (dict, list))))
         return False
 
     def walk(value, parent='', legacy_titles=None):
@@ -258,7 +270,9 @@ def project(c, scoped, payload, *, auth=None):
                     value.get('id') not in event_sources and any(value.get(k) in legacy_titles for k in ('old', 'new'))):
                 return gone
             alias = scan_alias(value)
-            if any(rejected(item) for key, item in object_refs(value) if not (alias and key == 'file_id')):
+            direct_denied = {reference(item) for key, item in object_refs(value)
+                             if not (alias and key == 'file_id')} & denied
+            if direct_denied - content_denied:
                 return gone
             if has_denied(value.get('source')) or has_denied(value.get('ref')):
                 return gone
@@ -284,7 +298,7 @@ def project(c, scoped, payload, *, auth=None):
             refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
             shown_refs = out.get('refs', {})
             answer, shown_answer = refs.get('answer', {}), shown_refs.get('answer', {})
-            hidden_body = (any(has_denied(container.get(key)) for container in (value, refs)
+            hidden_body = (bool(direct_denied) or any(has_denied(container.get(key)) for container in (value, refs)
                                for key in ('body_sources', 'sources')) or has_denied(answer.get('target')) or
                            answer.get('answers') != shown_answer.get('answers') or
                            answer.get('not') != shown_answer.get('not'))

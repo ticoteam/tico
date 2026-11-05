@@ -872,11 +872,15 @@ def test_plain_answer_previews_keep_the_message_body_provenance(api):
 
 
 def publication_collision(api, kind):
-    from backend.auth import Identity
-    api.app.state.store.settings.test_identities['unscoped-ops'] = Identity('bot:ops', 'bot')
+    machine, publisher = turn(api)
     body = ({'url': 'https://acme.example/roadmap'} if kind == 'links' else
             {'name': 'roadmap.md', 'text': '# Caller supplied bytes'}) | {'scope': 'bot'}
-    hidden = post(api, 'files/' + kind, {**body, 'title': 'Restricted roadmap name'}, 'unscoped-ops')['file']
+    # A chat turn publishes locally; its manager promotes the source without pinning it to a task.
+    hidden = post(api, 'files/' + kind, {**body, 'scope': '', 'title': 'Restricted roadmap name'}, publisher['token'])['file']
+    promoted = api.patch('/api/v2/files/' + hidden['id'], json={'promote': True}, headers=headers('ben-test'))
+    assert promoted.status_code == 200, promoted.text
+    post(api, f'attempts/{publisher["id"]}/started', {'thread_id': 'publication-source'}, machine['token'])
+    post(api, f'attempts/{publisher["id"]}/complete', {'outcome': 'completed', 'last_seq': 0}, machine['token'])
     task, attempt = task_turn(api)
     no_sources(get(api, 'bots/ops/files', attempt['token']), (hidden['id'], hidden['title']))
     return body, hidden, task, attempt
@@ -926,8 +930,9 @@ def test_reference_objects_are_projected_under_any_response_key(api, monkeypatch
         refs = H.message(c, comment['id'])['refs']
         refs.update({'file': {'id': hidden['id'], **fields}, 'page': {'id': hidden['id'], **fields},
                      'arbitrary': [{'nested': {'id': hidden['id'], **fields}},
+                                   {'source_identity': hidden['id'], **fields},
                                    {'id': private['id'], 'title': private['title']},
-                                   {'id': private_message['id'], 'text': private_message['body']}],
+                                   {'handle': private_message['id'], 'text': private_message['body']}],
                      'unrelated': opaque})
         c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), comment['id']))
     def check():

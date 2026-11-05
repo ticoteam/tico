@@ -657,10 +657,9 @@ class Files:
         if who is None:
             return c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? AND identity=?",
                              (bot, scope, identity)).fetchone()
-        prefix = identity + ":file:"
         rows = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? "
-                         "AND (identity=? OR substr(identity,1,?)=?) ORDER BY first_activity_at,id",
-                         (bot, scope, identity, len(prefix), prefix))
+                         "AND (identity=? OR identity=? || ':file:' || id) ORDER BY first_activity_at,id",
+                         (bot, scope, identity, identity))
         return next((row for row in rows if self.visible(c, who, row, {})), None)
 
     def activity(self, c, fid, actor, action, *, attempt="", task=None, version=None, digest=None, detail=None, now=None):
