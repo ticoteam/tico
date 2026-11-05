@@ -331,7 +331,7 @@ def test_a_bot_adds_readers_within_its_reach_and_never_a_group(api):
 
 
 def test_a_private_run_adds_only_readers_who_read_what_it_carries(api):
-    own = task(api, "human:ana", "bot:ops", "Zip triage")
+    own = task(api, "bot:ops", "bot:ops", "Zip triage")
     theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
     attempt = run_on(api)
     with api.app.state.store.transaction() as c:
