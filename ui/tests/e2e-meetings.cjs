@@ -22,8 +22,7 @@ journey('e2e-meetings', async ({hub, browser, phone}) => {
   assertClean(page, `${where}: meetings listed`);
 
   go(page, `#/meetings?meeting=${id}`);
-  // The transcript is folded under its own heading on the review page: open it, then read the line the page shows.
-  await page.locator('#main details summary', {hasText: /^Transcript/}).first().click({timeout: t(20000)});
+  // The transcript is always shown beside the meeting.
   const text = await drawn(page, '#main', text => text.includes(LINE), `${where}: the review page draws the transcript`);
   assert.match(text, new RegExp(TITLE), `${where}: the review page names the meeting`);
   assertClean(page, `${where}: review page`);

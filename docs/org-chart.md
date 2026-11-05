@@ -177,9 +177,9 @@ bot to someone without giving them the whole group, put that bot's slug in their
 
 ## Where notes go
 
-A human's `bot` is where Tico sends a meeting when they choose **Send to bot > Auto**. If they have no bot, Auto uses the
-default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Choose a named bot in the dialog
-when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
+A human's `bot` is where Tico sends a meeting sent with `bot_id: "auto"` (Pending's **Send to** choice, or the API). If they
+have no bot, Auto uses the default bot (Assistant when active, otherwise BotOps). There is no separate routing model call. Pick a
+named bot under the meeting's **Share** menu when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting task and `backend/media.py` for the API.
 
 ## Adding a human
 
