@@ -298,7 +298,9 @@ fn systemd_start(
         Ok(done) if done.status.success() => return Ok(true),
         Ok(done) => {
             let stderr = one_line(&String::from_utf8_lossy(&done.stderr));
-            let can_detach = stderr.starts_with("Failed to connect to bus:") || stderr.starts_with("Failed to set bus address:");
+            let can_detach = stderr.starts_with("Failed to connect to bus:")
+                || stderr.starts_with("Failed to set bus address:")
+                || stderr.starts_with("Failed to connect to user scope bus via local transport:");
             let detail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") };
             (format!("systemd-run exited {}{detail}", done.status.code().unwrap_or(-1)), can_detach)
         }
@@ -963,22 +965,31 @@ mod tests {
     #[test]
     fn a_bus_failure_detaches_only_when_the_runner_cgroup_will_survive_restart() {
         let f = checkout_follower();
-        for mode in ["control-group", "mixed", "", "process", "none"] {
-            let mut detached = false;
-            let result = f.spawn_with("0.3.45", &systemd_env(), |cmd| {
-                if cmd.get_program() == "systemd-run" {
-                    return command_output(1, "", "Failed to connect to bus: No such file or directory\n");
+        for stderr in [
+            "Failed to connect to bus: No such file or directory",
+            "Failed to set bus address: No such file or directory",
+            "Failed to connect to user scope bus via local transport: No such file or directory",
+        ] {
+            for mode in ["control-group", "mixed", "", "process", "none"] {
+                let mut detached = false;
+                let mut calls = 0;
+                let result = f.spawn_with("0.3.45", &systemd_env(), |cmd| {
+                    calls += 1;
+                    if cmd.get_program() == "systemd-run" {
+                        return command_output(1, "", stderr);
+                    }
+                    assert_eq!(cmd.get_program(), "systemctl");
+                    assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["--user", "show", "--property=KillMode", "--value", "tico-bot.service"]);
+                    command_output(if mode.is_empty() { 1 } else { 0 }, mode, "")
+                }, |_| { detached = true; Ok(()) });
+                assert_eq!(calls, 2, "{stderr}; KillMode={mode}");
+                let safe = matches!(mode, "process" | "none");
+                assert_eq!(detached, safe, "{stderr}; KillMode={mode}");
+                assert_eq!(result.is_ok(), safe, "{stderr}; KillMode={mode}: {result:?}");
+                if let Err(error) = result {
+                    assert!(error.contains(stderr));
+                    assert!(error.contains(&format!("KillMode={}", if mode.is_empty() { "unknown" } else { mode })));
                 }
-                assert_eq!(cmd.get_program(), "systemctl");
-                assert_eq!(cmd.get_args().last().unwrap(), "tico-bot.service");
-                command_output(if mode.is_empty() { 1 } else { 0 }, mode, "")
-            }, |_| { detached = true; Ok(()) });
-            let safe = matches!(mode, "process" | "none");
-            assert_eq!(detached, safe, "{mode}");
-            assert_eq!(result.is_ok(), safe, "{mode}: {result:?}");
-            if let Err(error) = result {
-                assert!(error.contains("Failed to connect to bus: No such file or directory"));
-                assert!(error.contains(&format!("KillMode={}", if mode.is_empty() { "unknown" } else { mode })));
             }
         }
         std::fs::remove_dir_all(f.directory).unwrap();

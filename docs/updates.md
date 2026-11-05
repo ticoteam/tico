@@ -193,9 +193,10 @@ a new name, so a retry cannot collide with a unit left from an earlier attempt. 
 keeps a second updater from running, even when the first is waiting for the checkout lock or its status is old.
 The runner fills in missing user-bus settings from `/run/user/<uid>` and passes them to the updater. If `systemd-run`
 fails, its error is saved as one short line in Health, the computer's update status and `update.log`. A detached
-process is used only for a missing command or a bus connection failure, and only if systemd confirms the runner's
-`KillMode` is `process` or `none`. The installed units use systemd's default `control-group`; a detached updater would
-be killed on restart, so a launch failure is reported instead. An unknown stop policy also refuses that fallback.
+process is used only for a missing command or a bus connection failure, including systemd 257's user scope bus
+errors, and only if systemd confirms the runner's `KillMode` is `process` or `none`. The installed units use systemd's
+default `control-group`; a detached updater would be killed on restart, so a launch failure is reported instead.
+An unknown stop policy also refuses that fallback.
 Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
 logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
