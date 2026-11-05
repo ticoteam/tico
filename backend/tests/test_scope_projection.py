@@ -765,3 +765,20 @@ def test_origins_task_prefix_ignores_unreadable_matches(api):
     get(api, 'origins/' + row['id'], attempt['token'], expected=404)
     shown = get(api, 'origins/' + t['id'][:8], attempt['token'])
     assert shown['id'] == t['id']
+
+
+def test_plain_answer_previews_keep_the_message_body_provenance(api):
+    data = sources(api)
+    _, attempt = scoped(api, data, False)
+    # Legacy answers may have body provenance without a structured answer map.
+    with api.app.state.store.transaction() as c:
+        mid = data['answered']['comment']['id']
+        refs = H.message(c, mid)['refs']
+        refs.pop('answer')
+        c.execute('UPDATE messages SET refs=? WHERE id=?', (H._dump(refs), mid))
+    narrow(api, data)
+    token = attempt['token']
+    for path in ('messages/' + data['made']['question']['id'],
+                 'tasks/' + data['made']['task']['id'],
+                 'tasks/' + data['made']['task']['id'] + '/comments'):
+        no_sources(get(api, path, token), secrets(data))

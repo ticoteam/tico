@@ -2735,13 +2735,12 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
                                        f"AND actor>? AND actor NOT IN {_qlist(sorted(hidden))} ORDER BY actor LIMIT ?",
                                        (root["id"], cursor or "", limit + 1))]
     participant = lambda a: {"actor": a, "role": "member", "added_by": None, "created_at": root.get("created_at")}
-    if audience_of(root) in PUBLIC_AUDIENCES:
+    if audience_of(root) in (*PUBLIC_AUDIENCES, "participants"):
         have = {r["actor"] for r in rows}
         rows += [participant(a) for a in root.get("participants") or []
-                 if _public_member(c, a) and a > (cursor or "") and a not in have and a not in hidden]
+                 if (audience_of(root) == "participants" or _public_member(c, a))
+                 and a > (cursor or "") and a not in have and a not in hidden]
         rows = sorted(rows, key=lambda r: r["actor"])[:limit + 1]
-    if audience_of(root) == "participants" and not rows and not cursor:
-        rows = [participant(a) for a in root.get("participants") or [] if a not in hidden]
     rows = known.members(rows, root["id"])
     page = rows[:limit]
     next_cursor = page[-1]["actor"] if len(rows) > limit else None

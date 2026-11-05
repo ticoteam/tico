@@ -5653,9 +5653,15 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     if source:
         original = message(conn, source)
         if original:
+            from .turn_scope import message_view
+            from .scope_projection import body_sources
+            shown = message_view(conn, original)
+            if text == original.get("body"):
+                text = shown.get("body") or ""
             # Preserve the review's references and run inputs when readers' access changes later.
             refs["inputs"] = [source]
-            refs.update({k: v for k, v in original["refs"].items() if k in ("turn_id", "run")})
+            refs["body_sources"] = [body_sources(shown["refs"])]
+            refs.update({k: v for k, v in shown["refs"].items() if k in ("turn_id", "run")})
     silent = quiet or parent["status"] in ("done", "closed", "declined")
     # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes
     # step or a merge to do, which goes first in the builder's queue (backend/verdict_moves.py).
@@ -6093,13 +6099,16 @@ def prime_review_answers(conn, messages):
 
 def review_answers(conn, message_id, *, actor=None):
     from . import task_privacy as privacy
+    from .turn_scope import message_view
     from .read_cache import rows
     out = []
     for row in rows(conn, REVIEW_ANSWERS_SQL, (message_id, message_id)):
         if actor is not None and not privacy.message_readable(conn, actor, row, current=True):
             continue
-        refs = _json(row["refs"], {}) or {}
-        out.append(refs.get("answer") or {"by": row["sender_id"], "text": row["body"], "at": row["created_at"]})
+        shown = message_view(conn, dict(row))
+        refs = _json(shown["refs"], {}) or {}
+        out.append(refs.get("answer") or {"by": shown["sender_id"], "text": shown["body"], "at": shown["created_at"],
+                   **({"refs": {"body_sources": refs["body_sources"]}} if refs.get("body_sources") else {})})
     return out
 
 
