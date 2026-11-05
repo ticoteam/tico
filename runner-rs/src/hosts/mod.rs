@@ -292,6 +292,8 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
 /// this list and the CLI differ, so a command added or renamed there is added here too.
 const HUB_PATHS: &[&str] = &[
     "ack", "agent", "agent pair", "agent pair approve", "agent pair decline", "agent pair show", "answer",
+    "alerts", "alerts company", "alerts confirm", "alerts remove", "alerts set", "alerts show", "alerts test",
+    "alerts verify",
     "api", "approval", "approval approve", "approval decline", "approval list", "approval read-back",
     "approval request", "approval show", "approvals", "approvals approve", "approvals decline",
     "approvals list", "approvals read-back", "approvals request", "approvals show", "ask", "assistant",

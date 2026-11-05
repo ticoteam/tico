@@ -89,6 +89,8 @@ EMPTY = (
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
     "inbound_inboxes", "inbound_messages", "inbound_sync",
+    # Personal phone consent and paid dispatch queues belong to the source install.
+    "alert_preferences", "personal_alerts",
     "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
@@ -131,6 +133,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "letter_outboxes", "letter_bot_settings",
+    "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
     "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
     "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
