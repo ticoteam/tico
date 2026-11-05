@@ -170,3 +170,19 @@ def test_automatic_defaults_keep_label_and_body_provenance(api, kind, outcome):
         for token in ("cara-test", "finance-test"):
             shown = json.dumps(get(api, "tasks/" + made["task"]["id"], token=token))
             assert fid not in shown and "Confidential draft" not in shown, shown
+
+
+def test_identical_content_in_another_task_resolves_its_own_live_review(api):
+    _, attempt, fid = public_page(api)
+    with api.app.state.store.read() as c:
+        digest = c.execute("SELECT source_digest FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
+    assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+    tid = post(api, "tasks", {"owner": "ops", "title": "Independent review", "body": "Review", "private": False})["id"]
+    made = page(api, attempt, task=tid, name="independent.html", title="Independent draft")
+    assert made.status_code == 200, made.text
+    new = made.json()["page"]["file_id"]
+    question = review_ask(api, "ops-test", [{"file": new}], on="ana", parent=tid, private=False)
+    assert review_answer(api, question, ["Approve"])["answer"]["reviewed"][0]["file"] == new
+    with api.app.state.store.read() as c:
+        # A bare saved digest has no independent live identity in the deleted page's task.
+        assert files.page_ref_denials(c, api.app.state.auth, Identity("human:ana", "owner"), digest) == {fid: "A deleted page"}

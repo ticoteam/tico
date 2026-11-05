@@ -224,7 +224,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
                             True if isinstance(payload, dict) and payload.get("field") == "file"
                             else original(c, actor, payload))
     elif disabled_guard == "recognizer":
-        monkeypatch.setattr(files, "page_references", lambda value, c=None: set())
+        monkeypatch.setattr(files, "page_references", lambda value, c=None, **kw: set())
     elif disabled_guard == "audience":
         monkeypatch.setattr(files, "page_audience_visible", lambda *args, **kwargs: True)
 

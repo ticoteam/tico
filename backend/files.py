@@ -354,11 +354,11 @@ def page_reference(value):
         return None
 
 
-def page_references(value, c=None):
+def page_references(value, c=None, *, file_ids=None):
     """Resolve file, version, blob and digest identities through one recognizer on every transport."""
     found = set()
     aliases = page_identities(c) if c is not None else {}
-    def collect(part):
+    def collect(part, explicit=None):
         if isinstance(part, str):
             fid = page_reference(part)
             if fid:
@@ -371,18 +371,29 @@ def page_references(value, c=None):
                 candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
                 candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
                 candidate = re.split(r"[/?@]", candidate, maxsplit=1)[0]
-                found.update(aliases.get(candidate, ()))
+                resolved = aliases.get(candidate, ())
+                # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
+                if resolved and explicit and c is not None and re.fullmatch(r"[0-9a-f]{64}", candidate):
+                    live = {fid for fid in explicit if read_cache.one(c,
+                        "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+                        "WHERE v.file_id=? AND f.state<>'deleted' AND (v.digest=? OR v.source_digest=?) LIMIT 1",
+                        (fid, candidate, candidate))}
+                    if live:
+                        resolved = set(resolved) & live
+                found.update(resolved)
             except ValueError:
                 pass
             if part.startswith(("{", "[")):
-                collect(H._json(part, None))
+                collect(H._json(part, None), explicit)
         elif isinstance(part, dict):
+            ids = {fid for key in ("file", "file_id", "page", "page_id")
+                   if (fid := page_reference(part.get(key)))}
             for child in part.values():
-                collect(child)
+                collect(child, ids or explicit)
         elif isinstance(part, (list, tuple)):
             for child in part:
-                collect(child)
-    collect(value)
+                collect(child, explicit)
+    collect(value, file_ids)
     return found
 
 
@@ -446,24 +457,26 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
     def rejected(value):
         return removed_page(value) or bool(page_references(value, c) & denied.keys())
 
-    def clean(value, parent="", tid=task_id):
-        direct = page_references(value, c) & denied.keys() if isinstance(value, str) else set()
+    def clean(value, parent="", tid=task_id, context=None):
+        direct = page_references(value, c, file_ids=context) & denied.keys() if isinstance(value, str) else set()
         if isinstance(value, dict):
             carried = H._json(value.get("refs"), {}) or {}
             carried = carried if isinstance(carried, dict) else {}
             tid = H.refs_task_id(carried) or H.refs_task_id(value) or value.get("task_id") or tid
             if "owner_id" in value and "title" in value:
                 tid = value.get("id") or tid
+            context = {fid for key in ("file", "file_id", "page", "page_id")
+                       if (fid := page_reference(value.get(key)))} or context
             if (rejected(value.get("source")) or parent == "options" and
                     not value.get("source") and not value.get("file") and value.get("label") in hidden_titles(tid) or
                     parent in ("if_no_answer", "recommend") and not value.get("source") and
                     value.get("do") in hidden_titles(tid)):
                 return {"removed": True, "label": "A page you can't open"}
-            direct = {fid for v in value.values() if isinstance(v, str) and not v.startswith(("{", "["))
-                      for fid in page_references(v, c) if fid in denied}
+            direct = page_references({k: v for k, v in value.items() if isinstance(v, str) and not v.startswith(("{", "["))},
+                                     c, file_ids=context) & denied.keys()
             if direct:
                 return {"removed": True, "label": denied[sorted(direct)[0]]}
-            shown = {k: clean(v, k, tid) for k, v in value.items()}
+            shown = {k: clean(v, k, tid, context) for k, v in value.items()}
             if isinstance(value.get("label_sources"), dict):
                 shown["label_sources"] = {qid: {label: source for label, source in sources.items() if not rejected(source)}
                                           for qid, sources in value["label_sources"].items()}
@@ -485,7 +498,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
                         shown[key] = "A page you can't open"
             return shown
         if isinstance(value, list):
-            return [clean(v, parent, tid) for v in value]
+            return [clean(v, parent, tid, context) for v in value]
         if isinstance(value, str) and value.startswith(("{", "[")):
             return readable_page_refs(c, auth, who, value, task_id=tid)
         if direct:
