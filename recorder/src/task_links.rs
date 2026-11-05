@@ -109,7 +109,10 @@ impl Tico {
     }
 
     pub fn queue_links(&self, store: &Store, id: &str, ids: &[String]) -> Result<()> {
-        ensure!(!ids.is_empty() && ids.len() <= 30, "Choose up to 30 tasks");
+        ensure!(
+            !ids.is_empty() && ids.len() <= MAX_ITEMS,
+            "Choose up to {MAX_ITEMS} tasks"
+        );
         let found = self.readable_tasks(ids)?;
         ensure!(
             ids.iter().all(|id| found.iter().any(|task| &task.id == id)),

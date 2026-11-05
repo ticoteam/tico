@@ -2787,3 +2787,31 @@ fn recorder_note_taker_rejects_unoffered_task_numbers() {
         json!([{"number":42,"title":"Review pricing"}])
     );
 }
+
+#[test]
+fn recorder_picker_queues_forty_five_tasks_across_result_pages_without_creating_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Picker pages");
+    let ids: Vec<String> = (0..45).map(|n| format!("task-{n:03}")).collect();
+    let replies = ids.chunks(30).map(|batch| Some(json!({"tasks":batch.iter().enumerate().map(|(n,id)|
+        json!({"id":id,"number":n+1,"title":"Review pricing","status":"open"})).collect::<Vec<_>>()}))).collect();
+    let (tico, seen, worker) = server(replies);
+    tico.queue_links(&store, &record.id, &ids).unwrap();
+    worker.join().unwrap();
+    let context = store.context(&record.id).unwrap();
+    assert_eq!(context.items.len(), 45);
+    assert!(
+        context
+            .items
+            .iter()
+            .all(|item| item.kind == "link" && !item.task_id.is_empty())
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|(path, _, _)| path.starts_with("GET /api/v2/tasks?ids="))
+    );
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
