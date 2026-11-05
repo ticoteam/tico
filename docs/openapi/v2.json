@@ -58680,6 +58680,49 @@
               ],
               "additionalProperties": true
             }
+          },
+          "used_by": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "integer"
+              },
+              "bots": {
+                "type": "integer"
+              },
+              "names": {
+                "type": "array",
+                "items": "s"
+              }
+            },
+            "required": [
+              "bots",
+              "names",
+              "people"
+            ],
+            "additionalProperties": true
+          },
+          "synced_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "newest_epoch": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sync": {
+            "enum": [
+              "",
+              "signin",
+              "failed"
+            ]
+          },
+          "sync_error": {
+            "type": "string"
           }
         },
         "required": [
@@ -58688,12 +58731,17 @@
           "id",
           "kind",
           "level",
+          "newest_epoch",
           "person_id",
           "person_name",
           "provider",
           "routines",
           "state",
-          "status"
+          "status",
+          "sync",
+          "sync_error",
+          "synced_at",
+          "used_by"
         ],
         "additionalProperties": true
       },
