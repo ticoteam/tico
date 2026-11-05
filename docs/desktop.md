@@ -60,7 +60,7 @@ Your team may also offer its own app.
 
 ## Switch between organizations
 
-The generic Mac app can hold several organizations, each with its own sign-in. Once you have added more than one (see the first-launch section above), **Switch organization** appears in the account menu. It lists your organizations with a check mark on the open one; choose one to show its page. Switching needs no restart and no new sign-in.
+The generic Mac app can hold several organizations, each with its own sign-in. Once you have added more than one (see the first launch above), **Switch organization** appears in the account menu. It lists your organizations with a check mark on the open one; choose one to show its page. Switching needs no restart and no new sign-in.
 
 When you leave an organization, its page is hidden and stays open for 30 seconds, so switching back shows it as it was, with no reload. Up to two hidden pages are kept this way. A page past that limit closes at once and opens again where you were when you return to it. A call in the page you leave ends as you switch. A page that may be capturing the screen closes as you leave it.
 
