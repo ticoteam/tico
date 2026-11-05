@@ -149,8 +149,11 @@ def _awaited_reply(conn, target, in_reply_to):
         return True
     if not parent:
         return True
+    from . import hubdb as H
+    refs = H._json(parent["refs"], {}) if isinstance(parent["refs"], str) else (parent["refs"] or {})
+    # Only the parent's own flag: a needs_action inside copied-text provenance is no instruction.
     return parent["sender_id"] == target and bool(parent["kind"] == "ask" or parent["wait_s"]
-                                                   or '"' + FLAG + '": true' in str(parent["refs"] or ""))
+                                                   or (isinstance(refs, dict) and refs.get(FLAG) is True))
 
 
 def awaited(refs):

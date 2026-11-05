@@ -337,6 +337,20 @@ def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
         assert [s["detail"]["rule"] for s in skips(c)] == ["rule"]
 
 
+def test_a_needs_action_inside_provenance_is_not_an_awaited_reply(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task, _ = parked_task(c)
+        room = task["conversation_id"]
+        for key in ("body_sources", "sources"):
+            parent = H.say(c, "bot:cpo", "bot:ops", "FYI " + key, room,
+                           refs={"task": task["id"], key: [{"file": "f1", "needs_action": True}]})
+            assert not W._awaited_reply(c, "bot:cpo", parent["id"])
+        flagged = H.say(c, "bot:cpo", "bot:ops", "Need it", room, refs={"task": task["id"], "needs_action": True,
+                                                                       "body_sources": [{"file": "f1"}]})
+        assert W._awaited_reply(c, "bot:cpo", flagged["id"])
+
+
 def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
     from backend import bot_to_bot as B
     setup(api)
