@@ -45,7 +45,13 @@ const pageSrc = p => p.src ? visualPageSrc(p.src) : null;
 // The frame's address says where the page is drawn: the server's height reporter (backend/visuals.py) reads
 // `#tico-view=card|full&tico-size=<size>` into <html data-tico-view data-tico-size>, so a page's own CSS can draw a
 // compact widget in a card. A fragment changes no signature, cache key or audience check, and follows a redirect.
-const pageViewSrc = (src, size) => `${src.split('#')[0]}#tico-view=${size === 'full' ? 'full' : 'card'}&tico-size=${size}`;
+// A desktop app that checks frame addresses (visualOrigin) refuses a fragment unless it says visualView
+// (app/src/visual_origin.rs view_marker): older ones get the bare address, so the page draws, without its card layout.
+const pageViewSrc = (src, size) => {
+  const bare = src.split('#')[0], features = window.ticoNativeFeatures || [];
+  if (features.includes('visualOrigin') && !features.includes('visualView')) return bare;
+  return `${bare}#tico-view=${size === 'full' ? 'full' : 'card'}&tico-size=${size}`;
+};
 function pageFrame(p, src, height, size) {
   const f = document.createElement('iframe');
   f.className = 'page-frame';
