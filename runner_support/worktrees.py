@@ -314,6 +314,51 @@ def _checkout_target(base, branch, default, env):
     return target, git(base, 'rev-parse', '--verify', target, env=env).stdout.strip()
 
 
+def _recover_retired(base, default, link, task, env, client):
+    """Fetch published history before initialization; never replace a local branch with separate history."""
+    recovery = link.get('recovery') or _detail(link).get('recovery')
+    if not recovery or _link_value(link, 'checkout_state') != 'queued':
+        return
+    branch = checked_branch(link['branch'])
+    if branch == recovery['branch']:
+        link.setdefault('task_id', task)
+        start = _saved_history(base, branch, link, env, remote_required=True)
+        if start:
+            for published in recovery.get('published_heads') or [recovery.get('published_head')]:
+                if published and (not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', published)
+                                  or git(base, 'merge-base', '--is-ancestor', published, start, env=env, check=False).returncode):
+                    raise ValueError('Origin no longer contains the last published head; kept local history unchanged')
+            if start != 'refs/heads/' + branch:
+                fast_forward(base, branch, start, env)
+            if link.get('snapshot_skipped'):
+                client.patch(f'tasks/{task}/links/{link["link_id"]}', {'snapshot_skipped': link['snapshot_skipped']})
+            return
+        client.patch(f'tasks/{task}/links/{link["link_id"]}', {'recovery_branch_missing': True})
+        link['branch'] = checked_branch(recovery['fallback_branch'])
+    elif branch != recovery['fallback_branch']:
+        raise ValueError('Recovery branch does not match its task link; kept unchanged')
+    # Absence is proved by ls-remote; a network failure never starts a replacement branch.
+    if not remote_branch(base, default, env):
+        raise ValueError('Origin has no default branch; retry once it is available')
+    if git(base, 'show-ref', '--verify', 'refs/heads/' + link['branch'], env=env, check=False).returncode == 0:
+        raise ValueError('New recovery branch already exists locally; kept unchanged')
+    link['recovery_note'] = 'The old branch is missing on origin. Old work was not published there; starting a new branch from the default branch.'
+
+
+def _recovery_warning(link):
+    history = link.get('retired_worktrees') or _detail(link).get('retired_worktrees')
+    if not history:
+        history = [link.get('retired_worktree') or _detail(link).get('retired_worktree') or {}]
+    notes = [link.get('recovery_note') or _detail(link).get('recovery_note') or '']
+    for old in history:
+        notes.append(old.get('recovery_note') or '')
+        if old.get('ahead'):
+            notes.append(f"{old['ahead']} unpushed commits stayed on the retired computer ({old.get('computer_id')}); last head {old.get('last_commit') or 'unknown'}.")
+        if old.get('dirty_files'):
+            notes.append(f"{old['dirty_files']} changed files stayed on the retired computer ({old.get('computer_id')}).")
+    return ' '.join(note for note in notes if note)
+
+
 def _worktree_registered(base, path, env):
     expected = Path(path).resolve()
     for line in git(base, 'worktree', 'list', '--porcelain', env=env).stdout.splitlines():
@@ -580,6 +625,12 @@ def command(client, operation, value, task=None):
                 detail = _detail(link)
                 state = link.get('checkout_state') or detail.get('checkout_state')
                 setup_pending = bool(link.get('setup_pending', detail.get('setup_pending', False)))
+                if state == 'queued' and (link.get('recovery') or detail.get('recovery')):
+                    if path.exists():
+                        raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
+                    base, default = repositories.worktree_base(workspace, repo, env)
+                    _recover_retired(base, default, link, task, env, client)
+                recovery_warning = _recovery_warning(link)
                 if state is None and path.exists():
                     _verify_worktree(path, workspace, repo, link['branch'], env)
                     if (link.get('state') == 'present' and not setup_pending
@@ -620,7 +671,7 @@ def command(client, operation, value, task=None):
                         _verify_worktree(path, workspace, repo, link['branch'], env, expected_base)
                         _verify_ready_registration(workspace, link, repo, task)
                         return {**link, 'state': 'present', 'checkout_state': 'ready',
-                                'workspace_path': str(path)}
+                                'workspace_path': str(path), **({'warning': recovery_warning} if recovery_warning else {})}
                     elif state == 'legacy_present':
                         _verify_worktree(path, workspace, repo, link['branch'], env)
                         if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
@@ -655,7 +706,8 @@ def command(client, operation, value, task=None):
                     raise ValueError('Worktree is not ready; no initialization or setup completion was recorded')
                 return {**link, 'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,
                         'workspace_path': str(path),
-                        **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
+                        **({'warning': ' '.join(filter(None, (recovery_warning, repo.get('fetch_warning'))))}
+                           if recovery_warning or repo.get('fetch_warning') else {})}
         else:
             raw = Path(value)
             relative = str(raw.relative_to(Path(workspace).resolve())) if raw.is_absolute() else value
@@ -707,13 +759,14 @@ def prepare(workspace, row, repo, env, client):
                 raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
             disk_floor(workspace)
             base, default = repositories.worktree_base(workspace, repo, env)
+            _recover_retired(base, default, link, task, env, client)
             expected, target = _create_or_resume_checkout(path, workspace, base, default,
                                                           {**link, 'checkout_state': state}, repo, task, env, client)
             link.update(checkout_state='checkout_ready', expected_head=expected, checkout_target=target,
                         expected_base=_base_identity(_common_dir(base, env)))
         elif state not in ('checkout_ready', 'setup_running'):
             raise ValueError('Worktree is not waiting to be prepared; kept unchanged')
-        _run_registered_setup(path, workspace, repo, row['branch'], link, task, env, client)
+        _run_registered_setup(path, workspace, repo, link['branch'], link, task, env, client)
     return 'present'
 
 
@@ -735,6 +788,40 @@ def checked_branch(branch):
 
 def wip_branch(row):
     return 'wip/' + row['task_id'][:8] + '-' + (row.get('id') or row['link_id'])[:6]
+
+
+def _saved_history(base, branch, row, env, *, remote_required=False):
+    """Restore and recovery choose the newest saved head containing local and published task history."""
+    local = 'refs/heads/' + branch
+    if git(base, 'show-ref', '--verify', local, env=env, check=False).returncode:
+        local = None
+    try:
+        task_remote = remote_branch(base, branch, env)
+        saved = [ref for name in (wip_branch(row), 'wip/' + row['task_id'][:8])
+                 if (ref := remote_branch(base, name, env))]
+    except ValueError:
+        if remote_required or not local:
+            raise
+        row['restore_source'] = 'local (remote unavailable)'
+        return local
+    # A retired checkout's local branch alone does not prove its work was published.
+    if remote_required and not (task_remote or saved):
+        return None
+    required = [ref for ref in (local, task_remote) if ref]
+    start = None
+    for candidate in [*required, *saved]:
+        if any(git(base, 'merge-base', '--is-ancestor', floor, candidate, env=env, check=False).returncode
+               for floor in required):
+            continue
+        if start is None or git(base, 'merge-base', '--is-ancestor', start, candidate, env=env, check=False).returncode == 0:
+            start = candidate
+    if required and start is None:
+        raise ValueError('Task branch has separate history; kept worktree')
+    row.pop('snapshot_skipped', None)
+    for snapshot in saved:
+        if git(base, 'merge-base', '--is-ancestor', snapshot, start, env=env, check=False).returncode:
+            row['snapshot_skipped'] = snapshot
+    return start
 
 
 def remote_branch(base, branch, env):
@@ -1113,24 +1200,9 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
     git(base, 'worktree', 'prune', '--expire', 'now', env=env)
     isolation.mkdir(path.parent, mode=0o755)
     local = git(base, 'show-ref', '--verify', 'refs/heads/' + branch, env=env, check=False).returncode == 0
-    try:
-        task_remote = remote_branch(base, branch, env)
-        saved = remote_branch(base, wip_branch(row), env)
-        legacy = remote_branch(base, 'wip/' + row['task_id'][:8], env) if not saved else None
-        saved = saved or legacy
-    except ValueError:
-        if not local:
-            raise
-        task_remote, saved = None, None
-        row['restore_source'] = 'local (remote unavailable)'
-    start = branch if local else task_remote or 'origin/' + default
-    if saved:
-        if not (local or task_remote) or git(base, 'merge-base', '--is-ancestor', start, saved, env=env, check=False).returncode == 0:
-            start = saved
-        else:
-            row['snapshot_skipped'] = saved
+    start = _saved_history(base, branch, row, env) or 'origin/' + default
     if local:
-        if start != branch:
+        if start != 'refs/heads/' + branch:
             fast_forward(base, branch, start, env)
         git(base, 'worktree', 'add', str(path), branch, env=env)
     else:

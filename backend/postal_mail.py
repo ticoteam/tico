@@ -695,6 +695,9 @@ class PostalMail:
                   (status, kind or "other", reading["summary"], reading["sender"], reading["deadline"], task_id,
                    file_id, item["id"], H.now(), ident))
         H.event(c, H.KEEPER, "mail." + status, ident, {"kind": kind or "unread", "task": task_id})
+        if kind == "legal" and task_id:
+            from . import personal_alerts
+            personal_alerts.legal_mail(c, self.auth, task_id, ident)
 
     def task(self, c, title, body, to, due, private=None, *, inform_owner=False):
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
