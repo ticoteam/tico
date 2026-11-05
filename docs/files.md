@@ -125,6 +125,7 @@ A file inherits the visibility of where it came from:
 The check applies to every list row, the total, metadata, activity, versions and every download.
 Bot task turns also check the shared [task context scope](pages.md#publishing) on each read. A person's Dashboard or
 Growth pin admits bots too; a team pin alone does not admit every task reader.
+Task attachments and covers, including legacy uploads and SQL listings, omit files outside that scope.
 
 A bot cannot make a thread's file bot-wide. The owner or a bot administrator **promotes** a task or
 thread file to bot-wide, explicitly and never automatically (`PATCH /api/v2/files/{id}` with `promote: true`); the move is

@@ -707,7 +707,11 @@ def create_app(settings=None):
             # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
             # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
             if request.url.path.startswith("/visuals/") and request.method in ("GET", "HEAD"):
-                return await call_next(request)
+                response = await call_next(request)
+                if response.status_code < 400 and pending_reads:
+                    turn_scope.READS.set(None)
+                    await asyncio.to_thread(turn_scope.flush, store, auth, pending_reads)
+                return response
             if request.url.path == "/_tico/screen/v1/authorize":
                 from .screen_relay import private_request
                 if not private_request(request, settings):
@@ -1333,10 +1337,12 @@ def create_app(settings=None):
             if who is not None and visible_sql != "1":
                 value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             from .task_review import task_covers
-            value["cover"] = task_covers(c, [row["id"]]).get(row["id"])
+            value["cover"] = task_covers(c, [row["id"]], auth=auth, who=who).get(row["id"])
             from .blobs import brief
+            from .turn_scope import blob_allowed
             value["attachments"] = [brief(r) for r in c.execute(
-                "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=?", (row["id"],))]
+                "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=?", (row["id"],))
+                if who is None or blob_allowed(c, auth, who, r["id"]) is not False]
             value["links"] = H.task_links(c, row["id"])
             from .worktree_waits import for_task as worktree_waits_for
             value["worktree_waits"] = worktree_waits_for(c, row["id"])
@@ -1373,7 +1379,7 @@ def create_app(settings=None):
             row.update({**EMPTY_STATS, **requester_stats.get(row['id'], {})})
         marks = ",".join("?" * len(ids))
         from .task_review import task_covers
-        covers = task_covers(c, ids)
+        covers = task_covers(c, ids, auth=auth, who=who)
 
         # From the page's ids, with visibility checked per child: an `IN (SELECT id FROM tasks WHERE ...)`
         # list made SQLite probe every visible task against the page (1.5 s at 30k tasks).
@@ -1401,10 +1407,12 @@ def create_app(settings=None):
 
         attachments = {tid: [] for tid in ids}
         from .blobs import brief
+        from .turn_scope import blob_allowed
         for asset in c.execute(
                 f"SELECT a.task_id,b.* FROM task_assets a JOIN blobs b ON b.id=a.blob_id "
                 f"WHERE a.task_id IN ({marks})", ids):
-            attachments[asset["task_id"]].append(brief(asset))
+            if blob_allowed(c, auth, who, asset["id"]) is not False:
+                attachments[asset["task_id"]].append(brief(asset))
 
         from .privacy_index import ReadIndex
         provenance = ReadIndex(c, who)

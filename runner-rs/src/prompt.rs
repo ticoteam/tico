@@ -49,11 +49,14 @@ fn task_context(context: &Value) -> String {
                           ("meetings", "Task meetings (`hub meeting read <id>`; `--notes` for notes):")] {
         let Some(rows) = context[key].as_array().filter(|r| !r.is_empty()) else { continue };
         let mut block = format!("{header}\n");
+        let line_budget = (748 - block.chars().count()) / rows.len().min(10);
         for row in rows.iter().take(10) {
             let id = s(&row["id"]);
-            let title: String = s(&row["title"]).chars().map(|c| if c.is_control() { ' ' } else { c }).take(18).collect();
             let date: String = s(&row[if key == "pages" { "updated_at" } else { "date" }]).chars().take(10).collect();
             let version = if key == "pages" { format!(" v{}", row["version"].as_u64().unwrap_or(0)) } else { String::new() };
+            let fixed = format!("{id}{version} {date} ").chars().count() + 1;
+            let title: String = s(&row["title"]).chars().map(|c| if c.is_control() { ' ' } else { c })
+                .take(32.min(line_budget.saturating_sub(fixed))).collect();
             let line = format!("{id}{version} {date} {title}\n");
             if block.chars().count() + line.chars().count() > 748 { break; }
             block.push_str(&line);
@@ -461,6 +464,7 @@ mod tests {
         assert!(block.chars().count() <= 1500, "{}", block.chars().count());
         assert_eq!(block.lines().count(), 23);
         assert!(block.contains("hub file read <id>") && block.contains("hub meeting read <id>"));
+        assert!(block.contains("Planning meetingPlanning meeting"));
         assert!(!block.contains("SECRET"));
         let built = prompt(&json!({"id": "a", "bot": "ops", "task_context": sources}), &Names::from_config(None), None, false);
         assert!(built.contains(&block) && !built.contains("SECRET"));

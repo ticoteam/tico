@@ -51,12 +51,17 @@ def _link(base, task_id, title, route=None):
 
 def _tasks(c, auth, who, attrs, base):
     from .store import H
+    from . import turn_scope
     if attrs.get("waiting-on") != "viewer":
         return ""
     # The same rules as Needs you: waiting on the viewer, not snoozed, and a task the reader may see (task_sql).
     clauses, args = ["status='waiting'", "waiting_on=?", "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
                      "AND sh.released_at IS NULL AND sh.until_at>?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
+    scoped = turn_scope.scope(c, who)
+    if scoped is not None:
+        clauses.append("id IN (" + ",".join("?" for _ in scoped.tasks) + ")")
+        args.extend(sorted(scoped.tasks))
     if attrs.get("bot"):
         bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
         clauses.append("owner_id=?")
@@ -83,7 +88,11 @@ def _file_item(base, task_id, row):
 
 
 def _task(c, auth, who, attrs, base):
+    from . import turn_scope
     if not attrs.get("id"):
+        return ""
+    scoped = turn_scope.scope(c, who)
+    if scoped is not None and attrs["id"] not in scoped.tasks:
         return ""
     row = c.execute("SELECT id,title,status,waiting_on FROM tasks WHERE id=? AND (" + auth.task_sql(c, who) + ")",
                     (attrs["id"],)).fetchone()

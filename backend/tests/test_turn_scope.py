@@ -1,10 +1,11 @@
 """Task attempts share only contained sources; direct URLs never bypass that boundary."""
 import json
 import sqlite3
+import base64
 
 import pytest
 
-from backend import meetings, turn_scope
+from backend import blobs, meetings, turn_scope, visuals
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
@@ -318,3 +319,118 @@ def test_context_orders_meetings_by_utc_and_pages_by_version_time(api):
     result = get(api, "tasks/" + t["id"] + "/context")
     assert [r["id"] for r in result["meetings"]] == ["later", "earlier"]
     assert result["pages"][0]["updated_at"] == stamp
+
+
+def test_scoped_visuals_filter_live_files_and_tasks_and_recheck_current_scope(api, monkeypatch):
+    monkeypatch.setattr(api.app.state.store.settings, "visual_origin", "http://visuals.localhost:9001")
+    t, attempt = task_turn(api)
+    other = task(api, owner="bot:cpo", title="Outside task title", private=False)
+    _, publisher = turn(api, "cpo")
+    secret = published(api, publisher, task=other["id"], title="Outside page title")
+    live = (f'<html><body><tico-files task="{other["id"]}"></tico-files>'
+            f'<tico-task id="{other["id"]}"></tico-task><tico-tasks waiting-on="viewer"></tico-tasks>'
+            f'<tico-files task="{t["id"]}"></tico-files></body></html>').encode()
+    fid = published(api, attempt, task=t["id"], data=live, title="Allowed page title")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='waiting',waiting_on='bot:ops' WHERE id=?", (other["id"],))
+    src = get(api, "pages/" + fid, attempt["token"])["page"]["src"]
+    assert visuals.read(api.app.state.visual_key, src.rsplit("/", 1)[1])[-1] == attempt["id"]
+    shown = api.get(src)
+    assert shown.status_code == 200, shown.text
+    assert "Allowed page title" in shown.text
+    assert all(value not in shown.text for value in (secret, "Outside page title", other["id"], "Outside task title"))
+    # A fresh request rebuilds containment; carrying a second task now excludes this bot-party page.
+    carry(api, attempt, other["id"])
+    assert api.get(src).status_code == 404
+
+
+def test_make_page_visuals_log_secondary_reads_and_fail_closed_when_logging_fails(api, monkeypatch):
+    monkeypatch.setattr(api.app.state.store.settings, "visual_origin", "http://visuals.localhost:9001")
+    t = task(api, private=False)
+    _, publisher = turn(api, "cpo")
+    source = published(api, publisher, task=t["id"], title="Source page")
+    viewer = published(api, publisher, task=t["id"], name="viewer.html",
+                       data=f'<html><tico-files task="{t["id"]}"></tico-files></html>'.encode())
+    _, attempt = assistant_turn(api, "ana-test")
+    make_scope(api, attempt, t["id"])
+    src = get(api, "pages/" + viewer, attempt["token"])["page"]["src"]
+    assert visuals.read(api.app.state.visual_key, src.rsplit("/", 1)[1])[-1] == attempt["id"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DELETE FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))
+    shown = api.get(src)
+    assert shown.status_code == 200 and "Source page" in shown.text, shown.text
+    with store.read() as c:
+        assert {tuple(r) for r in c.execute("SELECT kind,ref FROM attempt_reads WHERE attempt_id=?", (attempt["id"],))} == {
+            ("file", viewer), ("file", source)}
+    original = store.mutate
+
+    def unavailable(who, operation, *args, **kwargs):
+        if operation == "attempt.reads":
+            raise sqlite3.OperationalError("Synthetic write failure")
+        return original(who, operation, *args, **kwargs)
+
+    monkeypatch.setattr(store, "mutate", unavailable)
+    assert api.get(src).status_code == 503
+    missing = visuals.mint(api.app.state.visual_key, "human:ana", viewer, 1, attempt_id="missing-attempt")
+    assert api.get("http://visuals.localhost:9001/visuals/" + missing).status_code == 404
+
+
+def test_task_attachment_projections_omit_rejected_files_blobs_and_covers(api):
+    t, attempt = task_turn(api)
+    other = task(api, owner="bot:cpo", private=False)
+    image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    attached = post(api, f'tasks/{other["id"]}/files', {
+        "name": "hidden-cover.png", "content_base64": base64.b64encode(image).decode()})
+    fid = attached["file_id"]
+    digest = api.app.state.blobs.put(image + b"legacy", "image/png")
+    with api.app.state.store.transaction() as c:
+        legacy = blobs.register(c, Identity("human:ana", "owner"), digest, len(image) + 6, "hidden-legacy.png", "image/png")
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (other["id"], legacy["id"]))
+    # Ordinary readers retain their attachments and newest cover.
+    ordinary = get(api, "tasks/" + other["id"])["task"]
+    assert ordinary["attachments"] and ordinary["cover"]
+    token = attempt["token"]
+    get(api, "files/" + fid + "/meta", token, expected=404)
+    get(api, "files/" + legacy["id"], token, expected=404)
+    single = get(api, "tasks/" + other["id"], token)["task"]
+    listed = next(row for row in get(api, "tasks", token)["tasks"] if row["id"] == other["id"])
+    for projected in (single, listed):
+        assert projected["attachments"] == [] and projected["cover"] is None
+        assert "hidden-" not in json.dumps(projected)
+    assert get(api, f'tasks/{other["id"]}/files', token)["files"] == []
+    for query in ("SELECT task_id,blob_id FROM task_assets", "SELECT count(*) FROM task_assets"):
+        rows = post(api, "sql", {"sql": query}, token)["rows"]
+        assert rows == ([[0]] if "count" in query else [])
+    # A legacy upload on the carried task stays visible, including its cover and SQL row.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_assets WHERE blob_id=?", (legacy["id"],))
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (t["id"], legacy["id"]))
+    own = get(api, "tasks/" + t["id"], token)["task"]
+    assert [r["id"] for r in own["attachments"]] == [legacy["id"]]
+    assert legacy["id"] in own["cover"]["url"]
+    assert [r["id"] for r in get(api, f'tasks/{t["id"]}/files', token)["files"]] == [legacy["id"]]
+    assert post(api, "sql", {"sql": "SELECT task_id,blob_id FROM task_assets"}, token)["rows"] == [[t["id"], legacy["id"]]]
+
+
+def test_claim_replay_rebuilds_context_after_meeting_and_page_access_narrow(api):
+    t = task(api, owner="bot:ops", private=False)
+    mid = record(api, {"private": False, "title": "Previously shared meeting"})
+    link(api, mid, [t["id"]])
+    _, publisher = turn(api, "cpo")
+    fid = published(api, publisher, task=t["id"], title="Previously shared page")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    attempt = claim(api, machine, "ops", key="context-claim")
+    assert [r["id"] for r in attempt["task_context"]["pages"]] == [fid]
+    assert [r["id"] for r in attempt["task_context"]["meetings"]] == [mid]
+    private = task(api, owner="human:ben", requester="human:ben", private=True)
+    with api.app.state.store.transaction() as c:
+        meeting = meetings.get(mid, c)
+        meetings.snapshot({**meeting["metadata"], "private": True, "audience": "participants"}, conn=c)
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (private["id"], blob(api, fid)))
+    replay = claim(api, machine, "ops", key="context-claim")
+    assert replay["id"] == attempt["id"] and replay["token"] == attempt["token"]
+    assert replay["task_context"] == {"pages": [], "meetings": []}
+    assert "Previously shared" not in json.dumps(replay["task_context"])

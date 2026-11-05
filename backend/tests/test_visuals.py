@@ -376,7 +376,10 @@ def test_video_on_the_visual_route_serves_byte_ranges(api):
 def test_tokens_are_signed_expire_and_stay_stable_within_half_their_life():
     key = b"k" * 32
     token = V.mint(key, "human:ben", "f", 3, now=0)
-    assert V.read(key, token, now=0) == ("human:ben", "f", 3, "")
+    assert V.read(key, token, now=0) == ("human:ben", "f", 3, "", "")
+    scoped = V.mint(key, "human:ben", "f", 3, now=0, attempt_id="attempt-1")
+    assert scoped != token
+    assert V.read(key, scoped, now=0) == ("human:ben", "f", 3, "", "attempt-1")
     assert V.read(key, token, now=V.LIFE) is None
     assert V.read(b"x" * 32, token, now=0) is None
     assert V.mint(key, "human:ben", "f", 3, now=V.LIFE // 2 - 1) == token

@@ -36,7 +36,8 @@ Each read checks current access and whether every reader of every carried task m
 team-pinned page does not qualify merely because the bot can open it; a person's Dashboard or Growth pin can make
 a page shared context. A page filed on a task with a bot party qualifies for that task, without making it context for
 other tasks. Several carried tasks get their intersection. Access changes apply to the next read, including direct
-file and blob addresses. Outside task turns, a bot attached by a private meeting's owner may read that saved meeting.
+file and blob addresses and retried runner claims. Outside task turns, a bot attached by a private meeting's owner may
+read that saved meeting.
 
 **What a page may hold.** One `.html` file, up to 10 MB. It runs no script and loads nothing from elsewhere. Tico
 removes scripts and outside addresses when the page is published, and the answer lists what it removed
@@ -70,6 +71,8 @@ the one person or bot viewing it. The page itself stays static: no script runs a
 Needs you, the task page and the Library, so a viewer never sees a title, a count or a name they could not open.
 A page with live blocks is shown only through its visual address, never the shared hosted copy, since each viewer
 gets a different page.
+Visual addresses issued in a task turn keep that turn's scope. Live task blocks list only carried tasks, and live
+file blocks apply the same source checks as direct reads. Make-page turns record these file reads in their source log.
 
 ## Where pages show
 

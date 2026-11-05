@@ -336,7 +336,7 @@ def answer_task(c, auth, who, task_id, body, wake, warn=""):
 
 
 # The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.
-COVERS_SQL = (
+COVER_ROWS_SQL = (
     "WITH visuals AS ("
     "SELECT f.task_id,f.id,v.version,v.mime,v.created_at,v.rowid AS position,"
     "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
@@ -353,17 +353,29 @@ COVERS_SQL = (
     "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
     "ORDER BY created_at DESC,version DESC,position DESC) AS rank FROM visuals "
     "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
-    "SELECT * FROM ranked WHERE rank=1")
+    "SELECT * FROM ranked")
+COVERS_SQL = COVER_ROWS_SQL + " WHERE rank=1"
 
 
-def task_covers(c, task_ids):
+def task_covers(c, task_ids, *, auth=None, who=None):
     """Newest visual version per task, with one query for a bounded task page."""
     if not task_ids:
         return {}
     marks = ",".join("?" * len(task_ids))
-    rows = c.execute(COVERS_SQL.format(marks=marks), (*task_ids, *task_ids))
+    from . import turn_scope
+    from .files import file_visible
+    scoped = who is not None and turn_scope.scope(c, who) is not None
+    query = COVER_ROWS_SQL + " ORDER BY task_id,rank" if scoped else COVERS_SQL
+    rows = c.execute(query.format(marks=marks), (*task_ids, *task_ids))
     out = {}
     for row in rows:
+        if row["task_id"] in out:
+            continue
+        if scoped:
+            file = c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()
+            if (not file_visible(c, auth, who, file, {}) if file else
+                    turn_scope.blob_allowed(c, auth, who, row["id"]) is False):
+                continue
         suffix = "/poster" if row["mime"].startswith("video/") else "/thumb" if row["thumb_blob_id"] else ""
         out[row["task_id"]] = {"url": f"/api/v2/files/{row['id']}{suffix}?v={row['version']}",
                                "width": row["width"], "height": row["height"]}

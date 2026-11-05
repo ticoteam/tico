@@ -394,6 +394,7 @@ class Files:
 
     def task_listing(self, c, who, task_id):
         from .task_review import version_review
+        from .turn_scope import blob_allowed
         self.auth.task(c, who, task_id)
         out = []
         for row in c.execute("SELECT * FROM bot_files WHERE task_id=? AND locator='tico_blob' "
@@ -418,7 +419,8 @@ class Files:
         for b in c.execute("SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
                            "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
                            "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)", (task_id,)):
-            if not privacy.blob_readable(c, privacy.actor(who), b["id"]):
+            if (not privacy.blob_readable(c, privacy.actor(who), b["id"])
+                    or blob_allowed(c, self.auth, who, b["id"]) is False):
                 continue
             out.append({"id": b["id"], "name": b["name"], "mime": b["content_type"], "current_version": 1,
                         "archived": False, "versions": [{"n": 1, "size": b["size"], "mime": b["content_type"],

@@ -568,6 +568,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
     from . import turn_scope
     if turn_scope.scope(c, who) is not None:
+        rules["task_assets"] += " AND " + function("scope_blob") + "(blob_id)"
         for table, check in (("meetings", "scope_meeting"), ("bot_files", "scope_file"), ("blobs", "scope_blob")):
             rules[table] = "(" + rules[table] + ") AND " + function(check) + "(id)"
     hidden = {table: set(HIDDEN.get(table, ())) for table in rules}

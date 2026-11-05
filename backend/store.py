@@ -2355,6 +2355,11 @@ class Store:
                                                     attempt_id=aid)
                         if not privacy.attempt_readable(c, replay_principal.actor, aid):
                             raise Problem("privacy", "This execution is no longer available", 403)
+                        if operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
+                            from . import task_context
+                            attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+                            acting = replay_auth.assistant_principal(c, attempt) or replay_principal
+                            saved["task_context"] = task_context.for_turn(c, replay_auth, acting, saved.get("task"))
                 # Cached results keep their retry semantics, but access is current on every retry.
                 task_ids = set()
                 for part in operation.split("/"):

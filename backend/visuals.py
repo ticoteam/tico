@@ -17,6 +17,7 @@ import re
 import secrets
 import stat
 import time
+from dataclasses import replace
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -354,27 +355,33 @@ def _unb64(text):
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-def mint(key, actor, fid, version, part="", now=None):
+def mint(key, actor, fid, version, part="", now=None, *, attempt_id=""):
     """A signed address for one reader, file version and part ("" or "poster"). Tokens are minted per hour bucket and
     live two hours, so the same reader gets the same address while more than half its life remains."""
     now = int(now if now is not None else time.time())
     expires = (now // (LIFE // 2) + 2) * (LIFE // 2)
-    body = _b64(json.dumps([actor, fid, int(version), part, expires], separators=(",", ":")).encode())
+    fields = [actor, fid, int(version), part, expires]
+    if attempt_id:
+        fields.append(attempt_id)
+    body = _b64(json.dumps(fields, separators=(",", ":")).encode())
     return body + "." + _b64(hmac.new(key, body.encode(), hashlib.sha256).digest())
 
 
 def read(key, token, now=None):
-    """(actor, file id, version, part) from a token this server signed that has not expired, else None."""
+    """Reader, file version, part and originating attempt from an unexpired signed token."""
     try:
         body, mac = token.split(".", 1)
         if not hmac.compare_digest(_unb64(mac), hmac.new(key, body.encode(), hashlib.sha256).digest()):
             return None
-        actor, fid, version, part, expires = json.loads(_unb64(body))
+        actor, fid, version, part, expires, *scope = json.loads(_unb64(body))
+        if len(scope) > 1 or scope and (not isinstance(scope[0], str) or not scope[0]):
+            return None
+        expires, version = int(expires), int(version)
     except (ValueError, TypeError):
         return None
     if int(now if now is not None else time.time()) >= int(expires):
         return None
-    return str(actor), str(fid), int(version), str(part)
+    return str(actor), str(fid), version, str(part), scope[0] if scope else ""
 
 
 def ancestors(settings):
@@ -544,10 +551,11 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     says shows from Tico file hosting's address (tico_storage.visual_ready): it gets a `src` on the app's own route,
     which checks the reader and sends them there (`serve`)."""
     cache, rows, served = {}, {}, {}
-    # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
-    # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
+    from . import turn_scope
+    attempt_id = who.attempt_id if turn_scope.scope(c, who) is not None else ""
+    # Scoped URLs carry their originating attempt so secondary reads use the same current containment.
     # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
-    route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
+    route = token_reader(c, files.auth, who.actor, attempt_id) if who.role == "bot" or attempt_id else who
     # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
     # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
     from .counsel import is_counsel
@@ -569,6 +577,8 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
             hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
+            if attempt_id and (hidden or (not row and turn_scope.blob_allowed(c, files.auth, who, fid) is False)):
+                continue
             if a.get("kind") not in INLINE and not hidden:
                 fresh.append(a)                  # a file kind with no address here: shown as stored, when it may be seen
                 continue
@@ -585,16 +595,16 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 inline = full or a["kind"] in MEDIA or bool(hosted and here is not None and hosted(v))
-                view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
+                view["src"] = here + "/visuals/" + mint(key, actor, fid, number, attempt_id=attempt_id) if inline and here is not None else None
                 if not inline:
                     view["open"] = True
                     if v["thumb_blob_id"] and here is not None:
-                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview")
+                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview", attempt_id=attempt_id)
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
                 if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
-                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster")
+                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster", attempt_id=attempt_id)
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
@@ -650,17 +660,26 @@ def on_host(request, origin):
         return False
 
 
-def token_reader(c, auth, actor):
-    """The reader the visual route checks a token's actor as: a person as they are now, a bot as itself without any
-    run (a token outlives the turn it was minted in), or None when neither exists."""
+def token_reader(c, auth, actor, attempt_id=""):
+    """Rebuild current reader rights, retaining a scoped URL's originating attempt."""
     from .auth import Identity
     from .store import H, Problem
     if not isinstance(actor, str) or actor == H.bot_actor(H.COUNSEL):
         return None             # Counsel reads no visual: its grant is its run's, which a token does not carry
     try:
-        if actor.startswith("human:"):
-            return auth.identity_for_actor(c, actor)
-        return Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
+        who = (auth.identity_for_actor(c, actor) if actor.startswith("human:") else
+               Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None)
+        if not who or not attempt_id:
+            return who
+        attempt = c.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+        if not attempt or who.role == "bot" and actor != H.bot_actor(attempt["bot_id"]):
+            return None
+        who = replace(who, attempt_id=attempt_id,
+                      task_actor=H.bot_actor(attempt["bot_id"]) if who.role != "bot" else "",
+                      via=who.via if who.role == "bot" else
+                      "assistant" if attempt["bot_id"] == auth.settings.assistant_bot else "botops")
+        from . import turn_scope
+        return who if turn_scope.scope(c, who) is not None else None
     except Problem:
         return None
 
@@ -679,9 +698,10 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     found = read(key, token)
     if not found:
         return gone
-    actor, fid, number, part = found
-    with store.read() as c:
-        who = token_reader(c, auth, actor)
+    actor, fid, number, part, attempt_id = found
+    filled = None
+    with store.read_transaction() as c:
+        who = token_reader(c, auth, actor, attempt_id)
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not who or not row or row["archived"] or row["locator"] != "tico_blob" or not files.visible(c, who, row, {}):
             return gone
@@ -706,6 +726,10 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
+        if kind == "page" and not part:
+            text = blobs.get(blob["digest"]).decode("utf-8", errors="replace")
+            if has_live(text):
+                filled = fill_live(text, c, who, auth, files).encode("utf-8")
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
         # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
@@ -717,11 +741,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
     rule = policy(kind, ancestors)
     if kind in ("page", "svg"):
-        data = blobs.get(blob["digest"])
-        if kind == "page" and not part and has_live(text := data.decode("utf-8", errors="replace")):
-            # Filled in for this reader alone, with what they may see now.
-            with store.read() as c:
-                data = fill_live(text, c, who, auth, files).encode("utf-8")
+        data = filled if filled is not None else blobs.get(blob["digest"])
         data, _ = clean(data, kind)
         if kind == "page":
             data = with_reporter(data)
