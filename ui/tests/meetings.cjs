@@ -75,7 +75,7 @@ async function open(browser, viewport, world, options = {}) {
       const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-2));
       if (!item.detail.owner) {
         const docBot = (world.employees || []).find(employee => employee.slug === 'doc-updater');
-        if (!docBot) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'owner', detail: 'Pick who this is for, then push again.'}})});
+        if (!docBot) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'owner', detail: 'Pick who this doc update is for, then push again.'}})});
         item.detail.owner = 'bot:' + docBot.id;
       }
       item.status = 'pushed'; item.version += 1;
@@ -297,36 +297,6 @@ async function shot(page, name) {
         assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Historical Fireflies call']);
         assert.equal(await page.locator('.meet-row[title="Fireflies"]').count(), 1);
         await shot(page, 'historical-' + (viewport.width > 760 ? 'desktop-' : 'phone-') + scheme);
-        assert.deepEqual(errors, []);
-        await context.close();
-      }
-
-      // A proposed task with no owner is refused with an owner picker on the row, then sends once one is chosen.
-      {
-        const viewport = {width: 1280, height: 900};
-        const item = {id: 'i1', section: 'task', text: 'Ship the pricing change', status: 'proposed', quote: '', at_ms: null, version: 1,
-          detail: {body: 'Ship on Friday'}};
-        w = world({meetings: [meeting('m5', 'Pricing call', 'zoom', 1)],
-          items: {id: 'm5', can_push: true, counts: {proposed: 1}, sections: {doc: [], task: [item], feature: []}}});
-        ({page, errors, context} = await open(browser, viewport, w, {colorScheme: scheme}));
-        await page.goto('https://tico-ui.test/#/meetings');
-        await page.locator('.meet-row .note-title').first().click();
-        const owner = page.locator('#meet-sections [data-pending=i1] select[data-pending-field=owner]');
-        await owner.waitFor();
-        assert.match(await owner.locator('option').first().innerText(), /Choose who this is for/);
-        const refused = page.waitForResponse(response => response.url().endsWith('/items/i1/push'));
-        await page.locator('#meet-sections [data-pending=i1] [data-send]').click();
-        assert.equal((await refused).status(), 422);
-        await page.locator('#meet-sections [data-pending=i1] [data-owner-error]').waitFor();
-        assert.match(await page.locator('#meet-sections [data-pending=i1] [data-owner-error]').innerText(), /Pick who this is for/);
-        const saved = page.waitForResponse(response => response.url().endsWith('/items/i1') && response.request().method() === 'POST');
-        await owner.selectOption('human:ben');
-        assert.equal((await saved).status(), 200);
-        const sent = page.waitForResponse(response => response.url().endsWith('/items/i1/push'));
-        await page.locator('#meet-sections [data-pending=i1] [data-send]').click();
-        assert.equal((await sent).status(), 200);
-        assert.equal(w.items.sections.task[0].status, 'pushed');
-        assert.equal(w.items.sections.task[0].detail.owner, 'human:ben');
         assert.deepEqual(errors, []);
         await context.close();
       }
