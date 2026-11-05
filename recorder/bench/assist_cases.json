@@ -37,7 +37,19 @@
           "text": "I'll ping Dana about shipping the photo delivery bug soon."
         }
       ],
-      "owner": "human:ana"
+      "expected": [
+        {
+          "owner": "human:ana",
+          "title_keywords": [
+            [
+              "photo"
+            ],
+            [
+              "bug"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "return-reviewed-pr",
@@ -47,7 +59,20 @@
           "text": "I'll send the reviewed PR back to Eli."
         }
       ],
-      "owner": "human:dana"
+      "expected": [
+        {
+          "owner": "human:dana",
+          "title_keywords": [
+            [
+              "review"
+            ],
+            [
+              "pr",
+              "pull request"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "named-review-request",
@@ -57,7 +82,19 @@
           "text": "Eli, review the code again before we merge."
         }
       ],
-      "owner": "human:eli"
+      "expected": [
+        {
+          "owner": "human:eli",
+          "title_keywords": [
+            [
+              "review"
+            ],
+            [
+              "code"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "have-named-reviewer",
@@ -67,7 +104,19 @@
           "text": "Have Eli review the code again."
         }
       ],
-      "owner": "human:eli"
+      "expected": [
+        {
+          "owner": "human:eli",
+          "title_keywords": [
+            [
+              "review"
+            ],
+            [
+              "code"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "concierge-role",
@@ -77,7 +126,19 @@
           "text": "Let's open a ticket to concierge to negotiate quotes above the customer's price."
         }
       ],
-      "owner": "bot:guest-relations"
+      "expected": [
+        {
+          "owner": "bot:guest-relations",
+          "title_keywords": [
+            [
+              "negotiat"
+            ],
+            [
+              "quote"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "ping-two-recipients",
@@ -87,7 +148,22 @@
           "text": "I'll ping Dana and Casey again about the bed/bath count service issue."
         }
       ],
-      "owner": "human:ana"
+      "expected": [
+        {
+          "owner": "human:ana",
+          "title_keywords": [
+            [
+              "bed"
+            ],
+            [
+              "bath"
+            ],
+            [
+              "count"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "direct-ping-request",
@@ -97,7 +173,22 @@
           "text": "Dana, ping Casey again about the bed/bath count service issue."
         }
       ],
-      "owner": "human:dana"
+      "expected": [
+        {
+          "owner": "human:dana",
+          "title_keywords": [
+            [
+              "bed"
+            ],
+            [
+              "bath"
+            ],
+            [
+              "count"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "unknown-speaker-commitment",
@@ -107,7 +198,19 @@
           "text": "I'll ping Dana about the photo delivery bug soon."
         }
       ],
-      "owner": ""
+      "expected": [
+        {
+          "owner": "",
+          "title_keywords": [
+            [
+              "photo"
+            ],
+            [
+              "bug"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "absent-reviewer",
@@ -117,9 +220,21 @@
           "text": "Eli, review the code again."
         }
       ],
-      "owner": "",
       "omit": [
         "human:eli"
+      ],
+      "expected": [
+        {
+          "owner": "",
+          "title_keywords": [
+            [
+              "review"
+            ],
+            [
+              "code"
+            ]
+          ]
+        }
       ]
     },
     {
@@ -130,7 +245,19 @@
           "text": "I'll open a ticket to concierge to negotiate quotes above the customer's price."
         }
       ],
-      "owner": "human:ana"
+      "expected": [
+        {
+          "owner": "human:ana",
+          "title_keywords": [
+            [
+              "ticket"
+            ],
+            [
+              "concierge"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "named-speaker-first-person",
@@ -140,7 +267,19 @@
           "text": "I'll ping Dana about the photo delivery bug soon."
         }
       ],
-      "owner": "human:casey"
+      "expected": [
+        {
+          "owner": "human:casey",
+          "title_keywords": [
+            [
+              "photo"
+            ],
+            [
+              "bug"
+            ]
+          ]
+        }
+      ]
     },
     {
       "id": "concierge-lead",
@@ -150,10 +289,277 @@
           "text": "The concierge team needs to negotiate the quotes above the customer budget. Please assign that to their team lead."
         }
       ],
-      "owner": "human:blair",
       "omit": [
         "bot:guest-relations"
+      ],
+      "expected": [
+        {
+          "owner": "human:blair",
+          "title_keywords": [
+            [
+              "negotiat"
+            ],
+            [
+              "quote"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bare-ping",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll ping Dana tomorrow."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "bare-message",
+      "lines": [
+        {
+          "speaker": "Dana Lee",
+          "text": "I'll send Casey a message after lunch."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "bare-reminder",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Remind Eli tomorrow, please."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "bare-follow-ups",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll reach out to Dana, follow up with Eli, and let Casey know."
+        },
+        {
+          "speaker": "Dana Lee",
+          "text": "I'll check in with Eli next week."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "sync-later",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Let's sync later."
+        },
+        {
+          "speaker": "Dana Lee",
+          "text": "Sure, we can catch up another time."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "ping-stated-signoff",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll ping Eli to get his sign-off on the pricing doc by Friday."
+        }
+      ],
+      "expected": [
+        {
+          "owner": "human:ana",
+          "title_keywords": [
+            [
+              "pricing"
+            ],
+            [
+              "sign-off",
+              "sign off",
+              "approval",
+              "approve"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "requested-ping-stated-signoff",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Dana, ping Eli to get his sign-off on the pricing doc by Friday."
+        }
+      ],
+      "expected": [
+        {
+          "owner": "human:dana",
+          "title_keywords": [
+            [
+              "pricing"
+            ],
+            [
+              "sign-off",
+              "sign off",
+              "approval",
+              "approve"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reminder-stated-work",
+      "lines": [
+        {
+          "speaker": "Eli Park",
+          "text": "I'll remind Casey to correct the tax total on the invoice before Friday."
+        }
+      ],
+      "expected": [
+        {
+          "owner": "human:eli",
+          "title_keywords": [
+            [
+              "tax"
+            ],
+            [
+              "invoice"
+            ],
+            [
+              "correct",
+              "fix",
+              "updat"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "next-meeting-minutes",
+      "lines": [
+        {
+          "speaker": "Dana Lee",
+          "text": "I'll share my screen now and open the agenda so we can read it together."
+        },
+        {
+          "speaker": "Me",
+          "text": "Let's check everyone's audio before we start the next slide."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "existing-restatement",
+      "existing": [
+        "Correct the tax total on the invoice"
+      ],
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "Casey still needs to fix the invoice tax total; we already have that on our list."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "small-real-commitments",
+      "lines": [
+        {
+          "speaker": "Me",
+          "text": "I'll correct the typo in the invoice template tomorrow."
+        },
+        {
+          "speaker": "Dana Lee",
+          "text": "I'll update the support footer after lunch."
+        },
+        {
+          "speaker": "Me",
+          "text": "Eli, add the tax total to the export by Friday."
+        },
+        {
+          "speaker": "Casey Morgan",
+          "text": "Agreed, I'll remove the duplicate row from the forecast tomorrow."
+        },
+        {
+          "speaker": "Me",
+          "text": "I'll send Dana the revised pricing sheet by Friday."
+        }
+      ],
+      "expected": [
+        {
+          "owner": "human:ana",
+          "title_keywords": [
+            [
+              "typo"
+            ],
+            [
+              "invoice"
+            ]
+          ]
+        },
+        {
+          "owner": "human:dana",
+          "title_keywords": [
+            [
+              "support"
+            ],
+            [
+              "footer"
+            ]
+          ]
+        },
+        {
+          "owner": "human:eli",
+          "title_keywords": [
+            [
+              "tax"
+            ],
+            [
+              "export"
+            ]
+          ]
+        },
+        {
+          "owner": "human:casey",
+          "title_keywords": [
+            [
+              "duplicate"
+            ],
+            [
+              "forecast"
+            ]
+          ]
+        },
+        {
+          "owner": "human:ana",
+          "title_keywords": [
+            [
+              "pricing"
+            ],
+            [
+              "sheet",
+              "spreadsheet"
+            ]
+          ]
+        }
       ]
     }
+  ],
+  "banned_title_starts": [
+    "Ping",
+    "Message",
+    "Remind",
+    "Reach out",
+    "Let",
+    "Follow up",
+    "Check in",
+    "Check-in"
   ]
 }

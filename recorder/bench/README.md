@@ -180,14 +180,27 @@ combine an STT provider's per-request speaker labels into one meeting. Echo is r
 transcript, not with acoustic echo cancellation. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
 
-## Suggested task owners
+## Suggested tasks: work, titles and owners
 
 `assist_cases.json` covers commitments, named requests, concierge bot/team work, multiple recipients,
-and unknown speakers or absent teammates. Names and actors are fictional. Each case supplies a roster,
-signed-in identity, transcript speaker labels, and expected owner. A miss includes a missing or extra
-item, so the eval cannot pass by returning no suggestions. The opt-in Rust eval calls the production
-draft request, validates the model's owner against the offered PEOPLE, and checks the stored Item.
-It repeats each case at least three times and prints per-case and overall exact owner accuracy.
+and unknown speakers or absent teammates. It also covers bare pings, messages and reminders, pings
+with stated work, vague syncs, immediate meeting steps, EXISTING restatements, and five small real
+commitments in one stretch. Names and actors are fictional. The original twelve owner scenarios
+retain the same transcript and owner expectations.
+
+Each case supplies transcript speaker labels and an `expected` array (empty means no new items).
+Each expected item has an exact `owner` and `title_keywords`: every group must have at least one
+case-insensitive substring in the title. `banned_title_starts` rejects communication-only leading
+verbs at a word boundary. Optional `existing` titles seed the meeting's draft list. The shared
+roster and signed-in identity apply to each case, with `omit` removing absent teammates.
+
+The opt-in Rust eval calls the production draft request, validates owners against PEOPLE, and
+checks stored Items. It repeats each case at least three times and prints per-case and overall
+selection/title accuracy, owner accuracy, and combined accuracy. Items match without relying on
+output order; combined matching checks the title and owner on the same item. Missing or extra
+items and request errors fail all scores, so returning no suggestions cannot pass a positive case.
+Title checks use no judge model. Owners alone are compared as a multiset; use the combined score
+to detect ownership swapped between several deliverables.
 
 Run on RunsOn with `scripts/remote.py --setup rust --minutes 4 -- ...` and a secure credential source
 on the VM, using:
