@@ -347,7 +347,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     The owner bot or a person. Returns the task."""
     H = _H()
     from . import task_snooze
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
     row = H.task(conn, task_id)
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")

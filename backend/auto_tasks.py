@@ -370,10 +370,17 @@ def counts_many(c, tasks_by_bot, who=None):
     every = [row for tasks in tasks_by_bot.values() for row in tasks]
     suspect = maybe_waiting(c, every)
     steps = step_names(c, every)
+    held = set()
+    for part in H.chunks(tasks_by_bot):
+        held.update((r[0], r[1]) for r in c.execute(
+            f"SELECT bot_id,task_id FROM quarantine_holds WHERE bot_id IN ({_marks(part)}) "
+            "AND task_id IS NOT NULL AND released_at IS NULL", part))
     out = {}
     for bot, tasks in tasks_by_bot.items():
         going = queued = 0
         for row in tasks:
+            if (bot, row['id']) in held:
+                continue            # a held task takes no place in the bot's optional task cap
             if who is not None and not privacy.task_readable(c, who, row):
                 continue
             if row['id'] in suspect and waiting(c, row):
