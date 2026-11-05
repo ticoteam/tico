@@ -102,7 +102,7 @@ from clients import gateway as G
 from clients.gateway import user_agent
 
 from . import cloud_access, outbound_tls, releases
-from .store import H, Problem, digest
+from .store import H, Problem, digest, encode
 from . import bot_settings as BS
 
 log = logging.getLogger(__name__)
@@ -1518,9 +1518,27 @@ def install(app, settings, store, auth, execution, mutate):
         auth.domain(who)
         if who.role != "owner" or who.support:
             raise Problem("forbidden", "Only the owner changes Tico support on cloud machines", 403)
+        claimed = False
+
+        def claim(c):
+            nonlocal claimed
+            claimed = True
+            return {"pending": True}
+
+        # Reserve through the same receipt helper as other v2 writes, then release its transaction before HQ.
+        # A lost HQ answer leaves a pending receipt: a retry must never repeat an enable after a later disable.
+        receipt = mutate(request, body, claim)
+        if not claimed:
+            if receipt.get("pending"):
+                raise Problem("hq_unconfirmed", "Could not confirm the change at Tico HQ. Read the switch again.", 409)
+            return receipt
         answer = support_state(body.on)
-        with store.transaction() as c:
+
+        def finish(c):
+            c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                      (encode(answer), who.actor, request.url.path, request.headers["idempotency-key"]))
             H.event(c, who.actor, "access.rules_updated", "", {"after": {"cloud_machine_support": answer["on"]}})
+        store.write(who, finish)
         return answer
 
     @app.get("/api/v2/cloud-machines")

@@ -1,6 +1,8 @@
 """HQ owns the cloud-machine helper switch; core checks the caller and never keeps a local choice."""
 
 import json
+from contextlib import contextmanager
+from threading import local
 
 import httpx
 import pytest
@@ -94,6 +96,71 @@ def test_owner_turns_it_off_and_back_on_at_hq_and_records_who(api, hq):
         assert not stored or "cloud_machine_support" not in json.loads(stored[0])
     history = api.get("/api/v2/history?kind=permission.changed", headers=headers()).json()["items"]
     assert any(row["result"] == "team rules" for row in history)
+
+
+def test_replaying_enable_after_disable_does_not_enable_again(api, hq):
+    enable = headers(key="enable-support")
+    first = api.put(PATH, json={"on": True}, headers=enable)
+    assert first.status_code == 200, first.text
+    assert api.put(PATH, json={"on": False}, headers=headers()).status_code == 200
+    replay = api.put(PATH, json={"on": True}, headers=enable)
+    assert replay.status_code == 200 and replay.json() == first.json()
+    assert api.get(PATH, headers=headers()).json()["on"] is False
+    conflict = api.put(PATH, json={"on": False}, headers=enable)
+    assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "idempotency_conflict"
+    assert hq.calls == [("PUT", {"on": True}), ("PUT", {"on": False}), ("GET", None)]
+    assert len(audit(api)) == 2
+
+
+def test_key_is_required_before_contacting_hq(api, hq):
+    for key in (None, "x" * 201):
+        sent = {"Authorization": "Bearer ana-test"}
+        if key:
+            sent["Idempotency-Key"] = key
+        response = api.put(PATH, json={"on": False}, headers=sent)
+        assert response.status_code == 422 and response.json()["error"]["code"] == "idempotency_key"
+    assert hq.calls == [] and audit(api) == []
+
+
+def test_an_uncertain_enable_is_never_sent_again_after_a_disable(api, hq):
+    enable = headers(key="lost-enable")
+    hq.error = httpx.ReadTimeout("synthetic-private-HQ-details")
+    assert api.put(PATH, json={"on": True}, headers=enable).status_code == 502
+    hq.error = None
+    assert api.put(PATH, json={"on": False}, headers=headers()).status_code == 200
+    replay = api.put(PATH, json={"on": True}, headers=enable)
+    assert replay.status_code == 409 and replay.json()["error"]["code"] == "hq_unconfirmed"
+    assert hq.on is False
+    assert hq.calls == [("PUT", {"on": True}), ("PUT", {"on": False})]
+    assert len(audit(api)) == 1
+
+
+def test_hq_is_called_without_an_open_write_transaction_and_overlap_is_not_resent(api, hq, monkeypatch):
+    store = api.app.state.store
+    transaction = store.transaction
+    active = local()
+
+    @contextmanager
+    def tracked(*args, **kwargs):
+        with transaction(*args, **kwargs) as c:
+            active.open = True
+            try:
+                yield c
+            finally:
+                active.open = False
+
+    sent = headers(key="overlapping-enable")
+
+    def receive(request):
+        assert not getattr(active, "open", False), "HQ must not hold the database writer"
+        overlapping = api.put(PATH, json={"on": True}, headers=sent)
+        assert overlapping.status_code == 409 and overlapping.json()["error"]["code"] == "hq_unconfirmed"
+        return hq(request)
+
+    monkeypatch.setattr(store, "transaction", tracked)
+    monkeypatch.setattr(CM, "TRANSPORT", httpx.MockTransport(receive))
+    assert api.put(PATH, json={"on": True}, headers=sent).status_code == 200
+    assert hq.calls == [("PUT", {"on": True})]
 
 
 def test_unsigned_admin_member_bot_and_runner_cannot_change_access(api, hq):
