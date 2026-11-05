@@ -2699,11 +2699,7 @@ fn partial_save_create_adopts_another_readers_task_and_save_recovers() {
             },
         ];
         if lost_reply {
-            steps.extend([
-                Some(who.clone()),
-                Some(json!({"url":"https://acme.example"})),
-                Some(adopted),
-            ]);
+            steps.extend([Some(who.clone()), Some(adopted)]);
         }
         steps.extend([
             Some(who.clone()), Some(json!({"sections":{"task":[sent_a]}})), Some(json!({"item":b})),
