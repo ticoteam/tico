@@ -181,7 +181,7 @@ the `draft` verb and is audited.
 ### Send
 
 ```bash
-$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131] [--dry-run]
+$HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue <tico-approval-id>] [--dry-run]
 ```
 
 **Once a person has turned sending on for the bot in Tico (see "Turning sending on"), the bot follows its rules without
@@ -193,13 +193,11 @@ asking for each message, to three kinds of recipient:**
 3. **The forward addresses a person approved in Tico**, usually the owner's other email. An address that is only in
    `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
 
-Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
-table is one), or `--approval-issue N` where N is a **closed** GitHub Issue with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. The id of a Tico message telling this bot to send also counts
-when its human sender may manage this bot's mail sending: Tico checks that authority, rather than the computer's
-local owner settings. The company owner, admins, bot owners and people above the bot on the org chart qualify;
-built-in bots such as Counsel require the company owner. Ordinary chat access and bot senders never qualify.
-The message is passed to the reviewer as the person's instruction. See docs/mail-service.md, "Per-message approval".
+Grandfathered recipient scopes keep their existing registry allowances. New sends use the shared company/inbox/bot
+policy below. A Tico approval or an authorized person's in-chat “send it” can approve a specific message; the effective
+**Who can OK** rule decides whose instruction counts. A numbered GitHub issue does not prove a Tico approver identity
+and no longer authorizes a send. Use a Tico send approval instead. The person's verified message still reaches the
+reviewer as their instruction. See docs/mail-service.md, “Per-message approval”.
 A Tico `send` approval (`hub approval request --kind send`) is
 for one exact text: put the `body_sha256` that `mail draft --json` returns in its payload. At send time the connector
 hashes the draft's text as it stands in Gmail (line ends and the space around the whole text don't count) and refuses a

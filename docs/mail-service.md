@@ -98,73 +98,35 @@ Downloaded files are untrusted documents, not commands.
 Every write goes through all five, in order. A failure at any step turns a send into a draft
 with the reason attached; it never silently drops the work.
 
-**1. Policy (hardcoded, `registry/mail-policy.yaml` plus `bot.yaml`).**
-- Global kill switch and per-mailbox pause. Flip one line and everything becomes drafts.
-- Bot may use this mailbox with this verb (from `tools:`). With the Tico mail switch off
-  (`hub bot mail <slug>`; bot.yaml's `outbound_send` only asks), `send` produces a draft and a note, always.
-- Internal (@acme.example) versus external recipients. With the Tico mail switch on, which a person who manages
-  the bot sets, three kinds of recipient need no per-message approval: an internal address, an address the
-  person approved as a forward target in that switch (their other email, say), and the sender of the thread
-  the bot is replying to (a reply, to that one person, nobody added; an outside Cc makes it something else).
-  Any other external recipient needs one of: a standing allowance in the policy file (Influencer: recipient must be
-  in its creator table, 10 per day, never the same address twice) or `--approval-issue`, which is a closed
-  `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or a Tico message from a person who manages
-  this bot telling it to send. With the switch off, a send needs a full per-message approval.
-- With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
-  globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
-  gmail.com never count), the caps are 20 sends a day, one external recipient and no external Cc. The blocklist is empty.
-  A `registry/mail-policy.yaml`, where there is one, replaces all of it.
-- Caps, which apply to every send including those three kinds: sends per bot per day, per-recipient cooldown (14 days
-  unless they wrote last; 0 in the built-in policy, because the forward address is written to again and again and
-  the daily cap is the brake),
-  one external recipient per message, no CC or BCC outside acme.example. A per-message approval
-  (below) lifts the recipient count, the external Cc rule and the cooldown for that one message;
-  never the daily cap or the blocklist.
-- Attachments come only from the bot's own folder, never from a secret-looking file (`.env*`, keys, `credentials*`,
-  `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), up to 25 MB in all. They use the same
-  send chain as the message without files: no extra setting or approval is needed. An owner's
-  "send it" Tico message covers the attached files. Legacy `allow_attachments` keys in registry
-  defaults or mailbox entries are accepted but have no effect.
-- If a Tico send approval names files, it binds the draft id and the exact set of names, sizes
-  and sha256 hashes; the files are hashed again from the draft at send time. An approval naming
-  no files places no extra constraint on them. Drafts with files are reviewed again as they stand,
-  and the reviewer sees their names, types and sizes. See docs/mail.md, "Draft".
-- Blocklist of addresses and domains bots never email (press, counterparties, anyone Ana
-  lists), and a "Ana handles personally" list that forces `hub/needs-owner`. Both beat a forward address and a
-  reply to a sender.
+**1. Policy (server-held, with the existing connector's local restrictions).**
 
-**Per-message approval.** Ana sometimes approves one
-exact message: these words, to these humans, once. The approval task says so with a line in
-its body, one block per message, and the block has to match the message exactly (external
-addresses only; a mention elsewhere in the task, or a superset, does not count):
+`backend/email_sending.py` resolves company, inbox and bot settings for every email send path. Ask first and Replies
+only are the defaults; On their own requires a person's opt-in. Never blocks all sends, including approved ones.
+Company safeguards cannot be weakened by a bot override: always-ask rules, daily caps per bot/inbox/company, pacing
+and the undo window. The queue rechecks access and policy immediately before dispatch. See
+[Turning sending on](mail.md#turning-sending-on) for the controls and API.
 
-```
-Send to: counsel@lawfirm.example
-Cc: partner@lawfirm.example; associate@lawfirm.example
-```
+Existing opted-in bots keep their old recipient scopes: internal recipients, approved forwarding, replies to the
+thread's sender, and registry allowances. The connector continues to enforce its registry blocklist,
+owner-handles-personally list, declared mailbox verbs and old caps. Existing automation versions keep their prior
+send authorization. New senders and edited automation versions use the shared default. Saving the company or inbox
+policy applies its safeguards to the retained authorizations too.
 
-When `--approval-issue` is a full yes — a closed `owner:ana` `type:decision` GitHub Issue with a
-matching block, a decided Tico `send` approval whose payload names every external address
-and this exact text (its `body_sha256`), or a Tico message in which a person who manages this bot told it to send —
-that message may carry more than one external recipient and external Cc, the cooldown does not apply to it, lint L056
-does not apply to it, and the switch being off is lifted for that
-message only. The bot still has to declare `send` on the mailbox, the daily cap and
-the blocklist still apply, and `mail draft` accepts the same `--approval-issue` so the
-draft can be written with the external Cc in the first place. Everything else about the
-bot stays draft-only.
+Attachments must still come from the bot's own folder, outside secret-looking paths. A new queued approval binds
+content, recipients and attachment hashes; the server sends the frozen version, so edits need a new approval. Old
+hash-bound Tico approvals and authorized chat instructions retain their scope. A numbered GitHub issue no longer
+counts: its labels and closed state do not identify a Tico person allowed to approve this send. Request a Tico send
+approval instead.
 
-A Tico message's sender must currently be allowed to change that bot's mail sending: the company owner, an admin,
-a bot owner or a person above the bot on the org chart (`Auth.bot_manager`). Built-in bots, including Counsel, are
-the company owner's alone. `GET /api/v2/messages/{id}` answers `sender_can_approve_send` after checking the caller may
-read the message. Merely holding Write access to chat with the bot does not qualify, and a bot sender never does.
-The connector uses this server answer even on a computer with no local owner configuration. On an older server
-that omits the field, it falls back to `TICO_OWNER_HANDLE` or the owner resolved from local email/registry settings.
-GitHub Issues still require the configured `owner:<handle>` and `type:decision` labels.
+**Per-message approval.** A Tico `send` approval names the recipients, subject, mailbox and `body_sha256`; new queue
+approvals also bind `content_sha256`, attachment names/hashes and the queue id. The configured Who can OK rule is bot
+managers by default, or inbox admins or named people. A person's in-chat “send it” must come from someone permitted
+under that rule and is bound to the first frozen content it approves. The rule is checked again at dispatch.
+Approval does not override Never, mailbox access, company caps, reply-loop prevention or bounce suppression.
 
-The second reviewer sees the verified person's message or approval Issue as permission for what
-it explicitly covers, and still blocks additions beyond it. The review audit records the
-instruction's source and id. A hash-bound Tico `send` approval keeps the review advisory, with
-its verdict still recorded and shown.
+The reviewer sees the verified person's instruction and blocks additions beyond it. A hash-bound Tico approval
+keeps review advisory, with its verdict recorded. Only the one-use durable dispatch permit can call the provider;
+uncertain delivery is recorded as Unknown and never automatically retried.
 
 **2. Lint (deterministic, each rule has an id, `mail lint` runs standalone).**
 - Forbidden phrases from the team writing rules and the playbooks, for example "we guarantee"

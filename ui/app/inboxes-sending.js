@@ -7,6 +7,11 @@ const ibSendPath = address => address ? `/v2/email/inboxes/${encodeURIComponent(
 const ibSendOptions = (items, selected) => items.map(([key, label]) => `<option value="${esc(key)}"${key === selected ? ' selected' : ''}>${esc(label)}</option>`).join('');
 const ibSendEffective = e => `${IB_SEND_MODES.find(([key]) => key === e.mode)?.[1] || 'Ask first'} · ${IB_SEND_SOURCES[e.sources?.mode] || 'Company'}${e.legacy ? ' · kept from before' : ''}`;
 const ibSendField = (label, control) => `<label class="ib-field"><span class="ib-field-label">${esc(label)}</span>${control}</label>`;
+const ibSendAudit = send => `<li><strong>${esc(send.subject || '(No subject)')}</strong><span>${esc(send.state)} · ${esc(send.actor)}${send.via ? ' · ' + esc(send.via) : ''}</span>
+  <span>${esc(send.recipients.join(', '))}</span><span>${esc(send.decision.legacy ? 'On their own · kept from before' : send.decision.policy ? ibSendEffective(send.decision.policy) : 'Policy passed')}</span>
+  <span>${esc(send.decision.reasons?.join(', ') || '')}</span><code>${esc(send.content_sha256)}</code>
+  ${(send.attachments || []).map(file => `<span>${esc(file.name)}</span><code>${esc(file.sha256)}</code>`).join('')}
+  ${send.approval_id ? `<span>Approval: ${esc(send.approval_id)}</span>` : ''}${send.provider_message_id ? `<span>Receipt: ${esc(send.provider_message_id)}</span>` : ''}</li>`;
 
 function ibSendForm(document, company = false, disabled = false) {
   const e = document.effective, stored = company ? document.company : document.inbox;
@@ -25,6 +30,7 @@ function ibSendForm(document, company = false, disabled = false) {
     ${select('who_can_ok', 'Who can OK', [['bot_managers', 'Bot managers'], ['inbox_admins', 'Inbox admins'], ['named_people', 'Named people']])}
     ${ibSendField('People', `<input name="approvers" value="${esc((e.approvers || []).join(', '))}" placeholder="Person IDs, separated by commas">`)}
     <div class="ib-send-effective">${esc(ibSendEffective(e))}</div>
+    ${document.legacy_automation_count ? `<p class="muted"><a href="#/automations">${Number(document.legacy_automation_count)} automations</a> · On their own · kept from before</p>` : ''}
     ${disabled ? '' : '<div class="ib-actions"><button class="primary" type="submit">Save</button>' + (company ? '' : '<button type="button" class="ghost" data-send-inherit>Use company default</button>') + '</div>'}
     <p class="err" data-send-error role="alert"></p></fieldset></form>`;
 }
@@ -121,7 +127,7 @@ inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (hos
   ibSendAccessColumn(host, inbox, botRows, document.effective);
   host.querySelectorAll('[data-send-cancel]').forEach(button => button.addEventListener('click', async () => {
     button.disabled = true;
-    try { await post(`/v2/email/sends/${encodeURIComponent(button.dataset.sendCancel)}/cancel`, {}); if (ctx.live()) ctx.refresh(); }
+    try { await post(`/v2/email/sends/${encodeURIComponent(button.dataset.sendCancel)}/cancel`, {}); if (ctx.live()) { button.closest('li').remove(); ctx.refresh(); } }
     catch (e) { toast(e.message); if (button.isConnected) button.disabled = false; }
   }));
   const activity = host.querySelector('[data-send-activity]'), auditButton = host.querySelector('[data-send-audit]');
@@ -132,7 +138,7 @@ inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (hos
       const data = await get(`/v2/email/sends?mailbox=${encodeURIComponent(address)}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`, {fresh: true});
       if (!ctx.live()) return;
       if (!cursor) activity.innerHTML = '';
-      activity.insertAdjacentHTML('beforeend', `<ul class="ib-send-audit">${data.sends.map(send => `<li><strong>${esc(send.subject || '(No subject)')}</strong><span>${esc(send.state)} · ${esc(send.actor)}</span><span>${esc(send.recipients.join(', '))}</span><span>${esc(send.decision.reasons?.join(', ') || 'Policy passed')}</span><code>${esc(send.content_sha256)}</code>${send.provider_message_id ? `<span>Receipt: ${esc(send.provider_message_id)}</span>` : ''}</li>`).join('') || '<li class="muted">None</li>'}</ul>`);
+      activity.insertAdjacentHTML('beforeend', `<ul class="ib-send-audit">${data.sends.map(ibSendAudit).join('') || '<li class="muted">None</li>'}</ul>`);
       cursor = data.next_cursor || '';
       auditButton.textContent = cursor ? 'More activity' : 'Refresh activity';
     } catch (e) { if (ctx.live()) toast(e.message); }

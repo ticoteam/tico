@@ -7726,7 +7726,7 @@ REQUESTER = PEOPLE + BOTOPS
 REQUESTER_READ = REQUESTER + ("assistant",)
 HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are refused
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
-ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
+ASSISTANT_WRITES = {"hub_email_cancel", "hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",

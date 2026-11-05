@@ -146,8 +146,16 @@ def effective(c, mailbox="", bot=""):
 
 
 def policy_view(c, mailbox="", bot=""):
-    return {"company": saved(c, "company"), "inbox": saved(c, "inbox:" + mailbox) if mailbox else {},
-            "bot": saved(c, "bot:" + bot) if bot else {}, "effective": effective(c, mailbox, bot)}
+    def visible(settings):
+        return {key: value for key, value in settings.items() if key in DEFAULTS or key in ("legacy", "updated_at", "updated_by")}
+    legacy = c.execute("SELECT count(*) FROM email_legacy_automations l JOIN automations a "
+                       "ON a.id=l.automation_id AND a.owner_id=l.owner_id AND a.version=l.version "
+                       "WHERE a.deleted_at IS NULL AND a.enabled=1 "
+                       "AND EXISTS (SELECT 1 FROM json_tree(a.flow) WHERE key='do' AND value IN ('send_reply','forward')) "
+                       "AND (?='' OR lower(json_extract(a.flow,'$.trigger.inbox'))=?)", (mailbox, mailbox)).fetchone()[0]
+    return {"company": visible(saved(c, "company")), "inbox": visible(saved(c, "inbox:" + mailbox)) if mailbox else {},
+            "bot": visible(saved(c, "bot:" + bot)) if bot else {}, "effective": effective(c, mailbox, bot),
+            "legacy_automation_count": legacy if not saved(c, "company") and not saved(c, "inbox:" + mailbox) else 0}
 
 
 def update_policy(c, who, scope, body):
@@ -249,15 +257,20 @@ def approved(c, auth, row, policy):
     ap = H.approval(c, aid)
     if ap:
         payload = ap.get("payload") or {}
-        if (ap.get("kind") != "send" or ap.get("decision") != "approved"
+        if (ap.get("kind") != "send" or ap.get("decision") != "approved" or ap.get("consumed_at")
                 or ap.get("requested_by_id") != row["actor"]
                 or not can_ok(c, auth, ap.get("decided_by_id"), row["mailbox"], row["bot"], policy)):
             return False
         def addresses(value):
-            return {a.lower() for _, a in getaddresses(value if isinstance(value, list) else [str(value or "")])}
+            return {a.lower() for _, a in getaddresses(value if isinstance(value, list) else [str(value or "")]) if a}
         recipients = addresses(payload.get("to")) | addresses(payload.get("cc")) | addresses(payload.get("bcc"))
-        if recipients != set(json.loads(row["recipients"])) or payload.get("mailbox", "").lower() != row["mailbox"]:
+        if payload.get("mailbox", "").lower() != row["mailbox"]:
             return False
+        if recipients != set(json.loads(row["recipients"])):
+            domains = access.company_domains(c)
+            external = lambda values: {a for a in values if not domains or not access.inside(a, domains)}
+            if payload.get("content_sha256") or external(recipients) != external(json.loads(row["recipients"])):
+                return False
         if payload.get("subject") != row["subject"]:
             return False
         if payload.get("body_sha256") != row["body_sha256"]:
@@ -265,7 +278,9 @@ def approved(c, auth, row, policy):
             if not row["raw"] or payload.get("body_sha256") not in body_digests(snapshot(row["raw"], row["mailbox"])["body"]):
                 return False
         approved_files = [{"name": f.get("name"), "sha256": f.get("sha256")} for f in payload.get("attachments") or [] if isinstance(f, dict)]
-        if sorted(approved_files, key=dump) != sorted(json.loads(row["attachments"]), key=dump):
+        if (payload.get("attachments") or payload.get("content_sha256")) and sorted(approved_files, key=dump) != sorted(json.loads(row["attachments"]), key=dump):
+            return False
+        if payload.get("attachments") and payload.get("draft") and payload["draft"] != row["draft_id"]:
             return False
         # A queue approval binds the full MIME content too; existing text-bound approvals retain their original scope.
         if payload.get("content_sha256") and payload["content_sha256"] != row["content_sha256"]:
@@ -337,6 +352,8 @@ def decision(c, auth, row, *, dispatch=False):
         from . import lifecycle
         if lifecycle.is_onboarding(c, row["bot"]):
             blocked.append("onboarding")
+        if (H.bot(c, row["bot"]) or {}).get("state") != "active":
+            blocked.append("bot_inactive")
     legacy = legacy_authorized(c, row)
     # A changed company policy takes effect immediately, including for grandfathered authorizations.
     grandfathered = (legacy and not policy["company_restrictions_set"]
@@ -386,6 +403,8 @@ def decision(c, auth, row, *, dispatch=False):
                      "AND state IN ('pending','dispatching','sent','unknown') LIMIT 1",
                      (row["mailbox"], row["reply_to_id"], row["id"])).fetchone():
             blocked.append("already_replied")
+    if json.loads(row["classification"]).get("legacy_github_approval"):
+        reasons.append("github_approval_needs_tico")
     approval_ok = approved(c, auth, row, policy)
     if reasons and not approval_ok:
         return {"outcome": "blocked" if blocked else "ask", "reasons": blocked or reasons,
@@ -435,6 +454,8 @@ def request_approval(c, auth, row, policy):
 
 def enqueue(c, auth, actor, body, classification, via=""):
     mailbox = body.mailbox.strip().lower()
+    if body.approval_id.isdigit():
+        classification = {**classification, "legacy_github_approval": body.approval_id}
     bot = H.actor_id(actor) if actor.startswith("bot:") else ""
     if not access.may(c, actor, mailbox)["send"]:
         raise Problem("forbidden", "The sender cannot send from this inbox", 403)
@@ -462,8 +483,10 @@ def enqueue(c, auth, actor, body, classification, via=""):
     found = decision(c, auth, row)
     row["decision"] = dump(found)
     row["state"] = {"allow": "pending", "ask": "waiting_approval", "blocked": "blocked"}[found["outcome"]]
+    if row["state"] == "blocked":
+        row.update(raw="", finished_at=now, detail=", ".join(found["reasons"]))
     c.execute("INSERT INTO email_sends(" + ",".join(row) + ") VALUES(" + ",".join("?" for _ in row) + ")", tuple(row.values()))
-    if row["state"] == "waiting_approval" and not row["approval_id"]:
+    if row["state"] == "waiting_approval" and (not row["approval_id"] or row["approval_id"].isdigit()):
         # Existing approval cards expose only the proof metadata, never the MIME payload.
         request_approval(c, auth, row, found["policy"])
     if classification.get("status") == "classified":
@@ -629,7 +652,7 @@ def install(app, store, auth, mutate):
                 raise Problem("forbidden", "The sender cannot send from this inbox", 403)
             policy = effective(c, body.mailbox.strip().lower(), H.actor_id(actor) if actor.startswith("bot:") else "")
         snap = snapshot(body.raw, body.mailbox.strip().lower())
-        classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": False, "status": "off"}
+        classification = classify(app, store, snap) if policy["ask_legal_money"] else {"legal_or_money": None, "status": "off"}
         return mutate(request, body, lambda c: {"send": enqueue(c, auth, actor, body, classification, via=who.via)}, durable=True)
 
     @app.get("/api/v2/email/sends")
@@ -740,7 +763,12 @@ def install(app, store, auth, mutate):
                     continue
                 if found["outcome"] == "ask":
                     c.execute("UPDATE email_sends SET state='waiting_approval',decision=? WHERE id=?", (dump(found), row["id"]))
-                    if not row["approval_id"]:
+                    previous_recipient = (H.message(c, approval["message_id"]) or {}).get("recipient_id") if approval else None
+                    stale_approval = approval and (approval.get("decision") == "approved" or not can_ok(
+                        c, auth, previous_recipient, row["mailbox"], row["bot"], found["policy"]))
+                    if stale_approval and (approval.get("payload") or {}).get("email_send_id") == row["id"] and not approval.get("decision"):
+                        H.approval_withdraw(c, approval["id"], "The email's approval rule changed")
+                    if not row["approval_id"] or stale_approval:
                         request_approval(c, auth, row, found["policy"])
                     continue
                 if row["state"] == "waiting_approval":
@@ -776,6 +804,8 @@ def install(app, store, auth, mutate):
                 settle_automation(c, row, "blocked", ", ".join(found["reasons"]))
                 return {"send": None}
             c.execute("UPDATE email_sends SET provider_attempted_at=?,decision=? WHERE id=?", (H.now(), dump(found), sid))
+            if found["approved"] and H.approval(c, row["approval_id"]):
+                H.approval_consume(c, row["actor"], row["approval_id"])
             H.event(c, row["actor"], "email.dispatch", sid, {"mailbox": row["mailbox"]})
             return {"send": {"id": sid, "raw": row["raw"], "thread_id": row["thread_id"], "actor": row["actor"],
                              "recipients": json.loads(row["recipients"]), "subject": row["subject"], "draft_id": row["draft_id"]}}

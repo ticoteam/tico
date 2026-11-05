@@ -1926,7 +1926,8 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     if queued["state"] in ("pending", "waiting_approval", "sent"):
         ctx.conn.execute("INSERT OR REPLACE INTO queued_drafts VALUES(?,?,?)", (ctx.mailbox, draft_id, queued["id"]))
         ctx.conn.commit()
-    ctx.audit("send-queued", queued["id"], {"to": to, "cc": cc, "state": queued["state"]})
+    ctx.audit("send-queued", queued["id"], {"to": to, "cc": cc, "state": queued["state"],
+                                           "review_result": verdict.get("review"), "owner_instruction": verdict.get("owner_instruction")})
     return dict(base, sent=queued["state"] == "sent", queued=queued["state"] in ("pending", "waiting_approval"),
                 send_id=queued["id"], state=queued["state"], send_after=queued["send_after"],
                 approval_id=queued["approval_id"], checks=decision["checks"],

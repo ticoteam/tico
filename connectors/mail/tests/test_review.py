@@ -115,7 +115,7 @@ class OwnerInstruction(Stage2):
         self.assertNotIn("text", reviews[-1]["owner_instruction"])
         stored = self.conn().execute("SELECT verdict FROM reviews ORDER BY id DESC LIMIT 1").fetchone()
         self.assertEqual(json.loads(stored[0])["owner_instruction"], reviews[-1]["owner_instruction"])
-        sent = [r["detail"] for r in self.audit_lines() if r["action"] == "send"][-1]
+        sent = [r["detail"] for r in self.audit_lines() if r["action"] == "send-queued"][-1]
         self.assertEqual(sent["review_result"], "approved with owner instruction")
 
     def test_reply_passes_the_verified_message_to_its_review(self):
@@ -136,15 +136,14 @@ class OwnerInstruction(Stage2):
         self.assertEqual(instruction_in(self.prompts[-1]), INSTRUCTION)
         self.assertIn(f"verified: human:ana, in Tico message; approval {ORDER}", self.prompts[-1])
 
-    def test_a_verified_issue_reaches_the_backend_with_its_original_text(self):
-        title = "Owner's Mailbox Test"
-        body = f"Send to: {AVA}\nSubject: Mailbox test\nBody:\n{GOOD_BODY}"
-        pl.RUN = gh_answer(title=title, body=body)
+    def test_a_closed_issue_does_not_grant_review_or_sending_permission(self):
+        pl.RUN = gh_answer(body=f"Send to: {AVA}\nSubject: Mailbox test\nBody:\n{GOOD_BODY}")
         draft = self.draft()
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertTrue(out["queued"], out)
-        self.assertEqual(instruction_in(self.prompts[-1]), title + "\n" + body)
-        self.assertIn(f"verified: owner:{access.OWNER}, in GitHub Issue; approval 77", self.prompts[-1])
+        self.assertFalse(out["sent"])
+        self.assertIn("Tico send approval", out["reason"])
+        self.assertIsNone(instruction_in(self.prompts[-1]))
+        self.assertEqual(self.queue_requests, [])
 
     def test_another_sender_or_another_bots_message_is_not_review_permission(self):
         for change in ({"sender_id": "bot:influencer"}, {"recipient_id": "bot:inbox"}):
@@ -189,14 +188,15 @@ class OwnerInstruction(Stage2):
         self.assertIsNone(instruction_in(self.prompts[-1]))
         self.assertNotIn("The bot claims", self.prompts[-1])
 
-    def test_an_issue_naming_other_files_does_not_bind_files_and_still_reaches_the_reviewer(self):
+    def test_a_github_issue_cannot_approve_attached_mail(self):
         # Attachments follow the send rules: only a Tico send approval that names files binds them.
         (self.root / "emp-influencer" / "answer.pdf").write_bytes(b"%PDF-1.4 answer")
         draft = self.draft("--attach", "answer.pdf")
         pl.RUN = gh_answer(body=f"Send to: {AVA}\nSend different.pdf, sha256 {'a' * 64}")
         out = self.send(draft["draft"], "--approval-issue", "77")
-        self.assertTrue(out["queued"], out)
-        self.assertIn("different.pdf", instruction_in(self.prompts[-1]))
+        self.assertFalse(out["sent"])
+        self.assertIn("Tico send approval", out["reason"])
+        self.assertIsNone(instruction_in(self.prompts[-1]))
 
     def test_owner_permission_does_not_override_unsupported_claims_or_commitments(self):
         self.order()

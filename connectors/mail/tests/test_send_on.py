@@ -146,8 +146,8 @@ class Chain(Stage2):
             self.assertIn("Mail sending", d["reason"])
         self.assertFalse(pl.is_forward(self.policy(), "inbox", [ME]))
         # The owner's own per-message yes still sends that one message.
-        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
-        self.assertTrue(self.decide([AVA], approval="77").allowed)
+        hub(owner_order())
+        self.assertTrue(self.decide([AVA], approval=ORDER).allowed)
 
     def test_a_person_turning_it_on_in_tico_covers_only_the_targets_they_approved(self):
         pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": True,
@@ -173,8 +173,8 @@ class Chain(Stage2):
         self.assertEqual(self.decide([STRANGER], thread_id=THREAD, thread_senders=[AVA])["gate"], "recipient")
 
     def test_an_approval_still_covers_an_address_the_rules_do_not(self):
-        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
-        d = self.decide([STRANGER], approval="77")
+        hub(send_approval([STRANGER], []))
+        d = self.decide([STRANGER], approval=APPROVAL)
         self.assertTrue(d.allowed, d)
 
     def test_an_onboarding_bot_sends_nothing_even_with_a_matching_approval(self):
@@ -214,7 +214,7 @@ class Chain(Stage2):
             self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
         # The connector sends what Tico leased it (the server checked the automation's owner), with no stage to read;
         # the owner's own handle is held like everyone (no bypass).
-        self.assertTrue(self.decide([STRANGER], slug=access.CONNECTOR, approval="77", verbs=["send"]).allowed)
+        self.assertTrue(self.decide(["coworker@acme.example"], slug=access.CONNECTOR, verbs=["send"]).allowed)
         self.assertFalse(self.decide([STRANGER], slug=pl.OWNER, approval="77", verbs=["send"]).allowed)
 
     def test_with_sending_off_none_of_it_applies(self):
@@ -300,12 +300,14 @@ class Chain(Stage2):
         self.assertEqual(self.decide([STRANGER], attachments=1, draft="d-1", approval=APPROVAL)["gate"], "approval")
         self.assertTrue(self.decide([STRANGER], **kw).allowed)
 
-    def test_a_github_issue_covers_attached_mail_without_naming_files(self):
+    def test_a_github_issue_never_approves_mail_with_or_without_files(self):
         pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
         pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": False, "forward_to": []}
         plain = self.decide([STRANGER], approval="77")
         attached = self.decide([STRANGER], attachments=[FILE_A], draft="d-1", approval="77")
-        self.assertTrue(plain.allowed, plain)
+        self.assertFalse(plain.allowed, plain)
+        self.assertEqual(plain["gate"], "approval")
+        self.assertIn("Tico send approval", plain["reason"])
         self.assertEqual(attached, plain)
 
     def test_legacy_attachment_keys_are_ignored_in_defaults_and_mailboxes(self):
@@ -353,9 +355,9 @@ class Chain(Stage2):
         self.assertEqual(d["gate"], "recipient", d)
         self.assertIn("the draft changed after it was approved", d["reason"])
 
-    def test_a_github_issue_or_the_owners_message_carries_no_hash_and_is_unchanged(self):
+    def test_github_issues_refuse_and_owner_messages_keep_their_scope(self):
         pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
-        self.assertTrue(self.decide([STRANGER], approval="77", body=BODY + "!").allowed)
+        self.assertFalse(self.decide([STRANGER], approval="77", body=BODY + "!").allowed)
         hub(owner_order())
         self.assertTrue(self.decide([STRANGER], approval=ORDER, body=BODY + "!").allowed)
 

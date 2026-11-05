@@ -11,7 +11,7 @@ import pytest
 
 from backend import email_sending as S, mailbox_access as MA
 from backend.store import H
-from backend.tests.test_api import api, headers, post, runner  # noqa: F401
+from backend.tests.test_api import api, headers, post, runner, setup_attempt  # noqa: F401
 
 BOX = "ana@acme.example"
 CONTACT = "contact@vendor.example"
@@ -122,6 +122,28 @@ def test_never_blocks_an_approved_send_at_dispatch(inbox):
     with inbox.app.state.store.read() as c:
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
         assert row["state"] == "blocked" and "never" in json.loads(row["decision"])["reasons"]
+
+
+def test_a_tico_approval_without_bcc_releases_the_frozen_send_and_is_consumed(inbox):
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    queued = queue(inbox, actor="bot:ops")
+    assert queued["state"] == "waiting_approval"
+    approved(inbox, queued)
+    machine = runner(inbox)
+    assert claim(inbox, machine["token"]) is None
+    assert claim(inbox, machine["token"])["id"] == queued["id"]
+    permitted = post(inbox, "connectors/email/sends/" + queued["id"] + "/dispatch", {"mailbox": BOX}, token=machine["token"])
+    assert permitted["send"]["id"] == queued["id"]
+    with inbox.app.state.store.read() as c:
+        assert H.approval(c, queued["approval_id"])["consumed_at"]
+
+
+def test_a_github_issue_number_asks_for_a_normal_tico_approval(inbox):
+    autonomous(inbox)
+    queued = queue(inbox, approval_id="77")
+    assert queued["state"] == "waiting_approval"
+    assert queued["approval_id"] and queued["approval_id"] != "77"
+    assert "github_approval_needs_tico" in queued["decision"]["reasons"]
 
 
 def test_undo_pending_restart_cancel_and_no_recall(inbox):
@@ -241,8 +263,11 @@ def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(in
 
 def test_assistant_acting_for_a_person_queues_as_that_person_and_cannot_change_policy(inbox):
     from backend.auth import Identity
+    machine, _, _ = setup_attempt(inbox, "coo")
+    with inbox.app.state.store.read() as c:
+        attempt_id = c.execute("SELECT id FROM attempts WHERE runner_id=? AND bot_id='coo' ORDER BY rowid DESC LIMIT 1", (machine["runner_id"],)).fetchone()[0]
     inbox.app.state.store.settings.test_identities["assistant-test"] = Identity(
-        "human:ana", "owner", BOX, via="assistant", task_actor="bot:coo")
+        "human:ana", "owner", BOX, via="assistant", task_actor="bot:coo", runner_id=machine["runner_id"], attempt_id=attempt_id)
     queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime()}, token="assistant-test")["send"]
     assert queued["actor"] == "human:ana" and queued["via"] == "assistant"
     assert queued["state"] == "waiting_approval"

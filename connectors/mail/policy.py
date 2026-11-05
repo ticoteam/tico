@@ -28,8 +28,8 @@ owner-handles-personally apply to every send.
 With no registry (a Docker computer: TICO_REGISTRY_DIR is unset) there is no mail-policy.yaml; `builtin()` is
 the policy then. A registry file, when there is one, is the policy and wins.
 
-Nothing here talks to Google. A GitHub approval-Issue check shells out to `gh` through the `RUN`
-seam; a Tico approval or owner message is read through `HUB_GET`. Tests replace both.
+Nothing here talks to Google. A Tico approval or owner message is read through `HUB_GET`.
+GitHub issue numbers do not prove a Tico approver identity and never authorize sending.
 """
 
 import csv, hashlib, json, os, re, subprocess
@@ -595,7 +595,7 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
                    draft="", body=None):
     """Read one per-message yes and say how far it reaches.
 
-    `--approval-issue` is a GitHub Issue number, a Tico `send` approval id, or the id of a
+    `--approval-issue` is a Tico `send` approval id, or the id of a
     Tico message in which the owner told this employee to send. Returns
     {"ok", "detail", "full", "named", "issue"}, plus `owner_instruction` for a verified
     message or Issue. `full` lifts the recipient caps, the cooldown, and `outbound_send: false`.
@@ -604,12 +604,12 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
 
     Files follow the same approval rules as the text. When a Tico send approval names files,
     `attachments` ([{name, size, sha256}] as they stand in the draft) and `draft` must match.
-    An approval that names no files, a GitHub Issue, or the owner's message telling the bot to
+    An approval that names no files, or the owner's message telling the bot to
     send places no extra constraint on attachments.
 
     `body` is the text the send carries. A Tico send approval is for one exact text: its
     `body_sha256` must be this body's (`body_digests`), with or without files, so a draft changed
-    after the yes needs a new one. A GitHub Issue and the owner's message carry no hash.
+    after the yes needs a new one. The owner's message carries no hash until the server freezes the send.
     """
     n = str(number or "").strip()
     if n.isdigit():
@@ -617,50 +617,15 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
     if HUB_ID.match(n):
         return _hub_approval_check(n, to, cc, slug, attachments, draft, body) or _hub_message_check(n, slug)
     out = _blank_approval(n)
-    out["detail"] = (f"--approval-issue {number!r} is not an Issue number or a Tico id "
+    out["detail"] = (f"--approval-issue {number!r} is not a Tico id "
                      "(a send approval, or the owner's message telling this employee to send)")
     return out
 
 
 def _github_approval_check(n, to, cc, thread_id, repo):
     out = _blank_approval(n)
-    r = RUN(["gh", "issue", "view", n, "-R", repo, "--json", "state,labels,title,body"],
-            capture_output=True, text=True)
-    if r.returncode != 0:
-        out["detail"] = f"gh could not read Issue {n} in {repo}: {(r.stderr or '').strip()[:120]}"
-        return out
-    try:
-        data = json.loads(r.stdout or "{}")
-    except ValueError:
-        out["detail"] = f"gh returned something that is not JSON for Issue {n}"
-        return out
-    if str(data.get("state", "")).upper() != "CLOSED":
-        out["detail"] = (f"Issue {n} is {str(data.get('state', '?')).lower()}; an approval counts "
-                         "only once the owner has closed it")
-        return out
-    have = {str(l.get("name", "")).lower() for l in (data.get("labels") or [])}
-    missing = [l for l in APPROVAL_LABELS if l not in have]
-    if missing:
-        out["detail"] = f"Issue {n} is missing the label(s) {', '.join(missing)}"
-        return out
-    text = (str(data.get("title") or "") + "\n" + str(data.get("body") or "")).lower()
-    addrs = [str(x).strip().lower() for x in list(to) + list(cc) if str(x).strip()]
-    wanted = addrs + ([str(thread_id).strip().lower()] if str(thread_id or "").strip() else [])
-    named = [w for w in wanted if w in text]
-    out["named"] = named
-    if not named:
-        out["detail"] = (f"Issue {n} does not name " + (", ".join(wanted) or "the recipient")
-                         + "; an approval has to say who it is for")
-        return out
-    out["ok"] = True
-    ext_to = [str(x).strip().lower() for x in to if str(x).strip()]
-    ext_cc = [str(x).strip().lower() for x in cc if str(x).strip()]
-    out["full"] = bool(ext_to) and _send_spec_matches(text, ext_to, ext_cc)
-    out["detail"] = (f"Issue {n}: closed, {', '.join(APPROVAL_LABELS)}, "
-                     + ("its `Send to:` line matches every address on this message, To and Cc: "
-                        "per-message approval" if out["full"] else f"names {named[0]}"))
-    out["owner_instruction"] = {"source": "GitHub Issue", "id": n, "who": f"owner:{OWNER}",
-                                "text": str(data.get("title") or "") + "\n" + str(data.get("body") or "")}
+    out["detail"] = ("GitHub issue approvals do not verify who approved this send. "
+                     "Request a Tico send approval for this exact email, then use its id with --approval-issue.")
     return out
 
 
@@ -1088,6 +1053,8 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                            attachments=files, draft=draft,
                            body=body)
             if approval else None)
+    if str(approval or "").isdigit():
+        return no("approval", appr["detail"])
     if appr and appr.get("attachment_mismatch"):
         return no("approval", appr["detail"])
     full = bool(appr and appr["full"])
@@ -1101,7 +1068,7 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                                     f"by {appr['detail']}")
             else:
                 return no("outbound_send", f"outbound_send is false for {slug}: {sw['detail']}"
-                          + ("; --approval-issue lifts it for a matching GitHub Issue, a Tico "
+                          + ("; --approval-issue lifts it for a matching Tico "
                              "send approval, or the owner's message telling this employee to send"
                              + (f". {appr['detail']}" if appr and appr.get("detail") else "")
                              if approval else ""))
