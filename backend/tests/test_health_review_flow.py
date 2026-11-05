@@ -15,7 +15,7 @@ def ticket(api, number=206, step='Second look'):
             {'name': 'Second look', 'status': 'review', 'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'}},
             {'name': 'In QA', 'status': 'review', 'flow': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'Build'}},
         ])
-        task = H.task_create(c, 'human:morgan', 'Build change', '', 'bot:builder', type=typ['id'], step=step, private=False)
+        task = H.task_create(c, 'human:morgan', f'Build change {number}', '', 'bot:builder', type=typ['id'], step=step, private=False)
         link = H.task_link(c, 'human:morgan', task['id'], f'https://github.com/Acme/atlas/pull/{number}')
         detail = {'head_sha': HEAD, 'health_wait': {'reason': 'review', 'head': HEAD, 'since': H.shift(H.now(), hours=-24)}}
         c.execute("UPDATE task_links SET state='open',checks='passing',mergeable='clean',detail=? WHERE id=?",
@@ -120,7 +120,7 @@ def test_pool_filing_still_identifies_a_check_after_its_title_changes(environmen
 def test_private_children_supply_no_owner_or_verdict_to_health(environment):
     api = setup(environment)
     task = ticket(api)
-    child(api, task, owner='hidden-reviewer', status='open', private=True)
+    child(api, task, title='Security: PR #206', owner='hidden-reviewer', status='open', private=True)
     child(api, task, owner='hidden-reviewer', verdict='changes', private=True)
     [item] = items(api)
     assert item['whose_move'] == 'Second look pool'
@@ -161,3 +161,27 @@ def test_aged_review_reads_stay_constant_as_tickets_grow(environment):
     many, count = measured()
     assert count == 20
     assert many == few, (few, many)
+
+
+def test_a_qa_pass_cannot_clear_a_failure_at_the_same_head(environment):
+    api = setup(environment)
+    task = ticket(api, step='In QA')
+    child(api, task, title='QA: PR #206', verdict='fail')
+    child(api, task, title='QA again: PR #206', verdict='pass')
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:builder'
+    assert 'address review changes' in item['fix']
+
+
+def test_green_new_head_at_a_fixes_step_uses_merge_ready(environment):
+    api = setup(environment)
+    task = ticket(api, step='In QA')
+    child(api, task, title='QA: PR #206', verdict='fail', head=OLD)
+    with api.app.state.store.transaction() as c:
+        build = dict(c.execute("SELECT * FROM task_steps WHERE type_id=? AND name='Build'", (task['type_id'],)).fetchone())
+        c.execute('UPDATE task_steps SET flow=? WHERE id=?', (json.dumps({'after_green': 'merge'}), build['id']))
+        c.execute('UPDATE tasks SET step_id=?,status=? WHERE id=?', (build['id'], 'doing', task['id']))
+        H._task_event(c, task['id'], H.KEEPER, 'step', task['step_id'], build['id'], '')
+    [item] = items(api)
+    assert item['whose_move'] == 'bot:builder'
+    assert 'bot:builder: merge PR #206' in item['fix']
