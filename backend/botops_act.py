@@ -329,6 +329,9 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
+    ("PUT", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("PUT", r"postal/settings"),
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
     ("DELETE", rf"automations/{_S}"), ("POST", rf"automations/{_S}/delete"),

@@ -67,6 +67,12 @@ class ReadMark(BaseModel):
     seq: int
 
 
+class ReadAll(BaseModel):
+    # Read what was there this long ago, not what came since: Catch up sends it once its Undo is gone, so a message
+    # that arrived while Undo showed stays unread. Milliseconds, measured by the client, so its clock never matters.
+    ago_ms: int | None = Field(None, ge=0, le=600_000)
+
+
 class MemberAdd(BaseModel):
     actor: str
     role: str = "member"
@@ -580,10 +586,12 @@ def install(app, store, auth, mutate, rule_check):
         return mutate(request, body, lambda c: threads.mark_read(c, threads.viewer(auth, who), thread_id, body.seq))
 
     @app.post("/api/v2/threads/{thread_id}/read-all")
-    def read_all(request: Request, thread_id: str):
-        """Read up to now in the thread and every sub-thread under it."""
+    def read_all(request: Request, thread_id: str, body: ReadAll | None = None):
+        """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
-        return mutate(request, Nothing(), lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id))
+        body = body or ReadAll()
+        return mutate(request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id,
+                                                                     ago_ms=body.ago_ms))
 
     @app.post("/api/v2/threads/{thread_id}/members")
     def add_member(request: Request, thread_id: str, body: MemberAdd):

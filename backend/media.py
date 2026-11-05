@@ -444,16 +444,14 @@ def blob_for(c, auth, who, bid):
         raise Problem("not_found", "File not found", 404)
     from .turn_scope import blob_allowed
     scoped = blob_allowed(c, auth, who, bid)
-    if scoped is not None:
-        if not scoped:
-            raise Problem("not_found", "File not found", 404)
-        return row
-    # A letter's scan follows the letter's own policy (backend/postal_mail.py), its task's or the owner's alone.
+    if scoped is False:
+        raise Problem("not_found", "File not found", 404)
+    # Scoped containment and scan grants are independent ceilings on a download.
     from . import postal_mail
     scan = postal_mail.scan_access(c, auth, who, bid)
-    if scan is not None:
-        if not scan:
-            raise Problem("not_found", "File not found", 404)
+    if scan is False:
+        raise Problem("not_found", "File not found", 404)
+    if scoped is True or scan is True:
         return row
     # Ownership of the company account is not ordinary access to another person's
     # private Tico attachment. Shared-room and task access is derived from the linked

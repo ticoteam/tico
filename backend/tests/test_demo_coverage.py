@@ -139,3 +139,9 @@ def test_a_demo_task_has_a_page_made_by_its_person(api):
                         "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE v.file_id=?",
                         (made["file_id"],)).fetchone()
         assert row and made["task_id"] in row["refs"]
+
+
+def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
+    grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
+    assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
+    assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None

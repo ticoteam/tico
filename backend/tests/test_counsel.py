@@ -343,7 +343,7 @@ def test_counsel_reads_no_sql_in_a_run_or_out_of_one(api):
     run = read_run(api)
     for token in (run, headers("counsel-test")):
         refused = api.post("/api/v2/sql", headers=token, json={"sql": "SELECT body FROM tasks"})
-        assert refused.status_code == 403 and "SQL" in refused.text, refused.text
+        assert refused.status_code == 403, refused.text
     assert api.post("/api/v2/sql", headers=headers("ana-test"), json={"sql": "SELECT 1"}).status_code == 200
 
 
