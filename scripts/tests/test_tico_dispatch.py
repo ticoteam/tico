@@ -97,7 +97,11 @@ def test_an_update_by_the_old_scripts_tico_restarts_through_the_dispatcher_and_l
     envs = tmp_path / 'environments'
     (envs / 'acme').mkdir(parents=True)
     (envs / 'acme' / 'environment.json').write_text(json.dumps({'url': 'https://acme.example', 'id': 'env_acme'}))
-    env = {'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(home), 'TICO_RUNNER_PYTHON': sys.executable,
+    fakes = tmp_path / 'bin'                          # a systemd user session that answers, with nothing installed
+    fakes.mkdir()
+    (fakes / 'systemctl').write_text('#!/bin/sh\nexit 0\n')
+    (fakes / 'systemctl').chmod(0o755)
+    env = {'PATH': f"{fakes}:{os.environ.get('PATH', os.defpath)}", 'HOME': str(home), 'TICO_RUNNER_PYTHON': sys.executable,
            'TICO_ENVIRONMENTS_DIR': str(envs), 'TICO_OS': 'Linux', 'TICO_SYSTEMD_USER_DIR': str(tmp_path / 'units'),
            'GIT_CONFIG_NOSYSTEM': '1'}
 

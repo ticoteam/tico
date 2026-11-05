@@ -280,7 +280,7 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
     if environ.get(TOKEN):
         m.system("systemctl", "unset-environment", TOKEN)
     if not installed(m):
-        done = m.as_user(str(m.root / "scripts" / "tico"), "install")
+        done = m.as_user(str(m.root / "scripts" / "tico-computer"), "install")
         if done.returncode:
             m.say("scripts/tico-computer install failed; trying again")
             return 1
