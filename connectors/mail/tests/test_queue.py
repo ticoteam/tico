@@ -5,13 +5,28 @@ from unittest import mock
 
 import pytest
 
-from connectors.mail import Failure, actions, compose, db, policy
+from connectors.mail import Failure, actions, compose, db, gmail as gm, policy
 
 
 def test_missing_server_queue_confirmation_fails_closed():
     with mock.patch.object(policy, "HUB_POST", return_value=None):
         with pytest.raises(Failure):
             policy.queue_send("support@acme.example", "frozen")
+
+
+def test_gmail_does_not_retry_a_send_after_a_retryable_provider_error():
+    class ProviderError(Exception):
+        status_code = 503
+
+    request, sleep = mock.Mock(), mock.Mock()
+    request.execute.side_effect = ProviderError("Delivery response lost")
+    service = mock.Mock(_tico_granted=None)
+    service.users.return_value.drafts.return_value.send.return_value = request
+    gmail = gm.Gmail(service, "support@acme.example", sleep=sleep)
+    with pytest.raises(Failure):
+        gmail.send_draft("draft")
+    request.execute.assert_called_once_with()
+    sleep.assert_not_called()
 
 
 @pytest.mark.parametrize("uncertain", [False, True])

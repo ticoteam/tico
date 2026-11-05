@@ -97,10 +97,6 @@ def message_sender_can_approve_send(c, auth, row):
     sender, recipient = str(row.get("sender_id") or ""), str(row.get("recipient_id") or "")
     if not sender.startswith("human:") or not recipient.startswith("bot:"):
         return False
-    try:
-        who = auth.identity_for_actor(c, sender)
-    except Problem:
-        return False
     from .email_sending import can_ok, effective
     bot = H.actor_id(recipient)
     from . import mailbox_access

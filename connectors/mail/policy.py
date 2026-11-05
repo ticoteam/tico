@@ -32,7 +32,7 @@ Nothing here talks to Google. A Tico approval or owner message is read through `
 GitHub issue numbers do not prove a Tico approver identity and never authorize sending.
 """
 
-import csv, hashlib, json, os, re, subprocess
+import csv, hashlib, os, re, subprocess
 from datetime import datetime
 from pathlib import Path
 

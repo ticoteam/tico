@@ -78,14 +78,15 @@ class Gmail:
             self._part_of = was
 
     # -- plumbing ---------------------------------------------------
-    def _exec(self, request, what):
+    def _exec(self, request, what, *, retry=True):
         last = None
-        for attempt in range(MAX_ATTEMPTS):
+        attempts = MAX_ATTEMPTS if retry else 1
+        for attempt in range(attempts):
             try:
                 return request.execute()
             except Exception as e:                      # HttpError, socket errors
                 last = e
-                if attempt == MAX_ATTEMPTS - 1 or not _retryable(e):
+                if attempt == attempts - 1 or not _retryable(e):
                     break
                 self.sleep(2 ** attempt)
         raise Failure(f"Gmail {what} failed for {self.mailbox}: {last}",
@@ -233,7 +234,7 @@ class Gmail:
         oauth.company_allows(self.company, "send", self.mailbox, "send mail")
         return self._exec(
             self.service.users().drafts().send(userId="me", body={"id": draft_id}),
-            "drafts.send")
+            "drafts.send", retry=False)
 
 
 def _draft_body(raw, thread_id=""):

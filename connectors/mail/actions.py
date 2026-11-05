@@ -5,9 +5,8 @@ The hub decided them, its send switch included, so like the owner's own commands
 reviewer. Each is safe to run again after a lost answer or a lost lease:
   archive, label, leave       Gmail label changes, the same the second time
   draft                       kept in `drafts` under a key made from the action id: a retry finds it
-  send, forward               a draft first, then a row in `sends` before the API call. Gmail deletes a draft
-                              when it sends it, so a retry whose draft is gone never sends again; it reports the
-                              earlier send (or the person's discard) instead.
+  send, forward               freeze a draft in the server queue; repeating the action returns the same queue row
+  dispatch_send               one durable permit and one provider attempt; an uncertain result never sends again
   unsubscribe                 one RFC 8058 request to the message's own link, claimed before its POST
                               (unsubscribe.submit): a retry answers already_attempted and sends nothing
 
@@ -221,7 +220,7 @@ def _dispatch(ctx, ident):
                   datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"), source="email-queue")
     try:
         sent = ctx.gmail.send_draft(draft_id)
-    except Exception:
+    except Failure:
         return {"ok": False, "retry": False, "status": "unknown", "detail": "The provider result is unknown"}
     if not sent.get("id"):
         return {"ok": False, "retry": False, "status": "unknown", "detail": "The provider gave no delivery receipt"}
