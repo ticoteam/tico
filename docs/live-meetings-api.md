@@ -329,9 +329,12 @@ Screen lifecycle is ephemeral; it is not replayable from SSE.
 
 ### Sharing a screen from Recorder
 
-In a live meeting the Mac Recorder's **Share screen** button (shown to people who may share) picks a window or
-display. Its viewers see it a few times a second, for documents and slides. Nothing is saved: the image lives in
-server memory only and is not in the transcript, the database or the event stream, and bots never see it. Recorder's
-own windows are left out. Sharing the whole screen needs Screen Recording permission in System Settings, otherwise
-choose a window. Stopping the share ends it at once. Making a meeting public asks first, and stops the share if
-one is running. **Copy meeting link** copies the `link` above, and people must still be added to see the meeting.
+In a live meeting the Mac Recorder's **Share screen** button opens a picker for one window or display. Viewers
+see it a few times a second, and the storage and bot limits above apply.
+
+Sharing a whole display needs Screen Recording permission in System Settings; without it, choose a window.
+Recorder's own windows are left out of display shares. Stopping the share ends it at once.
+
+While a share runs, making the meeting public asks you to confirm **Stop sharing and make public**. Confirming
+stops the share, then makes the meeting public. **Cancel** keeps the share and the audience as they are.
+**Copy meeting link** copies the `link` above, and people must still be added to see the meeting.
