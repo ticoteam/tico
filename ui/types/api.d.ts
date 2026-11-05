@@ -1014,6 +1014,7 @@ export type ComputerSubscriptionResult = {
 };
 
 export type Config = {
+  administration_url?: string;
   app_name: string;
   assistant_bot: string;
   assistant_name: string;
