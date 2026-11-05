@@ -600,12 +600,21 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
+| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Manager** | people, a task given to it, its own clock | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |
+
+A production acceptance run is recognised by its title: a run verb (run, rerun, re-run, execute, perform, carry out,
+complete, finish, check, verify or do), then at most two words, none of them a build or change verb such as write,
+update or fix, then "production acceptance", then the end of the title, a colon, a comma, an opening bracket, or one of
+these words: for, after, on, against, in, at, with, from, to, before, during, of, and, through, across, test, tests,
+suite, run, pass, sweep, check, checks, again, now, today, as or once. A title that starts "Production acceptance run"
+also counts. The same title counts whether the task is top-level or a subtask. "Run production acceptance for billing"
+is a run. "Write production acceptance tests" and "Finish writing production acceptance tests" are ordinary work and go
+to a Doer, and so is "Run production acceptance plan": "plan" is not one of those words, so that title is not a run.
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
 snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a

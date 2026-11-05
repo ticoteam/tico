@@ -142,7 +142,10 @@ async function mbOneClick(host, b, ctx) {
   if (b.dataset.mbLevel && b.getAttribute('aria-checked') !== 'true') {
     return write(() => patch(`${base}/accesses/${encodeURIComponent(b.dataset.mbAccess)}`, {level: b.dataset.mbLevel}));
   }
-  if (b.dataset.mbRemove) return write(() => writeRequest('DELETE', `${base}/accesses/${encodeURIComponent(b.dataset.mbRemove)}`));
+  if (b.dataset.mbRemove) {
+    if (!await settingsConfirm({title: 'Remove mailbox access?', text: 'This person or bot will no longer be able to use this mailbox.', ok: 'Remove access'})) return;
+    return write(() => writeRequest('DELETE', `${base}/accesses/${encodeURIComponent(b.dataset.mbRemove)}`));
+  }
   if (b.hasAttribute('data-mb-share')) return write(() => post(`${base}/share`, {}));
   if (b.hasAttribute('data-mb-check')) return mbCheck(host, b, d, ctx);
   if (b.hasAttribute('data-mb-stop')) {

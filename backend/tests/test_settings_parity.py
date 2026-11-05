@@ -9,10 +9,12 @@ database, made-up bots and repositories, and no request leaves the test server.
 import json
 import sqlite3
 from contextlib import closing
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-from backend import providers, settings_catalog
+from backend import cloud_machines, providers, settings_catalog
 from backend.settings_entries import ENTRIES
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner  # noqa: F401  (fixture)
@@ -77,6 +79,12 @@ SAMPLES = {
     "inbound.inbox.create": {"bot": "finance"},
     "inbound.inbox": {"enabled": True},
     "inbound.phone_request.cancel": {},
+    "letters.outbox.settings": {"return_address": {"name": "Acme Inc", "line1": "1 Main Street", "line2": "",
+                                                      "city": "Dover", "state": "DE", "postal_code": "19901"},
+                                 "mode": "ask_first", "monthly_cap_micros": 1000000},
+    "letters.outbox.grant.bot": "send",
+    "letters.outbox.grant.person": "send",
+    "letters.bot.settings": {"mode": "ask_first", "monthly_cap_micros": 1000000},
     "bot.budget": lambda o: {"turns_per_hour": 10, "expected_revision": o.get("bot-revision", 1)},
     "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
@@ -263,7 +271,15 @@ def ask(api, attempt, e, objects, person, token):
     LAST[e.key] = f"{planned.status_code} {planned.text[:300]}"
     if got != "card":
         return got
-    tap = tapped(api, planned.json(), token)
+    if e.route == "cloud-machines/support":
+        # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
+        # the shared sweep proves the owner's confirmation as well as refusing everyone else.
+        hq = SimpleNamespace(support=lambda on=None, **_: {"on": on is not False, "machines": []})
+        with patch.object(cloud_machines, "cloud_company", return_value=True), \
+                patch.object(api.app.state.cloud_machines, "client", hq):
+            tap = tapped(api, planned.json(), token)
+    else:
+        tap = tapped(api, planned.json(), token)
     if tap != "ran":
         LAST[e.key] = f"tap: {TAP_DETAIL.get('detail', '')}"
     return "card" if tap == "ran" else "card, then " + tap

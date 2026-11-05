@@ -67,6 +67,7 @@ const scenarios = {
     assert.equal(writes(fake, 'PATCH', '/api/v2/mailboxes/mb-support/accesses/acc-cara').length, 1);
     // Remove.
     await page.locator('[data-mb-remove=acc-bot]').click();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await page.locator('tr[data-mb-access-row=acc-bot]').waitFor({state: 'detached'});
     assert.equal(writes(fake, 'DELETE', '/api/v2/mailboxes/mb-support/accesses/acc-bot').length, 1);
     assert.deepEqual(seen.errors, []);

@@ -195,6 +195,32 @@ the install's events name the request's HQ ticket (`TK-...`). `GET /v1/staff/acc
 `/v1/staff/access/<session>/api/v2/...` is one request to that install's API, with `X-Tico-Support-By: support-agent` when
 the bot makes it ([Tico HQ](tico-hq.md#support-access)).
 
+## Tico support on cloud machines
+
+Tico Cloud machines come with a support helper, on by default. It lets Tico staff and the Support Agent read and
+change files and run commands on the machine to diagnose and fix problems. The machine's user has `sudo`, so this
+access can reach bot workspaces, installed tools and credentials stored there. Each machine keeps an owner log of
+support actions, so you can see what support did and who acted.
+
+Only the owner can change **Tico support can reach our cloud machines**, in **Settings > People**, beside the rule
+for letting support into the app. Turning it off stops support work on the company's cloud machines at HQ. Turning
+it back on allows it again; a missing helper is installed on the machine's next start. The change is recorded under
+the owner's name in Tico's audit log. **Settings > Computers** shows each cloud machine's helper state.
+
+HQ holds the switch. Tico reads it on each Settings entry and saves a change there. After a failed or uncertain
+change, the page reads HQ again and shows its answer. Automatic retries keep the change's original revision, so a
+delayed enable cannot undo a newer disable. If HQ has already received a newer change, the page shows its current
+state and says "A newer change already reached Tico HQ." without retrying the write. If an uncertain change's read
+also fails, the switch stays unavailable until you open Settings again. It does not queue a local choice to send
+later. The owner can read and turn it off even while the company's plan is locked; turning it on requires an
+unlocked plan. An Assistant turn needs the person's
+confirmation, just like the rule for letting support into the app.
+
+This helper is separate from the time-limited app sessions above. Stopping an app session or turning off
+**Owners and admins may let Tico support in** does not turn off the cloud-machine helper. It is never installed on
+the shared hosts that run several companies' Tico servers. A company's shared cloud machine runs only that company's
+bots and can have the helper, just like a bot's own cloud machine. This switch is hidden outside Tico Cloud.
+
 ## Beta features
 
 A Beta feature works today and may still change. The app shows a **Beta** pill beside it (its nav item, settings section,

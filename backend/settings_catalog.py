@@ -41,6 +41,7 @@ WHO = {
     "creator": "the person who made it, an admin or the owner",
     "operator": "the computer's operator, an admin or the owner",
     "scope": "the people who manage the rule's scope (for a team rule, the owner or an admin)",
+    "automation": "the automation's owner, people above its owner, or its group's lead",
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")
@@ -302,6 +303,14 @@ def may(c, auth, who, e, target=None):
         return auth.bot_manager(c, who, _bot_target(c, e, target))
     if e.who == "self":
         return who.role == "human" and (e.target != "person" or who.actor == "human:" + str((target or {}).get("person")))
+    # A mailbox routine's switch is person-only: its route still checks the routine's managers, but no assistant can
+    # turn it into an edit card.
+    if e.who == "automation" and e.kind == "person" and e.route.startswith("automations/") and (target or {}).get("id"):
+        if who.via in ACTING_FOR or who.role not in ("owner", "human"):
+            return False
+        from . import automations
+        row = automations._row(c, str(target["id"]))
+        return bool(row) and automations.may_change(c, who, automations.flow_of(row))
     return False
 
 

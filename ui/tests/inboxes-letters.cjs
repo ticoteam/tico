@@ -248,6 +248,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.deepEqual(given.body, {level: 'read'});
       assert.ok(given.key, 'a grant carries an Idempotency-Key');
       await all.locator('[data-pm-revoke]').click();
+      await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
       await all.locator('[data-pm-grants-empty]').waitFor();
       assert.deepEqual(state.grants, [], 'Remove takes it back');
       // Get an address: prices and lines, then one order.
@@ -294,6 +295,7 @@ const disabled = option => option.evaluate(o => o.disabled);   // the option its
       assert.ok(state.sent.some(s => s.method === 'PUT' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel'));
       if (shots) await shot(page, 'address-desktop');
       await access.locator('[data-pm-revoke]').click();
+      await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
       await access.locator('[data-pm-grants-empty]').waitFor();
       assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel'));
       // Retry the failed letter: it is asked for once, and the page redraws with what the server says now.

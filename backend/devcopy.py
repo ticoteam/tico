@@ -37,6 +37,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Provider jobs and send grants never become actionable in a rehearsal copy.
+    "letter_sources", "letter_proofs", "letters", "letter_outbox_grants",
     # Maintenance's working state: its listings, its handoffs, and the Idempotency-Key receipts of its runs
     "maintenance_listings", "maintenance_handoffs", "maintenance_requests",
     # queued work
@@ -130,6 +132,7 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
            "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "letter_outboxes", "letter_bot_settings",
     "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
     "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
     "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
@@ -155,7 +158,7 @@ KEEP = frozenset((
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys",
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_task_links", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
-    "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
+    "message_links_seen", "notes", "pages", "page_identities", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners", "runner_states",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",

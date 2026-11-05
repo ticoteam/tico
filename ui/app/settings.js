@@ -399,6 +399,9 @@ function settingsShow(tab, {group: picked = false} = {}) {
   SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && !['you', 'general'].includes(tab);
   SETTINGS_TAB = shown ? group : 'you';
   if (!shown) SETTINGS_REVEAL = '';
+  // HQ may have changed while Settings was closed, or a previous read may have failed.
+  if (['people', 'computers'].includes(SETTINGS_TAB))
+    void cloudSupportRead({fresh: true}).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   const denied = $('#settings-denied');
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the group is just not remembered */ }

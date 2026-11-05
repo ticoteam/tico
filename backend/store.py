@@ -2385,7 +2385,8 @@ class Store:
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
                     result = redact(c, replay_principal, replay_auth, result)
-                return result
+                from .files import readable_page_refs
+                return readable_page_refs(c, replay_auth, replay_principal, result)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
             c.execute("SAVEPOINT domain_write")

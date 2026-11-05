@@ -130,6 +130,28 @@ def standing(c, pid):
     return ""
 
 
+def bot_identity(c, actor, *, attempt_id=""):
+    """Resolve current bot standing from its registry, without minting a credential or a lease."""
+    from . import agents
+    bot = H.actor_id(actor) if H.is_bot(actor) else None
+    record = H.bot(c, bot) if bot else None
+    config = read_cache.one(c, BS.ONE_SQL, (bot,)) if record else None
+    if not record or record["state"] != "active" or not config:
+        raise Problem("identity", "This bot is no longer available", 403)
+    external = agents.external_harness(c, bot)
+    credential = agents.row(c, bot)
+    active_agent = credential is not None and not credential["revoked_at"]
+    # Authentication still marks an active agent credential external while its configured harness changes.
+    if external or active_agent:
+        if not active_agent or not credential["harness"] or (external and credential["harness"] != external):
+            raise Problem("identity", "This external bot has no current credential", 403)
+        return Identity(actor, "bot", agent=credential["harness"])
+    attempt = read_cache.one(c, "SELECT runner_id FROM attempts WHERE id=? AND bot_id=?", (attempt_id, bot)) if attempt_id else None
+    if attempt_id and not attempt:
+        raise Problem("identity", "This bot's source execution is no longer available", 403)
+    return Identity(actor, "bot", attempt_id=attempt_id, runner_id=attempt["runner_id"] if attempt else "")
+
+
 def validate_identity(c, who):
     if who.support:
         # No roster row: the session it came in with must still be live.
@@ -230,6 +252,18 @@ class Auth:
         self._access_seen = None
         self._credential_followed = None
         self.proxy = identity_proxy.build(self.settings, store)
+
+    @classmethod
+    def read_policy(cls, c):
+        """The database's read rules for native gates without a web server or sign-in settings."""
+        def build():
+            from . import access, teammate_access
+            policy = cls.__new__(cls)
+            policy.bot_admins = set(access.owner_and_admin_emails(c))
+            # Native reads use the same stored built-in bot set as teammate access.
+            policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
+            return policy
+        return read_cache.value(c, ("native_read_policy",), build, shared=True)
 
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
@@ -772,6 +806,10 @@ class Auth:
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
             audience += (f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
                          f"OR guest={actor} OR ({participant_access_sql(c, actor)}))")
+        from . import counsel
+        denied = counsel.denied_page_copies(c, who, self)
+        if denied:
+            audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
 
     def operator(self, c, who, bot):
@@ -976,6 +1014,10 @@ class Auth:
         self.domain(who)
         if not row:
             raise Problem("not_found", "Task not found", 404)
+        from . import counsel
+        copied = counsel.page_copies(c).get(row["id"])
+        if copied and (not copied["removed"] or copied["page"]["state"] == "deleted") and not counsel.page_copy_readable(c, copied, who, self):
+            raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
@@ -1070,26 +1112,31 @@ class Auth:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
             allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
+        if row["kind"] == "letter":
+            from . import letters
+            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
+            allowed = False
+            if letter:
+                may_decide = who.role in ("owner", "human") and (letters.admin(self, who) or (
+                    letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"])))
+                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row
 
 
 def actor_reads_task(c, actor, row):
-    """Whether an actor may read this task under every rule in Auth.task_row, without server sign-in settings.
+    """Whether an actor may read this task under every rule in Auth.task_row, using the stored read policy.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
-    from . import access, teammate_access
-    policy = Auth.__new__(Auth)
+    from . import teammate_access
     opened = not c.in_transaction
     if opened:
         c.execute("SAVEPOINT actor_reads_task")
     try:
-        if H.is_human(actor):
-            policy.bot_admins = read_cache.value(c, ("task_read_admins",),
-                                                lambda: set(access.owner_and_admin_emails(c)))
+        policy = Auth.read_policy(c)
         if opened and row:
-            row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
+            row = H.task(c, row["id"])
         who = read_cache.value(c, ("task_read_identity", actor), lambda: teammate_access._viewer_for(c, actor))
         if who is None:
             return False

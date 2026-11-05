@@ -394,6 +394,7 @@ def create_app(settings=None):
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
         postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
+        letters_task = asyncio.create_task(app.state.letters.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
         sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
         # Bots' own cloud machines (backend/cloud_machines.py): started for work, stopped when idle; Tico Cloud only.
@@ -440,6 +441,8 @@ def create_app(settings=None):
                 await hook_relay_task
             if postal_mail_task:
                 await postal_mail_task
+            if letters_task:
+                await letters_task
             if sleep_idle_task:
                 await sleep_idle_task
             if cloud_machines_task:
@@ -1320,6 +1323,8 @@ def create_app(settings=None):
             if since := step_age.since_map(c, [row]).get(row["id"]):
                 value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
             if who is not None:
+                from .files import readable_page_refs
+                value = readable_page_refs(c, auth, who, value)
                 value = teammate_access.Known(c, who, auth).task(value)     # people the reader may not see
         return value
 
@@ -1445,6 +1450,8 @@ def create_app(settings=None):
                 value["origin_actor"] = None
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
+        from .files import readable_page_refs
+        result = readable_page_refs(c, auth, who, result)
         return teammate_access.Known(c, who, auth).tasks(result)       # people the reader may not see
 
     def mover(c, who):
@@ -2866,14 +2873,14 @@ def create_app(settings=None):
         with store.read() as c:
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
-        return {"models": list(MODEL_CATALOG), "harnesses": list(HARNESS_CATALOG),
+        return {"models": [row for row in MODEL_CATALOG if not row.get("held")], "harnesses": list(HARNESS_CATALOG),
                 "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
     @app.get("/api/v2/conversations")
     def conversations(request: Request, bot: str | None = None, chat_with: str | None = None):
-        """`chat_with=<bot>`: my open chats with that bot, however long ago the last message was
-        (the bot page's chat). Otherwise my conversations, or the owner's view of a bot's."""
+        """`chat_with=<bot>`: my open chat with that bot or its Home after the chats move there.
+        Otherwise my conversations, or the owner's view of a bot's."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -4202,8 +4209,11 @@ def create_app(settings=None):
                 can_comment = True
             except Problem:
                 can_comment = False
+            history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            for event in history:
+                event.pop("data", None)
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
-                    "events": privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid)),
+                    "events": history,
                     "can_comment": can_comment,
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
@@ -4395,7 +4405,7 @@ def create_app(settings=None):
         if parent_id:
             auth.task(c, who, parent_id)
         check, unchecked = None, None
-        if body.check_model is not None or body.check_role is not None:
+        if body.check_model is not None or body.check_role not in (None, "review"):
             check = check_choice(c, who, body, owner, parent_id)
         else:
             check, unchecked = check_models.review_default(c, settings, owner, parent_id)
@@ -5424,8 +5434,9 @@ def create_app(settings=None):
         """What a task answer says, as the rule check reads it: each question's picks and the free text."""
         if body.dismiss:
             return ""
-        lines = [f"{q}: {', '.join(a)}" for q, a in sorted(body.answers.items()) if a]
-        return "\n".join([*lines, *([body.other] if body.other else [])])
+        with store.read() as c:
+            asked = H.answer_question(c, body.target.model_dump(exclude_none=True))
+            return H.answer_text(asked, body.answers, other=body.other)[0]
 
     @app.post("/api/v2/tasks/{tid}/answers")
     def task_answer(request: Request, tid: str, body: M.TaskAnswer):
@@ -5789,13 +5800,15 @@ def create_app(settings=None):
     @app.get("/api/v2/approvals/{aid}")
     def approval(request: Request, aid: str):
         with store.read() as c:
+            from .files import readable_page_refs
             row = auth.approval(c, request.state.identity, aid)
             privacy.require_payload(c, request.state.identity, row)
             privacy.require_message(c, request.state.identity, H.message(c, row["message_id"]))
             # Its history: asked, decided (by whom, and for whom when the person's Assistant decided), undone, withdrawn,
             # spent.
             history = [{"created_at": e["created_at"], "actor": e["actor"], "action": e["action"].removeprefix("approval."),
-                        **{k: v for k, v in (H._json(e["detail"], {}) or {}).items()
+                        **{k: v for k, v in readable_page_refs(c, auth, request.state.identity,
+                                                              H._json(e["detail"], {}) or {}).items()
                            if k in ("decision", "note", "via", "was", "kind")}}
                        for e in c.execute("SELECT created_at,actor,action,detail FROM events WHERE target=? AND action IN "
                                           "('approval.request','approval.decide','approval.undo','approval.withdraw','approval.consume') "
@@ -5830,6 +5843,7 @@ def create_app(settings=None):
                 finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
         result = mutate(request, body, work, durable=True)     # approving a payment moves money: durable, like every decision
+        app.state.letters.decided(aid)
         from .company_page import editions
         for board in boards:
             editions.release_board(store, board)                 # after the commit: the rebuild takes its own transaction
@@ -6791,7 +6805,8 @@ def create_app(settings=None):
                                                                    lambda t: privacy.task_readable(c, who, t))
             result["approvals"] = []
             result["notices"] = [m for m in result["messages"] if m["kind"] == "notice"]
-            return result
+            from .files import readable_page_refs
+            return readable_page_refs(c, auth, who, result)
 
     @app.get("/api/v2/answers")
     def answers(request: Request, ids: str):
@@ -6808,7 +6823,8 @@ def create_app(settings=None):
                 privacy.require_message(c, who, msg)
             answers = H.answers_to(c, mids)
             privacy.require_payload(c, who, answers)
-            return answers
+            from .files import readable_page_refs
+            return readable_page_refs(c, auth, who, answers)
 
     @app.post("/api/v2/messages/{mid}/ack")
     def acknowledge(request: Request, mid: str, body: M.Empty):
@@ -8655,6 +8671,8 @@ def create_app(settings=None):
     install_hook_relay(app, settings, store, auth)
     from .postal_mail import install as install_postal_mail
     install_postal_mail(app, settings, store, auth)
+    from .letters import install as install_letters
+    install_letters(app, settings, store, auth, mutate)
     from .sleep_idle import install as install_sleep_idle
     install_sleep_idle(app, settings, store, auth)
     from .cloud_machines import install as install_cloud_machines

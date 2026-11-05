@@ -710,6 +710,36 @@ def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to
     assert handoffs[0]["refs"]["verdict"] == "fail" and "QA Fixes" in handoffs[0]["body"], handoffs[0]
 
 
+def test_timeout_keeps_the_private_qa_verdict_source(api):
+    import json
+    from backend import task_privacy
+    from backend.tests.test_api import unrelated_task_managers
+
+    task = ticket(api, step="In QA")
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        qa = H.task_create(c, "bot:cpo", "QA: PR #412", f"Check head {HEAD}", "bot:cmo",
+                           parent_id=task["id"], private=True, lint=False)
+        usage(c, qa["id"], "cmo")
+    verdict(api, qa, "fail")
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        c.execute("DELETE FROM jobs")
+    check(api, task, "QA: PR #412")
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
+        [msg] = [H.message(c, r[0]) for r in c.execute(
+            "SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo' "
+            "AND j.state='queued' AND json_extract(m.refs,'$.handoff') IS NOT NULL")]
+        assert msg["refs"]["trigger_source"] == qa["id"]
+        assert not task_privacy.message_readable(c, "bot:unrelated", msg)
+        assert task_privacy.message_readable(c, "bot:cpo", msg)
+        event = dict(c.execute("SELECT old,new,note FROM history_events WHERE subject_id=? AND kind='round_skipped'",
+                               (task["id"],)).fetchone())
+        assert json.loads(event["old"])["source_tasks"] == [qa["id"]]
+        assert not task_privacy.content_readable(c, "bot:unrelated", event)
+
+
 def test_a_later_pass_at_a_failed_head_does_not_let_a_timed_out_round_clear_the_merge(api):
     """QA failed the head, a later round passed the same head without a fix, and the ticket came back once more: the
     round that times out then finds the fail still standing, so the ticket goes to QA Fixes, never to the merge."""

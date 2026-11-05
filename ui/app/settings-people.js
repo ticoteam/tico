@@ -82,9 +82,13 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') peop
 async function renderSettingsPeople() {
   const el = $('#set-people'); if (!el) return;
   try {
-    const view = await get('/v2/access');
+    // HQ's switch for Tico support on cloud machines comes with it (ui/app/cloud-machines.js), null off Tico Cloud.
+    const [view, support] = await Promise.all([get('/v2/access'), cloudSupportRead()]);
     if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;
+    // Only the owner changes it; anyone else on this page sees it read-only.
+    const supportLabel = 'Tico support can reach our cloud machines';
+    const supportLine = support ? `<label class="people-line">${peopleSwitch('id="people-cloud-support"', support.on, !owner, supportLabel)}<span>${supportLabel}</span></label>` : '';
     PEOPLE_ADDED = '';                                     // the reminder shows once, right after the add
     const mode = PEOPLE_MODE || (view.directory ? 'sync' : 'manual');
     const active = view.people.filter(p => !p.left), left = view.people.filter(p => p.left);
@@ -120,6 +124,7 @@ async function renderSettingsPeople() {
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>
           <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
+        ${supportLine ? `<div class="people-rules">${supportLine}</div>` : ''}
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.js
     if (owner) void peopleFromSetup($('#people-from-setup'));
@@ -216,6 +221,32 @@ async function renderSettingsPeople() {
         text: domain ? `People at ${x} who are not added here can no longer sign in.` : `${x} can no longer sign in.`})) return;
       void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
     });
+    // A lost answer may still have reached HQ: read its state again before showing the result.
+    const supportSwitch = $('#people-cloud-support');
+    if (supportSwitch && owner) supportSwitch.onchange = async () => {
+      const on = supportSwitch.checked;
+      settingsFieldClear(supportSwitch);
+      supportSwitch.disabled = true;
+      try {
+        // Each press is a new choice; only this write's automatic retries share its key.
+        const answer = await put('/v2/cloud-machines/support', {on}, newRequestId());
+        cloudSupportSet(answer);
+        supportSwitch.checked = answer?.on === true;
+        toast('Saved');
+      } catch (error) {
+        const stale = error.body?.error?.code === 'stale_revision' && typeof error.body.error.on === 'boolean';
+        let current = await cloudSupportRead({fresh: true});
+        if (!current && stale) {
+          current = {available: true, on: error.body.error.on, machines: []};
+          cloudSupportSet(current);
+        }
+        if (error.signature) pendingWrites.delete(error.signature);
+        supportSwitch.checked = current?.on === true;
+        supportSwitch.indeterminate = !current;
+        const message = stale ? 'A newer change already reached Tico HQ.' : error.message;
+        settingsFieldError(supportSwitch, current ? message : `${message} Could not read the switch. Open Settings again to retry.`);
+      } finally { supportSwitch.disabled = !CLOUD_SUPPORT.view; }
+    };
     el.querySelectorAll('.people-row').forEach(row => {
       const p = person(row.dataset.person), path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
       const role = row.querySelector('[data-person-role]');

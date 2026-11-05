@@ -270,6 +270,7 @@ function pmGrantsBind(block, scope) {
     if (more) { more.disabled = true; return pmGrantsList(block, scope, more.dataset.pmMoreGrants); }
     const revoke = event.target.closest('[data-pm-revoke]');
     if (!revoke) return;
+    if (!await settingsConfirm({title: 'Remove Read access?', text: 'This person or bot will no longer be able to read letters and scans for this address.', ok: 'Remove access'})) return;
     revoke.disabled = true; error.textContent = '';
     try { await writeRequest('DELETE', pmGrantPath(scope, revoke.closest('[data-pm-grant]').dataset.pmGrant)); await pmGrantsList(block, scope); }
     catch (e) { error.textContent = e.message; revoke.disabled = false; }

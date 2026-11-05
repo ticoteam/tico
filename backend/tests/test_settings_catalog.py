@@ -201,6 +201,15 @@ def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
     finish(api, botops, ana)
 
 
+def test_mailbox_routine_is_catalogued_but_not_offered_as_a_botops_card(api, botops):
+    routine = settings_catalog.entry("mailbox.routine")
+    ana = turn(api, botops, person="ana-test", text="Disable the mailbox routine")
+    err, refused = mcp(api, "hub_settings_set", {"key": routine.key, "id": "routine-test",
+                                                  "value": {"enabled": False}}, ana["token"])
+    assert err and "person_only" in str(refused) and routine.card in str(refused), refused
+    finish(api, botops, ana)
+
+
 def test_someone_without_the_rights_is_told_who_can(api, botops):
     cara = turn(api, botops, person="cara-test", text="Set the release to 09:30")
     err, refused = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
