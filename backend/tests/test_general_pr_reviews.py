@@ -188,6 +188,8 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
     api.app.state.auth.settings.test_identities["observer-test"] = observer
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+                  ("rev-c", "test", "observer-credential", H.now(), "human:ana"))
         first = H.task_create(c, "bot:cpo", f"{title}: PR #12", f"Check head {HEAD}", "bot:rev-a",
                               parent_id=task["id"], private=private, lint=False)
     finish(api, first, bad)
