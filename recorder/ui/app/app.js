@@ -1943,9 +1943,14 @@
       if (title.trim() && title.trim() !== S.meeting?.title) await act('rename', { title });
     }
     if (el === mentionField && el.dataset.model !== 'notes') closeMention();
-    if (el.dataset?.blur === 'add-close' && !S.ui.addItem.trim() && S.ui.adding) {
-      S.ui.adding = false;
-      setTimeout(render, 0);
+    // Closes when left empty; not when a render only replaced it and focus moved to the new field (Enter adds the next).
+    if (el.dataset?.blur === 'add-close') {
+      setTimeout(() => {
+        if (S.ui.adding && !S.ui.addItem.trim() && document.activeElement?.dataset?.model !== 'addItem') {
+          S.ui.adding = false;
+          render();
+        }
+      }, 0);
     }
     if (el.dataset?.editItem) {
       const text = el.textContent.replace(/\s+/g, ' ').trim();
