@@ -95,7 +95,7 @@ function taskCodeLineHTML(l, mover, siblings = []) {
   // A released worktree (an open task whose pull requests are all finished) also stops retrying, but its cleanup resumes
   // by itself once its work is saved; a removal request there would remove it from a task that is still open.
   const wtDetail = l.kind === 'worktree' ? taskLinkDetail(l) : {};
-  const retry = mover && l.id && l.kind === 'worktree' && l.state !== 'removed' && wtDetail.cleanup_gave_up === true
+  const retry = mover && l.id && l.kind === 'worktree' && !['removed', 'retired'].includes(l.state) && wtDetail.cleanup_gave_up === true
     && wtDetail.release_requested !== true
     ? `<div class="code-retry-row"><span class="code-retry-hint">Cleanup stopped retrying. Fix the cause above, then retry.</span><button type="button" class="ghost code-retry" data-code-drop="${esc(l.id)}" data-code-retry aria-label="Retry cleanup of ${esc(what)}">Retry cleanup</button></div>` : '';
   if (l.kind === 'worktree') {
@@ -104,13 +104,18 @@ function taskCodeLineHTML(l, mover, siblings = []) {
     const url = taskWorktreeURL(l);
     const bits = [wtRepo ? `<span class="code-repo">${esc(wtRepo)}</span>` : '<span class="code-repo unknown">unknown repo</span>'];
     if (l.branch) bits.push(`<span class="code-branch mono">${esc(l.branch)}</span>`);
+    if (l.state === 'retired' && wtDetail.last_commit) bits.push(`<span class="code-branch mono">${esc(String(wtDetail.last_commit).slice(0, 12))}</span>`);
     const sync = [ahead ? `↑${ahead}` : '', behind ? `↓${behind}` : ''].filter(Boolean).join(' ');
     if (sync) bits.push(`<span class="tnum">${sync}</span>`);
     if (files) bits.push(`<span class="tnum">${files} file${files === 1 ? '' : 's'}</span>`);
-    const odd = ['missing', 'removed', 'unknown', 'pending'].includes(l.state) || error
-      ? ` <span class="code-state${error ? ' err' : ''}">${esc(['missing', 'removed', 'unknown', 'pending'].includes(l.state) ? l.state : 'error')}</span>` : '';
+    const odd = l.state === 'retired' ? ' <span class="code-state">left on a retired computer</span>'
+      : ['missing', 'removed', 'unknown', 'pending'].includes(l.state) || error
+        ? ` <span class="code-state${error ? ' err' : ''}">${esc(['missing', 'removed', 'unknown', 'pending'].includes(l.state) ? l.state : 'error')}</span>` : '';
     const title = [repo, l.branch, l.path].filter(Boolean).join(' · ');
-    const explanation = error ? `<div class="props-msg code-error">${esc(error)}</div>` : '';
+    const history = wtDetail.retired_worktrees || [wtDetail.retired_worktree || {}];
+    const left = [...history.flatMap(old => [old.ahead ? `${old.ahead} unpushed commits stayed on the retired computer (head ${old.last_commit || 'unknown'}).` : '',
+      old.dirty_files ? `${old.dirty_files} changed files stayed there.` : '', old.recovery_note || '']), wtDetail.recovery_note || ''].filter(Boolean).join(' ');
+    const explanation = [error, left].filter(Boolean).map(text => `<div class="props-msg code-error">${esc(text)}</div>`).join('');
     const inner = bits.join('<span class="code-dot">·</span>');
     return `<li class="code-line wt${l.state === 'removed' ? ' gone' : ''}" data-code-link="${esc(l.id || '')}">${url
       ? `<a class="code-main" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(title)}">${inner}</a>` : `<span class="code-main" title="${esc(title)}">${inner}</span>`}${odd}${x}${explanation}${retry}</li>`;
