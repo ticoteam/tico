@@ -1404,8 +1404,8 @@ class SettingsAdmin:
                 effort=before.get("reasoning_effort") or None, compact_at=before.get("compact_at"),
                 model_fields_set={"harness", "model", "effort", "compact_at"})
             return self.set_task_model(c, who, bot, SimpleNamespace(
-                task_model=restored or None,
-                expected_revision=body.expected_revision), undo_change_id=change_id)
+                task_model=restored or None, expected_revision=body.expected_revision,
+                model_fields_set={"task_model", "expected_revision"}), undo_change_id=change_id)
         raise Problem("not_reversible", "This settings change cannot be undone", 409)
 
     def team_names(self, c):
@@ -1532,7 +1532,8 @@ class SettingsAdmin:
         A saved held model (Dev 693) is the exception: a save with no model, or the same one, keeps it, and a different
         held model is refused. For that model a field the save leaves out (effort, context length) is kept, a context
         length sent as null clears it, a null effort keeps the held model's effort, and a harness with no model is
-        refused. Sending `task_model` as null clears the whole setting, held or not."""
+        refused. Sending `task_model` as null clears the whole setting, held or not; leaving it out names no model, so on
+        the held model it keeps it."""
         CA.gate(c, who.actor, "cost", f"change the model {(H.bot(c, bot) or {}).get('slug', bot)}'s tasks run on")
         self._manager(c, who, bot, report="task_model")
         shared_bots.refuse_copy(c, bot)
@@ -1546,6 +1547,10 @@ class SettingsAdmin:
         kept = (before or {}).get("model") or ""
         saved = self.models.get(kept) if kept else None
         held = bool(saved and saved.get("held"))
+        # A body that leaves `task_model` out names no model, so on the saved held model it keeps it, as `{}` does. An
+        # explicit null still clears the whole setting. The undo below names every field it sends.
+        if chosen is None and held and "task_model" not in body.model_fields_set:
+            chosen = M.BotTaskChoice()
         if held and chosen is not None and chosen.harness and not chosen.model:
             raise Problem("harness", "Choose a task model to pick a harness for it", 422)
         # A null task model clears all of it. A body that names nothing clears a task model that is not held; on the

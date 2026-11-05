@@ -3,6 +3,8 @@ check subtask keeps its check model, a task model that cannot run never holds th
 what ran."""
 import json
 
+import pytest
+
 from backend import usage_limits
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
@@ -298,6 +300,45 @@ def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_rep
     assert get(api, "bots/ops")["task_model"] == {**terra, "compact_at": 400000}
     undo_last()
     assert get(api, "bots/ops")["task_model"] == terra
+    # A save that changes the effort and clears a context length that was set, then undone: both come back.
+    set_task_model(api, {"compact_at": 400000})
+    set_task_model(api, {"effort": "high", "compact_at": None})
+    assert get(api, "bots/ops")["task_model"] == {**terra, "reasoning_effort": "high"}
+    undo_last()
+    assert get(api, "bots/ops")["task_model"] == {**terra, "compact_at": 400000}
+
+
+@pytest.mark.parametrize("body, changed", [
+    ({"task_model": {}}, None),
+    ({"task_model": {"effort": None}}, None),
+    ({"task_model": {"compact_at": None}}, {"compact_at": None}),
+    ({"task_model": {"effort": None, "compact_at": None}}, {"compact_at": None}),
+    # A body that leaves `task_model` out altogether names no model either: it is not an explicit null.
+    ({}, None),
+])
+def test_a_save_that_names_no_model_keeps_the_saved_held_model(api, body, changed):
+    """Dev 693 (Engineering Lead's ruling): a save that names no model keeps the saved held model, and only the field
+    the save names may change. A save that changes nothing is refused as unchanged (409), a context length sent as null
+    clears only the context length, and a null effort keeps the held effort. An explicit null for the whole task model
+    still clears it (asserted at the end of the held-model test above)."""
+    ops_on_sonnet(api)
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, 'ops')
+        config["task_model"] = {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium",
+                                "runtime": "codex", "compact_at": 400000}
+        BS.write(c, 'ops', config)
+    before = get(api, "bots/ops")["task_model"]
+    assert before == {"harness": "codex", "model": "gpt-6.1-terra", "reasoning_effort": "medium", "runtime": "codex",
+                      "compact_at": 400000}, before
+    if changed is None:
+        refused = post(api, "bots/ops/task-model", {**body, "expected_revision": revision(api)}, expected=409)
+        assert refused["error"]["code"] == "unchanged", refused
+    else:
+        saved = post(api, "bots/ops/task-model", {**body, "expected_revision": revision(api)})
+        assert saved["task_model"] == {**before, **changed}, saved
+    after = get(api, "bots/ops")["task_model"]
+    assert after == {**before, **(changed or {})}, after
+    assert after["model"] == "gpt-6.1-terra"
 
 
 def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(api):
