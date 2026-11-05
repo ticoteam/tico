@@ -807,7 +807,7 @@ let browser = null;
     await cu.locator('[data-cu-read]').click();
     await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
     assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
-    await cu.locator('.cu-undo', {hasText: 'Marked read'}).waitFor();
+    await cu.locator('.cu-undo-pill', {hasText: 'Marked read'}).waitFor();
     if (shots) await page.evaluate(() => clearTimeout(CU.undo?.timer));    // the screenshots take longer than Undo shows
     await themed(page, 'catch-up-undo');
     await cu.locator('[data-cu-undo]').click();
@@ -844,7 +844,7 @@ let browser = null;
     assert.equal(await cu.locator('.cu-pos').textContent(), '3 of 3', 'what was put off comes last');
     await cu.locator('[data-cu-mute]').click();
     await cu.getByText('All caught up').waitFor();
-    await cu.locator('.cu-empty .cu-undo', {hasText: 'Muted'}).waitFor();
+    await cu.locator('.cu-empty .cu-undo-pill', {hasText: 'Muted'}).waitFor();
     assert.deepEqual(seen.readAll, ['t11', 't-gdm'], 'the mute waits while Undo shows');
     // Undo goes by itself after a few seconds, and then the mute and read go out.
     await cu.locator('.cu-undo').waitFor({state: 'detached', timeout: 8000});
