@@ -360,3 +360,20 @@ def test_deleting_a_saved_meeting_revokes_grants_but_keeps_task_parties_and_gues
     assert get(api,'tasks/'+tid,'cara-test')['task']['id'] == tid
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND actor='human:ben' AND role='participant'",(tid,)).fetchone()
+
+
+def test_historical_grant_does_not_parse_string_participants_as_people(api):
+    import json
+    rid = record(api, {'private':True,'participants':['ben@acme.example']})
+    iid = add(api,rid,{'section':'task','text':'Legacy source','detail':{'owner':'human:ana'}})['item']['id']
+    tid = push(api,rid,iid)['item']['result_ref']
+    with api.app.state.store.transaction() as c:
+        # Historical source snapshots can contain speaker labels; only participant objects name an audience.
+        c.execute("UPDATE meetings SET metadata=json_set(metadata,'$.participants',json(?)) WHERE id=?",
+                  (json.dumps(['Ben', json.dumps({'email':'ben@acme.example'})]), rid))
+        assert c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND actor='human:ben'",(tid,)).fetchone()
+        assert tid not in meeting_audience.participant_tasks(c,'human:ben')
+        who = api.app.state.auth.identity_for_actor(c,'human:ben')
+        assert not c.execute('SELECT id FROM tasks WHERE id=? AND ('+api.app.state.auth.task_sql(c,who)+')',(tid,)).fetchone()
+    assert api.get(f'/api/v2/meetings/{rid}',headers=headers('ben-test')).status_code == 403
+    assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)

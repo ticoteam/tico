@@ -45,4 +45,4 @@ def up(conn):
           WHEN NOT coalesce(json_extract(m.metadata,'$.private'),0) THEN 1
           WHEN EXISTS (SELECT 1 FROM json_each(m.metadata,'$.calendar.attendees') a WHERE lower(trim(a.value))=lower(h.email)) THEN 1
           ELSE EXISTS (SELECT 1 FROM json_each(m.metadata,'$.participants') a
-            WHERE lower(trim(json_extract(a.value,'$.email')))=lower(h.email)) END""")
+            WHERE lower(trim(json_extract(CASE WHEN a.type='object' THEN a.value ELSE '{}' END,'$.email')))=lower(h.email)) END""")
