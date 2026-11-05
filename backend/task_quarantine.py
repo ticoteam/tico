@@ -7,6 +7,7 @@ no task status, snooze or dependency, and ends after the refusal cooldown or a p
 """
 
 from . import hubdb as H
+from .batch_work import isolated
 
 
 def source(c, actor, task_id=None):
@@ -36,7 +37,7 @@ def free_sql(task_sql):
 
 
 def for_task(c, bot, task_id):
-    """The task hold enforced for a writer without a run token, including an external agent."""
+    """The bot's hold on the task being written, including writes from an external agent or another run."""
     task_id = H._task_ref(task_id)
     if not task_id:
         return None
@@ -79,21 +80,46 @@ def _notice(c, bot, conversation_id, said):
     H.say(c, H.KEEPER, H.bot_actor(bot), said, conversation_id=conversation_id, kind="notice", refs={"quiet": True})
 
 
+def notes_free_sql():
+    """A waiting note n may travel only when its recipient's source task/chat is free, before any batch limit."""
+    return ("NOT EXISTS(SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            "WHERE m.id=n.message_id AND (EXISTS(SELECT 1 FROM quarantine_holds qh "
+            "WHERE qh.bot_id=substr(n.to_actor,5) AND qh.released_at IS NULL "
+            f"AND qh.task_id={H.MESSAGE_TASK_SQL}) OR EXISTS(SELECT 1 FROM quarantine_holds qh "
+            "WHERE qh.bot_id=substr(n.to_actor,5) AND qh.released_at IS NULL "
+            f"AND qh.conversation_id=m.conversation_id AND {H.MESSAGE_TASK_SQL} IS NULL)))")
+
+
+def _release_notice(c, row):
+    # Archiving ends a bot's work; its hold can still expire without addressing an inactive recipient.
+    if (H.bot(c, row["bot_id"]) or {}).get("state") == "archived":
+        return
+    refusal = H._json(row["refusal"], {})
+    said = (f"The refusal hold for {H.actor_name(c, H.bot_actor(row['bot_id']))} has lifted "
+            f"({refusal.get('rule')} rule). {H.QUARANTINE_LIFTED}")
+    if row["task_id"]:
+        H.task_comment(c, H.KEEPER, row["task_id"], said, wake=False)
+    else:
+        _notice(c, row["bot_id"], row["conversation_id"], said)
+
+
 def release(c, actor, bot=None, cutoff=None):
     """Release scoped holds for quarantine clear, or only cooled ones for the scheduler; reset only their counts."""
     rows = c.execute("SELECT * FROM quarantine_holds WHERE released_at IS NULL "
                      "AND (? IS NULL OR bot_id=?) AND (? IS NULL OR created_at<=?)",
                      (bot, bot, cutoff, cutoff)).fetchall()
     at = H.now()
+    released = set()
     for row in rows:
-        c.execute("UPDATE quarantine_holds SET released_at=? WHERE id=?", (at, row["id"]))
-        scope = "task:" + row["task_id"] if row["task_id"] else "chat:" + row["conversation_id"]
-        H.event(c, actor, "quarantine.released", H.bot_actor(row["bot_id"]), {"scope": scope})
-        refusal = H._json(row["refusal"], {})
-        said = (f"The refusal hold for {H.actor_name(c, H.bot_actor(row['bot_id']))} has lifted "
-                f"({refusal.get('rule')} rule). {H.QUARANTINE_LIFTED}")
-        if row["task_id"]:
-            H.task_comment(c, H.KEEPER, row["task_id"], said, wake=False)
-        else:
-            _notice(c, row["bot_id"], row["conversation_id"], said)
-    return sorted({row["bot_id"] for row in rows})
+        released_row = False
+        with isolated(c, "quarantine_release", row["id"]):
+            c.execute("UPDATE quarantine_holds SET released_at=? WHERE id=?", (at, row["id"]))
+            scope = "task:" + row["task_id"] if row["task_id"] else "chat:" + row["conversation_id"]
+            H.event(c, actor, "quarantine.released", H.bot_actor(row["bot_id"]), {"scope": scope})
+            released.add(row["bot_id"])
+            released_row = True
+        # A notice is best effort: rolling it back must preserve the release and every other row in this batch.
+        if released_row:
+            with isolated(c, "quarantine_release_notice", row["id"]):
+                _release_notice(c, row)
+    return sorted(released)

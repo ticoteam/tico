@@ -5727,7 +5727,7 @@ def create_app(settings=None):
                 readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
                 note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, "blocked_by")
             else:
-                H._writer(c, who.actor)
+                H._writer(c, who.actor, task_id=task_id)
                 H._task_private_writer(c, who.actor, row)
                 # The same gate as a blocked_by: a wait parks the task's news just as a blocker does.
                 TR._blocker_gate(c, who.actor, row, TR._mover(c, who.actor, mover(c, who) or None))

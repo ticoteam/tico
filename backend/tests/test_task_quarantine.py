@@ -319,6 +319,179 @@ def test_a_held_task_cannot_ride_along_with_another_tasks_next_run(api):
     assert attempt["task"]["id"] == other["id"] and attempt["next_run"] == []
 
 
+@pytest.mark.parametrize("failure", ["archived", "chat_notice", "task_notice", "release"])
+def test_a_bad_release_preserves_other_cooldowns_and_the_rest_of_the_scheduler_tick(api, time_machine, monkeypatch, failure):
+    from backend import task_quarantine as Q
+    from backend.scheduler import Scheduler
+
+    time_machine.move_to("2026-11-04T12:00:00Z", tick=False)
+    chat = post(api, "chat/ops", {"text": "Check the export."})
+    bad = new_task(api, "Check the export") if failure == "task_notice" else None
+    good = new_task(api, "Check the archive", owner="finance")
+    bad_scope = "task:" + bad["id"] if bad else "chat:" + chat["conversation_id"]
+    with api.app.state.store.transaction() as c:
+        Q.hold(c, "ops", bad_scope, "Repeated refusals", {"rule": "identity"})
+        Q.hold(c, "finance", "task:" + good["id"], "Repeated refusals", {"rule": "identity"})
+    if failure == "archived":
+        revision = next(b for b in get(api, "bots") if b["id"] == "ops")["revision"]
+        post(api, "bots/ops/archive", {"expected_revision": revision})
+    elif failure in ("chat_notice", "task_notice"):
+        original = Q._release_notice
+
+        def broken_notice(c, row):
+            original(c, row)
+            if row["bot_id"] == "ops":
+                raise RuntimeError("Notice delivery failed after writing")
+
+        monkeypatch.setattr(Q, "_release_notice", broken_notice)
+    else:
+        original = H.event
+
+        def broken_release(c, actor, action, target="", detail=None):
+            if action == "quarantine.released" and target == "bot:ops":
+                raise RuntimeError("This release cannot be recorded")
+            return original(c, actor, action, target, detail)
+
+        monkeypatch.setattr(H, "event", broken_release)
+    following = []
+    catch_up = H.notes_settle_catch_up
+
+    def after_release(c, limit):
+        following.append(True)
+        return catch_up(c, limit)
+
+    monkeypatch.setattr(H, "notes_settle_catch_up", after_release)
+    time_machine.shift(H.QUARANTINE_COOLDOWN_S + 1)
+    Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert following, "the step after cooldowns must run"
+    assert [r["bot_id"] for r in holds(api)] == (["ops"] if failure == "release" else [])
+    with api.app.state.store.read() as c:
+        released = {r[0] for r in c.execute("SELECT target FROM events WHERE action='quarantine.released'")}
+        assert released == ({"bot:finance"} if failure == "release" else {"bot:ops", "bot:finance"})
+        assert any("has lifted" in m["body"] for m in H.task_comments(c, good["id"]))
+        messages = H.task_comments(c, bad["id"]) if bad else H.messages(c, chat["conversation_id"])
+        assert not any("has lifted" in m["body"] for m in messages), "failed or skipped notices leave no partial write"
+
+
+@pytest.mark.parametrize("mutation", ["snooze", "unsnooze", "check-back", "later", "defer", "relations",
+                                     "reverse_relation", "wait_task", "wait_pr", "links", "unlink", "files",
+                                     "edit", "delete_comment", "resolve", "answers", "ask", "update"])
+def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_task(api, mutation):
+    from backend import task_quarantine as Q
+    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.test_task_review import ask
+
+    hermes_bot(api)
+    token = credential(api)["token"]
+    tasks = [new_task(api, title, owner="scout") for title in ("Check the export", "Check the archive", "Check the summary")]
+    other = tasks[2]
+    requests = []
+    for task in tasks[:2]:
+        tid, body, suffix = task["id"], {}, mutation
+        if mutation == "snooze":
+            body = {"until": H.shift(H.now(), days=2)}
+        elif mutation == "unsnooze":
+            post(api, f"tasks/{tid}/snooze", {"until": H.shift(H.now(), days=2)})
+        elif mutation == "check-back":
+            body = {"at": H.shift(H.now(), days=2)}
+        elif mutation in ("later", "defer"):
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (tid,))
+            body = {"next_run": True}
+        elif mutation in ("relations", "reverse_relation"):
+            suffix, body = "relations", {"task": other["id"], "kind": "related"}
+            if mutation == "reverse_relation":
+                tid, body["task"] = other["id"], tid
+        elif mutation in ("wait_task", "wait_pr"):
+            suffix = "waits"
+            body = {"on": "task:" + other["id"] if mutation == "wait_task" else "pr:https://github.com/acme/widgets/pull/42"}
+        elif mutation == "links":
+            body = {"url": "https://acme.example/export"}
+        elif mutation == "unlink":
+            link = post(api, f"tasks/{tid}/links", {"url": "https://acme.example/export"})["links"][0]
+            suffix, body = "links", {"remove": link["id"]}
+        elif mutation == "files":
+            body = {"name": "report.txt", "text": "Checked the report."}
+        elif mutation in ("edit", "delete_comment"):
+            comment = post(api, f"tasks/{tid}/comments", {"text": "Checking the report."}, token)["comment"]
+            suffix = "comments/" + comment["id"] + ("/delete" if mutation == "delete_comment" else "")
+            body = {} if mutation == "delete_comment" else {"text": "Checked the report."}
+        elif mutation == "resolve":
+            comment = post(api, f"tasks/{tid}/ask", {"text": "Which report should I check?"}, token)
+            suffix = "comments/" + comment["id"] + "/resolve"
+        elif mutation == "answers":
+            comment = post(api, f"tasks/{tid}/comments", {"text": "Is the report ready?", "ask": ask("scout")})["comment"]
+            body = {"target": {"comment": comment["id"]}, "answers": {"verdict": ["Approve"]}}
+        elif mutation == "ask":
+            body = {"text": "Which report should I check?"}
+        elif mutation == "update":
+            suffix = ""
+            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "status": "doing"}
+        requests.append((f"tasks/{tid}" + ("/" + suffix if suffix else ""), body))
+    with api.app.state.store.transaction() as c:
+        Q.hold(c, H.actor_id(tasks[0]["owner_id"]), "task:" + tasks[0]["id"], "Repeated refusals", {"rule": "identity"})
+        before = dict(c.execute("SELECT * FROM tasks WHERE id=?", (tasks[0]["id"],)).fetchone())
+    path, body = requests[0]
+    result = post(api, path, body, token, expected=403)
+    assert result["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert dict(c.execute("SELECT * FROM tasks WHERE id=?", (tasks[0]["id"],)).fetchone()) == before
+    path, body = requests[1]
+    post(api, path, body, token)
+    post(api, "bots/scout/quarantine/clear", {})
+    path, body = requests[0]
+    post(api, path, body, token)
+
+
+@pytest.mark.parametrize("source", ["task", "task_id", "task_room", "chat"])
+def test_notes_from_held_sources_stay_pending_and_unread_until_release(api, source, monkeypatch):
+    from backend import bot_to_bot as B, task_quarantine as Q
+    from backend import threads
+
+    monkeypatch.setattr(threads, "NOTES_READ", 1)
+    machine = task_bot(api, lanes=True)
+    with api.app.state.store.transaction() as c:
+        if source == "chat":
+            message = H.say(c, "bot:finance", "bot:ops", "The export is ready to check.")
+            scope = "chat:" + message["conversation_id"]
+        else:
+            task = H.task_create(c, "bot:finance", "Check the export", "Check the report.", "bot:ops")
+            message = H.task_comment(c, "bot:finance", task["id"], "The export is ready to check.")
+            scope = "task:" + task["id"]
+            if source != "task":
+                refs = {k: v for k, v in message["refs"].items() if k != "task"}
+                if source == "task_id":
+                    refs["task_id"] = "task:" + task["id"]
+                c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump(refs), message["id"]))
+        Q.hold(c, "ops", scope, "Repeated refusals", {"rule": "identity"})
+        pending = H._one(c, "SELECT * FROM notes WHERE message_id=?", (message["id"],))
+        free = H.say(c, "bot:cpo", "bot:ops", "The archive is ready to check.")
+    other = new_task(api, "Check the archive")
+    attempt = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
+    assert attempt["task"]["id"] == other["id"]
+    assert [n["message"] for n in attempt["notes"] if n.get("message")] == [free["id"]]
+    with api.app.state.store.transaction() as c:
+        note = H.note(c, pending["id"])
+        assert H.note_waiting(c, note) and H.notes_waiting_counts(c, ["ops"])["ops"] == 1
+        assert all(note[key] is None for key in ("carried_by", "settled_at", "canceled_at"))
+        assert H.message(c, message["id"])["read_at"] is None
+        assert B.continue_backlog(c, "ops") is None, "a held note must not start a backlog loop"
+    if source != "chat":
+        row = get(api, "tasks/" + task["id"])["task"]
+        result = post(api, "tasks/" + task["id"], {"version": row["version"], "status": "doing"}, attempt["token"], expected=403)
+        assert result["error"]["code"] == "quarantined"
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    post(api, "bots/ops/quarantine/clear", {})
+    if source == "chat":
+        new_task(api, "Check the summary")
+    resumed = post(api, "jobs/claim", {"next_run": True, "start_places": True}, machine["token"])["attempt"]
+    assert [n["message"] for n in resumed["notes"] if n.get("message")] == [message["id"]]
+    with api.app.state.store.read() as c:
+        assert H.note(c, pending["id"])["carried_by"] == resumed["id"]
+        assert H.message(c, message["id"])["read_at"] is not None
+
+
 def test_a_held_task_does_not_use_the_bots_only_automatic_task_place(api):
     from backend.tests.test_auto_tasks import set_cap
     machine = task_bot(api, lanes=True)

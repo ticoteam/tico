@@ -80,7 +80,7 @@ def may_snooze(conn, actor, row, mover=False):
 
 def _check(conn, actor, task_id, mover):
     H = _H()
-    H._writer(conn, actor)
+    H._writer(conn, actor, task_id=task_id)
     row = H.task(conn, task_id)
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")

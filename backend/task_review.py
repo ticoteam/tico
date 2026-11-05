@@ -156,6 +156,7 @@ def version_review(c, fid, number, *, actor):
 
 def edit_version(c, auth, who, task_id, fid, number, body):
     auth.task(c, who, task_id)
+    H._writer(c, who.actor, task_id=task_id)
     if body.ask is not None:
         comment_rights(c, auth, who, task_id)
     version = file_version(c, task_id, fid, number)
@@ -233,6 +234,7 @@ def reply_answer(c, auth, who, asked, text, warn=""):
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
     """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
     (its picks and Other text) is recorded as given."""
+    H._writer(c, who.actor, task_id=task_id)
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)

@@ -1664,7 +1664,7 @@ def notes_for_run(c, bot, conv, run_class):
     against its source first (revalidate_notes). Reads past a run's own batch, so private notes that wait for their own
     thread's turn never hide the ones this run may carry."""
     fits, left = [], []
-    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ)):
+    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ, unheld=True)):
         if not note_fits_run(c, item, conv, run_class):
             left.append(item)
         elif len(fits) < NOTES_PER_RUN:

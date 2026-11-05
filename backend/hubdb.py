@@ -2782,7 +2782,7 @@ def _actor_exists(conn, actor):
     return False
 
 
-def _writer(conn, actor):
+def _writer(conn, actor, task_id=None):
     """Rule 1: the actor must be someone hubdb knows, outside a bot quarantine or a held turn."""
     if not actor_kind(actor):
         refuse(conn, str(actor), "identity", f"{actor!r} is not an actor")
@@ -2797,11 +2797,11 @@ def _writer(conn, actor):
         refuse(conn, actor, "quarantined", f"{actor_name(conn, actor)} is quarantined; {release}")
     if is_bot(actor):
         from . import task_quarantine
-        hold = (task_quarantine.for_attempt(conn, {"id": RUN.get()}) if RUN.get() else
-                task_quarantine.for_task(conn, actor_id(actor), REFUSAL_TASK.get()))
+        hold = task_quarantine.for_attempt(conn, {"id": RUN.get()}) if RUN.get() else None
+        hold = hold or task_quarantine.for_task(conn, actor_id(actor), task_id or REFUSAL_TASK.get())
         if hold:
             refuse(conn, actor, "quarantined", "This task or chat is held after repeated refusals; it resumes after "
-                   "its cooldown or when a person clears quarantine. Other tasks can continue")
+                   "its cooldown or when a person clears quarantine. Other tasks can continue", task=task_id)
     return actor
 
 
@@ -3191,6 +3191,8 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     else:
         conv = _pair_conversation(conn, actor, target,
                                   {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=True)
+
+    _writer(conn, actor, task_id=message_task_id({"refs": refs}, conv))
 
     if kind == "ask":
         _botops_only(conn, actor, target)
@@ -3630,6 +3632,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     asked = message(conn, message_id)
     if not asked:
         refuse(conn, actor, "not-found", f"no message {message_id}")
+    _writer(conn, actor, task_id=message_task_id(asked, conversation(conn, asked["conversation_id"])))
     task_reply = bool(comment_refs and (asked.get("refs") or {}).get("questions")
                       and comment_refs.get("task") == (asked.get("refs") or {}).get("task"))
     if (asked.get("refs") or {}).get("questions") and asked["sender_id"] == actor:
@@ -5065,7 +5068,7 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     `wake_once` arms (True) or disarms (False) one wake on a pull request link: the next time its checks
     finish, it gets an approving or change-requesting review, or a release ships it, the task's owner hears
     once, in the task's conversation. It never changes the task's status (`github.py`)."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -5317,7 +5320,7 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
 
 @private_task_write
 def task_unlink(conn, actor, task_id, link_id, mover=None):
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -5358,6 +5361,7 @@ def task_ancestor_party(conn, actor, row):
 
 
 def _task_parent(conn, actor, task_id, parent_id):
+    _writer(conn, actor, task_id=parent_id)
     parent = task(conn, parent_id)
     if not parent:
         refuse(conn, actor, "not-found", f"no task {parent_id} to file this under")
@@ -5746,7 +5750,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     """A comment on a task: one message in the task's conversation, tagged with the task, from
     whoever wrote it. It wakes the bot on the other side of the task when `wake` (a mover, the
     owner or the requester left it); otherwise it is saved for the bot's next turn on the task."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -6154,7 +6158,7 @@ def _refresh_comment_replies(conn, msg):
 
 def _own_comment(conn, actor, task_id, message_id):
     """The live comment `message_id` on this task, when `actor` wrote it; refused otherwise."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     readable = globals().get("task_private_readable")
     if row and row.get("private") and (not readable or not readable(conn, actor, row)):
@@ -6241,7 +6245,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
 
     `relay` is the Strategy Bot passing on the answer a person gave once for several bots (backend/strategy_merge.py),
     never a route: the Strategy Bot records it on a task that is not its own, and the asker wakes to it."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -6687,7 +6691,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
     """
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -7585,7 +7589,7 @@ def _check_task_close(conn, actor, row, note, mover=None, step=None, type=None, 
     """All close authority and state checks, shared by direct closes and descendant preflight."""
     token = CLOSE_PROBE.set(CLOSE_PROBE.get() or check_only)
     try:
-        _writer(conn, actor)
+        _writer(conn, actor, task_id=row["id"])
         _task_close_allowed(conn, actor, row, note, mover, step, type)
         return _task_state(conn, actor, row, status="closed", type=type, step=step)
     finally:
@@ -7694,7 +7698,7 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     is not acceptance. `mover` says whether a person may move any task (the caller knows the environment owner).
     Open descendants close with it. `with_parent` names the ancestor whose finish closes this task; that
     ancestor handles the rest of the tree, and its parties hear about the subtasks in its own notice."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -7855,7 +7859,7 @@ def wait_detail(conn, row, *, children=True):
 def task_ask(conn, actor, task_id, body, park=True):
     """Rule 5's one clarifying question: the owner gets one ask before an answer comes back. `park` False leaves the
     task's status as it is (a question ask ingest sends back, backend/ask_ingest.py)."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -8537,7 +8541,7 @@ def task_run_now(conn, actor, task_id):
     run of its own, as the task it is ("Run now" used to send a chat message
     in the person's name, so the run read as a chat and hid the task's own text). Returns (task, queued):
     queued is False when a run for this task was already waiting, so none is added."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
@@ -8633,12 +8637,15 @@ def note_cancel(conn, actor, note_id, human=False):
     return note(conn, note_id)
 
 
-def notes_waiting(conn, bot, limit=50):
+def notes_waiting(conn, bot, limit=50, *, unheld=False):
     """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
     (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too."""
+    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too.
+    `unheld` selects notes deliverable now; the full pending list and its counts keep quarantined sources."""
+    from . import task_quarantine
+    available = " AND " + task_quarantine.notes_free_sql() if unheld else ""
     return _rows(conn.execute(
-        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} "
+        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL}{available} "
         f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?", ("bot:" + bot, KEEPER, limit)))
 
 
