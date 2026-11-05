@@ -32,6 +32,18 @@ pub struct Item {
     /// rewritten by the chunked transcript later; the quote is checked against this. Stays local.
     pub source: String,
 }
+/// Only writable fields count as local edits; server-added display names do not.
+pub fn item_fields_match(item: &Item, row: &Value) -> bool {
+    row["text"] == item.title
+        && if item.kind == "doc" {
+            row["detail"]["document"].as_str().unwrap_or("") == item.document
+                && row["detail"]["change"].as_str().unwrap_or("") == item.change
+        } else {
+            row["detail"]["owner"].as_str().unwrap_or("") == item.owner
+                && row["detail"]["due"].as_str().unwrap_or("") == item.due
+                && row["detail"]["body"].as_str().unwrap_or("") == item.body
+        }
+}
 /// One turn of the private chat about this recording. `via` leaves room for voice turns.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

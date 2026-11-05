@@ -2408,73 +2408,35 @@ fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_onl
 }
 
 #[test]
-fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
+fn keeping_a_live_share_local_dismisses_review_and_restores_the_same_meeting_later() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let kept = transcript(&store, "Kept here");
-    let older = transcript(&store, "Older Tico");
-    for (id, state) in [(&kept.id, "ended"), (&older.id, "live")] {
-        store
-            .update_context(id, |c| {
-                c.live_id = format!("live-{state}");
-                c.live_destination = "synthetic".into();
-                c.live_state = state.into();
-                Ok(())
-            })
-            .unwrap();
-    }
-    // Finish had already filed the shared transcript for review.
-    store
-        .delivery(
-            &kept.id,
-            &Delivery {
-                destination_id: "synthetic".into(),
-                meeting_id: "pending-fixture".into(),
-                status: "partial".into(),
-                error: String::new(),
-                receipt: json!({"source":"live"}),
-            },
-        )
-        .unwrap();
+    live_delivery(&store, &kept.id, "partial", json!({"source":"live"}));
     let (tico, seen, worker) = server(vec![
-        Some(json!({"ok":true})),
-        Some(json!({"id":"live-ended","state":"ended","discarded":true})),
+        Some(json!({"review_state":"dismissed"})),
         Some(json!({"actor":"human:test"})),
-        Some(json!({"id":"local-fixture"})),
-        Some(json!({"status":404})),
-        Some(json!({"id":"live-live","state":"ended"})),
+        Some(json!({"review_state":"pending"})),
+        Some(json!({"review_state":"live","title":"Kept here"})),
     ]);
     tico.keep_local(&store, &kept.id).unwrap();
     let context = store.context(&kept.id).unwrap();
-    assert!(context.live_discarded && context.live_removed);
-    assert!(store.get(&kept.id).unwrap().deliveries.is_empty());
-    // Saved to Tico later, it is a meeting recorded on this computer.
+    assert!(context.kept_on_mac && !context.live_discarded && !context.live_removed);
+    let delivery = &store.get(&kept.id).unwrap().deliveries[0];
+    assert_eq!(delivery.receipt["dismissed"], true);
     assert_eq!(
         tico.send_to(&store, &kept.id, false, "team").unwrap(),
-        "local-fixture"
+        format!("filed-{}", kept.id)
     );
-    let error = tico.keep_local(&store, &older.id).unwrap_err().to_string();
-    assert!(error.contains("keeps the live transcript"), "{error}");
-    let context = store.context(&older.id).unwrap();
-    assert!(context.live_discarded && !context.live_removed);
-    assert_eq!(context.live_state, "ended");
-    assert!(tico.send_to(&store, &older.id, false, "team").is_err());
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert!(
-        calls[0]
-            .0
-            .contains("/api/v2/meetings/pending-fixture/delete")
-    );
-    assert!(
-        calls[1]
-            .0
-            .contains("/api/v2/live-meetings/live-ended/discard")
-    );
-    assert!(calls[3].0.contains("meetings/import"));
-    assert_eq!(calls[3].1["external_id"], json!(kept.id));
-    assert!(calls[5].0.contains("/live-meetings/live-live/control"));
-    assert_eq!(calls[5].1, json!({"action":"end"}));
+    assert!(calls[0].0.contains("/review "));
+    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
+    assert_eq!(calls[2].1, json!({"action":"restore"}));
+    assert_eq!(calls[3].1, json!({"action":"approve","private":false}));
+    assert!(!calls.iter().any(|call| call.0.contains("/delete")
+        || call.0.contains("/discard")
+        || call.0.contains("/import")));
 }
 
 fn live_delivery(store: &Store, id: &str, status: &str, receipt: Value) {
@@ -2549,7 +2511,7 @@ fn a_retried_save_applies_the_audience_chosen_now_and_sends_a_title_changed_here
 }
 
 #[test]
-fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
+fn this_mac_after_a_save_failed_before_approval_dismisses_review() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let failed = transcript(&store, "Failed save");
@@ -2561,10 +2523,7 @@ fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
         "failed",
         json!({"source":"live","approved":true}),
     );
-    let (tico, seen, worker) = server(vec![
-        Some(json!({"ok":true})),
-        Some(json!({"id":"live","state":"ended","discarded":true})),
-    ]);
+    let (tico, seen, worker) = server(vec![Some(json!({"ok":true}))]);
     tico.keep_local(&store, &failed.id).unwrap();
     let error = tico
         .keep_local(&store, &approved.id)
@@ -2576,11 +2535,15 @@ fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
     assert!(
         calls[0]
             .0
-            .contains(&format!("/meetings/filed-{}/delete", failed.id))
+            .contains(&format!("/meetings/filed-{}/review", failed.id))
     );
-    assert!(calls[1].0.contains("/discard"));
-    assert!(store.get(&failed.id).unwrap().deliveries.is_empty());
-    assert!(store.context(&failed.id).unwrap().live_removed);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
+    assert_eq!(
+        store.get(&failed.id).unwrap().deliveries[0].receipt["dismissed"],
+        true
+    );
+    assert!(store.context(&failed.id).unwrap().kept_on_mac);
 }
 
 #[test]
@@ -3092,7 +3055,7 @@ fn recorder_saves_approval_notes_and_proposal_before_sent_links() {
 }
 
 #[test]
-fn recorder_this_mac_removes_a_finalized_pending_meeting_and_drops_only_queued_links() {
+fn recorder_this_mac_dismisses_a_finalized_pending_meeting_and_drops_only_queued_links() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let record = transcript(&store, "This Mac");
@@ -3130,19 +3093,22 @@ fn recorder_this_mac_removes_a_finalized_pending_meeting_and_drops_only_queued_l
             },
         )
         .unwrap();
-    let (tico, seen, worker) = server(vec![Some(json!({})), Some(json!({}))]);
+    let (tico, seen, worker) = server(vec![Some(json!({}))]);
     tico.keep_local(&store, &record.id).unwrap();
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert!(calls[0].0.contains("/pending/delete"));
-    assert!(calls[1].0.contains("/live-fixture/discard"));
-    assert_eq!(calls[0].1, json!({}));
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].0.contains("/pending/review"));
+    assert_eq!(calls[0].1, json!({"action":"dismiss"}));
     let context = store.context(&record.id).unwrap();
-    assert!(context.kept_on_mac && context.live_removed);
+    assert!(context.kept_on_mac && !context.live_removed && !context.live_discarded);
     assert_eq!(context.items.len(), 2);
     assert_eq!(context.items[0].task_id, "task-sent");
     assert!(context.items[1].proposed_task_id.is_empty());
-    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+    let after = store.get(&record.id).unwrap();
+    assert_eq!(after.chunks[0].text, record.chunks[0].text);
+    assert_eq!(after.deliveries[0].meeting_id, "pending");
+    assert_eq!(after.deliveries[0].receipt["dismissed"], true);
 }
 
 #[test]
@@ -3942,4 +3908,146 @@ fn recorder_save_ignores_display_names_when_detecting_local_edits() {
         store.get(&record.id).unwrap().deliveries[0].receipt["items"]["a"]["version"],
         2
     );
+}
+
+#[test]
+fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
+    for phase in ["b", "links", "add", "edit", "moved"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Later typing");
+        let original = json!({"id":"server-a","section":"task","version":1,"status":"proposed","text":"Original","detail":{"owner":"human:test"}});
+        store
+            .update_context(&record.id, |c| {
+                c.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    kind: "task".into(),
+                    title: if phase == "edit" {
+                        "First edit"
+                    } else {
+                        "Original"
+                    }
+                    .into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                if phase == "b" || phase == "moved" {
+                    c.items.push(crate::workspace::Item {
+                        id: "b".into(),
+                        kind: "task".into(),
+                        title: "B".into(),
+                        ..Default::default()
+                    });
+                }
+                if phase == "links" {
+                    c.items.push(crate::workspace::Item {
+                        id: "link".into(),
+                        kind: "link".into(),
+                        task_id: "linked".into(),
+                        ..Default::default()
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        let mut steps = if phase == "add" {
+            store
+                .delivery(
+                    &record.id,
+                    &Delivery {
+                        destination_id: "synthetic".into(),
+                        meeting_id: "filed".into(),
+                        status: "sent".into(),
+                        error: String::new(),
+                        receipt: json!({"approved":true}),
+                    },
+                )
+                .unwrap();
+            vec![]
+        } else {
+            vec![
+                Some(json!({"actor":"human:test"})),
+                Some(json!({"id":"filed"})),
+                Some(json!({"sections":{"task":[]}})),
+            ]
+        };
+        steps.push(Some(json!({"item":original})));
+        let gate = match phase {
+            "b" | "moved" => {
+                steps.push(Some(json!({"item":{"id":"server-b","version":1,"status":"proposed","text":"B","detail":{}}})));
+                4
+            }
+            "links" => {
+                steps.push(Some(
+                    json!({"results":[{"task_id":"linked","status":"linked","link_id":"link"}]}),
+                ));
+                4
+            }
+            "edit" => {
+                steps.push(Some(json!({"item":{"id":"server-a","section":"task","version":2,"status":"proposed","text":"First edit","detail":{"owner":"human:test"}}})));
+                4
+            }
+            _ => 0,
+        };
+        if phase == "moved" {
+            steps.push(Some(
+                json!({"status":409,"error":{"code":"version_conflict"}}),
+            ));
+            steps.push(Some(json!({"sections":{"task":[{"id":"server-a","section":"task","version":2,"status":"pushed","text":"Someone else's task","detail":{"owner":"human:other"},"updated_by":"human:other","result_ref":"existing"}]}})));
+        } else {
+            steps.push(Some(json!({"item":{"id":"server-a","section":"task","version":if phase == "edit" {3} else {2},"status":"proposed","text":"Latest title","detail":{"owner":"human:other","due":"2026-12-02T12:00:00Z","body":"Latest details"}}})));
+        }
+        let (release, held) = std::sync::mpsc::channel();
+        let (tico, seen, worker) = server_gated(steps, Some((gate, held)));
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| {
+                if phase == "add" {
+                    tico.upload_pending_item(&store, &record.id, "a")
+                        .map(|_| String::new())
+                } else {
+                    tico.send(&store, &record.id, false)
+                }
+            });
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() <= gate {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Request never started: {phase}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |c| {
+                    let item = &mut c.items[0];
+                    item.title = "Latest title".into();
+                    item.owner = "human:other".into();
+                    item.due = "2026-12-02T12:00:00Z".into();
+                    item.body = "Latest details".into();
+                    Ok(())
+                })
+                .unwrap();
+            release.send(()).unwrap();
+            saving.join().unwrap().unwrap();
+        });
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let edit = calls
+            .iter()
+            .find(|call| call.1["text"] == "Latest title")
+            .unwrap();
+        assert!(edit.0.contains("/items/server-a "));
+        assert_eq!(edit.1["version"], if phase == "edit" { 2 } else { 1 });
+        assert_eq!(edit.1["detail"]["body"], "Latest details");
+        let context = store.context(&record.id).unwrap();
+        if phase == "moved" {
+            let closed = context.items[0].closed_draft.as_ref().unwrap();
+            assert_eq!(closed["text"], "Latest title");
+            assert_eq!(closed["detail"]["due"], "2026-12-02T12:00:00Z");
+            assert_eq!(closed["item"]["result_ref"], "existing");
+        } else {
+            let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+            assert_eq!(receipt["items"]["a"]["text"], "Latest title");
+            assert!(context.items[0].closed_draft.is_none());
+        }
+    }
 }

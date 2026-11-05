@@ -894,102 +894,32 @@ impl Tico {
                         server_row = Some(reply["item"].clone());
                     }
                 }
-                // An upload can wait while the person keeps typing. Reconcile the current store fields.
-                let latest = store
-                    .context(id)?
-                    .items
-                    .into_iter()
-                    .find(|local| local.id == item.id)
-                    .unwrap_or_else(|| item.clone());
-                let item = &latest;
-                let payload = self.item_payload(item);
-                if item.task_id.is_empty() {
-                    let expected = if !upload.is_null() {
-                        &upload
-                    } else {
-                        &baseline
-                    };
-                    let fields = if section == "doc" {
-                        ["document", "change", "why"]
-                    } else {
-                        ["owner", "due", "body"]
-                    };
-                    // Responses also include display names; only the person's writable fields are edits.
-                    let differs = |saved: &Value| {
-                        saved["text"] != payload["text"]
-                            || fields.iter().any(|key| {
-                                saved["detail"][key].as_str().unwrap_or("")
-                                    != payload["detail"][key].as_str().unwrap_or("")
-                            })
-                    };
-                    let changed = if !upload.is_null() {
-                        differs(&upload)
-                    } else {
-                        !baseline["text"].is_null() && differs(&baseline)
-                    };
-                    if changed {
-                        let version = expected["version"].as_u64().unwrap_or(1);
-                        let mut detail = payload["detail"].clone();
-                        if section == "task" {
-                            detail["due"] = json!(item.due);
-                            detail["body"] = json!(item.body);
-                        }
-                        let edit =
-                            json!({"version":version,"text":payload["text"],"detail":detail});
-                        let moved = server_row.as_ref().is_some_and(|row| {
-                            row["status"] != "proposed"
-                                || row["version"].as_u64().unwrap_or(1) != version
-                        });
-                        let edited = if moved {
-                            None
-                        } else {
-                            match self.call_meeting(
-                                &format!("{path}/{item_id}"),
-                                Some(&edit),
-                                &format!("recorder:{id}:{}:edit:{}", item.id, hash(&edit)),
-                            ) {
-                                Ok(reply) => Some(reply["item"].clone()),
-                                Err(error)
-                                    if format!("{error:#}").contains("(version_conflict)")
-                                        || format!("{error:#}").contains("(status)") =>
-                                {
-                                    None
-                                }
-                                Err(error) => return Err(error),
-                            }
-                        };
-                        if let Some(row) = edited {
-                            item_version = row["version"].as_u64().unwrap_or(version + 1);
-                            server_row = Some(row);
-                        } else {
-                            // Fetch after a raced edit so the closed card names the current actor and state.
-                            let current = self.call_meeting(&path, None, "")?;
-                            let row = current["sections"][section]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .find(|row| row["id"] == item_id)
-                                .cloned()
-                                .or(server_row.clone())
-                                .context("This item was removed from the meeting")?;
-                            store.update_context(id, |c| {
-                                if let Some(local) = c.items.iter_mut().find(|local| local.id == item.id) {
-                                    local.closed_draft = Some(json!({"item":row,"text":item.title,"detail":payload["detail"]}));
-                                }
-                                Ok(())
-                            })?;
-                            server_row = Some(row);
-                        }
-                    }
-                }
-                delivery.receipt["items"][&item.id] = if item.task_id.is_empty() {
-                    json!({"id":item_id,"status":"proposed","version":item_version})
+                let expected = if !upload.is_null() {
+                    &upload
                 } else {
-                    json!({"id":item_id,"status":"pushed","result_ref":item.task_id,"version":item_version})
+                    &baseline
                 };
-                if let Some(row) = server_row {
-                    delivery.receipt["items"][&item.id] = row;
-                }
+                let mut row = server_row.unwrap_or_else(|| {
+                    let mut row = payload.clone();
+                    row["id"] = json!(item_id);
+                    row["version"] = json!(item_version);
+                    row["status"] = json!(if item.task_id.is_empty() {
+                        "proposed"
+                    } else {
+                        "pushed"
+                    });
+                    row
+                });
+                self.reconcile_item(
+                    store,
+                    id,
+                    &delivery.meeting_id,
+                    &item.id,
+                    expected,
+                    &mut row,
+                )?;
+                item_version = row["version"].as_u64().unwrap_or(item_version);
+                delivery.receipt["items"][&item.id] = row;
                 store.delivery(id, &delivery)?;
                 if push_items && item.task_id.is_empty() {
                     let reply = self.call_meeting(
@@ -1007,6 +937,8 @@ impl Tico {
             }
             // Links need an approved meeting and follow every durable item receipt.
             self.save_links(store, id, &context, &mut delivery)?;
+            // Revisit every row after the last upload or link batch: earlier items remain editable.
+            self.reconcile_items(store, id, &mut delivery)?;
             delivery.status = "sent".into();
             delivery.receipt["sent_at"] = json!(chrono::Utc::now().to_rfc3339());
             store.delivery(id, &delivery)?;
@@ -1044,9 +976,141 @@ impl Tico {
             })
             .context("Save the meeting first")?;
         if delivery.receipt["items"][item_id]["id"].is_null() {
-            self.upload_item(store, id, &mut delivery, item_id, &self.item_payload(item))?;
+            let expected = delivery.receipt["uploads"][item_id]
+                .get("body")
+                .cloned()
+                .unwrap_or_else(|| self.item_payload(item));
+            let mut row =
+                self.upload_item(store, id, &mut delivery, item_id, &expected)?["item"].clone();
+            self.reconcile_item(
+                store,
+                id,
+                &delivery.meeting_id,
+                item_id,
+                &expected,
+                &mut row,
+            )?;
+            delivery.receipt["items"][item_id] = row;
+            store.delivery(id, &delivery)?;
         }
+        self.reconcile_items(store, id, &mut delivery)?;
         Ok(())
+    }
+
+    fn reconcile_items(&self, store: &Store, id: &str, delivery: &mut Delivery) -> Result<()> {
+        loop {
+            let mut edited = false;
+            for item in store
+                .context(id)?
+                .items
+                .iter()
+                .filter(|item| item.kind != "link")
+            {
+                let expected = delivery.receipt["items"][&item.id].clone();
+                if expected["id"].as_str().is_none() {
+                    continue;
+                }
+                let mut row = expected.clone();
+                edited |= self.reconcile_item(
+                    store,
+                    id,
+                    &delivery.meeting_id,
+                    &item.id,
+                    &expected,
+                    &mut row,
+                )?;
+                delivery.receipt["items"][&item.id] = row;
+                store.delivery(id, delivery)?;
+            }
+            if !edited {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Compare the current local fields with the version last acknowledged, keeping conflicts local.
+    fn reconcile_item(
+        &self,
+        store: &Store,
+        id: &str,
+        meeting: &str,
+        item_id: &str,
+        expected: &Value,
+        row: &mut Value,
+    ) -> Result<bool> {
+        let Some(item) = store
+            .context(id)?
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id)
+        else {
+            return Ok(false);
+        };
+        let payload = self.item_payload(&item);
+        if item.closed_draft.is_some() {
+            store.update_context(id, |c| {
+                if let Some(local) = c.items.iter_mut().find(|local| local.id == item_id) {
+                    let detail = self.item_payload(local)["detail"].clone();
+                    if let Some(closed) = local.closed_draft.as_mut() {
+                        closed["text"] = json!(local.title);
+                        closed["detail"] = detail;
+                    }
+                }
+                Ok(())
+            })?;
+            return Ok(false);
+        }
+        if expected["text"].is_null() || crate::workspace::item_fields_match(&item, expected) {
+            return Ok(false);
+        }
+        let version = expected["version"].as_u64().unwrap_or(1);
+        let path = format!("/meetings/{meeting}/items");
+        let server_id = row["id"]
+            .as_str()
+            .context("Missing server item ID")?
+            .to_owned();
+        let mut detail = payload["detail"].clone();
+        if item.kind != "doc" {
+            detail["due"] = json!(item.due);
+            detail["body"] = json!(item.body);
+        }
+        let edit = json!({"version":version,"text":item.title,"detail":detail});
+        let moved = row["status"] != "proposed" || row["version"].as_u64().unwrap_or(1) != version;
+        if !moved && item.task_id.is_empty() {
+            match self.call_meeting(
+                &format!("{path}/{server_id}"),
+                Some(&edit),
+                &format!("recorder:{id}:{item_id}:edit:{}", hash(&edit)),
+            ) {
+                Ok(reply) => {
+                    *row = reply["item"].clone();
+                    return Ok(true);
+                }
+                Err(error)
+                    if format!("{error:#}").contains("(version_conflict)")
+                        || format!("{error:#}").contains("(status)") => {}
+                Err(error) => return Err(error),
+            }
+        }
+        // Fetch after a raced edit so Copy/Close names the current actor and state.
+        let current = self.call_meeting(&path, None, "")?;
+        if let Some(current) = current["sections"]
+            .as_object()
+            .into_iter()
+            .flat_map(|sections| sections.values())
+            .filter_map(Value::as_array)
+            .flatten()
+            .find(|current| current["id"] == server_id)
+        {
+            *row = current.clone();
+        }
+        store.update_context(id, |c| {
+            if let Some(local) = c.items.iter_mut().find(|local| local.id == item_id) {
+                local.closed_draft = Some(json!({"item":row,"text":local.title,"detail":self.item_payload(local)["detail"]}));
+            }
+            Ok(())
+        })?;
+        Ok(false)
     }
 
     fn item_payload(&self, item: &crate::workspace::Item) -> Value {

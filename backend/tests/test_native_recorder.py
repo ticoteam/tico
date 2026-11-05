@@ -291,13 +291,14 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
                                 text=True, capture_output=True, timeout=60)
         assert result.returncode == 0, result.stderr
         out = json.loads(result.stdout)
-        assert out['synthetic'] and out['local']['kept_on_mac'] and not out['local']['items']
+        assert out['synthetic'] and out['local']['kept_on_mac'] and len(out['local']['items']) == 1
         assert [len(ids) for ids, _ in batches] == [20, 20, 20, 5]
         assert batches[1] == batches[2]
         linked = get(api, f"meetings/{out['meeting']}/tasks?limit=50")['tasks']
         assert {row['task_id'] for row in linked} == {*targets, out['created']}
         for target in (targets[0], targets[-1], out['created']):
-            assert get(api, f'tasks/{target}/meetings')['meetings'][0]['meeting_id'] == out['meeting']
+            assert out['meeting'] in {row['meeting_id'] for row in get(api, f'tasks/{target}/meetings')['meetings']}
+        assert get(api, f"meetings/{out['pending']}")['review_state'] == 'dismissed'
         retry_uploads = [row for row in uploads if row[0]['text'] == 'Original retry title']
         assert len(retry_uploads) == 2 and retry_uploads[0] == retry_uploads[1]
         retry = get(api, f"meetings/{out['retry_meeting']}/items")['sections']['task'][0]
@@ -307,8 +308,12 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
         with api.app.state.store.read() as c:
             assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 46
             assert c.execute('SELECT count(*) FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id '
-                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 2
-            assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 1
+                             'WHERE mc.deleted_at IS NULL').fetchone()[0] == 3
+            assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 0
+            assert c.execute('SELECT review_state FROM meetings WHERE id=?', (out['pending'],)).fetchone()[0] == 'dismissed'
+            for table in ('live_meeting_chunks', 'live_meeting_chunk_versions', 'live_meeting_chat', 'live_meeting_events'):
+                assert c.execute(f'SELECT count(*) FROM {table} WHERE meeting_id=?', (out['live'],)).fetchone()[0] > 0
+            assert c.execute('SELECT task_id FROM meeting_task_links WHERE meeting_id=?', (out['pending'],)).fetchone()[0] == out['created']
             proposal = c.execute("SELECT * FROM meeting_items WHERE proposed_task_id IS NOT NULL").fetchone()
             assert proposal['status'] == 'pushed' and proposal['result_ref'] == targets[0]
             assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == 0

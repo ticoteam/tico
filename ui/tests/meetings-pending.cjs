@@ -8,7 +8,7 @@ const path = require('node:path');
 const code = fs.readFileSync(path.join(__dirname, '../app/meetings.js'), 'utf8');
 const item = {version:1, id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
 const streams = new Set(), sessions = new Map(), errors = [];
-let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0, lastSend;
+let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0, linked = 0, lastSend;
 const emit = (topic, data) => { for (const res of streams) res.write(`event: ${topic}\ndata: ${JSON.stringify(data)}\n\n`); };
 const actors = () => [...new Set(sessions.values())].map(id => ({actor:'human:' + id, name:id === 'ana' ? 'Ana' : 'Sam'}));
 const server = http.createServer(async (req, res) => {
@@ -47,19 +47,20 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/api/meetings/m1/items' && req.method === 'GET') return answer({id:'m1',can_send:true,audience:null,sections:{task:[item],doc:[],feature:[]}});
   if (url.pathname.startsWith('/api/meetings/m1/items/i1') && req.method === 'POST') {
-    const pushing = url.pathname.endsWith('/push');
-    if (!pushing && req.headers['x-viewer'] === 'ana') {
+    const pushing = url.pathname.endsWith('/push'), linking = url.pathname.endsWith('/link');
+    if (!pushing && !linking && req.headers['x-viewer'] === 'ana') {
       writes++; inflight++; maxInflight = Math.max(maxInflight, inflight);
       if (hold) { const gate=hold; hold=null; await gate; }
       inflight--;
       if (fail) { fail=false; return answer({error:'Offline'},503); }
     }
-    if(body.version !== item.version) return answer({error:{detail:'This item changed',item:structuredClone(item)}},409);
+    if(!linking && body.version !== item.version) return answer({error:{detail:'This item changed',item:structuredClone(item)}},409);
     item.version++;
     if (body.text !== undefined) item.text=body.text;
     if (body.detail) Object.assign(item.detail, body.detail);
     if (body.status) item.status=body.status;
     if (pushing && item.status === 'proposed') { item.status='pushed'; sent++; lastSend=structuredClone(body); }
+    if (linking) { assert.equal(item.proposed_task_id, 'existing-task'); item.status='pushed'; item.result_ref=item.proposed_task_id; linked++; }
     item.updated_by='human:' + req.headers['x-viewer'];
     answer({item,pushed:pushing}); emit('meeting_items',{meeting_id:'m1',kind:'items'}); return;
   }
@@ -174,6 +175,21 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
       await a.evaluate(()=>meetItemsLoad(MEET,'m1'));
       assert.equal(await a.locator('[data-pending="i1"]').count(),0,'acknowledged drafts stay closed');
     }
+    // A readable Recorder proposal accepts the existing task without creating another one.
+    item.status='proposed'; item.proposed_task_id='existing-task'; item.detail.owner=''; item.version++;
+    emit('meeting_items',{meeting_id:'m1',kind:'items'});
+    const proposal=a.locator('[data-pending="i1"]');
+    const link=proposal.getByRole('button',{name:'Link',exact:true});
+    await link.waitFor(); assert.equal(await link.isEnabled(),true);
+    assert.equal(await proposal.getByRole('button',{name:/^Send/}).count(),0);
+    const before=sent;
+    await link.click(); await proposal.waitFor({state:'detached'});
+    assert.equal(linked,1); assert.equal(sent,before); assert.equal(item.result_ref,'existing-task');
+    // Redaction removes the pointer, so a later render offers ordinary task creation.
+    item.status='proposed'; item.proposed_task_id=null; item.detail.owner='human:ben'; item.version++;
+    emit('meeting_items',{meeting_id:'m1',kind:'items'});
+    await proposal.getByRole('button',{name:'Send to Sam',exact:true}).waitFor();
+    assert.equal(await proposal.getByRole('button',{name:'Link',exact:true}).count(),0);
     emit('meeting_items',{meeting_id:'m1',gone:true});
     await b.waitForFunction(()=>MEET.open===false);
     assert.deepEqual(errors,[]);

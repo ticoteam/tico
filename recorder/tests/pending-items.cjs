@@ -181,11 +181,17 @@ const path = require('node:path');
       await page.locator('[data-shared-panel]').waitFor();
       await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
       assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
-      await page.evaluate(()=>window.pendingFixture.a.shared.sections.task=[window.pendingFixture.adopted]);
+      await page.evaluate(()=>{
+        const f=window.pendingFixture;
+        f.a.shared.sections.task=[f.adopted];
+        f.a.linked={tasks:[{task_id:'existing-task',title:'Original server title',number:42,status:'open'}]};
+      });
+      await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
+      assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
       await closed.getByRole('button',{name:close,exact:true}).click();
       await closed.locator('pre').waitFor({state:'detached'});
       if(close==='Copy') assert.match(await page.evaluate(()=>window.copiedText),/My native unsaved title/);
-      await page.evaluate(()=>window.pendingFixture.a.shared_scope+='-refresh');
+      await page.evaluate(()=>{window.pendingFixture.a.shared_scope+='-refresh';window.pendingFixture.a.linked=null;});
       await page.getByText('Original server title · Sent',{exact:false}).waitFor();
       assert.equal(await page.locator('[data-shared-row] pre').count(),0);
     }

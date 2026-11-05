@@ -1843,6 +1843,7 @@ impl Recorder {
         if org.is_empty()
             || self.choosing_org
             || self.sending.is_some()
+            || self.busy
             || owner.is_empty()
             || item.title.trim().is_empty()
             || !item.task_id.is_empty()
@@ -1867,10 +1868,10 @@ impl Recorder {
         self.item_error = None;
         // A task from a private meeting is between me and whoever gets it.
         let private = self.live["visibility"] != "team";
-        self.sending = Some(item_id.to_owned());
+        let sending_item = item_id.to_owned();
         let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
-        self.job_for("task", Some(id.clone()), move || {
+        if self.job_for("task", Some(id.clone()), move || {
             Tico::saved(&config, &destination)?.send_task_confirmed(
                 &store,
                 &id,
@@ -1881,7 +1882,9 @@ impl Recorder {
                 paused_confirmed,
             )?;
             Ok(json!({"message":format!("Sent to {name}")}))
-        });
+        }) {
+            self.sending = Some(sending_item);
+        }
     }
     /// The Tico that action items go to, when several are connected.
     pub fn choose_org(&mut self, destination: &str) {
@@ -2268,7 +2271,7 @@ impl Recorder {
         }
         self.send_meeting_to(id, destination, paused_confirmed, audience);
     }
-    /// Stops the recording and keeps it on this computer; a live share ends and leaves Tico.
+    /// Stops the recording and dismisses pending review without removing shared content.
     pub fn keep_local(&mut self, id: &str) {
         self.screen.stop_meeting(id);
         if self.active.as_ref().is_some_and(|(active, _)| active == id) {
@@ -3084,7 +3087,7 @@ impl Recorder {
             // The Finish sheet: the org it was shared live to (its default), and how.
             "live_org": if live && !self.context.live_removed { Some(router.clone()) } else { None },
             "team": team,
-            "kept_local": self.context.live_removed,
+            "kept_local": self.context.kept_on_mac,
             "live": if live { Some(match (ended, team) {
                 (true, _) => "Ended in Tico",
                 (false, true) => "Team can join",
@@ -3152,17 +3155,33 @@ impl Recorder {
             });
         }
         let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
-        let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
+        let can_send =
+            mode == "ready" && !self.busy && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
+        let unsaved = |item: &Item| {
+            self.current
+                .as_ref()
+                .and_then(|record| {
+                    record
+                        .deliveries
+                        .iter()
+                        .find(|delivery| delivery.destination_id == self.router())
+                })
+                .map(|delivery| &delivery.receipt["items"][&item.id])
+                .is_some_and(|row| {
+                    !row["text"].is_null()
+                        && !tico_recorder_native::workspace::item_fields_match(item, row)
+                })
+        };
         let order = items
             .iter()
             .filter(|item| item.task_id.is_empty())
             .chain(items.iter().filter(|item| !item.task_id.is_empty()));
         let rows: Vec<Value> = order
-            .filter(|item| item.task_id.is_empty() || self.link_tasks["scope"] != self.link_scope()
+            .filter(|item| item.closed_draft.is_some() || unsaved(item) || item.task_id.is_empty() || self.link_tasks["scope"] != self.link_scope()
                 || !self.link_tasks["linked"]["tasks"].as_array().into_iter().flatten()
                     .any(|remote| remote["task_id"] == item.task_id))
-            .filter(|item| item.kind != "link" || self.linked_task(&item.task_id).is_some())
+            .filter(|item| item.closed_draft.is_some() || unsaved(item) || item.kind != "link" || self.linked_task(&item.task_id).is_some())
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
                 let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
@@ -3184,10 +3203,11 @@ impl Recorder {
                     .unwrap_or_default();
                 json!({
                     "id": item.id,
-                    "server_item_id": self.current.as_ref().and_then(|r| r.deliveries.iter()
+                    "unsaved": unsaved(item),
+                    "server_item_id": (!unsaved(item)).then(|| self.current.as_ref().and_then(|r| r.deliveries.iter()
                         .find(|d| d.destination_id == self.router()))
-                        .map(|d| d.receipt["items"][&item.id]["id"].clone()),
-                    "title": linked.map(|task| task["title"].clone()).unwrap_or(json!(item.title)),
+                        .map(|d| d.receipt["items"][&item.id]["id"].clone())).flatten(),
+                    "title": if unsaved(item) { json!(item.title) } else { linked.map(|task| task["title"].clone()).unwrap_or(json!(item.title)) },
                     "number": linked.map(|task| task["number"].clone()),
                     "status": linked.map(|task| task["status"].clone()),
                     "proposed_task_id": proposal.map(|task| task["id"].clone()),
@@ -3699,6 +3719,73 @@ mod saved_panel_tests {
         app.tx.send(reply).unwrap();
         app.tick();
         assert_eq!(app.saved_items, json!({"gone":true}));
+    }
+    #[test]
+    fn create_during_add_upload_never_sets_sending_and_can_start_after_completion() {
+        let (_dir, mut app) = fixture();
+        app.context.items.push(Item {
+            id: "added".into(),
+            kind: "task".into(),
+            title: "One task".into(),
+            owner: "human:ana".into(),
+            ..Default::default()
+        });
+        app.save_context();
+        let (release, held) = mpsc::channel();
+        assert!(app.job("add-item", move || {
+            held.recv()?;
+            Ok(json!({}))
+        }));
+        app.send_item("added", "human:ana");
+        assert!(app.sending.is_none());
+        assert_eq!(app.actions_view("one")["items"][0]["can_send"], false);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while app.busy {
+            assert!(Instant::now() < deadline);
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.actions_view("one")["items"][0]["can_send"], true);
+        assert!(app.sending.is_none());
+        // The next Create can start a job and its reply clears sending normally.
+        assert!(app.job("task", || Ok(json!({}))));
+        app.sending = Some("added".into());
+        while app.busy {
+            assert!(Instant::now() < deadline);
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.sending.is_none());
+    }
+    #[test]
+    fn linked_refresh_preserves_closed_cards_and_any_unsaved_local_fields() {
+        let (_dir, mut app) = fixture();
+        let server = json!({"id":"server-a","section":"task","status":"pushed","version":2,"text":"Server title","result_ref":"existing","detail":{"owner":"human:ana"}});
+        app.context.items.push(Item {
+            id: "a".into(),
+            kind: "task".into(),
+            title: "My unsaved title".into(),
+            owner: "human:ana".into(),
+            task_id: "existing".into(),
+            closed_draft: Some(
+                json!({"item":server,"text":"My unsaved title","detail":{"body":"My details"}}),
+            ),
+            ..Default::default()
+        });
+        app.save_context();
+        app.current.as_mut().unwrap().deliveries[0].receipt = json!({"items":{"a":server}});
+        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"existing","title":"Server title"}],"linked":{"tasks":[{"task_id":"existing","title":"Server title"}]}});
+        app.link_tasks_at = Instant::now();
+        let rows = app.actions_view("one")["items"].clone();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["closed_draft"]["text"], "My unsaved title");
+        app.context.items[0].closed_draft = None;
+        let rows = app.actions_view("one")["items"].clone();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["unsaved"], true);
+        assert_eq!(rows[0]["title"], "My unsaved title");
+        assert!(rows[0]["server_item_id"].is_null());
     }
     #[test]
     fn saved_panel_presence_deadline_is_independent_of_continuous_edits() {

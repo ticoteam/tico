@@ -428,7 +428,7 @@
       if (!rows.has(it.id) || it.version >= rows.get(it.id).version) rows.set(it.id, it);
     }
     const linkedIds = new Set((a.linked?.tasks || []).map(it => it.task_id));
-    const local = (a.items || []).filter(it => !it.closed_draft && !rows.has(it.server_item_id) && !linkedIds.has(it.task_id));
+    const local = (a.items || []).filter(it => !it.closed_draft && !rows.has(it.server_item_id) && (it.unsaved || !linkedIds.has(it.task_id)));
     const extras = `<div data-shared-row="local-tasks"><ul class="items">${local.map(it => it.sent ? task(it) : proposal(it)).join('')}</ul></div>` +
       `<div data-shared-row="linked-tasks"><ul class="items tasks">${(a.linked?.tasks || []).map(it => task({...it,id:`server:${it.task_id}`,kind:'link',task_url:`${a.linked_browser}/#/task/${it.task_id}`})).join('')}</ul>${a.linked?.next_cursor ? '<button class="link" data-act="more-task-links">More</button>' : ''}</div>` +
       `<div data-shared-row="add-task">${S.ui.adding ? '<div class="add-item"><input data-model="addItem" data-enter="add-item" data-blur="add-close" placeholder="Add a task" aria-label="Add a task"></div>' : ''}${a.skipped_links ? `<div class="notice inline">${a.skipped_links} links skipped</div>` : ''}</div>`;

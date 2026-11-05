@@ -92,20 +92,57 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
     let local = recording(store, "This Mac synthetic")?;
     tico.ensure_live(store, &local, false)
         .context("Share This Mac fixture")?;
+    let live = store.context(&local)?.live_id;
+    tico.call(
+        &format!("/api/v2/live-meetings/{live}/chat"),
+        Some(&json!({"text":"Keep this chat","at_ms":0})),
+        "rows:chat",
+    )?;
     tico.finish_live(store, &local)
         .context("Finalize This Mac fixture")?;
+    let pending = store.get(&local)?.deliveries[0].meeting_id.clone();
+    tico.call(
+        &format!("/api/v2/meetings/{pending}/items"),
+        Some(
+            &json!({"section":"task","text":"Already sent","status":"pushed","result_ref":created}),
+        ),
+        "rows:sent-link",
+    )?;
+    store.update_context(&local, |c| {
+        c.items.push(Item {
+            id: "sent".into(),
+            kind: "task".into(),
+            title: "Already sent".into(),
+            task_id: created.clone(),
+            ..Default::default()
+        });
+        Ok(())
+    })?;
     tico.queue_links(store, &local, &tasks[..1])?;
     tico.keep_local(store, &local)
         .context("Keep finalized fixture on This Mac")?;
     ensure!(
-        store.context(&local)?.items.is_empty(),
+        store.context(&local)?.items.len() == 1
+            && store.context(&local)?.items[0].task_id == created,
         "This Mac drops queued links"
     );
     ensure!(
-        store.get(&local)?.deliveries.is_empty(),
-        "This Mac never files"
+        store.get(&local)?.deliveries[0].receipt["dismissed"] == true,
+        "This Mac retains its dismissed receipt"
     );
 
+    ensure!(
+        store
+            .get(&local)?
+            .chunks
+            .iter()
+            .any(|chunk| chunk.text == "I will send the proposal"),
+        "This Mac retains the local transcript"
+    );
+    ensure!(
+        !store.get(&local)?.chunks.is_empty(),
+        "This Mac retains the local recording"
+    );
     let retry = recording(store, "Item replay synthetic")?;
     store.update_context(&retry, |c| {
         c.items.push(Item {
@@ -132,7 +169,7 @@ pub fn run(store: &Store, base: &str) -> Result<()> {
     let retry_meeting = tico.send_to(&Store::open(store.root())?, &retry, false, "team")?;
     println!(
         "{}",
-        json!({"synthetic":true,"meeting":meeting,"created":created,"retry_meeting":retry_meeting,"local":store.context(&local)?})
+        json!({"synthetic":true,"meeting":meeting,"created":created,"retry_meeting":retry_meeting,"local":store.context(&local)?,"local_id":local,"pending":pending,"live":live})
     );
     Ok(())
 }
