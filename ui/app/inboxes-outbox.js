@@ -107,7 +107,7 @@ async function lettersOutDetail(host, id, ctx) {
   if (!ctx.live()) return;
   const [status, statusText] = lettersOutStatus(config), grants = grantData.grants || [];
   const rows = new Map((activity.items || []).map(row => [row.id, row])); let next = activity.next_before;
-  let refreshing = null, epoch = 0, revision = 0;
+  let refreshing = null, refreshDirty = false, epoch = 0, revision = 0;
   const rowRevisions = new Map();
   host.innerHTML = inboxesHead(host, {name: 'Letters out', status, statusText, sub: 'Tico Gateway · At cost + 25%',
     actions: '<a class="ghost" href="#/settings/inboxes/settings/letters-out">Settings</a>'}) +
@@ -131,16 +131,20 @@ async function lettersOutDetail(host, id, ctx) {
     }
   };
   const invalidate = () => {
-    if (refreshing) return;
-    const pending = new Map(); refreshing = pending; epoch++;
-    // Hide revoked content while the one bounded invalidation read is in flight.
+    epoch++;
+    // Every invalidation hides revoked content, including while an older read is in flight.
     rows.clear(); next = null; paint();
+    if (refreshing) { refreshDirty = true; return; }
+    const pending = new Map(); refreshing = pending; refreshDirty = false;
     get('/v2/letters?limit=25', {fresh: true}).then(page => {
-      if (!ctx.live()) return;
+      if (!ctx.live() || refreshDirty) return;
       rows.clear(); for (const row of page.items || []) rows.set(row.id, row);
       for (const event of pending.values()) apply(event);
       next = page.next_before; paint();
-    }).catch(e => { if (ctx.live()) toast(e.message, true); }).finally(() => { refreshing = null; });
+    }).catch(e => { if (ctx.live() && !refreshDirty) toast(e.message, true); }).finally(() => {
+      const again = refreshDirty; refreshing = null; refreshDirty = false;
+      if (again && ctx.live()) invalidate();
+    });
   };
   host.querySelector('[data-lo-activity]').onclick = async event => {
     const button = event.target.closest('[data-lo-cancel]'); if (!button) return; button.disabled = true;
