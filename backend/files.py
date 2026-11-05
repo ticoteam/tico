@@ -544,7 +544,9 @@ class Files:
             legacy = c.execute("SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
                                "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
                                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                               "ORDER BY b.created_at DESC LIMIT 1", (task_id, item["name"], item["id"])).fetchone()
+                               "ORDER BY b.created_at DESC", (task_id, item["name"], item["id"])).fetchall()
+            legacy = next((b for b in legacy if not page_ref_denials(c, self.auth, who, b["id"])
+                           and privacy.blob_readable(c, privacy.actor(who), b["id"])), None)
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
             c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
                       "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,?,?)",

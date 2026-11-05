@@ -294,3 +294,27 @@ def test_migration_links_name_only_history_before_page_content_is_purged(api):
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         result = get(api, "tasks/" + tid, token="cara-test")
         assert "weekly.html" not in json.dumps(result) and fid not in json.dumps(result)
+
+
+def test_same_name_upload_never_adopts_deleted_page_bytes_retained_by_a_meeting(api):
+    _, attempt = turn(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Retained review", "body": "Review", "private": False})["id"]
+    fid = page(api, attempt, task=tid).json()["page"]["file_id"]
+    with api.app.state.store.transaction() as c:
+        bid = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
+        c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (tid, bid))
+        meeting = H.new_id()
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                  (meeting, "Retained source", "human:ben", '{}', H.now(), H.now()))
+        c.execute("INSERT INTO media_assets(meeting_id,blob_id,kind) VALUES(?,?,'attachment')", (meeting, bid))
+    edit(api, fid, {"people": ["ben"]})
+    assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM blobs WHERE id=?", (bid,)).fetchone()
+        assert not c.execute("SELECT 1 FROM bot_file_versions WHERE blob_id=?", (bid,)).fetchone()
+    made = post(api, f"tasks/{tid}/files", {"name": "weekly.html", "text": "Independent replacement"}, token="cara-test")
+    assert made["version"] == 1 and made["file_id"] not in (fid, bid)
+    assert fid not in json.dumps(made) and bid not in json.dumps(made)
+    with api.app.state.store.read() as c:
+        versions = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=?", (made["file_id"],)).fetchall()
+        assert len(versions) == 1 and versions[0][0] != bid
