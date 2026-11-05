@@ -421,7 +421,11 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert((await searchRow()).box <= 34, 'emptied, it is an icon again');
     // The filter bar scrolls sideways on a narrow phone: its edge fades while more is to the right, not at the end.
     await page.setViewportSize({width: 330, height: 844});
-    await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'));
+    await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'), null, {timeout: t(5000)}).catch(async e => {
+      const bar = await page.locator('#task-bar').evaluate(b => ({cls: b.className, sw: b.scrollWidth, cw: b.clientWidth, sl: b.scrollLeft,
+        kids: [...b.children].map(k => `${k.className || k.id}:${k.hidden ? 'hidden' : Math.round(k.getBoundingClientRect().width)}`), view: TASKS_ST.view}));
+      throw new Error('narrow phone filter bar never fades: ' + JSON.stringify(bar), {cause: e});
+    });
     await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = bar.scrollWidth; });
     await page.waitForFunction(() => !document.querySelector('#task-bar').classList.contains('more'));
     await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = 0; });
