@@ -3159,7 +3159,7 @@ class GrowthSettingsUpdate(Contract):
     margin_pct: float | None = Field(default=None, ge=0, le=100)
 
 
-# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+# Settings > Inboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
 MailboxLevel = Literal["read", "read_write"]
 
 

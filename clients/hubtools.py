@@ -6901,7 +6901,7 @@ def inbound_query(args):
     return values
 
 
-@tool('hub_inbound_inboxes','The company Email & Phone inboxes, available to all company agents. Follow next with after for more.',
+@tool('hub_inbound_inboxes','The company Tico addresses and numbers, available to all company agents. Follow next with after for more.',
       {'after':_s('Next inbox cursor'),'limit':{'type':'integer','minimum':1,'maximum':100}})
 def inbound_inboxes(api,args):
     return api.get('inbound/inboxes',**{k:args[k] for k in ('after','limit') if args.get(k) is not None})
@@ -6963,7 +6963,7 @@ def inbound_wait(api,args):
 
 
 # ----------------------------------------------------------------------------- connections (backend/connections.py)
-@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
       'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
       'it, its bots and where to configure it. Follow next with cursor.',
       {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
