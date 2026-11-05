@@ -5,8 +5,9 @@ import time
 
 import pytest
 
-from backend import cloud_machines as CM, execution, health, start_places, thread_bot_status, usage_limits, views
-from backend.store import H
+from backend import (check_models, cloud_machines as CM, execution, health, providers, start_places,
+                     thread_bot_status, usage_limits, views)
+from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
 from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
 from backend.tests.test_start_places import memory
@@ -63,6 +64,36 @@ def test_health_keeps_a_resting_bots_reason_when_another_bot_is_stuck(cloud):
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
     assert {row['bot']: row['reason'] for row in queue['items']} == {'ops': 'task_wait', 'cpo': 'paused'}
     assert [row['bot'] for row in body['stuck']] == ['cpo']
+
+
+def test_an_old_task_wait_does_not_hide_a_sleeping_bots_signed_out_check(cloud):
+    computer = asleep_bot(cloud)
+    parent = waiting_task(cloud)
+    with cloud.store.transaction() as c:
+        check = H.task_create(c, 'bot:ops', 'Check the change', '', 'bot:ops',
+                              parent_id=parent['id'], private=False)
+        check_models.record(c, 'bot:ops', check['id'], {
+            'runtime': 'grok', 'model': providers.recommended('xai')['id'],
+            'harness': 'grok', 'effort': '', 'role': 'check'})
+        c.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?', (encode({
+            'schema_version': 1, 'bots': {'ops': {'ready': True}},
+            'runtimes': {'grok': {'installed': True, 'authenticated': 'missing'}}}), computer['runner_id']))
+        c.execute("UPDATE jobs SET created_at=? WHERE state='queued' AND message_id IN "
+                  "(SELECT id FROM messages WHERE conversation_id=?)",
+                  (H.shift(H.now(), hours=-1), check['conversation_id']))
+    with cloud.store.read() as c:
+        args = (c, cloud.store.settings, computer['runner_id'], 'ops')
+        assert execution.bot_claimable(*args, ignore_refusals=CM.STALE)[0] == 'task_wait'
+        assert {why for _, why in execution.queued_reasons(*args, ignore_refusals=CM.STALE)} == {
+            'task_wait', 'check_model'}
+    body = get(cloud.api, 'health')
+    queue = next(row for row in body['checks'] if row['id'] == 'queue')
+    assert queue['status'] == 'bad'
+    assert [(row['bot'], row['reason']) for row in queue['items']] == [('ops', 'check_model')]
+    assert [(row['bot'], row['reason']) for row in body['stuck']] == [('ops', 'check_model')]
+    assert {group['reason']: group['queued'] for group in body['stuck'][0]['queue_reasons']} == {
+        'task_wait': 1, 'check_model': 1}
+    assert queue['items'][0]['fixes'] == [health._fix(*health.BOT_SETTINGS)]
 
 
 @pytest.mark.parametrize('spent', [False, True])

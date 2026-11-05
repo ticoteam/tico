@@ -25,8 +25,9 @@ start, and a fix or a command to inspect its runs. Work held on purpose never ma
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
 
-A cloud machine asleep while its tasks wait shows the claim's task wait as queue information, without a stuck-bot
-alert. Its last boot's load raises no reporting warning while it rests, even if it just contacted Tico. The queue
+A cloud machine asleep while all its jobs wait on purpose shows those waits as queue information. If any job needs
+a fix, such as signing in its check model, Health marks the bot stuck even when an older task waits on purpose.
+Its last boot's load raises no reporting warning while it rests, even if it just contacted Tico. The queue
 cutoff uses the next runnable job's age, including when readiness still needs a fresh report. Spending limits and
 other holds still apply while that report is missing. Work that can run but stays asleep past that cutoff still
 raises a problem; **Starting** means the machine is starting.
