@@ -59,7 +59,9 @@ def test_a_manager_reads_its_reports_runs_and_peers_and_reports_do_not(api):
         get(api, f"bots/{slug}/turns", scoped, expected=403)
         from backend.tests.test_org_rules import as_bot
         turns[slug] = slug + "-history"
-        as_bot(api, slug, turns[slug])
+        with api.app.state.store.read() as c:
+            bid = H.resolve_bot(c, slug)["id"]
+        as_bot(api, bid, turns[slug])
     review("boss")
     # A wake the hub posts into the operator's chat room, outside any task: before, only that room's run read it.
     asked = finish(api, machine, wake(api, machine, "mon"))

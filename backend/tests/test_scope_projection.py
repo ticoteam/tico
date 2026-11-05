@@ -11,6 +11,7 @@ from backend.tests.test_file_reviews import ask, answer
 from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
+from backend.tests.test_member_bots import botops  # noqa: F401
 from backend.tests.test_pages import HTML
 from backend.tests.test_turn_scope import blob, make_scope, published, task_turn
 
@@ -254,8 +255,9 @@ def test_unknown_saved_file_ref_survives_the_real_message_writer(api):
     get(api, "files/" + unknown.split("@")[0], attempt["token"], expected=403)
 
 
-def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api):
-    _, attempt = task_turn(api, bot="botops")
+def test_scoped_botops_cannot_use_delegation_to_cross_the_admin_perimeter(api, botops):
+    post(api, "tasks", {"owner": "botops", "title": "Review project context", "body": "Review", "private": False})
+    attempt = claim(api, botops, "botops")
     token = attempt["token"]
     for path in ("bots/ops/repositories", "automations", "inbox", "tico/fleet", "bots/ops/turns",
                  "turns/" + attempt["id"] + "/steps"):
