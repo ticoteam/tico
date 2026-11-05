@@ -1048,11 +1048,13 @@ import argparse, ast, subprocess, sys
 from pathlib import Path
 source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
 main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
-end = next(i for i, n in enumerate(main.body) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
-           and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
-main.body = main.body[:end + 1]
+parse = next(n for n in ast.walk(main) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == 'parse_args')
+end = next(i for i, n in enumerate(main.body) if parse in ast.walk(n))
+# Keep the real parser setup and call, without the updater's surrounding error handling or side effects.
+main.body = [*main.body[:end], ast.Expr(value=parse)]
 scope = {'argparse': argparse, 'ROOT': Path('.')}
-exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
+exec(compile(ast.fix_missing_locations(ast.Module(body=[main], type_ignores=[])), '<origin/main updater parser>', 'exec'), scope)
 scope['main'](sys.argv[1:])
 "#).args(&args[module + 2..]).env("TICO_GIT_OWNED_ROOTS", owned).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
