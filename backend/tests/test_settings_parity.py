@@ -85,6 +85,9 @@ SAMPLES = {
     "letters.outbox.grant.bot": "send",
     "letters.outbox.grant.person": "send",
     "letters.bot.settings": {"mode": "ask_first", "monthly_cap_micros": 1000000},
+    "email.sending.company": {"mode": "ask_first", "what": "replies_only", "to": "internal",
+                              "daily_cap": 10, "ask_new_address": True, "who_can_ok": "bot_managers"},
+    "email.sending.bot": {"mode": "ask_first", "what": "replies_only", "to": "internal", "daily_cap": 5},
     "bot.budget": lambda o: {"turns_per_hour": 10, "expected_revision": o.get("bot-revision", 1)},
     "storage.move": {"expect_bytes": 0},
     # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
