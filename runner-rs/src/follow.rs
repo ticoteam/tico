@@ -1023,10 +1023,18 @@ mod tests {
     async fn a_live_updater_holds_even_with_stale_status_or_a_new_target_and_a_dead_one_can_retry() {
         let f = checkout_follower();
         write_status(&f.directory, json!({"state": "updating", "target": "0.3.45", "at": 1}));
-        let lock = crate::lock::acquire(&f.directory.join(PROCESS_LOCK)).unwrap();
+        use std::io::{BufRead, BufReader};
+        // A separate updater owns the lock so parallel test spawns cannot inherit it between fork and exec.
+        let mut updater = Command::new("python3").args(["-c",
+            "import fcntl,sys\nf=open(sys.argv[1],'w')\nfcntl.flock(f,fcntl.LOCK_EX)\nprint('holding',flush=True)\nsys.stdin.read()"])
+            .arg(f.directory.join(PROCESS_LOCK)).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut ready = String::new();
+        BufReader::new(updater.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        assert_eq!(ready.trim(), "holding");
         assert_eq!(f.outcome("0.3.46").await, Some(("updating".into(), String::new())));
         f.spawn_with("0.3.46", &systemd_env(), |_| panic!("an updater holds the lock"), |_| panic!("an updater holds the lock")).unwrap();
-        drop(lock);
+        drop(updater.stdin.take());
+        assert!(updater.wait().unwrap().success());
         assert_eq!(f.outcome("0.3.45").await.unwrap().0, "failed");
         assert_eq!(read_status(&f.directory)["state"], "failed");
         let mut status = read_status(&f.directory);
