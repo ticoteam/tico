@@ -4395,7 +4395,7 @@ def create_app(settings=None):
         if parent_id:
             auth.task(c, who, parent_id)
         check, unchecked = None, None
-        if body.check_model is not None or body.check_role is not None:
+        if body.check_model is not None or body.check_role not in (None, "review"):
             check = check_choice(c, who, body, owner, parent_id)
         else:
             check, unchecked = check_models.review_default(c, settings, owner, parent_id)

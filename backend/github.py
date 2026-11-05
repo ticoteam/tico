@@ -317,6 +317,10 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         author = str((pr.get("user") or {}).get("login") or "").lower()
         if author:
             detail["author_login"] = author
+        if pr.get("mergeable_state"):
+            detail["mergeable_state"] = pr["mergeable_state"]
+        elif new_head:
+            detail.pop("mergeable_state", None)
         if action != "refresh":
             detail["tracked"] = True
         if head_sha:

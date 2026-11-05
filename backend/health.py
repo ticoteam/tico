@@ -1804,6 +1804,38 @@ def _aged_pr_checks(c, who, auth, full, kind):
                    fixes=[_fix("Open tasks", "#/tasks")])] if items else []
 
 
+def _unfiled_pr_checks(c, who, auth, full, kind):
+    """A linked company-bot PR cannot wait a day for its first review without being named."""
+    if not full and kind != "bot":
+        return []
+    from . import check_pools as P, verdict_moves as V
+    rows = c.execute("SELECT l.* FROM task_links l JOIN tasks ON tasks.id=l.task_id "
+                     "WHERE l.kind='pr' AND l.state='open' AND l.created_at<? "
+                     f"AND ({auth.task_sql(c, who)}) ORDER BY l.created_at,l.id",
+                     (H.shift(H.now(), hours=-24),))
+    items, seen = [], set()
+    for raw in rows:
+        pr = dict(raw)
+        ticket = H.task(c, pr["task_id"])
+        if pr["url"] in seen or not P.bot_pr(c, ticket, pr):
+            continue
+        seen.add(pr["url"])
+        head = V._head(pr)
+        if any(t["judged_head"] and head.startswith(t["judged_head"].lower())
+               for t in V.review_checks(c, ticket)
+               if H.task_private_readable(c, who.actor, t) and (t["check_step"] or {}).get("flow")):
+            continue
+        waits = P.waiting(c, ticket["id"])
+        reason = next((w["reason"] for w in waits if head in w["heads"].split(",")), "no review pool is configured")
+        items.append({"pr": pr["url"], "task": ticket["id"], "name": f"PR #{pr['number']}",
+                      "text": f"PR #{pr['number']}: no review filed after 24 h; {reason[:300]}.",
+                      "fixes": [_fix("Open task", "#/tasks/" + ticket["id"])]})
+        if len(items) == DIAGNOSTIC_LIMIT:
+            break
+    return [_check("bot_pr_no_review", "Bot PRs without review", "warn",
+                   _diagnostic_summary("Bot PRs open over 24 h without a review.", items), items=items)] if items else []
+
+
 def _unreviewed_runs(c, who, auth):
     """Bots with a stopped run held two hours or more with no decision (execution.unreviewed), as `who` may read them:
     BotOps's review of it did not happen, so a person sees it here and in the operator's Needs you (Dev 543)."""
@@ -2418,6 +2450,7 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open tasks", "#/tasks")] if full else [], items=items))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))
+    checks.extend(_unfiled_pr_checks(c, who, auth, full, kind))
 
     if full and (stuck := watchers.problems(c, online_ids)):
         checks.append(_check("watchers", "Watchers", "warn",

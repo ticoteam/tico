@@ -208,6 +208,30 @@ def checks(c, type_id, kind=None):
     return [s for s in steps(c, type_id) if check_kind(s) and (kind is None or check_kind(s) == kind)]
 
 
+def pr_checks(c, ticket):
+    """Checks outside a board use the company's ticket pools without moving the task to that board."""
+    if not ticket or checks(c, ticket.get("type_id")):
+        return []
+    from .roadmap_flow import ENGINEERING
+    for row in c.execute("SELECT id FROM task_types WHERE role=? ORDER BY name='Dev tickets' DESC,created_at,id",
+                         (ENGINEERING,)):
+        board = checks(c, row["id"])
+        reviews = [s for s in board if check_kind(s) == "review"][:2]
+        if not reviews:
+            continue
+        selected = reviews + ([s for s in board if check_kind(s) == "qa"][:1]
+                              if "qa" in H.task_labels(ticket) else [])
+        out = []
+        for i, source in enumerate(selected):
+            name = f"Review {i + 1}" if i < len(reviews) else "QA"
+            out.append({**source, "name": name, "detached": True,
+                        "flow": json.dumps({"check": check_kind(source),
+                                            "other_company": other_company(source),
+                                            "on_pass": selected[i + 1]["id"] if i + 1 < len(selected) else MERGE})})
+        return out
+    return []
+
+
 def label(s):
     """What a check request for step `s` is titled with: `QA` for a QA step, else the step's name."""
     return "QA" if check_kind(s) == "qa" else s["name"]
@@ -253,7 +277,10 @@ def child_check(c, child, ticket=None):
     if ticket is None:
         parent = TR.parent_of(c, child["id"]) if child.get("id") else None
         ticket = H.task(c, parent) if parent else None
-    return titled(c, (ticket or {}).get("type_id"), child.get("title")) if ticket else None
+    if not ticket:
+        return None
+    board = pr_checks(c, ticket)
+    return titled(c, ticket.get("type_id"), child.get("title"), board=board or None)
 
 
 def is_kind(c, ticket, title, *kinds):
@@ -336,6 +363,11 @@ def check_step(c, check, ticket=None, *, evidence=None):
     Events are in created_at,rowid order; a title never turns a recorded work step into a check step.
     """
     from . import task_relations as TR
+    if evidence is None:
+        parent = ticket or H.task(c, TR.parent_of(c, check["id"]) or "")
+        detached = pr_checks(c, parent)
+        if detached:
+            return titled(c, parent.get("type_id"), check.get("title"), board=detached)
     if evidence is None:
         ticket_id = (ticket or {}).get("id") or TR.parent_of(c, check["id"])
         if not ticket_id:

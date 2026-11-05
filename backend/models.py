@@ -241,6 +241,15 @@ class TaskCreate(Contract):
     # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
     from_private: StrictBool = False
 
+    @model_validator(mode="after")
+    def review_child(self):
+        if self.check_role == "review" and self.check_model is None:
+            if not any(r.kind == "parent" for r in self.relations):
+                raise ValueError("A review is a child task: choose its parent")
+            if not re.match(r"^review\s+[12](?:\s*:|$)", self.title.strip(), re.I):
+                self.title = "Review 1: " + self.title
+        return self
+
 
 class TaskRunModel(Contract):
     """A task's own model (backend/task_run_models.py). An absent `model` keeps the task's and changes only the

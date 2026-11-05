@@ -31,6 +31,7 @@ log = logging.getLogger("tico.check_pools")
 
 DEFAULT_LIMIT = 2
 MAX_LIMIT = 20
+PR_REVIEWS_PER_HOUR = 3
 ONLINE_MINUTES = 5          # a computer that has not been seen for this long is offline
 HELD = ("paused", "quarantined", "limited", "crashed")     # bot_status states that take no new check
 # The pools Head of Engineering proposed (spec dev-ticket-flow.md, question 3), given once to each Dev tickets type,
@@ -393,6 +394,15 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     for slug in slugs:
         if slug in excluded or "bot:" + slug == ticket["owner_id"]:
             continue
+        if step.get("detached"):
+            if not H.task_private_readable(c, "bot:" + slug, ticket):
+                why.add("private")
+                continue
+            recent = c.execute("SELECT count(*) FROM history_events WHERE kind='pr_review_filed' AND new=? "
+                               "AND created_at>?", (slug, H.shift(H.now(), hours=-1))).fetchone()[0]
+            if recent >= PR_REVIEWS_PER_HOUR:
+                why.add("rate")
+                continue
         decision = assess(c, ticket, slug)
         if not online(c, slug):
             why.add("offline")
@@ -416,7 +426,9 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     free.sort()
     if free:
         return [slug for _, _, _, _, slug in free], ""
-    base = ("every reviewer in the pool is at its limit of open checks" if "busy" in why
+    base = ("the reviewers cannot read this private task" if "private" in why
+            else "the hourly review limit is reached" if "rate" in why
+            else "every reviewer in the pool is at its limit of open checks" if "busy" in why
             else "no reviewer in the pool is online" if "offline" in why else "")
     if "builder" in why:
         rest = "Tico can't name the model company the builder ran on, so no bot is shown to run on another"
@@ -520,9 +532,12 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     body = (f"{kind(step)} of {title.split(':', 1)[-1].strip()}"
             + (f" at head {', '.join(heads)}" if heads else "")
             + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head.")
+    if step.get("detached"):
+        body += "\n" + "\n".join(p["url"] for p in _prs(c, ticket, step) if set(_heads([p], snapshots)) & set(heads))
     c.execute("SAVEPOINT check_pool_file")
     try:
-        child = H.task_create(c, ticket["owner_id"], title, body, "bot:" + slug, parent_id=ticket["id"],
+        actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
+        child = H.task_create(c, actor, title, body, "bot:" + slug, parent_id=ticket["id"],
                               review_prs=snapshots, wake_refs={"check_pool": step["name"]})
     except H.Refused as exc:
         c.execute("ROLLBACK TO check_pool_file")
@@ -533,11 +548,13 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     if heads:
         recorded = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
                              "ORDER BY created_at DESC,rowid DESC LIMIT 1", (child["id"],)).fetchone()
-        if not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
+        if step.get("detached") or not recorded or set(filter(None, recorded["new"].split(","))) < set(heads):
             # Add merged PRs for checks after release; never replace the head child admission recorded.
             H._task_event(c, child["id"], ticket["owner_id"], "review_head", None, ",".join(heads), "")
     label = (H.bot(c, slug) or {}).get("slug", slug)
     H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {label} ({why})")
+    if step.get("detached"):
+        H._task_event(c, child["id"], H.KEEPER, "pr_review_filed", None, slug, "")
     return child
 
 
@@ -569,12 +586,20 @@ def entered(c, actor, ticket, snapshots=None):
     least busy eligible member, or leave it waiting for the first free one. Returns the child, the wait, or None."""
     if not _ready(c):
         return None
+    from . import step_flow
+    if step_flow.pr_checks(c, ticket):
+        return _unboard(c, ticket, snapshots)
     _drop(c, ticket["id"], keep_step=ticket.get("step_id"))
     found = pool(c, ticket.get("step_id"))
     if not found or ticket.get("status") not in H.ACTIVE_STATUSES:
         return None
     step, slugs, limit = found
     prs = _prs(c, ticket, step)
+    return _dispatch(c, ticket, step, slugs, limit, prs, snapshots)
+
+
+def _dispatch(c, ticket, step, slugs, limit, prs, snapshots):
+    """One pool dispatch for board checks and PR checks outside boards."""
     if not prs:
         return None          # nothing to judge at a head: a board-only move files no check
     heads = _heads(prs, snapshots)
@@ -583,6 +608,8 @@ def entered(c, actor, ticket, snapshots=None):
         return None
     for r in waiting(c, ticket["id"]):
         if r["step_id"] == step["id"]:
+            if step.get("detached") and r["title"] != title:
+                continue
             if set(filter(None, r["heads"].split(","))) == set(heads):
                 return r
             c.execute("UPDATE check_waits SET state='dropped',reason='a new head',updated_at=? WHERE id=?",
@@ -593,6 +620,67 @@ def entered(c, actor, ticket, snapshots=None):
         if child:
             return child
     return _wait(c, ticket, step, title, heads, reason or "no reviewer could take it")
+
+
+def bot_pr(c, ticket, pr):
+    """Known company authors only; another GitHub App's bot is not one of this company's bots."""
+    detail = H._json(pr.get("detail"), {}) or {}
+    author = str(detail.get("author_login") or "").lower()
+    app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
+    if author and app and author == (str(app[0]) + "[bot]").lower():
+        return True
+    return bool(author and c.execute(f"SELECT 1 FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+                                    "WHERE lower(s.github_login)=? "
+                                    "AND coalesce(b.state,'')<>'archived' LIMIT 1", (author,)).fetchone())
+
+
+def _unboard(c, ticket, snapshots=None):
+    from . import step_flow as F, verdict_moves as V
+    if ticket.get("status") not in (*H.ACTIVE_STATUSES, "done") or ticket.get("blocked_since"):
+        return None
+    board = F.pr_checks(c, ticket)
+    for pr in sorted(_prs(c, ticket, board[0]), key=lambda p: (p["created_at"], p["id"])):
+        if pr.get("state") != "open" or not bot_pr(c, ticket, pr):
+            continue
+        detail = H._json(pr.get("detail"), {}) or {}
+        head = V._head(pr)
+        if not _heads([pr], snapshots) or snapshots is not None and _heads([pr], snapshots) != [head]:
+            continue
+        if pr.get("mergeable") == "conflict" or detail.get("mergeable_state") == "behind":
+            if not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='pr_rebase' AND new=?",
+                             (ticket["id"], head)).fetchone():
+                H._task_event(c, ticket["id"], H.KEEPER, "pr_rebase", None, head, "")
+                H._wake(c, ticket, ticket["owner_id"], f"PR #{pr['number']}: rebase on main and push.",
+                        {V.HANDOFF: "merge_conflict", "pr_head": head})
+            continue
+        # An old open request cannot approve the new head or occupy its review slot.
+        for child in V.review_checks(c, ticket):
+            if child["status"] in H.ACTIVE_STATUSES and child["judged_head"] and \
+                    child["judged_head"] != head and pr["url"] in (child.get("body") or ""):
+                H.task_close(c, H.KEEPER, child["id"], note="Superseded by a new PR head.", strict=False)
+        for step in board:
+            verdict = V._verdict_at(c, ticket, step, head)
+            if verdict:
+                if verdict not in V.GOOD:
+                    break
+                if not any(V.verdict_at([t], head) in V.GOOD and (V.delivery(c, t) or {}).get("consumed")
+                           for t in V._checks(c, ticket, step)):
+                    break
+                continue
+            found = pool(c, step["id"])
+            slugs, limit = (found[1], found[2]) if found else ([], DEFAULT_LIMIT)
+            # Admission records only this PR's head, even when its task links several PRs.
+            selected = {p["id"]: {"error": True} for p in _prs(c, ticket, step)}
+            selected[pr["id"]] = (snapshots or {}).get(pr["id"]) or detail
+            if ticket["status"] == "done":
+                ticket = H.task_update(c, H.KEEPER, ticket["id"], status="review", strict=False,
+                                       note="The open PR still needs review and merge.")
+            result = _dispatch(c, ticket, step, slugs, limit, [pr], selected)
+            if result:
+                return result
+            break
+        V.merge_wake(c, ticket)
+    return None
 
 
 def _wait(c, ticket, step, title, heads, reason, attempt_id=None):
@@ -614,15 +702,23 @@ def TR_parent(c, task_id):
 def _take_plan(c, wait, only=None, snapshots=None):
     """Read what taking a wait would do, so idle retries need no writer transaction."""
     ticket = H.task(c, wait["ticket_id"])
-    if not ticket or ticket.get("step_id") != wait["step_id"] or ticket["status"] not in H.ACTIVE_STATUSES:
+    from . import step_flow
+    detached = next((s for s in step_flow.pr_checks(c, ticket) if s["id"] == wait["step_id"]), None)
+    if not ticket or not detached and ticket.get("step_id") != wait["step_id"] or ticket["status"] not in H.ACTIVE_STATUSES:
         return {"drop": "the ticket moved on"}
     found = pool(c, wait["step_id"])
     if not found:
         return {"drop": "the step has no pool"}
     step, slugs, limit = found
+    if detached:
+        step = detached
     # Admission and filing use the same saved links, read again under the writer. A wait can precede a refresh,
     # or already know a head whose webhook is late; an older saved link cannot consume that newer wait.
     prs = _prs(c, ticket, step)
+    if detached:
+        prs = [p for p in prs if _title(step, [p]) == wait["title"]]
+        if not prs or not all(bot_pr(c, ticket, p) for p in prs):
+            return {"drop": "the PR is no longer open"}
     heads = _heads(prs, None)
     waited = set(filter(None, wait["heads"].split(",")))
     head_problem = bool(waited and waited != set(heads) and
@@ -766,6 +862,7 @@ def retry(store, limit=RETRY_LIMIT, *, service=None):
     limit = max(0, min(limit, RETRY_LIMIT))
     if not limit:
         return []
+    out = retry_prs(store, limit=limit, service=service)
     # Advance past ineligible tickets without rewriting idle waits. A restart starts again at the oldest wait.
     after = getattr(store, "_check_retry_after", {})
     store._check_retry_after = after
@@ -773,7 +870,6 @@ def retry(store, limit=RETRY_LIMIT, *, service=None):
         if not _ready(c):
             return []
         waits = _retry_waits(c, limit, after, getattr(store, "_check_retry_step", None))
-    out = []
     for wait in waits:
         wid = wait["id"]
         after[wait["step_id"]] = (wait["created_at"], wid)
@@ -798,4 +894,33 @@ def retry(store, limit=RETRY_LIMIT, *, service=None):
                 child = safely(c, _take, dict(row), None, snapshots)
                 if child:
                     out.append(child["id"])
+    return out
+
+
+def retry_prs(store, limit=RETRY_LIMIT, *, service=None):
+    """Bounded oldest-first discovery also catches PRs linked before this route existed."""
+    from . import review_gate, step_flow
+    after = getattr(store, "_pr_review_after", ("", ""))
+    sql = ("SELECT l.task_id,l.created_at,l.id FROM task_links l JOIN tasks t ON t.id=l.task_id "
+           "WHERE l.kind='pr' AND l.state='open' AND t.status NOT IN ('closed','declined') "
+           "AND NOT EXISTS (SELECT 1 FROM task_steps s WHERE s.type_id=t.type_id "
+           "AND json_extract(s.flow,'$.check') IN ('review','qa','release_qa')) "
+           "AND (l.created_at,l.id)>(?,?) ORDER BY l.created_at,l.id LIMIT ?")
+    with store.read_transaction() as c:
+        rows = [dict(r) for r in c.execute(sql, (*after, limit))]
+        if not rows and after != ("", ""):
+            rows = [dict(r) for r in c.execute(sql, ("", "", limit))]
+    out = []
+    for raw in rows:
+        store._pr_review_after = (raw["created_at"], raw["id"])
+        with store.read_transaction() as c:
+            ticket = H.task(c, raw["task_id"])
+            if not step_flow.pr_checks(c, ticket):
+                continue
+            prs = review_gate.links(c, ticket)
+        snapshots = review_gate.snapshot(service, prs) if service else None
+        with store.transaction() as c:
+            result = safely(c, entered, H.KEEPER, H.task(c, ticket["id"]), snapshots)
+            if result and result.get("owner_id"):
+                out.append(result["id"])
     return out

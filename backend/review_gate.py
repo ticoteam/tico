@@ -19,7 +19,7 @@ def is_review(c, parent, title):
 def check_of(c, parent, title):
     """The check step a request with this title is for on the parent's board: one open request per check step."""
     from . import step_flow
-    return step_flow.titled(c, (parent or {}).get("type_id"), str(title or "").strip()) if parent else None
+    return step_flow.child_check(c, {"title": title}, parent) if parent else None
 
 
 def reviewing(c, actor, row):

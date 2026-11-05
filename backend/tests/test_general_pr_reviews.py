@@ -1,0 +1,226 @@
+"""Bot PRs outside ticket boards use the ticket pools and captured verdict handoff."""
+import json
+
+import pytest
+
+from backend import bot_settings as BS, check_pools as P, health, hubdb as H, verdict_moves as V
+from backend.tests.test_check_pools import team
+from backend.tests.test_github import api, headers  # noqa: F401
+from backend.tests.test_review_gate import HEAD, OLD
+
+
+def setup(api, reviews=1, qa=False, limit=20):
+    team(api)
+    with api.app.state.store.transaction() as c:
+        steps = [{"name": "Build", "status": "doing"}]
+        for i in range(reviews):
+            steps.append({"name": f"Review {i + 1}", "status": "review", "check_pool": ["rev-a", "rev-b"],
+                          "check_limit": limit, "flow": {"check": "review", "on_pass": "merge"}})
+        if qa:
+            steps.append({"name": "In QA", "status": "review", "check_pool": ["rev-c"],
+                          "flow": {"check": "qa", "on_pass": "merge"}})
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", steps)
+        BS.update(c, "cpo", {"github_login": "acme-writer"})
+        c.execute("UPDATE bot_config SET repo='Acme/atlas' WHERE bot='cpo'")
+    return typ
+
+
+def task_pr(api, number=12, head=HEAD, private=False, conflict=False, stale=False, labels=None, owner="bot:cpo"):
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", f"Update the guide {number}", "Private text" if private else "Docs and code",
+                             owner, private=private, labels=labels, mover=True)
+        pr = H.task_link(c, "human:ana", task["id"], f"https://github.com/Acme/atlas/pull/{number}")
+        detail = {"head_sha": head, "author_login": "acme-writer", "checks": {"required": "passing"},
+                  "mergeable_state": "behind" if stale else "clean"}
+        c.execute("UPDATE task_links SET state='open',repo='Acme/atlas',checks='passing',mergeable=?,detail=? WHERE id=?",
+                  ("conflict" if conflict else "clean", json.dumps(detail), pr["id"]))
+    return task
+
+
+def children(api, task, active=True):
+    with api.app.state.store.read() as c:
+        rows = [H.task(c, cid) for cid in H.TR.child_ids(c, task["id"])]
+    return [r for r in rows if not active or r["status"] in H.ACTIVE_STATUSES]
+
+
+def dispatch(api):
+    return P.retry(api.app.state.store)
+
+
+def finish(api, child, verdict="approve", head=HEAD, capture=True):
+    with api.app.state.store.transaction() as c:
+        attempt = H.new_id()
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id) VALUES(?,?,?,?)",
+                  (attempt, H.actor_id(child["owner_id"]), H.now(), child["id"]))
+        H.task_update(c, child["owner_id"], child["id"], status="done", verdict=verdict, verdict_head=head,
+                      note="Fix the broken link." if verdict == "changes" else "Reviewed the current diff.")
+        if capture:
+            c.execute("UPDATE attempts SET settled_at=? WHERE id=?", (H.now(), attempt))
+            P.capture_attempt(c, attempt)
+    return attempt
+
+
+def handoffs(api, task, kind):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT body,recipient_id FROM messages WHERE conversation_id=? "
+                                          "AND json_extract(refs,'$.handoff')=?", (task["conversation_id"], kind))]
+
+
+def test_general_pr_uses_pool_once_and_new_push_supersedes_open_review(api):
+    setup(api)
+    task = task_pr(api)
+    assert len(dispatch(api)) == 1
+    [child] = children(api, task)
+    assert child["title"] == "Review 1: PR #12"
+    assert child["owner_id"] == "bot:rev-a" and child["requester_id"] == H.KEEPER
+    assert "https://github.com/Acme/atlas/pull/12" in child["body"] and HEAD in child["body"]
+    assert dispatch(api) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.head_sha',?) WHERE task_id=?", (OLD, task["id"]))
+        V.new_head(c, H.task(c, task["id"]))
+    [new] = children(api, task)
+    assert new["id"] != child["id"] and OLD in new["body"]
+    assert len(children(api, task, active=False)) == 2
+
+
+@pytest.mark.parametrize("verdict,head,green,capture,merge,changes", [
+    ("approve", HEAD, True, True, True, False),
+    ("approve", OLD, True, True, False, False),
+    ("approve", HEAD, False, True, False, False),
+    ("approve", HEAD, True, False, False, False),
+    ("changes", HEAD, True, True, False, True),
+])
+def test_verdict_handoff_requires_current_head_capture_and_green_checks(api, verdict, head, green, capture, merge, changes):
+    setup(api)
+    task = task_pr(api)
+    dispatch(api)
+    [child] = children(api, task)
+    if not green:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (task["id"],))
+    finish(api, child, verdict, head, capture)
+    dispatch(api)
+    assert bool(handoffs(api, task, "merge")) == merge
+    assert bool(handoffs(api, task, "verdict")) == changes
+    if merge:
+        assert HEAD in handoffs(api, task, "merge")[0]["body"]
+        dispatch(api)
+        assert len(handoffs(api, task, "merge")) == 1
+    if changes:
+        assert "Fix the broken link" in handoffs(api, task, "verdict")[-1]["body"]
+
+
+def test_green_after_approval_wakes_owner_and_qa_and_second_review_are_required(api):
+    setup(api, reviews=2, qa=True)
+    task = task_pr(api, labels=["qa"])
+    dispatch(api)
+    [first] = children(api, task)
+    finish(api, first)
+    [second] = children(api, task)
+    assert second["title"].startswith("Review 2:") and second["owner_id"] != first["owner_id"]
+    assert not handoffs(api, task, "merge")
+    finish(api, second)
+    [qa] = children(api, task)
+    assert qa["title"].startswith("QA:")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET checks='pending' WHERE task_id=?", (task["id"],))
+    finish(api, qa, "pass")
+    assert not handoffs(api, task, "merge")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET checks='passing' WHERE task_id=?", (task["id"],))
+        V.checks_done(c, H.task(c, task["id"]), HEAD, "pass")
+    assert len(handoffs(api, task, "merge")) == 1
+
+
+def test_private_task_is_not_shared_with_pool(api):
+    setup(api)
+    task = task_pr(api, private=True)
+    dispatch(api)
+    assert children(api, task) == []
+    with api.app.state.store.read() as c:
+        assert "private" in P.waiting(c, task["id"])[0]["reason"]
+        assert not c.execute("SELECT 1 FROM messages WHERE recipient_id LIKE 'bot:rev-%' AND body LIKE '%Private text%'").fetchone()
+
+
+def test_backfill_is_oldest_first_and_limited_per_reviewer_per_hour(api, monkeypatch):
+    setup(api)
+    monkeypatch.setattr(P, "PR_REVIEWS_PER_HOUR", 1)
+    tasks = [task_pr(api, n) for n in range(20, 24)]
+    with api.app.state.store.transaction() as c:
+        for i, task in enumerate(tasks):
+            c.execute("UPDATE task_links SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-10 + i), task["id"]))
+    dispatch(api)
+    assert [len(children(api, t)) for t in tasks] == [1, 1, 0, 0]
+    dispatch(api)
+    assert [len(children(api, t)) for t in tasks] == [1, 1, 0, 0]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE history_events SET created_at=? WHERE kind='pr_review_filed'", (H.shift(H.now(), hours=-2),))
+    dispatch(api)
+    assert [len(children(api, t)) for t in tasks] == [1, 1, 1, 1]
+
+
+@pytest.mark.parametrize("conflict,stale", [(True, False), (False, True)])
+def test_conflicting_or_behind_pr_returns_to_owner_once(api, conflict, stale):
+    setup(api)
+    task = task_pr(api, conflict=conflict, stale=stale)
+    dispatch(api)
+    dispatch(api)
+    assert children(api, task) == []
+    [notice] = handoffs(api, task, "merge_conflict")
+    assert "rebase on main" in notice["body"]
+
+
+def test_role_review_without_check_model_is_normal_child(api):
+    setup(api)
+    task = task_pr(api)
+    result = api.post("/api/v2/tasks", headers=headers(), json={"owner": "rev-a", "title": "PR #12",
+                      "check_role": "review", "relations": [{"task": task["id"], "kind": "parent"}]})
+    assert result.status_code == 200, result.text
+    [child] = children(api, task)
+    assert child["title"] == "Review 1: PR #12"
+    with api.app.state.store.read() as c:
+        assert H.check_model(c, child["id"]) is None
+    assert dispatch(api) == []
+
+
+def test_merge_falls_back_to_existing_repo_manager_without_granting_access(api):
+    typ = setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='' WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET repo='Acme/atlas' WHERE bot='cmo'")
+        c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (typ["id"],))
+    task = task_pr(api)
+    dispatch(api)
+    finish(api, children(api, task)[0])
+    [merge] = children(api, task)
+    assert merge["owner_id"] == "bot:cmo" and merge["title"].startswith("Merge PR #12")
+    assert not handoffs(api, task, "merge")
+
+
+def test_done_task_with_open_pr_returns_to_review_and_human_pr_is_skipped(api):
+    setup(api)
+    task = task_pr(api)
+    human = task_pr(api, 13)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, H.KEEPER, task["id"], status="done", strict=False)
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.author_login','acme-person') WHERE task_id=?", (human["id"],))
+    dispatch(api)
+    assert len(children(api, task)) == 1 and children(api, human) == []
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "review"
+
+
+def test_health_names_unfiled_pr_after_a_day_without_disclosing_private_task(api):
+    setup(api)
+    public = task_pr(api)
+    private = task_pr(api, 13, private=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET created_at=?", (H.shift(H.now(), hours=-25),))
+    from backend.auth import Identity
+    with api.app.state.store.read() as c:
+        auth = api.app.state.auth
+        checks = health._unfiled_pr_checks(c, Identity("human:ana", "owner", "ana@acme.example"), auth, True, "owner")
+        assert public["id"] in {i["task"] for i in checks[0]["items"]}
+        assert private["id"] in {i["task"] for i in checks[0]["items"]}
+        other = health._unfiled_pr_checks(c, Identity("bot:rev-a", "bot"), auth, False, "bot")
+        assert private["id"] not in {i["task"] for check in other for i in check["items"]}
