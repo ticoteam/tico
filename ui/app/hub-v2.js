@@ -100,7 +100,7 @@ const sourceCarriesCard = m => { const r = m?.refs || {};
   return m?.kind === 'ask' || !!(r.action || r.credential_request || r.approval || r.questions || r.chat_goal || r.read_back || r.update || r.card || r.reconnect); };
 const isSourceLine = (m, by) => SOURCE_LINES.has(rowSource(m, by).kind) && !sourceCarriesCard(m);
 // Plain words for a gray line: names for actor ids, markdown marks and link targets dropped.
-const sourcePlain = text => plainActors(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
+const sourcePlain = text => plainActors(String(text ?? '').replace(/^New task from keeper: /, 'New task: ')).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
 // The name a gray line leads with: bold for a built-in, a link for an automation, nothing for a task update or system.
 function sourceLeadHTML(src) {
   if (!src.name || !['builtin', 'automation'].includes(src.kind)) return '';
