@@ -17,6 +17,21 @@ pub struct Task {
 }
 
 impl Tico {
+    pub fn linked_tasks(&self, meeting: &str, cursor: Option<&str>) -> Result<Value> {
+        let mut url = reqwest::Url::parse("https://localhost/")?;
+        url.query_pairs_mut().append_pair("limit", "50");
+        if let Some(cursor) = cursor {
+            url.query_pairs_mut().append_pair("cursor", cursor);
+        }
+        self.call(
+            &format!(
+                "/api/v2/meetings/{meeting}/tasks?{}",
+                url.query().unwrap_or("")
+            ),
+            None,
+            "",
+        )
+    }
     pub fn search_tasks(&self, query: &str, offset: usize) -> Result<Value> {
         let mut url = reqwest::Url::parse("https://localhost/")?;
         url.query_pairs_mut()
@@ -130,6 +145,7 @@ impl Tico {
                         id: uuid::Uuid::new_v4().to_string(),
                         kind: "link".into(),
                         task_id: task.id,
+                        task_destination: self.destination.id.clone(),
                         title: String::new(),
                         ..Default::default()
                     });
@@ -151,6 +167,10 @@ impl Tico {
             .iter()
             .find(|i| i.id == item_id)
             .context("This proposal was removed")?;
+        ensure!(
+            item.task_destination.is_empty() || item.task_destination == self.destination.id,
+            "This proposal belongs to another Tico"
+        );
         let tasks = self.readable_tasks(&[item.proposed_task_id.clone()])?;
         ensure!(
             !item.proposed_task_id.is_empty() && !tasks.is_empty(),
@@ -200,6 +220,8 @@ impl Tico {
                 .filter(|item| {
                     !item.task_id.is_empty()
                         && (item.kind == "link") == (kind == "linked")
+                        && (item.task_destination.is_empty()
+                            || item.task_destination == self.destination.id)
                         && delivery.receipt["links"][&item.task_id] != kind
                 })
                 .map(|item| item.task_id.clone())

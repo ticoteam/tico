@@ -17,6 +17,7 @@ pub struct Item {
     pub body: String,
     /// A note-taker match is a proposal until the person chooses Link.
     pub proposed_task_id: String,
+    pub task_destination: String,
     pub document: String,
     pub change: String,
     pub selected: bool,

@@ -62,7 +62,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 8] = [
+const BACKGROUND: [&str; 9] = [
     "live",
     "calendar",
     "autodraft",
@@ -71,6 +71,7 @@ const BACKGROUND: [&str; 8] = [
     "roster",
     "speech",
     "task-links",
+    "more-links",
 ];
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
@@ -920,6 +921,21 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            if reply.kind == "more-links" {
+                if here
+                    && let Ok(value) = reply.result
+                    && value["scope"] == self.link_scope()
+                {
+                    if let Some(rows) = value["linked"]["tasks"].as_array()
+                        && let Some(loaded) = self.link_tasks["linked"]["tasks"].as_array_mut()
+                    {
+                        loaded.extend(rows.iter().cloned());
+                    }
+                    self.link_tasks["linked"]["next_cursor"] =
+                        value["linked"]["next_cursor"].clone();
+                }
+                continue;
+            }
             if reply.kind == "task-links" {
                 if here {
                     self.link_tasks = reply
@@ -2855,10 +2871,11 @@ impl Recorder {
             .filter(|item| item.task_id.is_empty())
             .chain(items.iter().filter(|item| !item.task_id.is_empty()));
         let rows: Vec<Value> = order
+            .filter(|item| item.task_id.is_empty() || self.link_tasks["remote"].is_null())
             .filter(|item| item.kind != "link" || self.linked_task(&item.task_id).is_some())
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
-                let proposal = self.linked_task(&item.proposed_task_id);
+                let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
                 let chosen = if item.owner.is_empty() {
                     self.last_owner.clone()
                 } else {
@@ -2892,8 +2909,8 @@ impl Recorder {
                     "owner_name": owner_name,
                     "sent": !item.task_id.is_empty(),
                     "sent_to": item.sent_to,
-                    "task_id": item.task_id,
-                    "task_url": if item.kind == "link" { self.link_tasks["browser"].as_str().map(|base| format!("{base}/#/task/{}", item.task_id)).unwrap_or_default() } else { item.task_url.clone() },
+                    "task_id": if linked.is_some() { item.task_id.clone() } else { String::new() },
+                    "task_url": if item.kind == "link" { self.link_tasks["browser"].as_str().map(|base| format!("{base}/#/task/{}", item.task_id)).unwrap_or_default() } else if linked.is_some() { item.task_url.clone() } else { String::new() },
                     "can_link": proposal.is_some() && mode == "ready" && !self.context.kept_on_mac,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,
@@ -2904,6 +2921,8 @@ impl Recorder {
             })
             .collect();
         json!({
+            "linked": if self.link_tasks["scope"] == self.link_scope() { self.link_tasks["linked"].clone() } else { Value::Null },
+            "linked_browser": self.link_tasks["browser"],
             "link_scope": self.link_scope(),
             "can_link": mode == "ready" && !self.context.kept_on_mac,
             "mode": mode,

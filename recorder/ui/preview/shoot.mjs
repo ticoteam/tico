@@ -45,6 +45,7 @@ const scenes = {
   connect: [],
   demo: [],
   meeting: [open('m1')],
+  'task-picker': ['meeting', open('m1'), async (page) => { await page.click('[data-act="task-picker-open"]'); await page.waitForSelector('[data-act="task-pick"]'); await page.click('[data-id="t42"]'); }],
   owner: [open('m1'), async (page) => page.click('.owner.empty')],
   recording: [open('m0')],
   retrying: [open('m0')],
@@ -147,6 +148,26 @@ if (!only.length || only.includes('checks')) {
     await context.close();
   };
   const go = async (page, scene) => { await page.goto(`${base}?scene=${scene}`); await page.waitForSelector('#r-page > *'); };
+  await check('task links and detail drafts', async (page) => {
+    await go(page, 'meeting'); await open('m1')(page);
+    await page.click('[data-act="task-picker-open"]');
+    await page.waitForSelector('[data-act="task-pick"]');
+    await page.click('[data-id="t42"]'); await page.click('[data-id="t43"]');
+    await page.click('[data-act="task-picker-link"]');
+    await page.waitForSelector('.item.task:has-text("Review pricing")');
+    await page.click('.item.task:has-text("Review pricing") [data-act="unlink-item"]');
+    await page.waitForSelector('.item.task:has-text("Review pricing")', { state: 'detached' });
+    if (!(await page.locator('.item.task:has-text("Test recovery")').count())) throw Error('second link lost');
+    await page.click('[data-act="task-detail"][data-id="i1"]');
+    await page.fill('[data-model="detailDue"]', '2026-12-01');
+    await page.fill('[data-model="detailBody"]', 'Synthetic details');
+    await page.click('[data-act="task-detail-save"]');
+    await page.click('[data-act="task-detail"][data-id="i1"]');
+    if (await page.inputValue('[data-model="detailBody"]') !== 'Synthetic details') throw Error('details lost');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[aria-label="Task details"]', { state: 'detached' });
+  });
+
 
   // Delete asks first, and only Delete removes the row.
   await check('delete', async (page) => {

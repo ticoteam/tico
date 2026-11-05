@@ -373,6 +373,8 @@
     const proposed = a.items.filter((it) => !it.sent);
     if (sent.length) html += `<ul class="items tasks">${sent.map(task).join('')}</ul>`;
     if (proposed.length) html += `<ul class="items">${proposed.map(proposal).join('')}</ul>`;
+    if (a.linked?.tasks?.length) html += `<ul class="items tasks">${a.linked.tasks.map((it) => task({ ...it, id: `server:${it.task_id}`, kind: 'link', task_url: `${a.linked_browser}/#/task/${it.task_id}` })).join('')}</ul>`;
+    if (a.linked?.next_cursor) html += '<button class="link" data-act="more-task-links">More</button>';
     if (S.ui.adding || !a.items.length) html += `<div class="add-item"><span class="check">${icon('plus', 13)}</span><input data-model="addItem" data-enter="add-item" data-blur="add-close" placeholder="Add a task" spellcheck="false" aria-label="Add a task"></div>`;
     return html + '</section>';
   }
@@ -1528,6 +1530,7 @@
     },
     'accept-link-item': (el) => act('accept_link_item', { id: el.dataset.id }),
     'unlink-item': (el) => act('unlink_item', { id: el.dataset.id }),
+    'more-task-links': () => act('more_task_links'),
     'task-detail': (el) => {
       const it = S.meeting?.actions.items.find((i) => i.id === el.dataset.id); if (!it) return;
       S.ui.taskDetail = it.id; S.ui.detailDue = it.due || ''; S.ui.detailBody = it.body || ''; render();

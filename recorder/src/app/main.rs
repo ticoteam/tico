@@ -60,6 +60,7 @@ fn view(
 }
 
 commands! {
+    more_task_links() => |app| app.more_task_links();
     link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
     accept_link_item(id: String) => |app| app.accept_link_item(&id);
     unlink_item(id: String) => |app| app.unlink_item(&id);
@@ -353,6 +354,7 @@ fn main() {
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
+            more_task_links,
             task_picker,
             link_selected_tasks,
             accept_link_item,

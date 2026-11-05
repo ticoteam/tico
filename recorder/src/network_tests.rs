@@ -2322,7 +2322,7 @@ fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_onl
 }
 
 #[test]
-fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
+fn keeping_a_finalized_meeting_local_dismisses_it_and_save_restores_the_same_row() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let kept = transcript(&store, "Kept here");
@@ -2352,20 +2352,23 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
         .unwrap();
     let (tico, seen, worker) = server(vec![
         Some(json!({"ok":true})),
-        Some(json!({"id":"live-ended","state":"ended","discarded":true})),
         Some(json!({"actor":"human:test"})),
-        Some(json!({"id":"local-fixture"})),
+        Some(json!({})),
+        Some(json!({"title":"Kept here"})),
         Some(json!({"status":404})),
         Some(json!({"id":"live-live","state":"ended"})),
     ]);
     tico.keep_local(&store, &kept.id).unwrap();
     let context = store.context(&kept.id).unwrap();
     assert!(context.live_discarded && context.live_removed);
-    assert!(store.get(&kept.id).unwrap().deliveries.is_empty());
+    assert_eq!(
+        store.get(&kept.id).unwrap().deliveries[0].receipt["dismissed"],
+        true
+    );
     // Saved to Tico later, it is a meeting recorded on this computer.
     assert_eq!(
         tico.send_to(&store, &kept.id, false, "team").unwrap(),
-        "local-fixture"
+        "pending-fixture"
     );
     let error = tico.keep_local(&store, &older.id).unwrap_err().to_string();
     assert!(error.contains("keeps the live transcript"), "{error}");
@@ -2378,15 +2381,15 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
     assert!(
         calls[0]
             .0
-            .contains("/api/v2/meetings/pending-fixture/delete")
+            .contains("/api/v2/meetings/pending-fixture/review")
     );
     assert!(
-        calls[1]
+        calls[2]
             .0
-            .contains("/api/v2/live-meetings/live-ended/discard")
+            .contains("/api/v2/meetings/pending-fixture/review")
     );
-    assert!(calls[3].0.contains("meetings/import"));
-    assert_eq!(calls[3].1["external_id"], json!(kept.id));
+    assert_eq!(calls[2].1["action"], "restore");
+    assert_eq!(calls[3].1["action"], "approve");
     assert!(calls[5].0.contains("/live-meetings/live-live/control"));
     assert_eq!(calls[5].1, json!({"action":"end"}));
 }
@@ -2463,7 +2466,7 @@ fn a_retried_save_applies_the_audience_chosen_now_and_sends_a_title_changed_here
 }
 
 #[test]
-fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
+fn this_mac_after_a_save_failed_before_approval_dismisses_but_refuses_approved_rows() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let failed = transcript(&store, "Failed save");
@@ -2475,10 +2478,7 @@ fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
         "failed",
         json!({"source":"live","approved":true}),
     );
-    let (tico, seen, worker) = server(vec![
-        Some(json!({"ok":true})),
-        Some(json!({"id":"live","state":"ended","discarded":true})),
-    ]);
+    let (tico, seen, worker) = server(vec![Some(json!({"ok":true}))]);
     tico.keep_local(&store, &failed.id).unwrap();
     let error = tico
         .keep_local(&store, &approved.id)
@@ -2490,10 +2490,13 @@ fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
     assert!(
         calls[0]
             .0
-            .contains(&format!("/meetings/filed-{}/delete", failed.id))
+            .contains(&format!("/meetings/filed-{}/review", failed.id))
     );
-    assert!(calls[1].0.contains("/discard"));
-    assert!(store.get(&failed.id).unwrap().deliveries.is_empty());
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        store.get(&failed.id).unwrap().deliveries[0].receipt["dismissed"],
+        true
+    );
     assert!(store.context(&failed.id).unwrap().live_removed);
 }
 

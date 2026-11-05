@@ -255,6 +255,7 @@ pub fn draft_with_tasks(
                 } else {
                     matched.map(|task| task.id.clone()).unwrap_or_default()
                 },
+                task_destination: context.task_candidates_destination.clone(),
                 title,
                 quote,
                 at_ms,

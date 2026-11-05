@@ -316,11 +316,18 @@ def install_meeting_items(app, store, mutate, task_create, auth):
     settings = store.settings
 
     def item_answer(request, rid, body, work):
-        result = mutate(request, body, work,
+        def receipt(c):
+            result = work(c)
+            item = result.pop('item')
+            # A receipt records the operation, not a task reference whose access can change.
+            return {**result, 'item_id': item['id']}
+        result = mutate(request, body, receipt,
                         check=lambda c: media.authorized(c, request.state.identity, rid))
-        with store.read() as c:
+        with store.read_transaction() as c:
             media.authorized(c, request.state.identity, rid)
-            return {**result, 'item': task_references.redact(c, auth, request.state.identity, result['item'])}
+            iid = result.get('item_id') or result['item']['id']
+            return {k: v for k, v in {**result, 'item': task_references.redact(c, auth, request.state.identity,
+                      view(one(c, rid, iid)))}.items() if k != 'item_id'}
 
     @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")
