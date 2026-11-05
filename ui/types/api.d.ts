@@ -3930,6 +3930,10 @@ export type RanOn = {
   task_model: Record<string, unknown> | null;
 };
 
+export type ReadAll = {
+  ago_ms?: number | null;
+};
+
 export type ReadMark = {
   seq: number;
 };
@@ -9147,7 +9151,7 @@ export type MarkThreadAndSubthreadsReadParams = {
   "Idempotency-Key": string;
   thread_id: string;
 };
-export type MarkThreadAndSubthreadsReadBody = never;
+export type MarkThreadAndSubthreadsReadBody = ReadAll | null;
 export type MarkThreadAndSubthreadsReadResponse = ThreadReadAll;
 
 /** POST /api/v2/threads/{thread_id}/read */

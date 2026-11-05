@@ -38797,6 +38797,23 @@
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReadAll"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -62361,6 +62378,25 @@
           "task_model"
         ],
         "additionalProperties": true
+      },
+      "ReadAll": {
+        "properties": {
+          "ago_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 600000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ago Ms"
+          }
+        },
+        "type": "object",
+        "title": "ReadAll"
       },
       "ReadMark": {
         "properties": {
