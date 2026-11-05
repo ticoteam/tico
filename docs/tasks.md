@@ -32,6 +32,8 @@ own task; naming a different task cannot bypass either hold. Thread changes and 
 file reviews, and pins or cards on the task also respect the hold. Approval requests, replacement of an existing
 request and consumption of an approved request check the approval's task before changing it. A status update that
 keeps its stored task checks that task; the bot may still switch its status to unrelated work.
+Withdrawing or appealing a rule hold also checks its stored review task. Pinning a page checks the page's own task
+as well as the task it is pinned to.
 Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
 stay pending and unread until release; their task references use the same whitespace and list normalization
 as claims. Other tasks' runs carry only notes from sources that are free.

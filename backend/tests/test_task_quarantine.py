@@ -360,6 +360,47 @@ def test_external_requester_add_and_message_backed_note_cancel_respect_the_task_
     post(api, f"notes/{notes[0]['id']}/cancel", {}, token)
 
 
+def test_external_page_pins_check_the_files_task_even_at_an_unheld_place(api, external_work):
+    from backend.tests.test_cards import page
+
+    token, task, other = external_work
+    fid = page(api, H.actor_id(task["owner_id"]), task=task["id"])
+    body = {"place": "task:" + other["id"], "item": "page:" + fid}
+    hold_external(api, task)
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM bot_file_activity WHERE file_id=?", (fid,)).fetchone()[0]
+    assert post(api, "pins", body, token, expected=403)["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM pins WHERE item=?", ("page:" + fid,)).fetchone()
+        assert c.execute("SELECT count(*) FROM bot_file_activity WHERE file_id=?", (fid,)).fetchone()[0] == before
+    post(api, "bots/scout/quarantine/clear", {})
+    post(api, "pins", body, token)
+
+
+@pytest.mark.parametrize("mutation", ["keep", "withdraw", "appeal"])
+def test_external_rule_hold_mutations_check_the_stored_review_task(api, external_work, mutation):
+    token, task, other = external_work
+    ids = [H.new_id(), H.new_id()]
+    with api.app.state.store.transaction() as c:
+        for ident, row in zip(ids, (task, other)):
+            c.execute("INSERT INTO org_rule_holds(id,operation,payload,author,destinations,rule_ids,verdict,nonce,"
+                      "state,reviewer,task_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (ident, "message", H._dump({"text": "Review this report.", "replay": {}}), task["owner_id"],
+                       "[]", "[]", "{}", H.new_id(), "held", "human:ana", row["id"], H.now()))
+    hold_external(api, task)
+    body = {"why": "Please review this report."} if mutation == "appeal" else {}
+    with api.app.state.store.read() as c:
+        before = dict(c.execute("SELECT * FROM org_rule_holds WHERE id=?", (ids[0],)).fetchone())
+        status = H.task(c, task["id"])["status"]
+    assert post(api, f"rule-holds/{ids[0]}/{mutation}", body, token, expected=403)["error"]["code"] == "quarantined"
+    with api.app.state.store.read() as c:
+        assert dict(c.execute("SELECT * FROM org_rule_holds WHERE id=?", (ids[0],)).fetchone()) == before
+        assert H.task(c, task["id"])["status"] == status
+    post(api, f"rule-holds/{ids[1]}/{mutation}", body, token)
+    post(api, "bots/scout/quarantine/clear", {})
+    post(api, f"rule-holds/{ids[0]}/{mutation}", body, token)
+
+
 def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(api):
     botops(api)
     machine = task_bot(api, lanes=True)

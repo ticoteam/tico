@@ -3014,7 +3014,7 @@ def unread_dms(c, v, *, limit=50):
 
 
 # ----------------------------------------------------------------------------- C5: edit and delete
-def _own_say(c, actor, v, message_id):
+def _own_say(c, actor, v, message_id, *, check_writer=True):
     message = H.message(c, message_id)
     if not message:
         raise Problem("not_found", "Message not found", 404)
@@ -3024,8 +3024,9 @@ def _own_say(c, actor, v, message_id):
         raise Problem("forbidden", "Only its author changes a message", 403)
     if message.get("kind") not in EDITABLE_KINDS or (message.get("refs") or {}).get("carries"):
         raise Problem("kind", "Asks, answers and notices cannot be changed", 422)
-    thread = thread_row(c, message["conversation_id"])
-    H._message_writer(c, actor, message, thread)
+    if check_writer:
+        thread = thread_row(c, message["conversation_id"])
+        H._message_writer(c, actor, message, thread)
     return message
 
 

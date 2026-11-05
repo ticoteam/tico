@@ -1110,6 +1110,8 @@ def size_of(value):
 
 
 def file_activity(c, fid, actor, action, place):
+    row = c.execute("SELECT task_id FROM bot_files WHERE id=?", (fid,)).fetchone()
+    H._writer(c, actor, task_id=row["task_id"] if row else None)
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
               (fid, actor, action, H.now(), encode({"place": place})))
 
