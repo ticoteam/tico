@@ -60,12 +60,24 @@ def _context(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
-def refuse_retired(choice):
-    """A retired model stays in the catalog for bots already on it; nothing new may pick it."""
+def refuse_retired(choice, kept=""):
+    """A retired model stays in the catalog for bots already on it; nothing new may pick it. `kept` is the bot's saved
+    task model: a held row that is that model stays editable (its effort, context length or the same model is saved
+    again, Dev 693); any other held row is refused as a pick."""
     if choice.get("held"):
+        if choice["id"] == kept:
+            return
         raise Problem("model", f"{choice['label']} is not offered yet", 422)
     if choice.get("deprecated"):
         raise Problem("model", f"{choice['label']} is retired; choose a current model", 422)
+
+
+def kept_context(chosen, current):
+    """The context length a save sets for the saved held model: the one named (null clears it), else the saved one when
+    the save leaves the field out. `current` is the saved task model, or {} when the save does not keep it."""
+    if not current or "compact_at" in chosen.model_fields_set:
+        return chosen.compact_at
+    return current.get("compact_at")
 
 
 def harness_of(choice, requested=None, current=None):
