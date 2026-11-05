@@ -161,6 +161,8 @@ def future_deadlines(c, at):
                      "(t.owner_id='human:'||p.person_id OR t.waiting_on='human:'||p.person_id) "
                      "WHERE p.verified_at IS NOT NULL AND p.urgent_needs=1 AND p.monthly_cap>0 "
                      "AND t.status IN ('open','doing','waiting') AND t.due_at IS NOT NULL "
+                     "AND NOT EXISTS (SELECT 1 FROM personal_alerts a WHERE a.person_id=p.person_id "
+                     "AND a.incident_key='due:'||t.id||':'||t.due_at) "
                      "AND (SELECT monthly_cap FROM alert_company_settings WHERE id=1)>0 ORDER BY t.due_at LIMIT 100")
     out = []
     for (value,) in rows:
@@ -275,7 +277,7 @@ class Alerts:
                     raise Problem("removal_pending", "Finish removing your phone before verifying again", 409)
                 if old["phone"] and old["phone"] != phone:
                     raise Problem("remove_phone_first", "Remove your current phone before adding another", 409)
-                claimed = c.execute("SELECT 1 FROM alert_preferences WHERE phone=? AND person_id<>?", (phone, ident)).fetchone()
+                claimed = c.execute("SELECT 1 FROM alert_preferences WHERE phone=? AND person_id<>? AND verified_at IS NOT NULL", (phone, ident)).fetchone()
                 if claimed:
                     raise Problem("phone_in_use", "That phone is already connected", 409)
                 save(c, ident, {"phone": phone, "phone_version": old["phone_version"] or H.new_id()})
@@ -297,6 +299,9 @@ class Alerts:
             if not current or current.get("opted_out"):
                 raise Problem("opted_out", "Reply START to the paging number before enabling alerts", 422)
             with self.store.transaction() as c:
+                if c.execute("SELECT 1 FROM alert_preferences WHERE phone=? AND person_id<>? AND verified_at IS NOT NULL",
+                             (row["phone"], ident)).fetchone():
+                    raise Problem("phone_in_use", "That phone is already connected", 409)
                 save(c, ident, {"verified_at": current["verified_at"], "call_consent": int(bool(current.get("call_consent")))})
                 H.event(c, "human:" + ident, "alerts.verified", ident, {})
             return self.view(ident)
@@ -387,7 +392,8 @@ class Alerts:
                 if not sent.get("send_id") or sent.get("status") == "sending":
                     raise Problem("gateway_unavailable", "Paging acceptance is not confirmed yet", 502)
             except Problem as exc:
-                certain = alert["state"] == "pending" and exc.status < 500 and exc.code != "gateway_unavailable"
+                certain = exc.code == "provider_error" or (alert["state"] == "pending" and exc.status < 500
+                                                           and exc.code != "gateway_unavailable")
                 with self.store.transaction() as c:
                     c.execute("UPDATE personal_alerts SET state=?,reserved=?,error=? WHERE id=?",
                               ("failed" if certain else "sending", 0 if certain else 1, exc.code, alert_id))

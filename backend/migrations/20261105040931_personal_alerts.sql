@@ -1,6 +1,6 @@
 CREATE TABLE alert_preferences (
  person_id TEXT PRIMARY KEY REFERENCES humans(id),
- phone TEXT UNIQUE,
+ phone TEXT,
  phone_version TEXT NOT NULL DEFAULT '',
  verified_at TEXT,
  revocation_pending INTEGER NOT NULL DEFAULT 0,
@@ -17,6 +17,7 @@ CREATE TABLE alert_preferences (
  monthly_cap INTEGER NOT NULL DEFAULT 10 CHECK(monthly_cap BETWEEN 0 AND 10000),
  updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX alert_preferences_verified_phone ON alert_preferences(phone) WHERE verified_at IS NOT NULL;
 CREATE TABLE alert_company_settings (
  id INTEGER PRIMARY KEY CHECK(id=1),
  monthly_cap INTEGER NOT NULL DEFAULT 50 CHECK(monthly_cap BETWEEN 0 AND 100000)

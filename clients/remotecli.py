@@ -415,21 +415,21 @@ def run(args, who=None):
     if args.cmd == "file":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn == "file publish":
             return hubtools.files_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "page":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn == "page publish":
             return hubtools.pages_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "doc":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn", "body_file") and v is not None}
-        fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn == "doc write":
             fields["body"] = sys.stdin.read() if not args.body_file or args.body_file == "-" else Path(args.body_file).read_text(encoding="utf-8-sig")
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
@@ -460,7 +460,7 @@ def run(args, who=None):
     if args.cmd == "webhook":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn in ("webhook create", "webhook update"):
             try:
                 hubtools.webhook_options(fields)
@@ -1008,7 +1008,7 @@ def bots(client, args):
             fields["build"] = False
         if getattr(args, "no_setup", False):
             fields["setup"] = False
-        fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
         from clients.botcopy import folder_of

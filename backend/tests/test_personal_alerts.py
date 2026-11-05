@@ -20,6 +20,7 @@ class HQ:
         self.phones, self.pending, self.sends = {}, {}, {}
         self.calls, self.accepted = [], []
         self.stopped, self.timeout, self.down, self.old = False, False, False, False
+        self.provider_error = False
 
     def __call__(self, req):
         path = req.url.path
@@ -45,6 +46,8 @@ class HQ:
             return httpx.Response(200, json={"ok": True})
         if path.endswith("/sends"):
             key = req.headers["Idempotency-Key"]
+            if self.provider_error:
+                return httpx.Response(502, json={"error": "provider_error"})
             if self.stopped:
                 return httpx.Response(422, json={"error": "opted_out"})
             if key not in self.sends:
@@ -304,3 +307,23 @@ def test_quiet_alerts_and_future_deadlines_wake_a_sleeping_install(api, hq):
         future = H.task_create(c, "human:ana", "Review the next filing", "Review the next filing.", "human:ana",
                                due="2026-11-05T18:00:00Z", lint=False, deduplicate=False)
         assert H.parse_ts(future["due_at"]).timestamp() in A.future_deadlines(c, at)
+
+
+def test_hq_confirmed_provider_refusal_releases_the_dollar_reservation(api, hq):
+    connect(api)
+    put(api, "alerts/me", {"monthly_cap": 1})
+    hq.provider_error = True
+    post(api, "alerts/me/test", {"accept_charge": True}, expected=502)
+    with api.app.state.store.read() as c:
+        assert A.spend(c, "ana") == 0
+        assert c.execute("SELECT state FROM personal_alerts").fetchone()[0] == "failed"
+    hq.provider_error = False
+    assert post(api, "alerts/me/test", {"accept_charge": True})["status"] == "accepted"
+    assert len(hq.accepted) == 1
+
+
+def test_an_unverified_number_does_not_reserve_someone_elses_phone(api, hq):
+    post(api, "alerts/me/phone", {"phone": PHONE, "sms_consent": True})
+    connect(api, PHONE, "ben-test")
+    assert get(api, "alerts/me", "ben-test")["status"] == "verified"
+    assert get(api, "alerts/me")["status"] == "code_sent"
