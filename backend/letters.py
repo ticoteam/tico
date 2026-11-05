@@ -499,10 +499,11 @@ class Letters:
                 except Problem:
                     pass
                 return
-            # Unconfigured is a setup state, so the sweep leaves it alone until a person retries.
+            # Setup and spend refusals need a person's action, so the sweep leaves them alone until a retry.
             with self.store.transaction() as c:
                 c.execute("UPDATE letters SET error=?,attempts=attempts+1,next_sync_at=?,updated_at=? WHERE id=?",
-                    (exc.code, None if exc.code in ("unconfigured", "letters_disabled", "forbidden", "letters_cap", "unstable_proof")
+                    (exc.code, None if exc.code in ("unconfigured", "billing_required", "cap_reached", "out_of_credit",
+                                                   "letters_disabled", "forbidden", "letters_cap", "unstable_proof")
                      else later(BACKOFF[min(row["attempts"], len(BACKOFF)-1)]), H.now(), ident))
 
     def update(self, ident, result):
