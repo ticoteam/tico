@@ -520,16 +520,19 @@ def readers(c, target, level="read", auth=None):
 
 def _viewer_for(c, actor):
     """An identity for an actor, without elevating it: the owner when it is the owner's address."""
-    from .auth import Identity
-    if actor.startswith("bot:"):
-        return Identity(actor, "bot")
-    human = H.human(c, H.actor_id(actor))
-    if not human:
-        return None
-    from . import access
-    email = str(human.get("email") or "").lower()
-    owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
-    return Identity(actor, "owner" if email and email == owner else "human", email=email)
+    from . import read_cache
+    def build():
+        from .auth import Identity
+        if actor.startswith("bot:"):
+            return Identity(actor, "bot")
+        human = H.human(c, H.actor_id(actor))
+        if not human:
+            return None
+        from . import access
+        email = str(human.get("email") or "").lower()
+        owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
+        return Identity(actor, "owner" if email and email == owner else "human", email=email)
+    return read_cache.value(c, ("teammate_viewer", actor), build, shared=True)
 
 
 def hidden(c, viewer, level="see", kinds=KINDS, auth=None):

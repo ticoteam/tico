@@ -234,12 +234,14 @@ class Auth:
     @classmethod
     def read_policy(cls, c):
         """The database's read rules for native gates without a web server or sign-in settings."""
-        from . import access, teammate_access
-        policy = cls.__new__(cls)
-        policy.bot_admins = set(access.owner_and_admin_emails(c))
-        # Native reads use the same stored built-in bot set as teammate access.
-        policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
-        return policy
+        def build():
+            from . import access, teammate_access
+            policy = cls.__new__(cls)
+            policy.bot_admins = set(access.owner_and_admin_emails(c))
+            # Native reads use the same stored built-in bot set as teammate access.
+            policy.system_bot = lambda slug: slug in teammate_access._system_bots(c)
+            return policy
+        return read_cache.value(c, ("native_read_policy",), build, shared=True)
 
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
@@ -1096,11 +1098,11 @@ def bot_reads_task(c, bot, row):
     answer sent to it may carry. The read policy uses stored access, without the server's sign-in settings.
     With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
     a BEGIN open on an autocommit connection."""
-    policy = Auth.read_policy(c)
     opened = not c.in_transaction
     if opened:
         c.execute("SAVEPOINT bot_reads_task")
     try:
+        policy = Auth.read_policy(c)
         if opened and row:
             row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
         policy.task_row(c, Identity(bot, "bot"), row)

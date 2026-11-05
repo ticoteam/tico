@@ -1021,11 +1021,13 @@ def require_batch(c, who, row):
 
 def page_message_readable(c, actor, refs):
     """Generated file-review messages carry names in prose as well as structured refs."""
-    return page_content_readable(c, actor, [refs.get("target"), refs.get("answer")])
+    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get("target"), refs.get("answer")])
 
 
 def page_content_readable(c, actor, payload):
     from . import files, teammate_access
+    if not files.page_references(payload, c):
+        return True
     principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
     return all(viewer is not None and not files.page_ref_denials(c, None, viewer, payload)
                for principal in principals if (viewer := teammate_access._viewer_for(c, principal)) is not None)

@@ -246,6 +246,19 @@ def file_visible(c, auth, who, row, cache):
     return cards.widened(c, auth, who, row["id"], cache)
 
 
+def page_rows(c):
+    """Neutral page/file rows shared by all blob checks in one snapshot, including tombstones."""
+    privacy.snapshot(c)
+    def build():
+        try:
+            return {r["id"]: dict(r) for r in c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id")}
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return {}
+    return read_cache.value(c, ("page_rows",), build, shared=True)
+
+
 def page_identities(c):
     """All page aliases, including purged versions, resolved once per read snapshot."""
     privacy.snapshot(c)
@@ -255,8 +268,8 @@ def page_identities(c):
             if identity:
                 found.setdefault(identity, set()).add(fid)
         try:
-            for r in c.execute("SELECT file_id FROM pages"):
-                add(r[0], r[0])
+            for fid in page_rows(c):
+                add(fid, fid)
             for r in c.execute("SELECT v.* FROM bot_file_versions v JOIN pages p ON p.file_id=v.file_id"):
                 for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
                     add(r[key], r["file_id"])
@@ -271,8 +284,8 @@ def page_identities(c):
 
 def page_blobs(c, bid):
     """The pages whose bytes or previews this blob holds, including deleted provenance."""
-    return [dict(row) for fid in page_references(bid, c) if (row := c.execute(
-        "SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone())]
+    rows = page_rows(c)
+    return [rows[fid] for fid in page_references(bid, c) if fid in rows]
 
 
 def page_blob_visible(c, auth, who, bid):
