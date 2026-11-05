@@ -432,8 +432,9 @@ function machineNowWords(machine) {
   const parts = [['running', 'running'], ['starting', 'starting'], ['queued', 'queued'], ['waiting', 'waiting']]
     .filter(([key]) => Number(counts[key]) > 0).map(([key, word]) => `${counts[key]} ${word}`);
   if (parts.length) return parts.join(' · ');
+  if (machineOnline(machine)) return 'idle';
   if (['stopped', 'stopping'].includes(machine.cloud_machine?.state)) return 'asleep';
-  return machineOnline(machine) ? 'idle' : 'offline';
+  return 'offline';
 }
 // The AI tools that get a column: those a subscription can be given to first (a picker each), then every other tool a
 // computer reports (its login's chip, as in the computer's pop-up).

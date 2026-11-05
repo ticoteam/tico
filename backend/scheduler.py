@@ -1,5 +1,6 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -13,6 +14,8 @@ from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
+
+LOG = logging.getLogger("tico.scheduler")
 
 
 def stamp(at):
@@ -554,6 +557,12 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import webhooks
                     webhooks.auto_disable(c, stamp(at))           # an endpoint that failed every attempt for five days is off
+                try:
+                    from . import computers
+                    computers.sweep(self.store, stamp(at))       # replaced self-hosted computers retire only when unused
+                except Exception as exc:
+                    LOG.exception("Computer retirement failed")
+                    failures.append({"computer_retirement": type(exc).__name__})
                 from . import support_triage
                 support_triage.sweep(self.store, stamp(at))      # a support ticket waits here at most an hour
                 from . import screening
