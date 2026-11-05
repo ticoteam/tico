@@ -247,7 +247,8 @@ const init = () => {
    await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ana']));
    await tasksReady();
    assert.equal(await page.locator('#task-modal[open]').count(), 0, 'the closed task stays closed after sign-in');
-   await page.evaluate(async task => taskModalShow(task), task);
+   await page.evaluate(id => { location.hash = '#/task/' + id; }, task.id);
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), 'Closed task title');
    assert.equal(await details.inputValue(), 'Closed task details');
    assert.equal(writes.length, beforeReturn, 'failed drafts wait for Retry after reopening');
@@ -297,8 +298,7 @@ const init = () => {
    const count = writes.length;
    me = {...me, id: 'ben', name: 'Ben'}; offline = false;
    await page.reload(); await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ben']));
-   await tasksReady();
-   await page.evaluate(async task => taskModalShow(task), task); await idle();
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.getByRole('textbox', {name: 'Message', exact: true}).inputValue(), '');
    assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
