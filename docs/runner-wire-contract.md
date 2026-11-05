@@ -74,3 +74,8 @@ each new minor release.
 
 At each release cut, keep that release's copy with `python3 scripts/check_wire_contract.py --snapshot X.Y.Z`. This
 also removes copies older than the previous minor.
+
+Make-page requests are claimed only by runners advertising `make_page`. The optional `attempt.make_page.task`
+names the target task; `task_context` remains references only. The runner uses a fresh session and disposable scratch,
+skips automatic file publication, and discards scratch after the turn. Later chat inputs and queued work stay queued.
+Older servers negotiate the flag away through the heartbeat 422 fallback.

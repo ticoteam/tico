@@ -1488,6 +1488,7 @@ def create_app(settings=None):
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
+        H.check_message_refs(refs)
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
                 # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.

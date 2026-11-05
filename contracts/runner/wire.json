@@ -15,6 +15,7 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.capabilities": "Older servers can negotiate it away; requests stay queued until a runner advertises make_page",
     "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
@@ -122,6 +123,7 @@
         "source_continuation": {"type": "object", "additionalProperties": true},
         "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "make_page": {"type": "object", "additionalProperties": false, "required": ["task"], "properties": {"task": {"type": "object", "additionalProperties": true}}},
         "task_context": {"$ref": "#/$defs/TaskContext"},
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "session_epoch": {"type": "integer"},

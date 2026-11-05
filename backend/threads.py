@@ -1962,6 +1962,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    H.check_message_refs(refs)
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
     with H.refusal_task(on_task):

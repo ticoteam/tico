@@ -129,6 +129,9 @@ SOURCE_CONTINUE = "source_continue_v1"
 # so the server gives it each chat's own session instead (start_claimed).
 THREADS = "threads_v1"
 
+# These requests need a fresh provider session and disposable scratch.
+MAKE_PAGE = "make_page"
+
 
 def positive_effect(c, aid, body):
     """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
@@ -2183,6 +2186,8 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
+    if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
+        return "make_page_upgrade"
     from . import task_check_backs
     if task_check_backs.stale(c, message, job):
         return "obsolete_check_back"
@@ -3935,8 +3940,9 @@ class Execution:
         # A bot limited to one task (scoped_sql) carries only that task's work: its other next-run tasks and waiting
         # notes stay where they are for a run after the scope is released.
         scope = claim_scope(c, row["bot_id"])
+        making_page = (msg.get("refs") or {}).get("make_page")
         # A check runs on another model for one subtask: the bot's other work waits for its own turns.
-        if getattr(body, "next_run", False) and not check:
+        if getattr(body, "next_run", False) and not check and not making_page:
             if row["bot_id"] == "librarian":
                 from .docs import refresh_generated_docs
                 refresh_generated_docs(c)  # Also covers a Librarian enabled after the upgrade.
@@ -3962,7 +3968,7 @@ class Execution:
         # Quiet notes ride the same way: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check and not scope:
+        if getattr(body, "next_run", False) and not check and not scope and not making_page:
             from . import bot_to_bot
             from . import threads
             # A deferred thread note goes only while the bot still reads its source (a lost one is canceled here), and
@@ -3999,6 +4005,9 @@ class Execution:
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees
+        make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
+        if making_page:
+            history = [msg]
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
         if chat_goal and chat_goal["bot"] != row["bot_id"]:
@@ -4050,7 +4059,8 @@ class Execution:
                             # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                             # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                             "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
-                            "task_context": task_context.for_turn(c, self.auth, acting or bot_who, task),
+                            "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
+                            **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                             # Asked from the Updates chat: the recent updates that person may read and open, read now as
                             # them (backend/updates_chat.py). None for every other turn.
                             "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
@@ -4618,6 +4628,8 @@ class Execution:
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
         origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
                            include_deleted=True)
+        if "make_page" in (origin.get("refs") or {}):
+            return {"messages": []}
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
         origin_notice = wake_rule_engine.notice_only(origin)
         capabilities = c.execute("SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)).fetchone()

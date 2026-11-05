@@ -327,7 +327,10 @@ class Pages:
                 self.files.activity(c, old["id"], "bot:" + row["bot_id"], "modified", now=now,
                                     detail={"replaced_by": row["id"]})
             if task and row["task_id"] == task:
-                self.pin_to_task(c, row, task)
+                if who.via == "assistant" and not c.execute(
+                        "SELECT 1 FROM pins WHERE place=? AND item=?", ("task:" + task, "page:" + row["id"])).fetchone():
+                    self.require_pin_space(c, task)
+                self.pin_to_task(c, row, task, actor=who.actor if who.via == "assistant" else None)
             return {"page": self.view(c, who, row, c.execute("SELECT * FROM pages WHERE file_id=?",
                                                               (row["id"],)).fetchone(), {}, include_audience=True),
                     "unembedded": unembedded}
@@ -336,16 +339,22 @@ class Pages:
                                               **({"audience": audience} if audience_set else {})})
 
     @staticmethod
-    def pin_to_task(c, row, task):
+    def require_pin_space(c, task):
+        if c.execute("SELECT count(*) FROM pins WHERE place=?", ("task:" + task,)).fetchone()[0] >= cards.PLACE_MAX:
+            raise Problem("conflict", f"This task has {cards.PLACE_MAX} pins", 409)
+
+    @staticmethod
+    def pin_to_task(c, row, task, *, actor=None):
         """A page published with --task is pinned at the top of that task, by its bot, once. A task place never
         widens who reads the page (backend/cards.py WIDENING)."""
+        actor = actor or "bot:" + row["bot_id"]
         place, item = "task:" + task, "page:" + row["id"]
         count = c.execute("SELECT count(*) FROM pins WHERE place=?", (place,)).fetchone()[0]
         if count >= cards.PLACE_MAX or c.execute("SELECT 1 FROM pins WHERE place=? AND item=?", (place, item)).fetchone():
             return
         c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
-                  (H.new_id(), place, item, count, "medium", "bot:" + row["bot_id"], H.now()))
-        cards.file_activity(c, row["id"], "bot:" + row["bot_id"], "pinned", place)
+                  (H.new_id(), place, item, count, "medium", actor, H.now()))
+        cards.file_activity(c, row["id"], actor, "pinned", place)
 
     def may_manage(self, c, who, row):
         return may_manage(c, self.auth, who, row)
