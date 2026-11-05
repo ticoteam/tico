@@ -782,7 +782,7 @@ def decide(current, found, at, idle_s):
     nothing is done ("stuck", "no_enroll"), or None to leave the row's as it is. Pure: the clock is `at`. `found` is
     `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
     if current["problem"] == "delete_unknown":
-        return None, None                                   # HQ's next list resolves the unanswered deletion first
+        return None, None                                   # deletion must settle before any more work reaches it
     if current["problem"] == "replacing" and (current.get("stop_until") or 0) > at:
         return None, None                                   # a person's replacement is already at HQ
     on = current["state"] in ON and current["machine_id"]
@@ -960,6 +960,7 @@ class Manager:
             return None
         self.relist = False
         self.list_refused = None
+        retry_deletes = []
         with self.store.transaction() as c:
             # What a create waiting on the list said: an hq: problem with no refusal of its own (a refused create or
             # start counts a failure), whatever the code and across restarts.
@@ -970,6 +971,17 @@ class Manager:
                           "value=excluded.value",
                           (SIZES_KEY, json.dumps({"sizes": listed["sizes"], "caps": listed["caps"], "at": H.now()})))
             mine = rows(c)
+            by_id = {machine["id"]: machine for machine in listed["machines"]}
+            for key, current in mine.items():
+                if current["problem"] != "delete_unknown":
+                    continue
+                machine = by_id.get(current["machine_id"])
+                if machine and machine["state"] == "deleted":
+                    deleted(c, current, H.KEEPER)
+                else:
+                    if machine:
+                        save(c, key, **self.described(machine), start_asked_at=None)
+                    retry_deletes.append((key, current["machine_id"]))
             # Per key, a machine that is not dead wins, then the one this row already has. HQ renames a machine a new
             # one replaces (key ":superseded:"), so it lists one per key; a dead one already counted is never re-read.
             latest = {}
@@ -982,15 +994,8 @@ class Manager:
                 current = mine.get(key)
                 if current and current["problem"] == "replacing" and (current["stop_until"] or 0) > now():
                     continue                                # an HQ list cannot release a replacement's claim fence
-                if current and current["problem"] == "delete_unknown" and current["machine_id"] == machine["id"]:
-                    if machine["state"] in DEAD:
-                        deleted(c, current, H.KEEPER)
-                    else:
-                        # As with an unanswered stop, HQ's state takes over, but a running report keeps the rest of
-                        # the hold. Do not send a resume or another stop before that hold has passed either.
-                        save(c, key, **self.described(machine), problem="", problem_at=None, start_asked_at=None,
-                             next_try_at=current["stop_until"])
-                    continue
+                if current and current["problem"] == "delete_unknown":
+                    continue                                # reconcile its exact id, even if HQ changed its key
                 if current and current["state"] == "deleted" and current["machine_id"] == machine["id"]:
                     continue                                # deleted here: live at HQ only until boat confirms
                 if current and (current["machine_id"] in (None, machine["id"]) or (
@@ -1022,7 +1027,28 @@ class Manager:
                     c.execute("ROLLBACK TO cloud_offered")
                     log.exception("Placing bots on cloud machines failed")
                 c.execute("RELEASE cloud_offered")
+        for key, machine_id in retry_deletes:
+            self.reconcile_delete(hq, key, machine_id)
         return listed
+
+    def reconcile_delete(self, hq, key, machine_id):
+        """Retry an unanswered deletion outside the write lock: HQ's Machine has no pending-deletion field."""
+        try:
+            hq.delete(machine_id)
+        except Refused as refused:
+            if stopped_unknown(refused):
+                return                                      # HQ may still be retrying an accepted deletion
+            gone = refused.status == 404
+        else:
+            return                                          # accepted; keep the hold until HQ confirms it is gone
+        with self.store.transaction() as c:
+            current = row(c, key)
+            if not current or current["machine_id"] != machine_id or current["problem"] != "delete_unknown":
+                return
+            if gone:
+                deleted(c, current, H.KEEPER)
+            else:
+                save(c, key, problem="", problem_at=None, stop_until=None, start_asked_at=None, next_try_at=None)
 
     @staticmethod
     def described(machine):
@@ -1433,7 +1459,7 @@ def remove(service, who, auth, key, request, mutate, replace=False):
 
 def _remove(service, who, auth, key, request, mutate, replace):
     """The successful local deletion and its retry receipt commit together. An uncertain HQ answer holds claims
-    until the manager reads HQ's list; only a clear refusal restores the machine's previous reservation."""
+    until HQ settles the deletion; only a clear refusal restores the machine's previous reservation."""
     store = service.store
     token = request.headers.get("idempotency-key")
     if not token or len(token) > 200:

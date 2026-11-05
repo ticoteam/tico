@@ -1204,33 +1204,76 @@ def test_an_ambiguous_delete_holds_claims_until_hq_can_be_read_even_after_restar
 
 
 @pytest.mark.parametrize("kind", ["replace", "shared", "unused"])
-@pytest.mark.parametrize("state", ["running", "stopping", "stopped", "deleted"])
-def test_an_ambiguous_delete_reconciles_the_next_hq_list_before_more_work(cloud, kind, state):
+@pytest.mark.parametrize("state,retry,settlement", [
+    ("running", None, "deleted"),
+    ("running", CM.Refused("http_503", 503), "not_found"),
+    ("stopping", CM.Refused("sandbox_stopping", 409), "deleted"),
+    ("stopped", CM.Refused("frozen", 402), "deleted"),
+    ("failed", None, "deleted"),
+    ("missing", None, "not_found"),
+    ("running", None, "never_accepted"),
+])
+def test_an_ambiguous_delete_keeps_its_intent_until_hq_settles(cloud, monkeypatch, kind, state, retry, settlement):
     target = deletion_target(cloud, kind)
     machine_id = cloud.row(target.key)["machine_id"]
+    with cloud.store.transaction() as c:
+        unused_code = CM.mint(c, target.key, "ana" if kind == "shared" else None)
     cloud.hq.fail["delete"] = CM.Refused("unreachable")
     assert delete_target(cloud, target).status_code == 502
-    # HQ's outcome arrives after the unanswered delete, before the manager's next look.
-    cloud.hq.machines[machine_id]["state"] = state
+    # HQ can keep its old state while boat deletion is pending or retrying. Its list has no pending-delete flag.
+    if state == "missing":
+        cloud.hq.machines.pop(machine_id)
+    else:
+        cloud.hq.machines[machine_id]["state"] = state
+
+    def pending(mid):
+        assert mid == machine_id
+        cloud.hq.calls.append(("delete", mid))
+        cloud.hq._check("delete")
+
+    monkeypatch.setattr(cloud.hq, "delete", pending)
+    cloud.hq.fail["delete"] = retry
     cloud.hq.calls.clear()
     cloud.tick(1)
     assert cloud.hq.calls[0] == ("list",)
-    assert cloud.hq.actions() == (["create"] if state == "deleted" and kind != "unused" else [])
+    assert cloud.hq.actions() == ["delete"]
+    cloud.tick(CM.STOP_HOLD + 1)
+    assert cloud.hq.actions() == ["delete", "delete"]          # no start, stop or new machine while deletion is pending
+    assert cloud.row(target.key)["problem"] == "delete_unknown"
+    with cloud.store.read() as c:
+        assert CM.held(c, target.computer["runner_id"])
+        assert not c.execute("SELECT revoked_at FROM runners WHERE id=?", (target.computer["runner_id"],)).fetchone()[0]
+    if kind != "unused":
+        answer = claim_on(cloud, target.computer, "ops")
+        assert answer["attempt"] is None and "stopping" in answer["paused"]
+
+    if settlement == "deleted":
+        cloud.hq.machines[machine_id]["state"] = "deleted"
+    else:
+        cloud.hq.fail["delete"] = (CM.Refused("not_found", 404) if settlement == "not_found"
+                                   else CM.Refused("machine_busy", 409))
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    current = cloud.row(target.key)
+    assert current["problem"] == "" and current["stop_until"] is None
     with cloud.store.read() as c:
         revoked = c.execute("SELECT revoked_at FROM runners WHERE id=?", (target.computer["runner_id"],)).fetchone()[0]
-        assert bool(revoked) == (state == "deleted")
-        if state != "deleted":
-            assert CM.held(c, target.computer["runner_id"])
-    if state == "deleted":
-        assert cloud.row(target.key)["runner_id"] is None
-        again = cloud.api.post("/api/v2/runners/enroll", json={"code": target.code, "label": "boat-vm"})
-        assert again.status_code == 401
-    else:
-        cloud.at[0] += CM.STOP_HOLD
-        with cloud.store.read() as c:
-            assert bool(CM.held(c, target.computer["runner_id"])) == (state in CM.GOING)
-        if state == "running" and kind != "unused":
+        assert bool(revoked) == (settlement != "never_accepted")
+        assert not CM.held(c, target.computer["runner_id"])
+    if settlement == "never_accepted":
+        assert current["state"] == "running" and current["runner_id"] == target.computer["runner_id"]
+        again = post(cloud.api, "runners/enroll", {"code": target.code, "label": "boat-vm"})
+        assert again["runner_id"] == target.computer["runner_id"]
+        if kind != "unused":
             assert claim_on(cloud, target.computer, "ops")["attempt"]
+    else:
+        assert current["state"] == "deleted" and current["runner_id"] is None
+        with cloud.store.read() as c:
+            assert not c.execute("SELECT 1 FROM cloud_machine_codes WHERE bot=?", (target.key,)).fetchone()
+        for code in (target.code, unused_code):
+            again = cloud.api.post("/api/v2/runners/enroll", json={"code": code, "label": "boat-vm"})
+            assert again.status_code == 401
+        answer = cloud.api.post("/api/v2/jobs/claim", json={"bot": "ops"}, headers=headers(target.computer["token"]))
+        assert answer.status_code == 401
 
 
 @pytest.mark.parametrize("kind", ["replace", "shared", "unused"])

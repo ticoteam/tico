@@ -81,10 +81,13 @@ the disk is deleted.
 
 An unanswered delete, a 5xx, or another uncertain reply keeps claims paused and asks for HQ's list at the next look.
 The stored hold survives a server restart and stays while the list cannot be read. If the list says the machine is
-deleted or failed, the server finishes the same local deletion and revokes its runner and codes. A running report
-keeps the rest of the two-minute hold before work can resume; stopping or stopped keeps claims paused by state.
-A clear 4xx refusal releases the deletion reservation at once; 404 finishes deletion because the machine is already
-gone. Out of credit (402) and already stopping (409 `sandbox_stopping`) remain uncertain, as for a scheduled stop.
+deleted, the server finishes the same local deletion and revokes its current runner and all codes under the write
+lock. Every other state keeps the deletion hold, even past two minutes: HQ can still report running while boat
+deletion is pending or retrying. HQ's machine response has no pending-deletion field, so each successful list is
+followed by another idempotent DELETE for that exact machine id until deletion settles, even if the machine is absent
+from the list. An accepted retry keeps the hold until HQ reports deleted. A clear 4xx refusal says the delete was not
+accepted and releases the hold at once; 404 finishes deletion because the machine is already gone. Out of credit
+(402) and already stopping (409 `sandbox_stopping`) remain uncertain, as for a scheduled stop.
 
 ## How a machine becomes the bot's runner
 
