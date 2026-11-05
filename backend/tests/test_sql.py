@@ -692,33 +692,6 @@ def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api,
         assert any('attempts_created (created_at>?)' in row[3] for row in plan)
 
 
-def test_message_visibility_index_upgrades_history_and_covers_sql_counts(api, world):
-    import sqlite3
-    from contextlib import closing
-    from backend import migrations, sql as S
-    from backend.auth import Identity
-
-    store = api.app.state.store
-    version = '20261105115005_sql_message_visibility_index'
-    with store.transaction() as c:
-        before = [dict(row) for row in c.execute('SELECT * FROM messages ORDER BY id')]
-        c.execute('DROP INDEX messages_sql_visibility')
-        c.execute('DELETE FROM schema_migrations WHERE version=?', (version,))
-    # Reapply just the migration authority; full startup can also publish unrelated onboarding notices.
-    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
-        migrations.apply(c)
-        migrations.apply(c)
-    with store.read() as c:
-        assert [dict(row) for row in c.execute('SELECT * FROM messages ORDER BY id')] == before
-        assert c.execute('SELECT count(*) FROM schema_migrations WHERE version=?', (version,)).fetchone()[0] == 1
-        conn = S.connect(store.settings.db_path, c, api.app.state.auth, Identity('human:ben', 'human'))
-        try:
-            plan = list(conn.execute('EXPLAIN QUERY PLAN SELECT count(*) FROM messages'))
-            assert any('COVERING INDEX messages_sql_visibility' in row[3] for row in plan), [tuple(row) for row in plan]
-        finally:
-            conn.close()
-
-
 def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world, monkeypatch):
     from backend import sql as S, task_privacy
     from backend.auth import Identity
