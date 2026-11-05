@@ -271,7 +271,13 @@ def test_postal_file_ids_and_unprocessed_arrivals_share_the_audience_ceiling(api
 def test_postal_cursors_scan_past_rejected_arrivals_without_naming_them(api, hq, mail, monkeypatch):
     from backend import postal_mail
     from backend.tests.test_api import put
-    t, attempt = task_turn(api, private=True, roles={"participant": ["ben"]})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    t = post(api, "tasks", {"owner": "ops", "title": "Read the mailbox context", "body": "Read the shared arrivals.",
+                            "private": True}, "ben-test")
+    attempt = claim(api, machine, "ops")
+    assert attempt and attempt["task"]["id"] == t["id"]
     token = attempt["token"]
     put(api, "postal/addresses/all/grants/bot/ops", {})
     with api.app.state.store.read() as c:
