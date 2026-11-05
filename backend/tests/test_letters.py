@@ -635,6 +635,7 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
         from dataclasses import replace
         who = replace(who, task_actor="bot:coo")
         assert not task_privacy.blob_readable(c, task_privacy.actor(who), source)
+    with api.app.state.store.read() as c:
         assert events.read(c, api.app.state.auth, who, 0, topics=("letters",))[0] == []
     get(api, "files/" + source, delegated, expected=403)
 
