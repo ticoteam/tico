@@ -1164,7 +1164,8 @@ def test_deletion_cleanup_is_bounded_and_continues_without_sizes_or_a_readable_l
             assert c.execute("SELECT count(*) FROM cloud_machine_deletions").fetchone()[0] == left
 
 
-def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old_id_stays_fenced(cloud, monkeypatch):
+@pytest.mark.parametrize("old_settles", [False, True])
+def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old_id_stays_fenced(cloud, monkeypatch, old_settles):
     target = deletion_target(cloud, "replace")
     old_id = cloud.row()["machine_id"]
     with cloud.store.transaction() as c:
@@ -1186,6 +1187,8 @@ def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old
     fresh = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
     with cloud.store.read() as c:
         assert CM.held(c, fresh["runner_id"])                 # create's new id has not been received yet
+    if old_settles:
+        cloud.hq.machines[old_id]["state"] = "deleted"
     monkeypatch.setattr(cloud.hq, "create", create)
     cloud.tick(CM.BACKOFF)
     assert cloud.row()["machine_id"] != old_id
@@ -1195,7 +1198,8 @@ def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old
     assert claim_on(cloud, fresh, "ops")["attempt"]
     assert post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm"})["runner_id"] == fresh["runner_id"]
     with cloud.store.read() as c:
-        assert CM.held(c, target.computer["runner_id"])
+        assert bool(CM.held(c, target.computer["runner_id"])) == (not old_settles)
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (target.computer["runner_id"],)).fetchone()[0]
         assert not CM.held(c, fresh["runner_id"])
 
 
@@ -1214,6 +1218,25 @@ def test_an_unsupported_per_id_read_falls_back_to_delete_and_only_its_settlement
     cloud.manager.sync(cloud.hq, cloud.at[0])
     with cloud.store.read() as c:
         assert CM.deleting(c, old_id) == (not settled)
+
+
+@pytest.mark.parametrize("kind", ["replace", "never_enrolled"])
+def test_a_first_delete_that_reports_deleted_removes_its_intent(cloud, monkeypatch, kind):
+    target = deletion_target(cloud, "replace", enroll=kind != "never_enrolled")
+    delete = cloud.hq.delete
+
+    def settled(mid):
+        delete(mid)
+        return {"id": mid, "state": "deleted"}
+
+    monkeypatch.setattr(cloud.hq, "delete", settled)
+    if kind == "never_enrolled":
+        cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
+    else:
+        assert delete_target(cloud, target).status_code == 200
+    assert cloud.row()["state"] == "deleted"
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM cloud_machine_deletions").fetchone()
 
 
 @pytest.mark.parametrize("kind", ["replace", "shared", "unused"])

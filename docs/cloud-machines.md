@@ -102,7 +102,7 @@ again. The fence is only on the old id: work can create a fresh machine and run 
 settles. A create that returns a fenced id is refused as a replacement and tried again later. New enrollment codes
 belong to the fresh request; unused old codes cannot enroll its runner. Settling the old id leaves the new runner
 and its codes intact. The codes' `replacement_for` marker keeps fresh attempts together across a lost create reply,
-so a machine that enrolls before the reply is recovered keeps its runner and code.
+so a machine that enrolls before the reply is recovered keeps its runner and code, even if the old id settles first.
 
 ## How a machine becomes the bot's runner
 
