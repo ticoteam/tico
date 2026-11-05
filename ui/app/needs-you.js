@@ -383,8 +383,6 @@ async function staleDecide(button, path, body) {
     }
   }
 }
-// The Tasks page still calls this loader; keep its entry point inert until that caller is retired.
-async function askFilteredLoad() {}
 
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.

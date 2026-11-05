@@ -413,7 +413,6 @@ async function tasksRead(state, opts = {}) {
   state.loading = false; state.read = true;
   tasksTypeCheck(state);
   tasksTools(state); tasksRender(state);
-  if (tasksNeedsQueue(state)) void askFilteredLoad(state);
   tasksFilterMenuLoaded(state);
   tasksPeekSync(state);
   tasksFinishPending(state, seq);
