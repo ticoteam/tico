@@ -48,6 +48,8 @@ def source_db(tmp_path):
             c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'text','{}',?)",
                       (aid, at))
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, job))
+            c.execute("INSERT INTO attempt_reads(attempt_id,kind,ref,created_at) VALUES(?,'meeting','linked-meeting',?)",
+                      (aid, at))
         # A run recorded with no lease (migration 0072): history, kept in the window, with no token to revoke.
         c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger) VALUES('recorded','sales',?,?,'message')",
                   (now, now))
@@ -74,6 +76,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     assert removed["task_rules"] == 1                                  # scheduled actions never enter the copy
     assert source.read_bytes() == before                                    # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
+    assert removed["attempt_reads"] == 2
     assert stat.S_IMODE(dest.stat().st_mode) == 0o600
     assert not any((dest.parent / name).exists() for name in ("credential.key", "github-app.key", "slack.key"))
     with closing(sqlite3.connect(dest)) as c:
@@ -86,6 +89,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert c.execute("SELECT id,state FROM jobs").fetchall() == [("ran", "completed")]
         assert c.execute("SELECT attempt_id FROM attempt_events").fetchall() == [("done",)]
         assert c.execute("SELECT attempt_id FROM attempt_inputs").fetchall() == [("done",)]
+        assert c.execute("SELECT attempt_id,kind,ref FROM attempt_reads").fetchall() == [("done", "meeting", "linked-meeting")]
         assert c.execute("SELECT token_hash,revoked_at IS NOT NULL FROM runners").fetchall() == [("devcopy-revoked:r1", 1)]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
         assert c.execute("SELECT meeting_id,task_id FROM meeting_task_links").fetchall() == [

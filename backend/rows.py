@@ -21,6 +21,14 @@ class MeetingTaskLinkRow(TypedDict):
     created_at: str
 
 
+class AttemptReadRow(TypedDict):
+    """A meeting or file read by a Make-page attempt; no source content is copied."""
+    attempt_id: str
+    kind: str
+    ref: str
+    created_at: str
+
+
 class TaskRow(TypedDict):
     """One `tasks` row (SELECT *)."""
     id: str

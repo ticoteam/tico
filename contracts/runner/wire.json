@@ -116,9 +116,30 @@
         "source_continuation": {"type": "object", "additionalProperties": true},
         "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
+        "task_context": {"$ref": "#/$defs/TaskContext"},
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "session_epoch": {"type": "integer"},
         "bot_session_epoch": {"type": "integer"}
+      }
+    },
+    "TaskContext": {
+      "type": "object", "additionalProperties": false, "required": ["pages", "meetings"],
+      "properties": {
+        "pages": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/TaskContextPage"}},
+        "meetings": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/TaskContextMeeting"}}
+      }
+    },
+    "TaskContextPage": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "version", "updated_at"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200},
+        "version": {"type": "integer"}, "updated_at": {"type": "string"}
+      }
+    },
+    "TaskContextMeeting": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "date"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string", "maxLength": 200}, "date": {"type": "string"}
       }
     },
     "StartPlaceAnswer": {

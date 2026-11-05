@@ -23,6 +23,7 @@ TABLES = {
     rows.MaintenanceHandoffRow: "maintenance_handoffs",
     rows.MaintenanceRequestRow: "maintenance_requests",
     rows.AttemptRow: "attempts",
+    rows.AttemptReadRow: "attempt_reads",
     rows.RunnerRow: "runners",
     rows.RunnerStateRow: "runner_states",
     rows.ApprovalRow: "approvals",

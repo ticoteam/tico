@@ -158,6 +158,11 @@ def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
     token = claim(api, machine, "coo")["token"]
     tid = post(api, "tasks", {"owner": "ops", "title": "Review the draft", "body": "Read the report."}, token)["id"]
     made = attach(api, tid)
+    # A requester still needs the carried task's containment, even for a subtask it just filed.
+    assert api.get(made["link"], headers=headers(token)).status_code == 404
+    from backend.tests.test_org_rules import as_bot
+    as_bot(api, "coo", "coo-outside-task")
+    token = "coo-outside-task"
     assert api.get(made["link"], headers=headers(token)).content == b"# Report"
     digest = api.app.state.blobs.put(b"old")
     with api.app.state.store.transaction() as c:
