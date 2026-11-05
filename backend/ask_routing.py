@@ -69,6 +69,7 @@ def repair(c):
                          "ORDER BY m.created_at").fetchall():
         old = dict(row)
         refs = H._json(old["refs"], {}) or {}
+        old["refs"] = refs
         conv = H.conversation(c, old["conversation_id"])
         tid = H.message_task_id(old, conv)
         task = H.task(c, tid) if tid else None
