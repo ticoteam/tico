@@ -3954,6 +3954,12 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
                 Ok(())
             })
             .unwrap();
+        if phase == "edit" {
+            store.delivery(&record.id, &Delivery {
+                destination_id:"synthetic".into(),meeting_id:"filed".into(),status:"failed".into(),error:String::new(),
+                receipt:json!({"audience":"team","uploads":{"a":{"key":"original-upload","body":{"section":"task","text":"Original","detail":{"owner":"human:test"},"quote":"","at_ms":null}}}}),
+            }).unwrap();
+        }
         let mut steps = if phase == "add" {
             store
                 .delivery(
@@ -3968,6 +3974,11 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
                 )
                 .unwrap();
             vec![]
+        } else if phase == "edit" {
+            vec![
+                Some(json!({"actor":"human:test"})),
+                Some(json!({"sections":{"task":[]}})),
+            ]
         } else {
             vec![
                 Some(json!({"actor":"human:test"})),
@@ -3989,7 +4000,7 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
             }
             "edit" => {
                 steps.push(Some(json!({"item":{"id":"server-a","section":"task","version":2,"status":"proposed","text":"First edit","detail":{"owner":"human:test"}}})));
-                4
+                3
             }
             _ => 0,
         };
