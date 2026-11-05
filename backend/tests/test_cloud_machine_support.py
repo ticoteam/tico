@@ -278,7 +278,7 @@ def test_cloud_support_catalogue_is_owner_only_and_reads_hq_through_mcp(api, hq)
     key = "team.rules.cloud_machine_support"
     err, found = mcp(api, "hub_settings_find", {"words": "cloud support"})
     assert not err, found
-    entry = next(e for e in found if e["key"] == key)
+    entry = next(e for e in found["result"] if e["key"] == key)
     assert entry["who"] == "owner" and entry["class"] == "confirm"
     assert entry["method"] == "PUT" and entry["route"] == PATH and entry["body"] == {"on": "<bool>"}
     shown = api.get("/api/v2/settings/catalog/" + key, headers=headers()).json()
@@ -317,7 +317,7 @@ def test_cloud_support_catalogue_waits_for_the_owners_confirmation(api, hq, boto
     response = api.post(confirm, json={}, headers=headers())
     assert response.status_code == 200 and response.json()["action"]["status"] == "done", response.text
     assert hq.on is False and hq.calls == [("PUT", {"on": False})]
-    assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}})]
+    assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}, "via": via})]
 
 
 def test_only_a_boolean_is_accepted_and_no_extra_fields_are_sent(api, hq):

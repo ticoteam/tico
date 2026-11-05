@@ -9,10 +9,12 @@ database, made-up bots and repositories, and no request leaves the test server.
 import json
 import sqlite3
 from contextlib import closing
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-from backend import providers, settings_catalog
+from backend import cloud_machines, providers, settings_catalog
 from backend.settings_entries import ENTRIES
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner  # noqa: F401  (fixture)
@@ -262,7 +264,15 @@ def ask(api, attempt, e, objects, person, token):
     LAST[e.key] = f"{planned.status_code} {planned.text[:300]}"
     if got != "card":
         return got
-    tap = tapped(api, planned.json(), token)
+    if e.route == "cloud-machines/support":
+        # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
+        # the shared sweep proves the owner's confirmation as well as refusing everyone else.
+        hq = SimpleNamespace(support=lambda on=None: {"on": on is not False, "machines": []})
+        with patch.object(cloud_machines, "cloud_company", return_value=True), \
+                patch.object(api.app.state.cloud_machines, "client", hq):
+            tap = tapped(api, planned.json(), token)
+    else:
+        tap = tapped(api, planned.json(), token)
     if tap != "ran":
         LAST[e.key] = f"tap: {TAP_DETAIL.get('detail', '')}"
     return "card" if tap == "ran" else "card, then " + tap
