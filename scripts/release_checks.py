@@ -242,7 +242,7 @@ def python_tests(workers, files):
         alone_report = Path(directory) / 'alone.xml'
         if report:
             commands[1].append(f'--junitxml={alone_report}')
-        for label, command in zip(('Parallel Python', 'Alone Python'), commands):
+        for label, command in zip(('Parallel Python', 'Alone Python'), commands, strict=True):
             process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             tail = deque(maxlen=5)
             with process.stdout:
