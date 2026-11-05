@@ -193,6 +193,10 @@ const scenarios = {
     assert.equal(await page.locator('[data-ib-first]').count(), 0, 'skipping is kept');
     await page.locator('[data-ib-setup]').click();
     await page.locator('[data-ib-first]').waitFor();
+    // The demo starts set up without Google, so it opens on the list.
+    await page.evaluate(() => { S.config.demo = true; return renderSettingsInboxes(); });
+    await page.locator('[data-ib-empty]').waitFor();
+    assert.equal(await page.locator('[data-ib-first]').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
     // Phone width: first run fits.
