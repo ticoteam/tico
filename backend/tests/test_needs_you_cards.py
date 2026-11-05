@@ -332,6 +332,8 @@ def test_plate_count_covers_all_boards_folding_and_unread_pages_without_thread_a
     with store.transaction() as c:
         board = H.type_create(c, H.KEEPER, "Launch", [{"name": "Todo", "status": "open"}])
         whole_task = H.task_create(c, "human:ana", "Review the attachments", "Write a report.", "human:ana")
+        declined = H.task_create(c, "human:ana", "Book the venue", "Find a venue.", "bot:ops")
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (declined["id"],))
         wait = H.task_create(c, "human:ana", "Prepare the offsite", "x", "bot:ops")
         card = H.task_create(c, "human:ana", "Choose the offsite venue", "Which venue suits the team?",
                              "human:ana", parent_id=wait["id"], type=board["id"])
@@ -339,17 +341,18 @@ def test_plate_count_covers_all_boards_folding_and_unread_pages_without_thread_a
         room = threads.create(c, "human:cara", title="Launch", audience="members", members=["human:ana"])
         threads.post(c, "human:cara", room["id"], "Please check the launch plan.", to_actor="human:ana")
     whole = get(api, "needs-you")
-    assert whole["plate_count"] == 2
-    assert whole["count"] == 3 and whole["by_kind"]["thread_mention"] == 1
+    assert whole["plate_count"] == 3
+    assert whole["count"] == 4 and whole["by_kind"]["thread_mention"] == 1
+    assert whole["by_kind"]["declined"] == 1
     assert whole["folded_task_ids"] == [wait["id"]]
     assert {it["type_id"] for it in whole["items"] if it["kind"] == "task"} == {"general", board["id"]}
 
     page = get(api, "needs-you?limit=1")
-    assert page["plate_count"] == 2 and page["next"] and len(page["items"]) == 1
-    assert get(api, f"needs-you?limit=1&cursor={page['next']}")["plate_count"] == 2
-    assert get(api, f"needs-you?ids={card['id']}")["plate_count"] == 2
+    assert page["plate_count"] == 3 and page["next"] and len(page["items"]) == 1
+    assert get(api, f"needs-you?limit=1&cursor={page['next']}")["plate_count"] == 3
+    assert get(api, f"needs-you?ids={card['id']}")["plate_count"] == 3
     unchanged = get(api, f"needs-you?version={whole['version']}")
-    assert unchanged["unchanged"] is True and unchanged["plate_count"] == 2
+    assert unchanged["unchanged"] is True and unchanged["plate_count"] == 3
 
     # The desktop's cheap count still skips per-item headers, tiers and sorting.
     def no_headers(*args, **kwargs):
@@ -359,7 +362,7 @@ def test_plate_count_covers_all_boards_folding_and_unread_pages_without_thread_a
         m.setattr(views, "holds_up", no_headers)
         m.setattr(views, "needs_marks", no_headers)
         count = get(api, "needs-you?count=1")
-    assert count["count"] == 3 and count["plate_count"] == 2 and "items" not in count
+    assert count["count"] == 4 and count["plate_count"] == 3 and "items" not in count
 
     who = auth.authenticate({"authorization": "Bearer ana-test"})
     with store.read() as c:
@@ -368,15 +371,16 @@ def test_plate_count_covers_all_boards_folding_and_unread_pages_without_thread_a
     with store.read() as c:
         delta = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
         full = E.read(c, auth, who, after, topics=("needs",), task_view=view)[0][-1][2]
-    assert delta["plate_count"] == full["plate_count"] == get(api, "needs-you?ids=")["plate_count"] == 1
-    assert delta["count"] == full["count"] == 2
+    assert delta["plate_count"] == full["plate_count"] == get(api, "needs-you?ids=")["plate_count"] == 2
+    assert delta["count"] == full["count"] == 3
     assert delta["removed"] == [whole_task["id"]]
 
 
 def test_plate_count_deduplicates_task_kinds_and_skips_merged_and_folded_tasks():
     items = [{"kind": kind, "id": kind} for kind in
-             ("task", "question", "waiting", "approval", "ask", "stale", "memory_tidy", "thread_ask", "update")]
-    items += [{"kind": "question", "id": "task"}, {"kind": "approval", "id": "approval"},
-              {"kind": "waiting", "id": "folded"}, {"kind": "task", "id": "merged"}]
+             ("task", "question", "waiting", "declined", "approval", "ask", "stale", "memory_tidy", "thread_ask", "update")]
+    items += [{"kind": "question", "id": "task"}, {"kind": "declined", "id": "task"},
+              {"kind": "approval", "id": "approval"}, {"kind": "waiting", "id": "folded"},
+              {"kind": "declined", "id": "folded"}, {"kind": "task", "id": "merged"}]
     items[0].update(folded=[{"id": "folded"}], merged=["merged"])
-    assert views.needs_plate_count(items) == 7
+    assert views.needs_plate_count(items) == 8

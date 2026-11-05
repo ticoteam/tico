@@ -173,9 +173,10 @@ function v2NeedsMore() {
   if (needsAll()) return Promise.resolve(false);
   return NEEDS_MORE ||= (async () => {
     try {
-      const cursor = S.v2.needsNext;
+      const cursor = S.v2.needsNext, read = NEEDS_READ;
       const r = await v2Get(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor)}`, {fresh: true});
-      if (!r || S.v2.needsNext !== cursor) return false;        // a read or a live event moved the list meanwhile
+      // A newer read owns the next snapshot even before it lands; this older page must not invalidate it.
+      if (!r || read !== NEEDS_READ || S.v2.needsNext !== cursor) return false;
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
       needsSeen(r.items);

@@ -102,6 +102,7 @@ function needRowHTML(it, ctx = {}) {
 // thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
+const NEEDS_TASK_KINDS = ['task', 'question', 'waiting', 'declined'];
 const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
 const needsExtras = () => needsQueueItems().filter(it => NEEDS_EXTRA_KINDS.includes(it.kind));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose

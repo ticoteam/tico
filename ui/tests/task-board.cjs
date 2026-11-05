@@ -76,6 +76,13 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/me') return json(me);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
+      if (p === '/api/v2/needs-you') {
+        const actor = 'human:' + me.id;
+        const items = tasks.filter(t => t.lane === 'company' && !['done', 'closed', 'declined'].includes(t.status)
+          && (t.owner_id === actor || t.waiting_on === actor || t.ask?.recipient_id === actor))
+          .map(t => ({...t, kind: t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
+        return json({items, count: items.length, plate_count: items.length});
+      }
       if (p === '/api/humans') return json({people});
       if (p === '/api/v2/tasks/flow') {
         flowAsked.push(Object.fromEntries(url.searchParams));
@@ -189,13 +196,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.setViewportSize({width, height: 900});
       const result = await page.evaluate(() => {
         const head = document.querySelector('.tl-head');
-        const items = ['h1', '.tl-search', '#task-new', '#task-view'].map(s => head.querySelector(s).getBoundingClientRect());
+        const items = ['h1', '.tl-search', '#task-new', '#task-view', '[data-go-through]']
+          .map(s => head.querySelector(s)).filter(el => el.checkVisibility()).map(el => el.getBoundingClientRect());
         return {tops: items.map(r => Math.round(r.top)), right: Math.max(...items.map(r => r.right)), edge: head.getBoundingClientRect().right,
-          search: items[1].width, overflow: head.scrollWidth > head.clientWidth + 1};
+          search: head.querySelector('.tl-search').getBoundingClientRect().width, overflow: head.scrollWidth > head.clientWidth + 1};
       });
       if (oneLine) assert(Math.max(...result.tops) - Math.min(...result.tops) <= 8, `${width}px toolbar wraps: ${JSON.stringify(result)}`);
       assert(result.right <= result.edge + 1 && !result.overflow, `${width}px toolbar overflows: ${JSON.stringify(result)}`);
-      assert(result.search >= 60, `${width}px search is too narrow: ${JSON.stringify(result)}`);
+      if (await page.locator('.tl-search').isVisible()) assert(result.search >= 60, `${width}px search is too narrow: ${JSON.stringify(result)}`);
     };
     await checkDesktopToolbar(1280);
     await checkDesktopToolbar(1000, false);
@@ -205,18 +213,24 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.deepEqual(await page.locator('#task-view [role=tab]').evaluateAll(tabs => tabs.map(b => [b.firstChild.textContent, b.getAttribute('aria-selected')])),
       [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Done', 'false'], ['Closed', 'false']]);
     assert.equal(await page.locator('#task-view .nav-icon').count(), 0);
+    assert.equal(await page.locator('.tl-type-search').isHidden(), true, 'Needs you has no board or search cut');
+    assert.equal(await page.locator('.tl-filters').isHidden(), true);
+    // Open keeps the searchable toolbar and filters; check its layout and keyboard order too.
+    await page.locator('#task-view [data-view="list"]').click();
+    await checkDesktopToolbar(1280);
+    await checkDesktopToolbar(1000, false);
+    await checkDesktopToolbar(768, false);
+    await page.setViewportSize({width: 1200, height: 900});
     await page.locator('#task-q').focus();
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-new');
-    await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-who');
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter');
     await page.locator('#task-q').focus();
     await page.keyboard.press('Shift+Tab');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.taskType), 'general', 'the type selector precedes search');
     await page.keyboard.press('Shift+Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'foryou', 'one tab stop for the view tabs');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'list', 'one tab stop for the view tabs');
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-toolbar-desktop.png')});
 
     // List and Board are every open task again, by column; For you stays who needs me.
@@ -373,6 +387,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity));
     await page.locator('#task-view [data-view="foryou"]').click();
     await page.locator('#task-body .tl').waitFor();
+    assert.equal(await page.locator('.tl-type-search').isHidden(), true);
+    assert.equal(await page.locator('.tl-filters').isHidden(), true);
+    await page.locator('#task-view [data-view="list"]').click();
     const mobile = await page.evaluate(() => {
       const head = document.querySelector('.tl-head');
       const rect = s => head.querySelector(s).getBoundingClientRect();

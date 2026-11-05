@@ -44,7 +44,7 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
-**Needs you** counts everything waiting on you across every board: tasks, questions, waits,
+**Needs you** counts everything waiting on you across every board: tasks, questions, waits, recent declines,
 approvals, asks, stale checks and nightly memory tidy. The tab and Tasks navigation badges show the
 same count on desktop and phone; the badges hide at zero. Under **Asked by**, approvals, questions
 outside tasks, stale checks and memory tidies lead under **Approvals and questions**, with their own count.

@@ -75,7 +75,11 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     }
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
-    if (p === '/api/v2/needs-you') return json({items: [LOOSE], count: 1, version: 'v1'});
+    if (p === '/api/v2/needs-you') {
+      const items = [LOOSE, task('t1', server.title), ...Array.from({length: 40}, (_, i) => task(`r${i}`, `Check release link ${i}`)),
+        ...(server.second || [])].map(it => ({kind: 'task', ...it}));
+      return json({items, count: items.length, plate_count: items.length});
+    }
     return json(unrouted(p));
   });
   const shows = title => page.locator('#task-body', {hasText: title}).waitFor({timeout: t(8000)});
@@ -98,6 +102,9 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => TASKS_ST.since === '13.a', null, {timeout: t(5000)});
   assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed with a question on the page');
+  // The remaining checks deliberately omit changes from the task cursor. Open exercises that task-list fallback;
+  // Needs you reads its own current feed, which can already contain a change the task cursor missed.
+  await page.locator('#task-tab-list').click();
 
   // The task changed in a way the delta read does not bring: the list still shows the old copy.
   server.title = 'Draft the final release notes';
@@ -256,7 +263,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   // card, over the list, keeps its words.
   server.title = 'Draft the release notes, fifth pass';
   full = reads.full.length;
-  await page.locator('#task-body [data-need-card="ask:m-loose"] .tl-title').click();
+  await page.evaluate(() => decideOpen('ask:m-loose'));
   await page.locator('#need-card .dc-note textarea').fill('Friday is fine');
   await page.evaluate(() => { TASKS_ST.fullAt = Date.now() - 16 * 60e3; tasksTick(); });
   await shows('Draft the release notes, fifth pass');
@@ -287,7 +294,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   full = reads.full.length; delta = reads.delta;
   await page.evaluate(() => { location.hash = '#/updates'; });
   await page.waitForFunction(() => !TASKS_ST && S.lastRead.tasks?.since === '12.a');
-  await page.evaluate(() => { location.hash = '#/tasks'; });
+  await page.evaluate(() => { location.hash = '#/tasks?view=list'; });
   await page.waitForFunction(() => TASKS_ST && TASKS_ST.since === '13.a', null, {timeout: t(5000)});
   await settled();
   assert.equal(reads.full.length, full, 'a return visit reads no full list');
@@ -299,7 +306,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   assert.equal(await page.evaluate(() => S.lastRead.tasks.since), null, 'a reset drops the kept cursor');
   await page.waitForFunction(() => !LIVE_SOON.has('refresh'), null, {timeout: t(5000)});   // its refresh(true) lands while away
   await page.waitForTimeout(t(300));
-  await page.evaluate(() => { location.hash = '#/tasks'; });
+  await page.evaluate(() => { location.hash = '#/tasks?view=list'; });
   await page.waitForFunction(() => TASKS_ST && TASKS_ST.since, null, {timeout: t(5000)});
   await settled();
   assert.equal(reads.full.length, full + 1, 'a kept list without a cursor is read in full');

@@ -44,7 +44,7 @@ function decideCards(items) {
     if (it.kind === 'ask') { asks.push({key: 'ask:' + it.id, type: 'ask', it, at: it.created_at}); continue; }
     if (it.kind === 'memory_tidy') { approvals.push({key: 'memory_tidy:' + it.id, type: 'memory_tidy', it, at: it.created_at}); continue; }
     if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created_at}); continue; }
-    if (!['task', 'question', 'waiting'].includes(it.kind)) continue;
+    if (!NEEDS_TASK_KINDS.includes(it.kind)) continue;
     const q = it.kind === 'question' ? decideQuestion(it) : null;
     if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask.created_at || it.created_at});
     // A card still waiting for its bot to say what it needs goes last, as the server orders it.
@@ -59,8 +59,8 @@ function decideCards(items) {
   const all = [...asks, ...approvals, ...waiting, ...mine].sort((a, b) => tier(a) - tier(b) || old(b, a));
   return [...all, ...unexplained.sort(old)];
 }
-// Answered on a card: everything but a task that asks for no yes or no and recommends nothing (that one opens whole).
-const decideOnCard = c => c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask;
+// Declines open whole, as do tasks that ask for no yes or no and recommend nothing.
+const decideOnCard = c => c.it.kind !== 'declined' && (c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
 function needsCards(items) {
   const folded = new Set((items || []).flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
   const cards = new Map();

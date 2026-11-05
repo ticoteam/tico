@@ -1077,7 +1077,7 @@ SCHEMAS = {
                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
                                   "answered by their Assistant, and the total"},
         count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
-        plate_count={"type": "integer", "description": "Unique task, question, waiting, approval, ask, stale and memory_tidy items "
+        plate_count={"type": "integer", "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items "
                      "across all boards, excluding folded or merged tasks; excludes thread and update attention"},
         by_kind={"type": "object", "additionalProperties": {"type": "integer"},
                  "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds"},

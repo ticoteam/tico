@@ -194,7 +194,7 @@ function taskItems(state, view = state.view) {
   // counted item. Use the full task when held (relations and properties), with the queue's current ask and status.
   if (tasksNeedsQueue(state, view)) {
     const held = new Map((state.tasks || []).map(t => [String(t.id), t]));
-    const out = needsQueueItems().filter(it => ['task', 'question', 'waiting'].includes(it.kind))
+    const out = needsQueueItems().filter(it => NEEDS_TASK_KINDS.includes(it.kind))
       .map(it => taskItem({...held.get(String(it.id)), ...it}));
     state.memo?.set(view, out);
     return out;

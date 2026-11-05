@@ -65096,7 +65096,7 @@
               },
               "plate_count": {
                 "type": "integer",
-                "description": "Unique task, question, waiting, approval, ask, stale and memory_tidy items across all boards, excluding folded or merged tasks; excludes thread and update attention"
+                "description": "Unique task, question, waiting, declined, approval, ask, stale and memory_tidy items across all boards, excluding folded or merged tasks; excludes thread and update attention"
               },
               "by_kind": {
                 "type": "object",

@@ -90,14 +90,16 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null, needsLive = false} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null, needsLive = false, waitForNeeds = true} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   const needsSnapshot = () => {
     const items = tasks.filter(t => !['done', 'closed'].includes(t.status)
       && !(t.holds || []).some(h => h.kind === 'snoozed')
-      && (t.owner_id === 'human:ana' || t.waiting_on === 'human:ana' || t.ask?.recipient_id === 'human:ana'))
+      && (t.status === 'declined' ? t.requester_id === 'human:ana' && !t.owner_id?.startsWith('human:')
+        && Date.now() - Date.parse(t.updated_at) < 24 * 3600e3
+        : t.owner_id === 'human:ana' || t.waiting_on === 'human:ana' || t.ask?.recipient_id === 'human:ana'))
       .sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)))
-      .map(t => ({...withRelations(t, tasks), kind: t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
+      .map(t => ({...withRelations(t, tasks), kind: t.status === 'declined' ? 'declined' : t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
     const folded = new Set(items.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]));
     return {items, count: items.length, plate_count: new Set(items.filter(it => !folded.has(it.id)).map(it => it.id)).size,
       folded_task_ids: [...folded]};
@@ -205,7 +207,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
-  await page.waitForFunction(() => needsFirstIn());
+  if (waitForNeeds) await page.waitForFunction(() => needsFirstIn());
   await page.evaluate(() => tasksRender(TASKS_ST));
   return {page, errors, posts, tasks, pref: () => pref, conflictNextUpdate: id => conflictNextUpdate.add(id)};
 }
