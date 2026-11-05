@@ -3,10 +3,11 @@ check behaviour (who owns what, what waits for whom, what every bot has done), n
 
 import re
 import sqlite3
-from contextlib import closing, contextmanager
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo, demo_seed, hubdb
@@ -47,32 +48,20 @@ def stored(path):
         return out
 
 
-@contextmanager
-def usage_clock_at(moment):
-    """The usage-limit windows read the wall clock when no time is given, so a build that runs across an hour
-    boundary reads two hours and its hourly spend differs. The windows read the moment given for the build."""
-    saved = U.datetime
-
-    class Pinned(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return moment
-
-    U.datetime = Pinned
-    try:
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
         yield
-    finally:
-        U.datetime = saved
 
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     """Two builds of the same date, back to back, read before any app has opened either database."""
-    with usage_clock_at(NOW):
-        first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
-        rows = stored(first.db_path)
-        second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
-        return first, rows, stored(second.db_path)
+    first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
+    rows = stored(first.db_path)
+    second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+    return first, rows, stored(second.db_path)
 
 
 @pytest.fixture(scope="module")
@@ -260,10 +249,12 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
 def test_the_demo_clock_also_reads_the_spend_windows(built):
     """The spend windows (30 minutes, hour, day...) are read at the build's own moment, not the real clock: a build that
     straddles a window boundary would otherwise store different spend from its twin (the same-date test's failure)."""
-    clock = demo_seed.Clock(NOW)
+    saved = U.clock
+    moment = NOW - timedelta(hours=2)
+    clock = demo_seed.Clock(moment)
     with demo_seed.fixed(clock):
-        assert U.clock() == NOW
-    assert U.clock() != NOW
+        assert U.clock() == moment
+    assert U.clock is saved and U.clock() == NOW
 
 
 def test_the_same_date_builds_the_same_company(built):
