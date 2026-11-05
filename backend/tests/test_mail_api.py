@@ -1,4 +1,4 @@
-"""Server-stored mail is browsable by people, never by bots, and never live from Gmail."""
+"""Stored legacy mail is browsable by people, never by bots. Live Workspace coverage is in test_mail_live."""
 
 
 from backend.auth import Identity
