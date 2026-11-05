@@ -67,6 +67,8 @@ impl TaskLinkSync {
                             let result = match connect(&store, &destination) {
                                 Ok(tico) => tico.flush_saved_links(&store, &id),
                                 Err(error) => {
+                                    // A failed connector must not replace another sender's active request.
+                                    let _drain = store.task_links_lock();
                                     let ids = store
                                         .context(&id)
                                         .unwrap_or_default()

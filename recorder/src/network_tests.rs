@@ -3702,6 +3702,12 @@ fn recorder_link_drainers_serialize_and_reread_the_outbox() {
     assert!(activity.sending);
     assert_eq!(activity.task_ids, ["task"]);
     assert!(activity.error.is_empty());
+    let (connecting, connected) = std::sync::mpsc::channel();
+    let disconnected = crate::task_links::TaskLinkSync::start_with(store.clone(), move |_, _| {
+        connecting.send(()).unwrap();
+        anyhow::bail!("Connection unavailable")
+    });
+    connected.recv_timeout(Duration::from_secs(3)).unwrap();
     let second_id = id.clone();
     let (finished, completion) = std::sync::mpsc::channel();
     let second = std::thread::spawn(move || {
@@ -3713,9 +3719,11 @@ fn recorder_link_drainers_serialize_and_reread_the_outbox() {
         completion.recv_timeout(Duration::from_millis(100)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout)
     ));
+    assert!(store.task_link_activity(&id).sending);
     release.send(()).unwrap();
     first.join().unwrap();
     second.join().unwrap();
+    drop(disconnected);
     server.join().unwrap();
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert!(store.context(&id).unwrap().task_link_operations.is_empty());
