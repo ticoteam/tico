@@ -174,3 +174,20 @@ def test_a_permanent_admission_failure_is_captured_and_the_next_job_still_runs(s
     start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
     assert startup_jobs.ran == ["market", "message_bots", "ship_deployed"]
     assert startup_jobs.captured == [("librarian", failure)]
+
+
+def test_a_database_that_stays_busy_ends_the_wait_and_the_job_is_captured(startup_jobs, monkeypatch):
+    """Shutdown waits for the start jobs, so the admission retry has a deadline."""
+    store = startup_jobs.store
+    take, busy = store._take, sqlite3.OperationalError("database is locked")
+
+    def locked_once_past_the_deadline():
+        monkeypatch.setattr(store, "_take", take)
+        monkeypatch.setattr(start_jobs, "ADMISSION_WAIT", 0)
+        raise busy
+
+    monkeypatch.setattr(start_jobs, "ADMISSION_WAIT", 0)
+    monkeypatch.setattr(store, "_take", locked_once_past_the_deadline)
+    start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
+    assert startup_jobs.ran == ["market", "message_bots", "ship_deployed"]
+    assert startup_jobs.captured == [("librarian", busy)]

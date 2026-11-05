@@ -4,11 +4,15 @@ import sqlite3
 import time
 from contextlib import ExitStack, contextmanager
 
+# Shutdown waits for the start jobs (app.py), so a database that stays busy ends the wait: the job is captured.
+ADMISSION_WAIT = 120
+
 
 @contextmanager
 def _transaction(store):
     # A request can answer busy and be retried by its client; a start job has no client to retry it.
     # Retry admission only: once the job starts, its errors must still be captured without replaying its work.
+    deadline = time.monotonic() + ADMISSION_WAIT
     with ExitStack() as stack:
         while True:
             try:
@@ -16,7 +20,8 @@ def _transaction(store):
                 break
             except sqlite3.OperationalError as exc:
                 code = getattr(exc, "sqlite_errorcode", 0) & 0xff
-                if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) and str(exc) != "database is locked":
+                busy = code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or str(exc) == "database is locked"
+                if not busy or time.monotonic() >= deadline:
                     raise
                 time.sleep(.1)
         yield c
