@@ -36,8 +36,8 @@ const path = require('node:path');
         item.version++;
         if (args.body.text !== undefined) item.text=args.body.text;
         Object.assign(item.detail,args.body.detail || {});
-        if (args.action === 'send') { item.status='pushed'; f.sent=args.body; }
-        return {item};
+        if (args.action === 'send') { item.status='pushed'; f.sent=structuredClone(item); }
+        return {item:structuredClone(item)};
       };
     });
     await page.locator('.row[data-id="m1"]').click();
@@ -68,9 +68,15 @@ const path = require('node:path');
     await title.fill('Before send');
     await page.waitForFunction(()=>window.pendingFixture.inflight===1);
     await title.fill('Final words');
+    await page.evaluate(()=>{const item=window.pendingFixture.a.shared.sections.task[0];item.detail.body='B saved before Send';item.version++;});
     await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).click();
     await page.evaluate(()=>window.pendingFixture.release());
+    await page.getByText(/Current:.*B saved before Send/).waitFor();
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent),undefined);
+    assert.equal(await title.inputValue(),'Final words');
+    await page.getByRole('button',{name:'Send to Sam Okafor',exact:true}).click();
     await page.waitForFunction(()=>window.pendingFixture.sent?.text==='Final words');
+    assert.equal(await page.evaluate(()=>window.pendingFixture.sent.detail.body),'B saved before Send');
     assert.match(await page.evaluate(()=>window.pendingFixture.sent.detail.due),/^2026-12-01T.*Z$/);
     assert.equal(await page.evaluate(()=>window.pendingFixture.max),1);
     await page.evaluate(() => {

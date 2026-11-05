@@ -395,7 +395,7 @@
       Object.values(data.sections).flat().filter(i => i.status !== 'dismissed').map(it => {
         if (it.status === 'pushed') return `<div class="item sent">${esc(it.text)} · Sent${it.result_ref ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
         const draft = sharedDraft(it.id), current = mergeShared(mergeShared(it, draft.inflightPatch || {}), draft.patch), detail = current.detail || {};
-        if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...document.querySelectorAll('[data-shared-item]')].find(n=>n.dataset.sharedItem===it.id)?.contains(document.activeElement)) draft.version = it.version;
+        if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...document.querySelectorAll('[data-shared-item]')].find(n=>n.dataset.sharedItem===it.id)?.contains(document.activeElement)) { draft.version = it.version; draft.base = it; }
         const fields = it.section === 'task' ? ['owner', 'due', 'body'] : it.section === 'doc' ? ['document', 'change', 'why'] : ['side', 'app', 'area'];
         const owners = a.owners.filter(o => !data.audience || data.audience.includes(o.actor));
         return `<div class="shared-item" data-shared-item="${esc(it.id)}"><label>Title<textarea data-defer data-shared-field="text" aria-label="Title">${esc(current.text)}</textarea></label>` + fields.map(key => {
@@ -417,6 +417,15 @@
     clearTimeout(draft.timer);
     if (!draft.error) draft.timer = setTimeout(() => sharedSave(id), 700);
   }
+  function sharedDifference(value, base = {}) {
+    const patch = {};
+    if (value.text !== base.text) patch.text = value.text;
+    for (const [key, part] of Object.entries(value.detail || {})) {
+      const old = base.detail?.[key] || '';
+      if (key === 'due' ? String(part).slice(0,10) !== String(old).slice(0,10) : part !== old) (patch.detail ||= {})[key] = part;
+    }
+    return patch;
+  }
   async function sharedSave(id) {
     const draft = sharedDraft(id);
     clearTimeout(draft.timer);
@@ -424,7 +433,7 @@
     const patch = draft.patch; draft.patch = {}; draft.error = '';
     draft.inflightPatch = patch;
     draft.flight = invoke('shared_item', {id, body:{...patch, version:draft.version}});
-    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; throw new Error('This item changed'); } draft.version=reply.item.version; draft.current=null; }
+    try { const reply = await draft.flight; if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.base=reply.conflict; throw new Error('This item changed'); } draft.version=reply.item.version; draft.base=reply.item; draft.current=null; }
     catch (e) { draft.patch = mergeShared(patch, draft.patch); draft.error = String(e); }
     finally { draft.flight = null; draft.inflightPatch = null; }
     if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return sharedSave(id);
@@ -444,8 +453,8 @@
     }
     try {
       if (draft.flight) { try { await draft.flight; } catch {} if(draft.error) throw new Error(draft.error); }
-      const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...body,version:draft.version} : {status:'dismissed',version:draft.version}});
-      if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.patch=mergeShared(body,draft.patch); throw new Error('This item changed'); }
+      const reply = await invoke('shared_item', {id, action:send ? 'send' : null, body:send ? {...sharedDifference(body,draft.base),version:draft.version} : {status:'dismissed',version:draft.version}});
+      if (reply.conflict) { draft.current=reply.conflict; draft.version=reply.conflict.version; draft.patch=mergeShared(sharedDifference(body,draft.base),draft.patch); draft.base=reply.conflict; throw new Error('This item changed'); }
       draft.patch = {}; draft.error = ''; draft.current=null;
     } catch (e) { draft.error = String(e); }
     finally { draft.sending = false; node.querySelectorAll('button,input,textarea,select').forEach(f => f.disabled = false); }

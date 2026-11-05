@@ -322,5 +322,22 @@ def test_presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):
     with store.transaction() as c:
         assert c.execute('SELECT count(*) FROM presences').fetchone()[0] == 0
         c.execute('INSERT INTO presences VALUES(?,?,?,?,?)',('fresh','meeting:'+rid,'human:ana','fresh',events.H.now()))
+        c.execute('DELETE FROM import_refs WHERE meeting_id=?',(rid,))
+        c.execute('DELETE FROM media_control WHERE meeting_id=?',(rid,))
         c.execute('DELETE FROM meetings WHERE id=?',(rid,))
         assert not c.execute('SELECT 1 FROM presences WHERE place=?',('meeting:'+rid,)).fetchone()
+
+
+def test_participant_queries_recheck_source_even_if_a_historical_grant_remains(api):
+    from backend import meeting_audience
+    from backend.tests.test_api import post
+    mid = post(api, 'live-meetings', {'title':'Source', 'visibility':'private'})['id']
+    post(api, f'live-meetings/{mid}/access', {'add':['human:ben']})
+    tid = post(api, 'tasks', {'title':'Source words','body':'Words','owner':'human:ana','live_meeting_id':mid})['id']
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM live_meeting_access WHERE meeting_id=? AND actor='human:ben'", (mid,))
+        assert c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND actor='human:ben'",(tid,)).fetchone()
+        assert tid not in meeting_audience.participant_tasks(c,'human:ben')
+        who = api.app.state.auth.identity_for_actor(c,'human:ben')
+        assert not c.execute('SELECT id FROM tasks WHERE id=? AND ('+api.app.state.auth.task_sql(c,who)+')',(tid,)).fetchone()
+    assert api.get('/api/v2/tasks/'+tid,headers=headers('ben-test')).status_code in (403,404)

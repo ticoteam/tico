@@ -71,19 +71,20 @@ def record_sent_link(c, meeting_id, task_id, author):
 
 
 def saved_read_sql(actor_sql):
-    # Match media.authorized for human participant grants, using indexed source/actor lookups.
-    return (f"EXISTS (SELECT 1 FROM humans h WHERE h.id=substr({actor_sql},7) AND {actor_sql} LIKE 'human:%' AND h.email<>'' AND "
-            "NOT EXISTS (SELECT 1 FROM media_control mc WHERE mc.meeting_id=m.id AND mc.deleted_at IS NOT NULL) AND ("
-            "lower(h.email)=lower(m.owner) OR (m.review_state='live' AND ("
-            "(coalesce(json_extract(m.metadata,'$.audience'),'')<>'participants' AND "
-            "lower(h.email)=(SELECT lower(json_extract(value,'$.email')) FROM registry_metadata WHERE key='owner')) OR "
-            "(json_extract(m.metadata,'$.kind')='meeting' AND ("
-            "CASE WHEN json_extract(m.metadata,'$.audience')='participants' THEN "
+    # CASE keeps nesting shallow enough for SQLite inside the queue's permission predicate.
+    return (f"EXISTS (SELECT 1 FROM humans h WHERE h.id=substr({actor_sql},7) AND {actor_sql} LIKE 'human:%' "
+            "AND h.email<>'' AND CASE "
+            "WHEN EXISTS (SELECT 1 FROM media_control mc WHERE mc.meeting_id=m.id AND mc.deleted_at IS NOT NULL) THEN 0 "
+            "WHEN lower(h.email)=lower(m.owner) THEN 1 "
+            "WHEN m.review_state<>'live' THEN 0 "
+            "WHEN coalesce(json_extract(m.metadata,'$.audience'),'')<>'participants' AND "
+            "lower(h.email)=(SELECT lower(json_extract(value,'$.email')) FROM registry_metadata WHERE key='owner') THEN 1 "
+            "WHEN coalesce(json_extract(m.metadata,'$.kind'),'')<>'meeting' THEN 0 "
+            "WHEN json_extract(m.metadata,'$.audience')='participants' THEN "
             "EXISTS (SELECT 1 FROM json_each(m.metadata,'$.audience_emails') a WHERE lower(trim(a.value))=lower(h.email)) "
-            "ELSE NOT coalesce(json_extract(m.metadata,'$.private'),0) OR "
-            "EXISTS (SELECT 1 FROM json_each(m.metadata,'$.calendar.attendees') a WHERE lower(trim(a.value))=lower(h.email)) OR "
-            "EXISTS (SELECT 1 FROM json_each(m.metadata,'$.participants') a WHERE lower(trim(json_extract(a.value,'$.email')))=lower(h.email)) "
-            "END))))))")
+            "WHEN NOT coalesce(json_extract(m.metadata,'$.private'),0) THEN 1 "
+            "WHEN EXISTS (SELECT 1 FROM json_each(m.metadata,'$.calendar.attendees') a WHERE lower(trim(a.value))=lower(h.email)) THEN 1 "
+            "ELSE EXISTS (SELECT 1 FROM json_each(m.metadata,'$.participants') a WHERE lower(trim(json_extract(a.value,'$.email')))=lower(h.email)) END)")
 
 
 def live_read_sql(actor_sql):

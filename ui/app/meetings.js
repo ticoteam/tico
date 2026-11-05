@@ -1085,6 +1085,15 @@ function meetPendingPatch(draft, key, value) {
 function meetPendingMerge(a, b) {
   return {...a, ...b, ...((a.detail || b.detail) ? {detail: {...a.detail, ...b.detail}} : {})};
 }
+function meetPendingDifference(value, base = {}) {
+  const patch = {};
+  if (value.text !== base.text) patch.text = value.text;
+  for (const [key, part] of Object.entries(value.detail || {})) {
+    const old = base.detail?.[key] || '';
+    if ((key === 'due' ? String(part).slice(0, 10) !== String(old).slice(0, 10) : part !== old)) (patch.detail ||= {})[key] = part;
+  }
+  return patch;
+}
 async function meetPendingSave(state, rid, iid) {
   const draft = meetPendingDraft(state, iid);
   clearTimeout(draft.timer);
@@ -1092,10 +1101,10 @@ async function meetPendingSave(state, rid, iid) {
   const patch = draft.patch;
   draft.patch = {}; draft.error = '';
   draft.flight = post(`/meetings/${encodeURIComponent(rid)}/items/${encodeURIComponent(iid)}`, {...patch, version: draft.version});
-  try { const reply = await draft.flight; draft.version = reply.item.version; draft.current = null; }
+  try { const reply = await draft.flight; draft.version = reply.item.version; draft.base = reply.item; draft.current = null; }
   catch (e) {
     draft.patch = meetPendingMerge(patch, draft.patch); draft.error = e.message;
-    if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; }
+    if (e.body?.error?.item) { draft.current = e.body.error.item; draft.version = draft.current.version; draft.base = draft.current; }
   }
   finally { draft.flight = null; }
   if (!draft.error && Object.keys(draft.patch).length && !draft.sending) return meetPendingSave(state, rid, iid);
@@ -1111,7 +1120,7 @@ function meetPendingRender(state, rec, data) {
   panel.hidden = !pending.length;
   for (const item of pending) {
     const draft = meetPendingDraft(state, item.id);
-    if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...list.children].find(n => n.dataset.pending === item.id)?.contains(document.activeElement)) draft.version = item.version;
+    if (!draft.flight && !draft.sending && !Object.keys(draft.patch).length && ![...list.children].find(n => n.dataset.pending === item.id)?.contains(document.activeElement)) { draft.version = item.version; draft.base = item; }
     let node = [...list.children].find(row => row.dataset.pending === item.id);
     if (!node) {
       node = document.createElement('section'); node.className = 'meet-item meet-pending'; node.dataset.pending = item.id;
@@ -1149,7 +1158,7 @@ function meetPendingRender(state, rec, data) {
             else final.detail[key] = key === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
           }
           await post(`/meetings/${encodeURIComponent(rec.id)}/items/${encodeURIComponent(item.id)}${send ? '/push' : ''}`,
-                     send ? {...final, force, version: draft.version} : {status: 'dismissed', version: draft.version});
+                     send ? {...meetPendingDifference(final, draft.base), force, version: draft.version} : {status: 'dismissed', version: draft.version});
           draft.patch = {}; draft.error = ''; draft.current = null;
           await meetItemsLoad(state, rec.id);
         } catch (e) {
@@ -1161,7 +1170,7 @@ function meetPendingRender(state, rec, data) {
               if (field.dataset.pendingField === 'text') final.text = field.value;
               else final.detail[field.dataset.pendingField] = field.dataset.pendingField === 'due' && field.value ? new Date(field.value + 'T12:00:00').toISOString() : field.value;
             }
-            draft.patch = meetPendingMerge(final, draft.patch); draft.current = current; draft.version = current.version;
+            draft.patch = meetPendingMerge(meetPendingDifference(final, draft.base), draft.patch); draft.current = current; draft.version = current.version; draft.base = current;
           }
           const duplicate = e.body?.error?.duplicate;
           if (duplicate) {

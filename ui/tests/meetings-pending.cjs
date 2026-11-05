@@ -109,11 +109,16 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     pauseWrite(); await title.fill('Sending draft');
     await a.waitForFunction(()=>!!meetPendingDraft(MEET,'i1').flight);
     await title.fill('Final words');
+    item.detail.body='B saved before Send'; item.version++;
     await a.getByRole('button',{name:'Send to Sam',exact:true}).click();
     release();
+    await a.getByText(/Current:.*B saved before Send/).waitFor();
+    assert.equal(sent,0,'a conflicted autosave prevents Send');
+    assert.equal(await title.inputValue(),'Final words');
+    await a.getByRole('button',{name:'Send to Sam',exact:true}).click();
     await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
     assert.equal(item.text,'Final words'); assert.equal(sent,1);
-    assert.equal(item.detail.body,'Another live edit');
+    assert.equal(item.detail.body,'B saved before Send');
     emit('meeting_items',{meeting_id:'m1',gone:true});
     await b.waitForFunction(()=>MEET.open===false);
     assert.deepEqual(errors,[]);
