@@ -71,9 +71,7 @@
 .notes-filters select{flex:none;width:auto;max-width:220px;height:var(--ctl);font:inherit;font-size:var(--t-base);color:var(--ink);padding:0 26px 0 8px}
 .notes-filters .notes-count{margin-left:auto;padding-left:8px;font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap}
 .notes-rows{overflow:auto}
-/* The viewer's own Granola account (ui/app/meetings-granola.js): one dense row above the strip. */
-.meet-granola{margin:0 0 10px}
-.meet-granola[hidden]{display:none}
+/* The viewer's own Granola account on Tools > Granola (ui/app/meetings-granola.js mountGranolaTool). */
 .mg-row{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .mg-row.mg-flat{border:0;padding:0;background:none}
 .mg-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -88,9 +86,6 @@
 .mg-spin{width:10px;height:10px;border:1.5px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:mg-turn .8s linear infinite}
 @keyframes mg-turn{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.mg-spin{animation:none}}
-.mg-sub{margin:0;font-size:var(--t-sm)}
-.mg-sub .linkish{font-size:var(--t-sm);color:var(--link-quiet);text-decoration:none}
-.mg-sub .linkish:hover{text-decoration:underline}
 .mg-err{margin:0;font-size:var(--t-sm);color:var(--fail)}
 .mg-actions{flex:none;display:flex;align-items:center;gap:6px}
 .mg-actions button.primary,.mg-actions button.ghost{padding:5px 11px;font-size:var(--t-base)}
@@ -102,28 +97,38 @@
 .mg-wait .dot{width:7px;height:7px;background:var(--wait);animation:mg-pulse 1.4s ease-in-out infinite}
 @keyframes mg-pulse{50%{opacity:.3}}
 @media (prefers-reduced-motion:reduce){.mg-wait .dot{animation:none}}
-.mg-more-wrap{position:relative}
-.mg-more{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
-.mg-more:hover,.mg-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
-.mg-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:140px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16)}
-.mg-menu[hidden]{display:none}
-.mg-menu button{display:block;width:100%;padding:7px 10px;border:0;border-radius:5px;background:none;color:var(--ink);font-size:var(--t-base);text-align:left;cursor:pointer;white-space:nowrap}
-.mg-menu button:hover,.mg-menu button:focus-visible{background:var(--surface2)}
-.mg-menu .danger-text{color:var(--fail)}
 @media (max-width:760px){
-  .mg-row{flex-wrap:wrap}
-  .mg-body{flex-basis:calc(100% - 40px)}
-  .mg-row[data-state=off] .mg-actions,.mg-row[data-state=signin] .mg-actions{width:100%;padding-left:36px}
-  .mg-row[data-state=on],.mg-row[data-state=code]{flex-wrap:nowrap}
-  .mg-row[data-state=on] .mg-body,.mg-row[data-state=code] .mg-body{flex-basis:auto}
-  /* the account goes under the name and sync time, so the row stays two lines */
-  .mg-line .mg-email{order:9;flex-basis:100%;max-width:none;font-size:var(--t-sm)}
-  .mg-line .mg-email::before{content:none}
   .mg-actions button.primary,.mg-actions button.ghost,.mg-code-row .ghost{min-height:32px;padding:4px 10px}
-  .mg-more{width:32px;height:32px}
+}
+/* Sources (ui/app/meetings-sources.js): connected rows first, then the ones to connect. */
+.msrc-dialog{width:min(500px,calc(100vw - 32px));padding:16px 18px 10px}
+.msrc-list{list-style:none;margin:0;padding:0}
+.msrc-list+.msrc-list{margin-top:4px;border-top:1px solid var(--line)}
+.msrc-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:9px 0}
+.msrc-row+.msrc-row{border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+.msrc-body{flex:1 1 180px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.msrc-line{display:flex;align-items:center;flex-wrap:wrap;gap:0 6px;font-size:var(--t-base);color:var(--muted);min-width:0}
+.msrc-line b{color:var(--ink);font-weight:600}
+.msrc-line>*+*::before{content:'·';margin-right:6px;color:var(--muted)}
+.msrc-line .mg-email{max-width:100%}
+.msrc-st{display:inline-flex;align-items:center;gap:5px}
+.msrc-st .dot{width:7px;height:7px}
+.msrc-row[data-state=on] .dot{background:var(--ok)}
+.msrc-row[data-state=delayed] .dot,.msrc-row[data-state=wait] .dot{background:var(--wait)}
+.msrc-row[data-state=error] .dot{background:var(--fail)}
+.msrc-row[data-state=error] .msrc-st{color:var(--fail)}
+.msrc-err{margin:0;font-size:var(--t-sm);color:var(--fail);overflow-wrap:anywhere}
+.msrc-actions{flex:none;display:flex;align-items:center;gap:6px;margin-left:auto}
+.msrc-actions .primary,.msrc-actions .ghost{padding:5px 11px;font-size:var(--t-base);text-decoration:none;white-space:nowrap}
+.msrc-actions .danger-text{color:var(--fail)}
+.msrc-actions a.ghost{display:inline-block;border:1px solid var(--line);border-radius:var(--r-ctl);line-height:20px;color:var(--ink)}
+.msrc-actions a.ghost:hover{background:var(--surface2)}
+@media (max-width:760px){
+  .msrc-dialog{padding:14px 14px 8px}
+  .msrc-list[aria-label=Connected] .msrc-actions{width:100%;padding-left:38px}
+  .msrc-actions .primary,.msrc-actions .ghost{min-height:32px;padding:4px 10px}
 }
 .meet-sources[hidden]{display:none}
-.meet-sources-label{margin:0 0 6px;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 .meet-tiles{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
 .meet-tile{flex:1 0 152px;display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;text-align:left;text-decoration:none;cursor:pointer}
 .meet-tile:hover:not(:disabled){border-color:var(--muted)}
@@ -340,17 +345,11 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-select-all{display:flex;align-items:center;margin-right:6px}
 .meet-select-all[hidden]{display:none}
 .meet-select-all input{width:16px;height:16px;accent-color:var(--ink)}
-/* Add source: a quiet menu in the tab bar */
+/* Sources: a quiet link in the tab bar */
 .meet-sources{position:relative;margin:0}
 .meet-review-bar .linkish{display:inline-flex;align-items:center;gap:6px;color:var(--muted);text-decoration:none;font-size:var(--t-base);white-space:nowrap}
 .meet-review-bar .linkish:hover,.meet-review-bar .linkish[aria-expanded=true]{color:var(--ink)}
 .meet-src-btn .dot{width:7px;height:7px;background:var(--fail)}
-.meet-src-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16)}
-.meet-src-menu[hidden]{display:none}
-.meet-tile.item{display:flex;width:100%;flex:none;gap:9px;padding:6px 8px;border:0;border-radius:6px;background:none}
-.meet-tile.item:hover:not(:disabled),.meet-tile.item:focus-visible{background:var(--surface2);border-color:transparent;outline:0}
-.meet-tile.item .mt-text{flex-direction:row;align-items:center;justify-content:space-between;gap:10px;flex:1}
-.meet-tile.item .mt-status{font-size:var(--t-sm)}
 .meet-review-bulk input,.meet-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--ink)}
 .meet-row.review-pending{grid-template-columns:16px auto minmax(0,1fr) auto}
 .meet-row .meet-side{display:flex;align-items:center;gap:6px}

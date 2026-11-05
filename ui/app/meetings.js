@@ -11,6 +11,7 @@ function meetStop() {
     clearInterval(MEET.poll); clearInterval(MEET.sourcesPoll);
     meetSharedStop(MEET);
     granolaStop(MEET);   // ui/app/meetings-granola.js
+    $('#meet-src-dialog')?.remove();
     MEET = null;
   }
   window.liveMeetingsStop?.();
@@ -34,7 +35,7 @@ async function pageNotes() {
       <div class="meet-sources" id="meet-sources" hidden></div>
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
-    <section class="meet-granola" id="meet-granola" aria-label="Granola" hidden></section>
+    <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
     <div class="notes" id="notes">
@@ -241,7 +242,8 @@ function meetSourceState(row, id) {
   if (row.status === 'delayed') return {key: 'delayed', word: 'Delayed'};
   return {key: 'on', word: 'Connected'};
 }
-function meetTile(state, source, big) {
+// A large tile on the empty page: a source and how it is doing.
+function meetTile(state, source) {
   const row = (state.sourceRows || []).find(r => r.id === source.id);
   const known = Array.isArray(state.sourceRows);
   // Granola with account sign-in is per person: the tile shows the viewer's own connection and anyone can use it.
@@ -251,38 +253,34 @@ function meetTile(state, source, big) {
   const when = mine ? (mine.when ? ago(mine.when) : '') : st.key === 'on' ? ago(row.last_import || row.last_succeeded_at) : '';
   const label = `${source.name}: ${st.word || 'Connect'}${when ? (mine ? ', synced ' : ', last import ') + when : ''}`;
   const attrs = source.id === 'close' ? `href="${INTEGRATIONS}/close-crm"` : `type="button" data-msrc="${esc(source.id)}"${S.me?.role === 'owner' || account ? '' : ' disabled title="The owner connects sources"'}`;
-  return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile${big ? ' big' : ' item'}" data-state="${st.key}" ${attrs}${big ? '' : ' role="menuitem"'} aria-label="${esc(label)}">
-      ${meetLogo(source.id, big ? 40 : 20)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
+  return `<${source.id === 'close' ? 'a' : 'button'} class="meet-tile big" data-state="${st.key}" ${attrs} aria-label="${esc(label)}">
+      ${meetLogo(source.id, 40)}<span class="mt-text"><b>${esc(source.name)}</b><span class="mt-status">${st.key && st.key !== 'off' ? '<i class="dot" aria-hidden="true"></i>' : ''}${esc(st.word)}${when ? ` <span class="mt-when">${esc(when)}</span>` : ''}</span></span></${source.id === 'close' ? 'a' : 'button'}>`;
 }
-// The big empty-state tiles leave Granola out when the viewer's own Granola row is above them; the Add source menu keeps it.
-const meetTilesHTML = (state, big) => MEET_SOURCES.filter(s => s.id !== 'granola' || !state.granola || !big).map(s => meetTile(state, s, big)).join('');
+const meetTilesHTML = state => MEET_SOURCES.map(s => meetTile(state, s)).join('');
 function meetWireTiles(state, root) {
   root.querySelectorAll('[data-msrc]').forEach(b => b.onclick = () => {
     const source = MEET_SOURCES.find(s => s.id === b.dataset.msrc);
-    if (source.id === 'granola' && state.granola) return granolaFromTile(state);
+    if (source.id === 'granola' && state.granola) return granolaConnect(state);
     if (window.openMeetingImporter) window.openMeetingImporter(source.id, source.name, () => meetSources(state));
   });
 }
 // Whether anything already brings meetings in: the viewer's Granola or any importer that has been set up.
 const meetConnected = state => granolaReady(state.granola) || (state.sourceRows || []).some(r => MEET_SOURCES.some(m => m.id === r.id) && r.status && r.status !== 'needs_setup');
-// A quiet "Add source" menu in the tab bar, and the large tiles only on a page with no meetings and nothing connected.
+// A quiet "Sources" link in the tab bar (ui/app/meetings-sources.js), and the large tiles only on a page with no
+// meetings and nothing connected.
 function meetPaintTiles(state) {
   // Granola's status can land after the list: swap the empty state's tiles for a plain line once something is connected.
   if (state.empty && !!$('#notes-rows .meet-blank') === meetConnected(state)) { meetList(state); return; }
   const strip = $('#meet-sources');
   if (strip) {
-    const open = !!strip.querySelector('.meet-src-menu:not([hidden])');
-    const trouble = (state.sourceRows || []).some(r => r.status === 'error' || r.status === 'delayed');
     strip.hidden = !state.loaded || (!!state.empty && !meetConnected(state));
-    strip.innerHTML = `<button type="button" class="linkish meet-src-btn" aria-haspopup="menu" aria-expanded="${open}">${trouble ? '<i class="dot" aria-hidden="true"></i>' : ''}Add source</button>
-      <div class="meet-src-menu" role="menu" aria-label="Sources"${open ? '' : ' hidden'}>${meetTilesHTML(state, false)}</div>`;
-    const button = strip.querySelector('.meet-src-btn'), menu = strip.querySelector('.meet-src-menu');
-    button.onclick = event => { event.stopPropagation(); menu.hidden = !menu.hidden; button.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button:not(:disabled), a')?.focus(); };
-    menu.onkeydown = event => { if (event.key === 'Escape') { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); } };
-    meetWireTiles(state, strip);
+    strip.innerHTML = '<button type="button" class="linkish meet-src-btn" aria-haspopup="dialog">Sources</button>';
+    strip.querySelector('.meet-src-btn').onclick = () => meetSourcesOpen(state);
+    meetSourcesDot(state);
   }
   const big = document.querySelector('#notes-rows [data-meet-tiles]');
-  if (big) { big.innerHTML = meetTilesHTML(state, true); meetWireTiles(state, big); }
+  if (big) { big.innerHTML = meetTilesHTML(state); meetWireTiles(state, big); }
+  meetSourcesPaint(state);
 }
 async function meetSources(state) {
   let rows;
@@ -378,10 +376,10 @@ async function meetLoad(state, first) {
   else if (!state.selected) $('#notes-detail').innerHTML = '';
 }
 const meetFiltersOn = state => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
-// No meetings and nothing narrowing the list: the sources, since the Add source menu is hidden until one is connected
+// No meetings and nothing narrowing the list: the sources, since the Sources link is hidden until one is connected
 // (the header has Add notes).
 const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
-  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div></div>`;
+  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
 const meetPeople = r => {

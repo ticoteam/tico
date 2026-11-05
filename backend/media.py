@@ -1073,7 +1073,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             else:
                 status = "delayed"
             extra = []
-            from .meeting_importers import IMPORTERS, status_of
+            from .meeting_importers import ERROR_TEXT, IMPORTERS, status_of
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
@@ -1086,7 +1086,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                               "last_succeeded_at": health["last_succeeded_at"] if health else None,
                               "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
                               "pending": 0, "imported": detail.get("imported_total", 0),
-                              "error_code": detail.get("error_code", "")})
+                              "error_code": detail.get("error_code", ""),
+                              # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
+                              "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
+                              if detail.get("error_code") else ""})
             return {"sources": [
                 {"id": "import", "name": "Import", "status": "available", "last_succeeded_at": None},
                 {"id": "close", "name": "Close", "status": status,

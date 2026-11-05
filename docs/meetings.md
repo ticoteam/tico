@@ -292,11 +292,15 @@ and 365; it makes one bounded pass, then exits. Restart the service afterward. O
 service to stop: move `secrets/close-calls.env` aside so the runner stops the job, run the backfill, then put it back. The worker stops with an
 error if a single day exceeds its 5,000-activity page limit, so narrow the window and retry.
 
-The **Add source** menu beside Settings on the Meetings page lists Close and each importer below, with the worker's
-heartbeat in one word: **Connect** until the worker connects, **Connected** (with the last import) after a recent
-successful pull, **Delayed** when its heartbeat is stale, **Error** after a failed pull (a red dot on the menu).
-With no meetings and nothing connected, the page shows them as large tiles (**Add notes** stays in the header). An entry opens that source's setup: Close its tool page,
-the others a dialog with the same form as Tools > Meeting importers (owners only).
+**Sources** beside Settings on the Meetings page opens one dialog with every source: your own Granola account, Close
+and each importer below. Connected sources come first, each with its status in one word (**Connected**, **Waiting**
+until the worker connects, **Delayed** when its heartbeat is stale, **Error** after a failed pull, **Signed out** for
+Granola), its last sync and, when it fails, why. Sources shows a red dot while any of them needs a look. A connected
+source has **Sync now** (Granola), **Sign in again** or **Reconnect** when it needs one, and **Remove**: for Granola
+that disconnects your account, for an importer it turns the importer off (owners only), and Close is managed on its
+tool page. The rest have **Connect**: Granola's sign-in for anyone, Close's tool page, and for the others a dialog with
+the same form as Tools > Meeting importers (owners only). With no meetings and nothing connected, the page shows them
+as large tiles instead (**Add notes** stays in the header).
 
 ## Meeting importers
 
@@ -440,10 +444,10 @@ here but not run against a Workspace.
 
 ### Granola
 
-**Connect your own Granola account in Meetings (default).** Choose **Connect Granola** (in Meetings, Add source, or Tools > Granola), open the
+**Connect your own Granola account in Meetings (default).** Choose **Connect** next to Granola (in Meetings > Sources, or Tools > Granola), open the
 verification link and enter the code if asked. Each person connects their own account through
 Granola's official remote MCP at `https://mcp.granola.ai/mcp`. Tico stores tokens encrypted in the
-server credential vault; bots and Computers cannot read them. Disconnect in Meetings to delete them.
+server credential vault; bots and Computers cannot read them. Remove it in Meetings > Sources to delete them.
 
 The free plan imports your own notes and AI summaries from the last 30 days, without transcripts or
 folders. Paid plans can also import transcripts when Granola permits them. Private notes typed by
@@ -481,7 +485,7 @@ the blocked meetings as skipped. Each attempt resets its skipped count. A rate-l
 in about five minutes, or later when Granola supplies a longer `Retry-After`, and resumes from that
 checkpoint. The first free-plan
 sync requests `last_30_days` when supported; otherwise it uses a custom date range.
-Disconnect cancels an active sync and removes the stored token promptly; revocation is attempted in
+Removing Granola cancels an active sync and removes the stored token promptly; revocation is attempted in
 background when Granola advertises a trusted endpoint. Connections are removed when a person leaves
 or loses sign-in. A pending reconnect retains the working token until success or expiry; a successful
 new sign-in starts a fresh 30-day backfill.
