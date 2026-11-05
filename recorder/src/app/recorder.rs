@@ -349,6 +349,7 @@ pub struct Recorder {
     link_tasks: Value,
     link_tasks_at: Instant,
     link_tasks_generation: u64,
+    link_tasks_dirty: bool,
     seen_task_links: Value,
     link_activity: tico_recorder_native::task_links::Activity,
     chat_error: String,
@@ -485,6 +486,7 @@ impl Recorder {
             link_tasks: Value::Null,
             link_tasks_at: Instant::now() - Duration::from_secs(60),
             link_tasks_generation: 0,
+            link_tasks_dirty: true,
             seen_task_links: Value::Null,
             link_activity: Default::default(),
             chat_error: String::new(),
@@ -1136,6 +1138,7 @@ impl Recorder {
                 if here
                     && let Ok(value) = reply.result
                     && value["scope"] == self.link_scope()
+                    && value["generation"] == self.link_tasks_generation
                 {
                     if let Some(rows) = value["linked"]["tasks"].as_array()
                         && let Some(loaded) = self.link_tasks["linked"]["tasks"].as_array_mut()

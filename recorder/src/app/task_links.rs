@@ -43,7 +43,7 @@ impl Recorder {
 
     pub(super) fn invalidate_task_links(&mut self) {
         self.link_tasks_generation += 1;
-        self.link_tasks_at = Instant::now() - Duration::from_secs(60);
+        self.link_tasks_dirty = true;
     }
 
     pub(super) fn saved_items_with_links(&self) -> Value {
@@ -167,7 +167,7 @@ impl Recorder {
         if self.demo
             || self.context.kept_on_mac
             || self.background.contains("task-links")
-            || self.link_tasks_at.elapsed() < Duration::from_secs(60)
+            || (!self.link_tasks_dirty && self.link_tasks_at.elapsed() < Duration::from_secs(60))
         {
             return;
         }
@@ -215,6 +215,7 @@ impl Recorder {
             return;
         }
         self.link_tasks_at = Instant::now();
+        self.link_tasks_dirty = false;
         self.job_for("task-links", Some(id), move || {
             let data = (|| -> anyhow::Result<Value> {
                 let tico = Tico::saved(&config, &destination)?;
@@ -279,8 +280,9 @@ impl Recorder {
             return;
         };
         let scope = self.link_scope();
+        let generation = self.link_tasks_generation;
         self.network_job("more-links", move |tico, _, _| {
-            Ok(json!({"scope":scope,"linked":tico.linked_tasks(&remote, Some(&cursor))?}))
+            Ok(json!({"scope":scope,"generation":generation,"linked":tico.linked_tasks(&remote, Some(&cursor))?}))
         });
     }
     pub fn edit_task_detail(&mut self, item_id: &str, due: &str, body: &str) {
@@ -484,6 +486,7 @@ mod tests {
             task_id: "task".into(),
             ..Default::default()
         });
+        app.store.save_context(&id, &app.context).unwrap();
         app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"task","title":"Review pricing","number":42}]});
         app.link_tasks_at = Instant::now();
         assert_eq!(app.actions_view("one")["items"][0]["pending"], false);
@@ -565,7 +568,9 @@ mod tests {
         app.link_tasks = json!({"scope":app.link_scope(),"tasks":[],"linked":{"tasks":[]}});
         app.link_tasks_at = Instant::now();
         let generation = app.link_tasks_generation;
-        let stale = app.link_tasks.clone();
+        let expected = app.link_tasks.clone();
+        let mut stale = expected.clone();
+        stale["tasks"] = json!([{"id":"stale","title":"Before the link"}]);
         // No outbox change: a Save may acknowledge a batch before it removes the operation.
         app.store
             .delivery(
@@ -583,7 +588,7 @@ mod tests {
             a.current.as_ref().unwrap().deliveries.len() == 1
         });
         assert!(app.link_tasks_generation > generation);
-        assert!(app.link_tasks_at.elapsed() >= Duration::from_secs(60));
+        assert!(app.link_tasks_dirty);
         assert_eq!(app.context.notes, "Window draft");
         app.tx
             .send(Reply {
@@ -595,7 +600,8 @@ mod tests {
             })
             .unwrap();
         app.tick();
-        assert!(app.link_tasks_at.elapsed() >= Duration::from_secs(60));
+        assert!(app.link_tasks_dirty);
+        assert_eq!(app.link_tasks, expected);
     }
 
     #[test]
