@@ -10,6 +10,12 @@ even while a runner still checks in. Enrollment and subsequent heartbeats finish
 pending `starting` transition, so the next heartbeat repairs an old record too. A heartbeat does not cancel a stop
 already reserved by the scheduler.
 
+A stopped machine stays asleep while its queued tasks wait for a person, a snooze, a prerequisite or a check.
+Health and Computers show those waits. With no other reason, Computers says **asleep; starts when work can run**.
+Samples and load from the last boot do not mean an asleep machine is failing to report. They still hold new starts
+once it is running. Last-boot readiness can wake the machine for a fresh report too; stale samples and memory holds
+do not block that wake. Work that can run but has waited over 15 minutes for the machine to start is a Health problem.
+
 ## Shared or own
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,

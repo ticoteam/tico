@@ -24,6 +24,10 @@ start, and a fix or a command to inspect its runs. Work held on purpose never ma
 Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible bot tasks
 that nothing is set to move, the tasks Task Manager lists as stalled. Settings > Health shows the same summaries.
 
+A cloud machine asleep while its tasks wait shows the claim's task wait as queue information, without a stuck-bot
+alert. Its last boot's load raises no reporting warning while it rests. Work that can run but stays asleep past the
+queue cutoff still raises a problem; **Starting** means the machine is starting.
+
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
 or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
 move it is: the author merges main, or the reviewer reviews. These clocks start when the existing GitHub sync
