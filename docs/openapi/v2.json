@@ -66417,6 +66417,22 @@
             ],
             "title": "Document"
           },
+          "slack": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "warn",
+                  "hold"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slack"
+          },
           "patterns": {
             "anyOf": [
               {

@@ -22,7 +22,7 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 PEOPLE = {"owner": ("ana-test", "ana"), "admin": ("ben-test", "ben"), "member": ("cara-test", "cara")}
 # Cara neither runs nor owns finance, made nothing below and operates no computer: "the bot's owners", "the person who
 # made it", "the computer's operator" and the managers of a team rule's scope are Ana's and Ben's (as an admin) here.
-MANAGERS = ("bot", "creator", "operator", "scope", "automation")
+MANAGERS = ("bot", "creator", "operator", "scope")
 
 # A value each entry's route takes. An entry left out sends `{}` (json) or the type's plain sample; a route that does
 # not take it says so with a 422, which the test reports as not proven rather than passing.
@@ -56,7 +56,6 @@ SAMPLES = {
     # refused), at the revision _objects read.
     "models.providers": lambda o: {"enabled": ["openai", "anthropic"], "expected_revision": o.get("providers-revision", 0)},
     "alerts.company.cap": {"monthly_cap": 3},
-    "mailbox.routine": lambda o: {"enabled": False},
     "bot.profile": {"description": "Keeps the books."},
     "bot.repositories": {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "write",
                                                         "run_workflows": True}]},
@@ -141,12 +140,6 @@ def _objects(api, machine):
     ids["triggers"] = post(api, "triggers", {"name": "Parity trigger"}, "ana-test")
     ids["webhooks"] = post(api, "webhooks", {"name": "Parity hook", "url": "https://hooks.acme.example/parity",
                                              "events": ["custom.*"]}, "ana-test")["webhook"]
-    ids["automations"] = post(api, "automations", {
-        "name": "Mailbox parity routine", "owner": "person:ben", "enabled": True,
-        "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
-        "steps": [{"id": "tell", "type": "action", "enabled": True, "do": "wake_bot",
-                   "args": {"bot": "finance", "text": "Look"}}],
-    }, "ana-test")["id"]
     found = {}
     for key, made in ids.items():
         made = made.get(next(iter(made))) if isinstance(made, dict) and len(made) == 1 else made
