@@ -187,3 +187,7 @@
 .qc-actions .qc-btn:disabled{opacity:.5;cursor:default}
 .qc-note{width:100%;box-sizing:border-box;resize:vertical;font:inherit}
 .qc-foot{display:flex;flex-direction:column;gap:8px}
+
+/* Memory proposals are plain text; long diff lines scroll within their card. */
+.dc-body>pre,.dc-body details>pre{max-width:100%;overflow-x:auto;flex-shrink:0}
+.dc-body code{overflow-wrap:anywhere}

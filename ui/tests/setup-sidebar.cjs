@@ -1,6 +1,6 @@
 // Offline regression for the sidebar around the first-run wizard. Fixtures only.
 //  - on the wizard, before setup is done, the sidebar shows Finish setup and the team, not the app's pages or
-//    "What's new · 103 updates", and the phone's bottom bar is hidden; anywhere else, and once setup is
+//    the "Updated to" version row, and the phone's bottom bar is hidden; anywhere else, and once setup is
 //    done, everything is back;
 //  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
 //    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
@@ -30,7 +30,7 @@ const groups = ['Leadership', 'Engineering', 'Finance', 'Marketing', 'Product'].
 const bot = (name, display_name, team, reports_to, extra = {}) => ({name, display_name, team, reports_to,
   org_parent: reports_to.startsWith('human:') ? 'p:' + reports_to.slice(6) : 'b:' + reports_to, status: 'planned',
   state: 'planned', onboarding_state: 'needs_setup', harness: 'claude', model: 'claude-opus-5-5', host: 'keeper',
-  can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], operator: 'ana', revision: 1, ...extra});
+  can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], owner_id: 'ana', revision: 1, ...extra});
 const TEAM = [
   bot('head-of-engineering', 'Head of Engineering', 'engineering', 'human:ana'),
   bot('qa-engineer', 'QA Engineer', 'engineering', 'head-of-engineering'),

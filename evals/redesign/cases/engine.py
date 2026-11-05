@@ -126,7 +126,7 @@ def ran_ok(run, sid):
 def started(run):
     """The run's start as an aware time (a naive one is read as UTC), or None when it has none."""
     try:
-        when = dt.datetime.fromisoformat(str(run.get("started") or "").replace("Z", "+00:00"))
+        when = dt.datetime.fromisoformat(str(run.get("started_at") or "").replace("Z", "+00:00"))
     except ValueError:
         return None
     return when if when.tzinfo else when.replace(tzinfo=UTC)
@@ -273,8 +273,8 @@ def turn_tools(f):
         return False, "no turn claimed"
     me = f.get("me")
     body = me.body if me is not None and isinstance(me.body, dict) else {}
-    ok = body.get("actor") == "bot:" + CLAUDE_ID and body.get("attempt_id") == got(f, "turn1")
-    return ok, f"the turn's calls act as {body.get('actor')} (attempt {body.get('attempt_id')})"
+    ok = body.get("actor") == "bot:" + CLAUDE_ID and body.get("run_id") == got(f, "turn1")
+    return ok, f"the turn's calls act as {body.get('actor')} (run {body.get('run_id')})"
 
 
 def second_held(f):
@@ -480,7 +480,7 @@ def counts_kept(f):
     two messages came, with its run and its drop, after the 31-day prune."""
     got(f, "day31")
     _, run = hit_run_at(f, "runs31")
-    day = str(run.get("started") or "")[:10]
+    day = str(run.get("started_at") or "")[:10]
     daily = (unwrap(body(f, "runs31")) or {}).get("daily") or []
     row = next((d for d in daily if d.get("day") == day), None)
     ok = bool(row) and row.get("runs") == 1 and row.get("dropped") == 1
@@ -521,7 +521,7 @@ def pick_builtin(f):
     if not found:
         raise Unmet(W3, "the listing has no built-in automation (builtin true)")
     order = {CLAUDE_REF: 0, OPENAI_REF: 0, LEAD_REF: 1}
-    return min(found, key=lambda row: order.get(row.get("owner"), 2))
+    return min(found, key=lambda row: order.get(row.get("owner_id"), 2))
 
 
 def on_builtin(org, f, method, who, payload=None):
@@ -553,7 +553,7 @@ def post_refused(f):
 
 def lead_refused(f):
     ok, text = replied(f, "lead_pause", 403, needs=("listing",))
-    return ok, f"{text} (built-in owned by {pick_builtin(f).get('owner')})"
+    return ok, f"{text} (built-in owned by {pick_builtin(f).get('owner_id')})"
 
 
 def dana_pause_warns(f):

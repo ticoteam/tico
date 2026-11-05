@@ -2,6 +2,7 @@
 sees and acts on its own cards only; a decline budget's cutoff freezes them and a purchase over the budget is not held;
 a card is saved on vendor accounts by a person, replay-safe, and a bot reads where its card works; a single-use card
 waits for a provider that has them; and no card number reaches a payload, a receipt, a read or a tool."""
+import json
 import random
 import re
 import threading
@@ -15,6 +16,7 @@ from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import validate as V
+from backend.finance.core.org import SYSTEM
 from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
 from backend.tests.test_api import api, headers  # noqa: F401
@@ -45,8 +47,8 @@ def _world(books, fake):
     """Acme's Mercury connected; a 50.00 budget with a 20.00 standing card for each bot, both synced to Mercury (the
     fake answers card-coder and card-seller); both bots granted finance.cards."""
     connect(books, fake)
-    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"},
-                                 {**MERCURY["card_created"], "cardId": "card-seller", "lastFourDigits": "2222"}]
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"},
+                                 {**MERCURY["card_created"], "id": "card-seller", "lastFour": "2222"}]
     with books.transaction() as c:
         budget = _budget(c)
         coder = str(_bot_card(c, budget, "bot:coder").result["card_id"])
@@ -144,12 +146,18 @@ def test_a_cutoff_freeze_lifts_when_a_raise_leaves_room_and_a_raise_short_of_it_
     sync_once(books, fake, LATER)
     assert sorted(fake.sent("card_state")) == [("card-coder", "freeze"), ("card-seller", "freeze")]
     with books.transaction() as c:
-        # 60.00 still leaves the 50.00 spent and the 40.00 reserved over it: the freezes stay.
+        # 60.00 against 50.00 spent is under the cutoff, so both freezes lift. The 40.00 the cards reserve is not spend,
+        # but it still refuses a new hold that no room leaves: a 20.00 hold does not fit (reserves count in remaining).
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 60_000}).status == "committed"
-        assert _status(c, coder) == "frozen" and _status(c, seller) == "frozen"
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        assert _frozen_by(c, coder) is None and _frozen_by(c, seller) is None
+        ctx = load(c, AT)
+        refused = budgeting.place(ctx, budget_scope=budget, amount=20_000, currency=ctx.book.base_currency,
+                                  source="manual", source_id="reserve-check", expires_at=None)
+        assert not refused.allowed
+        assert budgeting.held_amount(ctx, "manual", "reserve-check") == 0
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
         assert _status(c, coder) == "active" and _status(c, seller) == "active"
-        assert _frozen_by(c, coder) is None
         assert act(c, OWNER, "card_unfreeze", {"card_id": coder}).code == "conflict"
     sync_once(books, fake, LATER)
     sent = fake.sent("card_state")
@@ -174,6 +182,128 @@ def test_a_cutoff_freeze_lifts_at_a_new_period_and_a_person_freeze_stays(books):
     sync_once(books, fake, NEXT)
     sent = fake.sent("card_state")
     assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") not in sent
+
+
+def test_the_hourly_look_lifts_a_cutoff_freeze_as_a_logged_system_action(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert FA.watch_documents(c, NEXT) >= 1
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        lifts = c.execute("SELECT actor, status, payload FROM fin_actions WHERE kind='card_unfreeze'").fetchall()
+        assert sorted((actor, status) for actor, status, _ in lifts) == [(SYSTEM, "committed")] * 2
+        assert {json.loads(payload)["card_id"] for *_, payload in lifts} == {coder, seller}
+    sync_once(books, fake, NEXT)
+    sent = fake.sent("card_state")
+    assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") in sent
+
+
+def test_a_cutoff_lift_that_failed_is_tried_again_the_next_hour(books, monkeypatch):
+    """Item E: the hourly look keys each lift by its card and the hour, so a lift refused in one hour (its failed result
+    is stored under that key) is tried again the next hour. Here each card's first lift names a card that is not there,
+    so it is refused; the next hour's lift goes through, and a look in that same hour lifts nothing more."""
+    from backend.finance import cards as CARDS
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    real = FA.act
+    tried: set[str] = set()
+
+    def refuse_each_cards_first_lift(c, who, kind, payload, key, **kw):
+        if kind == "card_unfreeze" and payload["card_id"] not in tried:
+            tried.add(payload["card_id"])
+            payload = {**payload, "card_id": "card-not-there"}
+        return real(c, who, kind, payload, key, **kw)
+    monkeypatch.setattr(FA, "act", refuse_each_cards_first_lift)
+    with books.transaction() as c:
+        assert CARDS.lift_through_actions(load(c, NEXT)) == 0                    # refused: both stay frozen
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    with books.transaction() as c:
+        assert CARDS.lift_through_actions(load(c, "2026-11-03T10:00:00.000000Z")) == 2
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE kind='card_unfreeze' AND status='committed'"
+                         ).fetchone()[0] == 2
+        assert CARDS.lift_through_actions(load(c, "2026-11-03T10:30:00.000000Z")) == 0   # nothing left to lift
+
+
+def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": seller}).status == "committed"
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        refused = act(c, SYSTEM, "card_unfreeze", {"card_id": seller}, key="system-lift-person")
+        assert (refused.status, refused.code) == ("failed", "conflict")
+        assert _status(c, seller) == "frozen" and _frozen_by(c, seller) == "person"
+        assert _frozen_by(c, coder) == "budget"
+
+
+def test_the_card_help_says_the_mercury_user_may_be_left_out_because_tico_finds_one(books):
+    """Mercury issues a card to one of its own users. A card names that user, or Tico finds it (the holder's email,
+    then the connection's card user): provider_user_id is optional, and the next tests show each way it is found."""
+    fields = {f["name"]: f["required"] for f in FA.help("card_create")["fields"]}
+    assert fields["provider_user_id"] is False
+
+
+def test_a_card_for_a_teammate_is_issued_to_the_mercury_user_with_the_same_email(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-ben", "lastFour": "3333"}]
+    with books.transaction() as c:
+        made = act(c, OWNER, "card_create", {"holder": "human:ben", "budget_id": _budget(c), "amount": 20_000})
+        assert made.status == "committed", (made.code, made.reason)
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-ben", 20_000)]
+    with books.read() as c:       # Mercury's Card answer: its id, and its last four (lastFour) kept on the card
+        assert tuple(c.execute("SELECT provider_card_id, last4 FROM fin_cards").fetchone()) == ("card-ben", "3333")
+
+
+def test_a_card_with_no_named_or_found_mercury_user_takes_the_connections_card_user_or_is_refused(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"}]
+    with books.transaction() as c:
+        budget = _budget(c)
+        refused = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
+        assert (refused.status, refused.code) == ("failed", "invalid")
+        assert "Mercury user is needed" in refused.reason
+        assert c.execute("SELECT count(*) FROM fin_cards").fetchone()[0] == 0
+        connection = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_settings", {"connection_id": connection,
+                                                     "card_user_id": "user-zed"}).code == "invalid"
+        assert act(c, OWNER, "connection_settings", {"connection_id": connection,
+                                                     "card_user_id": "user-eve"}).status == "committed"
+        made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
+        assert made.status == "committed", (made.code, made.reason)
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-eve", 20_000)]
+
+
+def test_a_card_request_may_name_its_merchant_which_is_kept_on_the_card_and_not_sent_to_mercury(books):
+    """Spec §8.1: Mercury has no merchant locks, so a card's merchant is the request's intent. It is kept on the card
+    and the help lists it; it is not sent to Mercury, and the card's limit is what Mercury enforces."""
+    assert {f["name"] for f in FA.help("card_create")["fields"]} >= {"merchant"}
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"}]
+    with books.transaction() as c:
+        made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": _budget(c), "amount": 20_000,
+                                             "provider_user_id": "user-cara", "merchant": "Acme Cloud"})
+        assert made.status == "committed", (made.code, made.reason)
+        card_id = str(made.result["card_id"])
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-cara", 20_000)]
+    with books.read() as c:
+        assert c.execute("SELECT merchant FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "Acme Cloud"
 
 
 def test_a_person_who_freezes_a_budget_frozen_card_keeps_it_frozen_when_the_budget_has_room(books):
@@ -221,9 +351,16 @@ def test_a_pause_freezes_the_cards_keeping_allocations_and_a_raise_that_leaves_r
     sync_once(books, fake, LATER)
     assert sorted(fake.sent("card_state")) == [("card-coder", "freeze"), ("card-seller", "freeze")]
     with books.transaction() as c:
-        # Zero leaves no room: the reserves are over it, so raising to exactly them does not lift the seller's card.
+        # Nothing is spent, so 40.00 (the cards' reserves exactly) is under the cutoff and the seller's card lifts. The
+        # reserves still leave no room for a new hold: a 10.00 hold is refused, and the person's freeze on coder stays.
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 40_000}).status == "committed"
-        assert _status(c, seller) == "frozen"
+        assert _status(c, seller) == "active" and _frozen_by(c, seller) is None
+        assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "person"
+        ctx = load(c, AT)
+        refused = budgeting.place(ctx, budget_scope=budget, amount=10_000, currency=ctx.book.base_currency,
+                                  source="manual", source_id="reserve-pause", expires_at=None)
+        assert not refused.allowed
+        assert budgeting.held_amount(ctx, "manual", "reserve-pause") == 0
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
         assert _status(c, seller) == "active" and _frozen_by(c, seller) is None
         assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "person"
@@ -274,6 +411,113 @@ def test_a_bot_card_purchase_over_a_decline_budget_is_declined_and_one_within_it
         assert c.execute("SELECT count(*) FROM fin_holds WHERE source='card'").fetchone()[0] == 1
 
 
+def _whole_budget_card(books, fake):
+    """Tools (50.00, decline) with one bot card whose limit is the whole budget and nothing else on it, so the card runs
+    until the money is spent (spec 4.4). The fake answers card-coder."""
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"}]
+    with books.transaction() as c:
+        budget = _budget(c)
+        coder = str(_bot_card(c, budget, "bot:coder", amount=50_000).result["card_id"])
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.cards"}).status == "committed"
+    return budget, coder
+
+
+def _auth(c, budget, card, amount, source_id):
+    """A card purchase authorised on `card`: a hold that moves capacity from the card's allocation to held."""
+    ctx = load(c, AT)
+    return budgeting.place(ctx, budget_scope=budget, amount=amount, currency=ctx.book.base_currency, source="card",
+                           source_id=source_id, expires_at=None, target=f"card:{card}")
+
+
+def _budget_events(c, budget):
+    return sorted(r[0] for r in c.execute("SELECT name FROM fin_events WHERE subject=? AND name LIKE 'finance.budget.%'",
+                                          (budget,)).fetchall())
+
+
+def test_a_whole_budget_card_does_not_freeze_or_warn_after_a_small_charge(books):
+    fake = FakeMercury()
+    budget, coder = _whole_budget_card(books, fake)
+    with books.transaction() as c:
+        assert _auth(c, budget, coder, 4_000, "auth-small").allowed
+        FA.drain_events(c, AT)
+        assert _status(c, coder) == "active" and _frozen_by(c, coder) is None
+        assert _budget_events(c, budget) == []
+        st = budgeting.budget_state(c, budget, AT)
+        # The card's allocation still reserves the rest of the budget, so remaining is 0; spend is only the 40.00.
+        assert (st.spent, st.remaining, st.crossed_warn, st.at_limit) == (4_000, 0, False, False)
+
+
+def test_a_whole_budget_card_warns_at_80_percent_of_real_spend_not_of_what_it_reserves(books):
+    fake = FakeMercury()
+    budget, coder = _whole_budget_card(books, fake)
+    with books.transaction() as c:
+        assert _auth(c, budget, coder, 35_000, "auth-warn-1").allowed
+        assert _budget_events(c, budget) == []                          # 35.00 is 70% of spend: under the warn level
+        assert _auth(c, budget, coder, 5_000, "auth-warn-2").allowed
+        assert _budget_events(c, budget) == [budgeting.WARN_EVENT]      # 40.00 is 80% of spend
+        FA.drain_events(c, AT)
+        assert _status(c, coder) == "active"
+
+
+def test_a_whole_budget_card_freezes_when_real_spend_reaches_the_budget(books):
+    fake = FakeMercury()
+    budget, coder = _whole_budget_card(books, fake)
+    with books.transaction() as c:
+        assert _auth(c, budget, coder, 40_000, "auth-freeze-1").allowed
+        assert _auth(c, budget, coder, 10_000, "auth-freeze-2").allowed       # 50.00 spent: the cutoff
+        FA.drain_events(c, AT)
+        assert budgeting.LIMIT_EVENT in _budget_events(c, budget)
+        assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "budget"
+        assert act(c, OWNER, "card_unfreeze", {"card_id": coder}).code == "denied"
+
+
+def test_a_force_post_past_the_limit_shows_as_over_and_freezes_the_card(books):
+    fake = FakeMercury()
+    budget, coder = _whole_budget_card(books, fake)
+    with books.transaction() as c:
+        held = _auth(c, budget, coder, 20_000, "auth-force")
+        assert held.allowed
+        # Mercury posts a force post in full (spec 8.2): the hold settles at 600.00 with no ledger entry yet.
+        assert budgeting.hold_settle(c, held.hold_id, 60_000, at=AT)
+        st = budgeting.budget_state(c, budget, AT)
+        assert (st.actual, st.spent, st.remaining, st.at_limit) == (0, 60_000, -10_000, True)
+        FA.drain_events(c, AT)
+        assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "budget"
+
+
+def test_a_raise_releases_a_whole_budget_card_frozen_at_its_cutoff(books):
+    fake = FakeMercury()
+    budget, coder = _whole_budget_card(books, fake)
+    with books.transaction() as c:
+        assert _auth(c, budget, coder, 50_000, "auth-raise").allowed
+        FA.drain_events(c, AT)
+        assert _status(c, coder) == "frozen"
+    sync_once(books, fake, LATER)
+    assert ("card-coder", "freeze") in fake.sent("card_state")
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 60_000}).status == "committed"
+        assert _status(c, coder) == "active" and _frozen_by(c, coder) is None
+    sync_once(books, fake, LATER)
+    assert ("card-coder", "unfreeze") in fake.sent("card_state")
+
+
+def test_a_second_allocation_is_refused_while_the_budget_is_fully_reserved(books):
+    fake = FakeMercury()
+    budget, coder = _whole_budget_card(books, fake)
+    with books.transaction() as c:
+        refused = _bot_card(c, budget, "bot:seller", amount=10_000, user="user-dan")
+        assert refused.code == "invalid" and "does not fit" in refused.reason
+        ctx = load(c, AT)
+        held = budgeting.place(ctx, budget_scope=budget, amount=1_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="reserved-full", expires_at=None)
+        assert not held.allowed                                                # the reserves leave no room for a hold
+        assert budgeting.held_amount(ctx, "manual", "reserved-full") == 0
+        assert _status(c, coder) == "active"
+
+
 def test_single_use_waits_for_a_provider_that_has_them_and_each_kind_fits_its_holder(books):
     fake = FakeMercury()
     connect(books, fake)
@@ -285,8 +529,6 @@ def test_single_use_waits_for_a_provider_that_has_them_and_each_kind_fits_its_ho
         for holder, kind in (("bot:coder", "person"), ("human:eve", "standing"), ("bot:coder", "gift")):
             assert act(c, OWNER, "card_create", {"holder": holder, "budget_id": budget, "amount": 5_000, "kind": kind,
                                                  "provider_user_id": "u"}).code == "invalid", (holder, kind)
-        assert act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 5_000,
-                                             "merchant": "acme.example", "provider_user_id": "u"}).code == "invalid"
         dry = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 5_000,
                                             "kind": "standing", "provider_user_id": "u"}, dry_run=True)
         assert dry.rule == "rule:bot-card-standing"
@@ -442,7 +684,24 @@ def test_a_card_number_is_refused_however_its_digits_are_spaced_or_followed(book
     assert not V.has_card_number({"budget_id": "ab4222222222222cd", "card_id": "12345678-1234-1234-1234-123456789012"})
 
 
-DASHED_CARD_SHAPES = ("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
+def test_a_cvc_typed_as_free_text_is_refused_and_never_stored(books):
+    """§8.3, §13: a CVC is never stored, logged or sent to a model, whatever sentence it is typed into."""
+    for typed in ("CVC 123", "cvc: 4567", "CVV2=123", "CVC123", "security code 987", "cvc is 123"):
+        assert V.has_card_number({"memo": typed}), typed
+    # CSC alone is not a card code: a memo can name a year or an invoice with it (only CVC, CVV and security code are).
+    for text in ("invoice 123 for cvc work", "CVC check passed on 3 runs", "security code 123456",
+                 "order 2026-10-31 ref 0001", "CSC 2026"):
+        assert not V.has_card_number({"memo": text}), text
+    with books.transaction() as c:
+        budgets = c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0]
+        refused = act(c, OWNER, "budget_create", {"name": "CVC 123", "account_id": account(c, "6100"),
+                                                  "amount": 10_000, "at_limit": "decline"})
+        assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", FA.CARD_NUMBER_REFUSED)
+        assert c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0] == budgets
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE payload LIKE '%CVC%'").fetchone()[0] == 0
+
+
+DASHED_CARD_SHAPES =("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
                       "4242-4242-4242-4242-", "-4242424242424242", "4242424242424242-", "-4242-4242-4242-4242",
                       "123-4242-4242-4242-4242")
 
@@ -520,12 +779,9 @@ def test_an_unfreeze_waits_while_an_ancestor_decline_budget_is_at_its_cutoff(boo
     with books.transaction() as c:
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
-        ctx = load(c, AT)
-        # Tools has 5.00 left once Eng tools' 5.00 card reserves its share: a 5.00 hold takes Tools to its cutoff, while
-        # Eng tools (10.00, 5.00 reserved) still has room.
-        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
-                               source_id="cutoff-tools", expires_at=None)
-        assert held.allowed
+        # Tools' spend reaches its 50.00 amount: its cutoff. Eng tools (10.00, 5.00 reserved) has room of its own, so
+        # only Tools' ancestor cutoff holds the card.
+        spend(c, "6100", 50_000)
         FA.drain_events(c, AT)
         assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
         refused = act(c, OWNER, "card_unfreeze", {"card_id": kid})
@@ -542,10 +798,7 @@ def test_an_unfreeze_refusal_names_only_budgets_the_asker_can_see(books):
     with books.transaction() as c:
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
-        ctx = load(c, AT)
-        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
-                               source_id="cutoff-hidden", expires_at=None)
-        assert held.allowed
+        spend(c, "6100", 50_000)                     # Tools at its cutoff: spend, not the reserves, holds the cards
         FA.drain_events(c, AT)
         assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
         # The bot holds its card but has no view of Tools, the budget above it: the refusal does not name it.
@@ -562,10 +815,7 @@ def test_a_refusal_that_named_a_budget_replays_without_the_name_once_the_asker_c
     with books.transaction() as c:
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
-        ctx = load(c, AT)
-        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
-                               source_id="cutoff-replay", expires_at=None)
-        assert held.allowed
+        spend(c, "6100", 50_000)                     # Tools at its cutoff
         FA.drain_events(c, AT)
         assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
         grant = act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
@@ -591,10 +841,7 @@ def test_a_status_read_names_a_budget_only_while_the_asker_can_see_it(books):
     with books.transaction() as c:
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
-        ctx = load(c, AT)
-        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
-                               source_id="cutoff-read", expires_at=None)
-        assert held.allowed
+        spend(c, "6100", 50_000)                     # Tools at its cutoff
         FA.drain_events(c, AT)
         grant = act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
         assert grant.status == "committed"
@@ -685,7 +932,7 @@ def test_a_card_on_an_ended_child_budget_is_refused_and_nothing_is_queued(books)
 
 def test_ending_a_child_keeps_its_card_reserve_against_the_parent(books):
     """Eng tools (100.00) has a 50.00 card under Tools (100.00), so Tools has 50.00 left. Ending Eng tools frees nothing:
-    the card keeps its Mercury limit until it is lowered or cancelled. Tools' remaining must not rise."""
+    the card keeps its Mercury limit until it is lowered or canceled. Tools' remaining must not rise."""
     fake = FakeMercury()
     connect(books, fake)
     with books.transaction() as c:
@@ -705,17 +952,14 @@ def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "at_limit": "warn"}).status == "committed"
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
-        ctx = load(c, AT)
-        # One 5.00 hold on Eng tools takes it to its cutoff, and Tools (a warn budget) to zero with it.
-        held = budgeting.place(ctx, budget_scope=eng, amount=5_000, currency=ctx.book.base_currency, source="manual",
-                               source_id="cutoff-eng", expires_at=None)
-        assert held.allowed
+        # Eng tools' spend reaches its 100.00 amount: its cutoff freezes the card under it. Tools (a warn budget) above it
+        # blocks nothing.
+        spend(c, "6100", 10_000, team="eng")
         FA.drain_events(c, AT)
         assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
-        # Releasing the hold gives Eng tools room (a raise would push Tools' cards past its amount). The warn budget
-        # above it blocks nothing.
-        assert budgeting.release_for(load(c, LATER), "manual", "cutoff-eng") == 1
-        FA.watch_documents(c, LATER)
+        # A new month: Eng tools' October spend is out of the period, so the freeze lifts. (A raise is refused here, since a
+        # child's amount counts against Tools' cards.) The warn budget above it still blocks nothing.
+        FA.watch_documents(c, NEXT)
         assert _status(c, kid) == "active" and _frozen_by(c, kid) is None
 
 

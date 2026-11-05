@@ -1,7 +1,7 @@
 """One-click clarify on a stale bot ask.
 
 A bot's question a person never answered goes stale after two business days (hubdb.ask_older): it stays on their
-list until the next weekday-morning batch sends it back to its bot (backend/still_needed.py). One tap on Clarify sends the
+list until the weekday-morning batch sends it back to its bot's task roundup (backend/still_needed.py). One tap on Clarify sends the
 asking bot the winning prompt of the clarifying-prompt experiment: say whether the request is still relevant, and
 if so restate it plainly. The ask itself stays open: the person has not answered, they have asked for a clearer
 question. One clarify per ask: a second tap is refused, so the bot hears it once.
@@ -32,13 +32,13 @@ def already_asked(conn, ask_id):
 
 
 def clarify(conn, actor, ask_id):
-    """Send the clarify prompt to the bot that asked `ask_id`. Returns the nudge it got."""
+    """Send the clarify prompt to the bot that asked `ask_id`. Returns where the prompt was sent: the bot, the task and the message."""
     asked = H.message(conn, ask_id)
     if not asked or asked["kind"] != "ask":
         raise Problem("not_found", "Question not found", 404)
-    if asked["to_actor"] != actor:
+    if asked["recipient_id"] != actor:
         raise Problem("forbidden", "Only the person it asked can ask for a clearer question", 403)
-    asker = asked["from_actor"]
+    asker = asked["sender_id"]
     if not H.is_bot(asker):
         raise Problem("kind", "Only a bot's question can be clarified", 422)
     if not conn.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}",
@@ -48,7 +48,7 @@ def clarify(conn, actor, ask_id):
         raise Problem("not_stale", "This question is still fresh; answer it, or wait until it goes stale", 422)
     if already_asked(conn, ask_id):
         raise Problem("already_requested", "The bot was already asked to clarify this question", 409)
-    person = (H.human(conn, H.actor_id(asked["to_actor"])) or {}).get("name") or H.actor_id(asked["to_actor"])
+    person = (H.human(conn, H.actor_id(asked["recipient_id"])) or {}).get("name") or H.actor_id(asked["recipient_id"])
     text = message(asker, person, asked.get("body"))
     task_id = H.message_task_id(asked, H.conversation(conn, asked["conversation_id"]))
     task = H.task(conn, task_id) if task_id else None
@@ -57,8 +57,8 @@ def clarify(conn, actor, ask_id):
     if task:
         # As with a comment meant for the bot: it wakes on the task, whose clock restarts, but what the person
         # owes it does not change: the wait stays theirs until they answer.
-        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
-        conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+        conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
+        conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                      (task["id"], asker, actor, msg["id"], H.shift(H.now(), hours=24)))
     H.event(conn, actor, ACTION, ask_id, {"to": actor, "bot": asker, **({"task": task["id"]} if task else {})})
     return {"bot": asker, "task": task["id"] if task else None, "message": msg["id"]}

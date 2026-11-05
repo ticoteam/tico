@@ -54,15 +54,17 @@ def _tasks(c, auth, who, attrs, base):
     if attrs.get("waiting-on") != "viewer":
         return ""
     # The same rules as Needs you: waiting on the viewer, not snoozed, and a task the reader may see (task_sql).
-    clauses, args = ["status='waiting'", "waiting_on=?", "(snoozed_until IS NULL OR snoozed_until<=?)",
+    clauses, args = ["status='waiting'", "waiting_on=?", "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+                     "AND sh.released_at IS NULL AND sh.until_at>?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
-        clauses.append("owner=?")
-        args.append("bot:" + attrs["bot"])
+        bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
+        clauses.append("owner_id=?")
+        args.append("bot:" + bot)
     if attrs.get("parent"):
         clauses.append("parent_id=?")
         args.append(attrs["parent"])
-    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created LIMIT ?",
+    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created_at LIMIT ?",
                      (*args, _limit(attrs.get("limit")))).fetchall()
     if not rows:
         return '<p class="tico-live-empty">Nothing waiting on you</p>'

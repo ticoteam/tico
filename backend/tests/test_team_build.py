@@ -10,7 +10,7 @@ import pytest
 import backend
 from backend import groups as Groups
 from backend import recruiting
-from backend.store import Problem
+from backend.store import H, Problem
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
 from backend.tests.test_strategy_bot import as_bot
 
@@ -78,6 +78,12 @@ def counts(api):
     with api.app.state.store.read() as c:
         return (c.execute("SELECT COUNT(*) FROM seats WHERE closed_at IS NULL").fetchone()[0],
                 c.execute("SELECT COUNT(*) FROM bots").fetchone()[0])
+
+
+def bot_id(api, slug):
+    """A bot by its slug, as its id: the team and the access lists name bots by id."""
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
 
 
 def team_bots(api, team, token="ana-test"):
@@ -152,7 +158,7 @@ def test_a_bot_the_caller_cannot_see_is_neither_named_nor_counted_on_the_team(ap
     assert r.status_code == 200, r.text
     # The owner sees the bot on the team, by its name. Cara is on none of its lists: the role is open, the bot hidden.
     owners = lead_of(suggest(api, team))
-    assert owners["bot"] == {"slug": slug, "name": name, "icon": owners["pick"]["icon"]}
+    assert owners["bot"] == {"id": bot_id(api, slug), "slug": slug, "name": name, "icon": owners["pick"]["icon"]}
     assert slug not in team_bots(api, team, token="cara-test")
     seen_by_cara = suggest(api, team, token="cara-test")
     head = lead_of(seen_by_cara)
@@ -169,12 +175,13 @@ def test_a_bot_the_permissions_do_not_name_is_hidden_from_the_team_even_for_the_
     # The permissions come back without this bot: a missing entry is hidden, not open to everyone.
     auth = api.app.state.auth
     real = auth.bot_accesses
+    hidden = bot_id(api, slug)
     monkeypatch.setattr(auth, "bot_accesses",
-                        lambda c, who, slugs=None: {k: v for k, v in real(c, who, slugs).items() if k != slug})
+                        lambda c, who, slugs=None: {k: v for k, v in real(c, who, slugs).items() if k != hidden})
     found = suggest(api, team)
     head = lead_of(found)
     assert not head["on_team"] and head["bot"] is None and head["checked"]
-    assert slug not in json.dumps(found)
+    assert slug not in json.dumps(found) and hidden not in json.dumps(found)
 
 
 def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypatch):
@@ -185,6 +192,7 @@ def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypat
     slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-lead"}])["bots"][0]["slug"]
     store, auth = api.app.state.store, api.app.state.auth
     real = auth.bot_accesses
+    bid = bot_id(api, slug)
     moved = []
 
     def then_leave_the_team(c, who, slugs=None):
@@ -192,7 +200,7 @@ def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypat
         if not moved:
             moved.append(slug)
             with store.transaction() as writer:           # another connection commits while this answer is being read
-                Groups._set_bot(writer, slug, "")
+                Groups._set_bot(writer, bid, "")
         return out
     monkeypatch.setattr(auth, "bot_accesses", then_leave_the_team)
     before = lead_of(suggest(api, team))
@@ -217,8 +225,8 @@ def test_hiring_makes_one_seat_per_pick_in_the_team_with_the_head_first_and_fill
     head = bots["engineering-lead"]["slug"]
     assert get(api, f"bots/{head}")["reports_to"] == "human:ana"
     for template in ("devops-engineer", "security-engineer"):
-        assert get(api, f"bots/{bots[template]['slug']}")["reports_to"] == head
-    assert team_bots(api, team) == {bot["slug"] for bot in hired["bots"]}      # the team's group is theirs
+        assert get(api, f"bots/{bots[template]['slug']}")["reports_to"] == bot_id(api, head)
+    assert team_bots(api, team) == {bot["id"] for bot in hired["bots"]}      # the team's group is theirs
     assert counts(api) == (seats_before, bots_before + 3)                       # every seat filled, none left open
     assert not any(seat["title"] in {"Head of Engineering", "DevOps Engineer"} for seat in get(api, "seats")["seats"])
     # The same team's suggestion now has those roles on the team.
@@ -280,3 +288,33 @@ def test_only_a_person_suggests_and_hires(api):
 def test_an_unknown_team_is_not_found(api):
     suggest(api, "no-such-team", expected=404)
     hire(api, "no-such-team", [{"role": "x", "template": "pr-reviewer"}], expected=404)
+
+
+def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monkeypatch):
+    """A team that already fills more roles than the suggestion shows still sees each of them, and the head it lacks."""
+    from backend import team_build
+    providers(api, "anthropic", "openai")
+    team = engineering(api)
+    others = [role["pick"]["template"] for role in suggest(api, team)["roles"] if role["pick"].get("template")]
+    others += [alt["template"] for role in suggest(api, team)["roles"] for alt in role["alternatives"]]
+    filled = {t: "ghost-" + t for t in dict.fromkeys(others) if t and t != "engineering-lead"}
+    assert len(filled) > team_build.ROLES
+    monkeypatch.setattr(team_build, "_filled", lambda c, group: filled)
+    roles = [role for role in suggest(api, team)["roles"] if role["pick"].get("template")]
+    shown = {role["pick"]["template"]: role["on_team"] for role in roles}
+    assert roles[0]["pick"]["template"] == "engineering-lead" and shown["engineering-lead"] is False
+    picked = [t for t in shown if t != "engineering-lead"]
+    assert all(shown[t] for t in picked) and set(picked) == set(filled)
+
+
+def test_a_filled_niche_role_is_shown_even_when_the_briefing_does_not_name_it(api, monkeypatch):
+    from backend import team_build
+    providers(api, "anthropic", "openai")
+    team = engineering(api)
+    dept = suggest(api, team)["department"]
+    niche = next(card["template"] for card in team_build.recruit.catalog(api.app.state.onboarding.settings)["cards"]
+                 if card["department"] == dept and card["suggest"] == "niche")
+    monkeypatch.setattr(team_build, "_filled", lambda c, group: {niche: "ghost-" + niche})
+    roles = {role["pick"]["template"]: role["on_team"] for role in suggest(api, team, briefing="")["roles"]
+             if role["pick"].get("template")}
+    assert roles.get(niche) is True

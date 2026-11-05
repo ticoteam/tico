@@ -5,8 +5,8 @@ that matter. The team's reason codes and offers live in `save-policy.md`. Where 
 rule under "Rules that apply" requires otherwise, and the disagreement is written on the reasons log line. This is not legal
 advice. Check the rules for each market with counsel.
 
-## Cancelling stays as easy as signing up
-- Cancelling uses the same medium as sign-up, or an easier one, and finishes in one step once the customer has asked.
+## Canceling stays as easy as signing up
+- Canceling uses the same medium as sign-up, or an easier one, and finishes in one step once the customer has asked.
 - One save offer per request, shown once. A second offer after a no, a maze of screens and a guilt line all count against the
   customer and, in some markets, against the team.
 
@@ -14,7 +14,7 @@ advice. Check the rules for each market with counsel.
 - United States, federal: the FTC click-to-cancel rule was set aside by the Eighth Circuit in July 2025 (most summaries give
   8 July) and never took effect. State automatic-renewal laws were not affected.
 - California: AB 2863 amended the Automatic Renewal Law, effective 1 July 2025. As summarised in law-firm alerts, it requires
-  cancelling in the same medium used to enter the subscription, adds a click-to-quit option, requires annual reminders and
+  canceling in the same medium used to enter the subscription, adds a click-to-quit option, requires annual reminders and
   express consent, and allows retention offers during cancellation subject to conditions. The statute text (Bus. & Prof. Code
   sections 17601 and 17602) was not read for this file.
 - European Union: Directive (EU) 2023/2673 (Article 11a) requires a withdrawal button for distance contracts concluded through

@@ -1,0 +1,66 @@
+# OpenAI Codex CLI. Signs in with a ChatGPT subscription (device code, relayed to the browser).
+id = "codex"
+name = "Codex"
+host = "codex"
+runtime = "codex"
+executable = "codex"
+providers = ["openai"]
+
+[install]
+method = "npm"
+package = "@openai/codex"
+
+[version]
+args = ["--version"]
+pattern = '(\d+\.\d+\.\d+)'
+
+[update]
+policy = "latest"
+
+[auth]
+methods = ["device-code", "subscription", "api-key"]
+api_key_env = ["OPENAI_API_KEY"]
+
+[login]
+command = ["login", "--device-auth"]
+terminal = false
+# Sign out (Settings > Computers): the CLI's own logout, and the files under CODEX_HOME that hold the login, which a
+# Switch account moves into place only once the new sign-in has finished.
+logout = ["logout"]
+files = ["auth.json"]
+# Connect (Settings > Models): signs in on the side, so the computer's own login stays; the result is this file there.
+connect = ["login", "--device-auth"]
+connect_file = "auth.json"
+
+# What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
+[capabilities]
+packet_only = true
+terminal_login = ["login"]
+api_keys = "computer"
+api_key_login = ["login", "--with-api-key"]
+subscription_marker = "chatgpt"
+subscription_profiles = true
+profile_home = "CODEX_HOME"
+weekly_usage = "refresh"
+account = "app-server"
+mcp_transports = ["http"]
+# Checked against codex 0.163: a thread whose turn was interrupted takes the next turn, in the same app-server and
+# after a restart (thread/resume).
+resume_after_interrupt = true
+# A message for the running turn goes in with turn/steer.
+steer = true
+goal_runs_across_turns = true
+# Bots on one ChatGPT login run together and share its usage allowance.
+one_turn_per_login = false
+compaction = true
+resume_command = "codex resume"
+model_list = "host"
+
+[capabilities.sign_in_status]
+check = "command"
+args = ["login", "status"]
+ready = "logged in"
+not_ready = "not logged in"
+ready_detail = "Signed in with ChatGPT"
+missing_detail = "Codex login required"
+timeout_s = 8

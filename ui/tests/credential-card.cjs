@@ -1,4 +1,4 @@
-// The credential card (ui/credential-card.js): a bot asks for a secret inside the chat, the person types it
+// The credential card (ui/credential-card.js): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
 // there, and it goes to one route only (the credential request's save), never anywhere else, never back into
 // the page, a toast or the console. Fixtures only, no network.
 const {chromium, webkit} = require('playwright');
@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 
 const SECRET = 'ana@acme.example:ATATT-super-secret-7788';
 const now = new Date().toISOString();
@@ -21,8 +22,8 @@ async function open(browser, viewport, view) {
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('console', m => seen.console.push(m.text()));
   const messages = [
-    {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Make me a Jira bot', created: now, refs: {}},
-    {id: 'm2', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Jira Manager needs your Jira login', created: now, refs: {credential_request: 'cr1'}}];
+    {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Make me a Jira bot', created_at: now, refs: {}},
+    {id: 'm2', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Jira Manager needs your Jira login', created_at: now, refs: {credential_request: 'cr1'}}];
   const snapshot = {messages, execution: null};
   await page.context().route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -37,6 +38,7 @@ async function open(browser, viewport, view) {
     if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: 'event: snapshot\ndata: ' + JSON.stringify(snapshot) + '\n\n'});
+    if (p === '/api/v2/assistant' && req.method() === 'GET') return json(assistantView('c-botops', snapshot));
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-botops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
     if (p.startsWith('/api/v2/conversations/c-') && p.endsWith('/snapshot')) return json(snapshot);
     if (p === '/api/v2/credential-requests/cr1' && req.method() === 'GET') return json(seen.view);
@@ -46,10 +48,10 @@ async function open(browser, viewport, view) {
       seen.view = {...seen.view, status: 'saved', credential_id: 'c1'};
       return json(seen.view);
     }
-    if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'cancelled'}; return json(seen.view); }
+    if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'canceled'}; return json(seen.view); }
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/botops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   return {page, seen};
 }
 

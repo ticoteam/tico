@@ -48,7 +48,7 @@ function ldotLayer() {
   LDOT_GHOSTS.length = 0;
   return LDOT_LAYER;
 }
-// A copy not flying now (one whose flight was just cancelled is free at once; its late cancel event leaves it be).
+// A copy not flying now (one whose flight was just canceled is free at once; its late cancel event leaves it be).
 function ldotGhost() {
   const layer = ldotLayer(), free = LDOT_GHOSTS.find(g => g._run?.playState !== 'running');
   if (free) return free;

@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import sqlite3
+from unittest.mock import Mock
 
 import pytest
 
@@ -6,6 +8,24 @@ from backend import routines
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
+
+
+def test_failed_computer_retirement_records_failure_and_runs_the_remaining_cleanup(api, monkeypatch, caplog):
+    from backend import computers, screening, support_triage
+
+    retirement = Mock(side_effect=sqlite3.OperationalError("writer lock timeout"))
+    monkeypatch.setattr(computers, "sweep", retirement)
+    following = []
+    for module in (support_triage, screening):          # the deadline sweeps after retirement (pruning is Clean up's)
+        sweep = Mock(wraps=module.sweep)
+        monkeypatch.setattr(module, "sweep", sweep)
+        following.append(sweep)
+    result = Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert result["failures"] == [{"computer_retirement": "OperationalError"}]
+    retirement.assert_called_once()
+    for sweep in following:
+        sweep.assert_called_once()
+    assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
 def test_schedule_survives_restart_without_duplicate_work(api):
@@ -17,11 +37,11 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         aid = routines.create(c, H.KEEPER, 'coo', {'title': 'Review daily work', 'cron': '0 9 * * *',
                                                    'timezone': 'America/Los_Angeles', 'text': 'Review work'},
                               key='morning')['automation']
-        c.execute("UPDATE automations SET next_due=? WHERE id=?", ('2026-09-09T16:00:00.000000Z', aid))
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ('2026-09-09T16:00:00.000000Z', aid))
 
     def tasks(c):
-        return [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner='bot:coo' AND title='Review daily work' "
-                                        "ORDER BY created, rowid")]
+        return [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id='bot:coo' AND title='Review daily work' "
+                                        "ORDER BY created_at, rowid")]
     Scheduler(store, api.app.state.execution).tick(at)
     Scheduler(store, api.app.state.execution).tick(at)
     with store.read() as c:
@@ -30,8 +50,8 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         assert len(fired) == 1
         # The day's update request (backend/updates.py) is a job of its own, not the routine's.
         assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE json_extract(m.refs_json,'$.update_request') IS NULL").fetchone()[0] == 1
-        assert c.execute("SELECT next_due FROM automations WHERE id=?", (aid,)).fetchone()[0] == '2026-09-11T16:00:00.000000Z'
+                         "WHERE json_extract(m.refs,'$.update_request') IS NULL").fetchone()[0] == 1
+        assert c.execute("SELECT next_due_at FROM automations WHERE id=?", (aid,)).fetchone()[0] == '2026-09-11T16:00:00.000000Z'
     # A finished occurrence keeps its status; the next occurrence gets its own task and is deduplicated after restart.
     with store.transaction() as c:
         previous = H.task_update(c, 'bot:coo', fired[0], status=finished_status, note='Daily work reviewed.')
@@ -121,7 +141,7 @@ def test_completed_tasks_stay_done_after_scheduler_ticks_and_restarts(api, monke
     with store.read() as c:
         assert {tid: H.task(c, tid) for tid in previous} == previous
         assert H.task(c, child['id'])['status'] == 'open'
-        assert c.execute("SELECT last_success FROM service_health WHERE service='scheduler'").fetchone()[0]
+        assert c.execute("SELECT last_succeeded_at FROM service_health WHERE service='scheduler'").fetchone()[0]
 
 
 def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, monkeypatch):
@@ -149,13 +169,13 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     monkeypatch.setattr(execution, "_idle_claim", reassign_after_read)
     monkeypatch.setattr(execution, "candidate", select_again)
     assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is None
-    assert selected and selected[0]['bot'] == 'ops'
+    assert selected and selected[0]['bot_id'] == 'ops'
     # The read's pick, its recheck under the writer, then one more pick that passes over the reassigned job.
     assert selections == [1, 1, 1]
     with store.read() as c:
         assert H.task(c, task['id'])['private']
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1
-        assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 1
+        assert not c.execute("SELECT 1 FROM attempts WHERE bot_id='ops' AND state IN ('leased','running')").fetchone()
 
 
 def test_database_failure_keeps_original_error_and_stops_work(tmp_path):
@@ -199,7 +219,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
         # The ordering oracle predates provenance checks. Give its task references real,
         # ordinary sources; missing sources are deliberately unclaimable now.
         for ident in ('held', 'other'):
-            c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+            c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,'x','human:ana','bot:ops','open',?,?,0)", (ident, ident, H.now(), H.now()))
         rooms = {}
         for bot, kind in itertools.product(('ops', 'finance', 'cpo'), ('chat', 'task')):
@@ -211,22 +231,22 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
             sender = ('human:ana', H.KEEPER)[(i // 6) % 2]
             m = H.say(c, sender, 'bot:' + bot, f'Generated request {i}', conversation_id=rooms[bot, kind],
                       refs={'task': refs[(i // 12) % len(refs)]})
-            c.execute("UPDATE jobs SET created=?,state=? WHERE message_id=?", ('2026-09-01T00:00:00Z' if i % 5 == 0 else '2026-09-02T00:00:00Z', 'uncertain' if i % 17 == 0 else 'queued', m['id']))
+            c.execute("UPDATE jobs SET created_at=?,state=? WHERE message_id=?", ('2026-09-01T00:00:00Z' if i % 5 == 0 else '2026-09-02T00:00:00Z', 'uncertain' if i % 17 == 0 else 'queued', m['id']))
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")
-        readiness = readiness_document(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        readiness = readiness_document(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
         # The old candidate's Python predicate, with readiness and onboarding gates.
         def old_claimable(job):
-            check = bot_readiness(readiness, job['bot'])
+            check = bot_readiness(readiness, job['bot_id'])
             if check.get('ready') is not True:
                 return False
             msg = H.message(c, job['message_id'])
             conv = H.conversation(c, msg['conversation_id'])
-            parked = c.execute('SELECT onboarding_state FROM bot_config WHERE bot=?', (job['bot'],)).fetchone()[0]
-            if not msg['from_actor'].startswith('human:') and parked in PARKED:
+            parked = c.execute('SELECT onboarding_state FROM bot_config WHERE bot=?', (job['bot_id'],)).fetchone()[0]
+            if not msg['sender_id'].startswith('human:') and parked in PARKED:
                 return False
             task = H.message_task_id(msg, conv)
-            if not (msg['from_actor'].startswith('human:') and conv['kind'] == 'chat' and task is None):
-                for held in c.execute("SELECT message_id FROM jobs WHERE bot=? AND state='uncertain'", (job['bot'],)):
+            if not (msg['sender_id'].startswith('human:') and conv['kind'] == 'chat' and task is None):
+                for held in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='uncertain'", (job['bot_id'],)):
                     other = H.message(c, held[0])
                     other_conv = H.conversation(c, other['conversation_id'])
                     if (task and H.message_task_id(other, other_conv) == task) or (not task and conv['kind'] == 'chat' and other['conversation_id'] == msg['conversation_id']):
@@ -234,13 +254,82 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
             return True
         # Compare the entire order, including tied and NULL timestamps, not just the first row.
         for _ in range(200):
-            rows = c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' ORDER BY CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created,j.id").fetchall()
+            rows = c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' ORDER BY CASE WHEN m.sender_id LIKE 'human:%' THEN 0 ELSE 1 END,j.created_at,j.id").fetchall()
             expected = next((j for j in rows if old_claimable(j)), None)
             actual = execution.candidate(c, who, Claim(), execution.runner(c, who))
             assert (actual['id'] if actual else None) == (expected['id'] if expected else None)
             if actual is None:
                 break
             c.execute("UPDATE jobs SET state='completed' WHERE id=?", (actual['id'],))
+
+
+def _ops_runner(api):
+    from backend.auth import Identity
+    from backend.tests.test_api import assign, ready, runner
+    r = runner(api)
+    assign(api, r, 'ops')
+    ready(api, r, ['ops'])
+    return Identity('runner:' + r['runner_id'], 'runner', runner_id=r['runner_id'])
+
+
+def _wake_by_hand(c, message_id, bot):
+    """H.say marks a keeper notice quiet, so it queues no job. This queues it as a notice that wakes the bot: the job
+    enqueue writes for a notice that is not quiet."""
+    c.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (message_id, message_id, bot, H.now()))
+    return message_id
+
+
+def _carrier_job(c, message_id):
+    """The queued job of the keeper carrier a thread wrote for this message (threads._carrier)."""
+    return c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "
+                     "AND json_extract(m.refs,'$.carries')=?", (message_id,)).fetchone()[0]
+
+
+def test_a_persons_home_message_carried_by_a_notice_is_claimed_before_an_older_notice(api):
+    from backend import threads
+    from backend.models import Claim
+    who = _ops_runner(api)
+    execution, store = api.app.state.execution, api.app.state.store
+    with store.transaction() as c:
+        older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        older_job = _wake_by_hand(c, older['id'], 'ops')
+        home = threads.home(c, 'bot:ops', create=True)
+        mine = threads.post(c, 'human:ana', home['id'], 'Stop the April numbers')
+        carrier = _carrier_job(c, mine['id'])
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-01T00:00:00Z', older_job))
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-02T00:00:00Z', carrier))
+        claimed = execution.candidate(c, who, Claim(), execution.runner(c, who))
+        assert claimed['id'] == carrier
+
+
+def test_a_bots_message_carried_by_a_notice_keeps_its_place_behind_an_older_notice(api):
+    from backend.models import Claim
+    who = _ops_runner(api)
+    execution, store = api.app.state.execution, api.app.state.store
+    with store.transaction() as c:
+        older = H.say(c, H.KEEPER, 'bot:ops', 'Older keeper notice', kind='notice')
+        said = H.say(c, 'bot:finance', 'human:ana', 'Finance has the numbers')
+        carrier = H.say(c, H.KEEPER, 'bot:ops', 'bot:finance: Finance has the numbers', kind='notice',
+                        refs={'carries': said['id'], 'from': 'bot:finance', 'wake': 'thread'})
+        older_job = _wake_by_hand(c, older['id'], 'ops')
+        carrier_job = _wake_by_hand(c, carrier['id'], 'ops')
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-01T00:00:00Z', older_job))
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", ('2026-09-02T00:00:00Z', carrier_job))
+        claimed = execution.candidate(c, who, Claim(), execution.runner(c, who))
+        assert claimed['id'] == older_job
+
+
+def test_a_carried_persons_home_chat_stays_claimable_past_an_interrupted_run_on_the_bot(api):
+    from backend import threads
+    from backend.execution import queued_jobs_sql
+    _ops_runner(api)
+    with api.app.state.store.transaction() as c:
+        home = threads.home(c, 'bot:ops', create=True)
+        earlier = threads.post(c, 'human:ana', home['id'], 'Earlier question')
+        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (_carrier_job(c, earlier['id']),))
+        mine = threads.post(c, 'human:ana', home['id'], 'Now this one')
+        free = {row['id']: row['free'] for row in c.execute(queued_jobs_sql(), ('ops',))}
+        assert free[_carrier_job(c, mine['id'])] == 1
 
 
 def test_row_isolation_keeps_standalone_task_databases_working(tmp_path):
@@ -263,8 +352,8 @@ def test_a_duplicate_refusal_is_done_not_a_health_error(tmp_path):
     import sqlite3
     from backend.batch_work import isolated
     c = sqlite3.connect(tmp_path / 'dup.db', isolation_level=None)
-    c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_success TEXT, last_error TEXT, "
-              "detail_json TEXT NOT NULL DEFAULT '{}')")
+    c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_succeeded_at TEXT, last_error TEXT, "
+              "detail TEXT NOT NULL DEFAULT '{}')")
     c.execute("INSERT INTO service_health VALUES('background:wake_stalled:t1',NULL,'wake_stalled: duplicate: x','{}')")
     c.execute('BEGIN IMMEDIATE')
     failures = []
@@ -279,8 +368,8 @@ def test_rows_from_retired_health_mechanisms_are_removed_on_start(tmp_path, monk
     import sqlite3
     from backend.store import retire_health_rows
     c = sqlite3.connect(tmp_path / 'h.db')
-    c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_success TEXT, last_error TEXT, "
-              "detail_json TEXT NOT NULL DEFAULT '{}')")
+    c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_succeeded_at TEXT, last_error TEXT, "
+              "detail TEXT NOT NULL DEFAULT '{}')")
     for service in ('backup', 'backup-daily', 'backup-monthly', 'restore-check', 'processing:r1', 'scheduler'):
         c.execute("INSERT INTO service_health VALUES(?,'2026-09-30',NULL,'{}')", (service,))
     monkeypatch.delenv('TICO_BACKUP_MODE', raising=False)

@@ -72,7 +72,7 @@ def live(items, engine, record_to=None):
     try:
         started = time.perf_counter()
         seen = X.corpus_pass(org, items, "hold", judge)
-        cost = X.one(org, "SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
+        cost = X.one(org, "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
                           "WHERE action='judge.spend' AND target LIKE 'injection-screen@%'") or 0.0
         leaks, _ = X.audit_leaks(org, items)
     finally:

@@ -1,0 +1,7 @@
+# Puts the demo's router entry back if a cell core without `cell route` rewrote the router. A no-op otherwise.
+[Unit]
+Description=Tico public demo: keep its router entry
+
+[Service]
+Type=oneshot
+ExecStart=/srv/tico-demo/tools/current/deploy/demo/tico-demo route

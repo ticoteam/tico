@@ -1,6 +1,6 @@
 """Deleting tasks removes them and their conversations; offline it refuses a task carrying work, and a person's
 delete keeps that work in place instead."""
-
+import json
 
 from backend.task_delete import delete_tasks
 from backend import hubdb as H
@@ -27,7 +27,7 @@ def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_l
 
     with store.read() as c:
         for table, column, value in (("tasks", "id", ticket["id"]), ("task_links", "task_id", ticket["id"]),
-                                     ("task_events", "task_id", ticket["id"]),
+                                     ("history_events", "subject_id", ticket["id"]),
                                      ("conversations", "id", conversation),
                                      ("messages", "conversation_id", conversation)):
             assert c.execute(f"SELECT count(*) FROM {table} WHERE {column}=?", (value,)).fetchone()[0] == 0, table
@@ -79,7 +79,7 @@ def test_a_deleted_task_comes_back_whole_and_keeps_its_number(api):
 
     assert post(api, "tasks/41/restore", {}, token="ben-test")["restored"] == ticket["id"]
     after = get(api, "tasks/" + ticket["id"], token="ben-test")
-    for key in ("title", "body", "requester", "owner", "status", "conversation_id"):
+    for key in ("title", "body", "requester_id", "owner_id", "status", "conversation_id"):
         assert after["task"][key] == before["task"][key] if "task" in before else after[key] == before[key], key
     with store.read() as c:
         assert c.execute("SELECT number FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[0] == 41
@@ -131,7 +131,7 @@ def test_purging_a_deleted_task_reports_the_files_it_leaves_behind(api):
         assert listed["files_left"] == {"files": 1, "versions": 1, "bytes": len(b"# Wrong one"),
                                         "ids": [attached["file_id"]], "attachments": []}
         assert purge_trash(c, 30, apply=True)["files_left"] == listed["files_left"]
-        detail = c.execute("SELECT detail_json FROM events WHERE action='task.purged' AND target=?",
+        detail = c.execute("SELECT detail FROM events WHERE action='task.purged' AND target=?",
                            (wrong["id"],)).fetchone()[0]
         assert json.loads(detail)["files_left"] == [attached["file_id"]]
     assert api.get(f"/api/v2/files/{attached['file_id']}", headers=headers("ben-test")).status_code == 404
@@ -185,11 +185,11 @@ def test_a_task_bots_worked_on_deletes_and_comes_back_whole(api):
     post(api, f"tasks/{task['id']}/comments", {"text": "Look again tomorrow."})
     with store.transaction() as c:
         conversation = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turns(id,bot,task_id,started) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
     assert post(api, f"tasks/{task['id']}/delete", {}) == {"deleted": task["id"]}
     get(api, "tasks/" + task["id"], expected=404)
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (conversation,)).fetchone()[0] >= 1
         assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE m.conversation_id=? AND j.state='queued'", (conversation,)).fetchone()[0] == 0
@@ -233,7 +233,7 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
     first = post(api, "tasks", {"owner": "ben", "title": "Fix the about page", "body": "x"}, token="priya-test")
     second = post(api, "tasks", {"owner": "ben", "title": "Fix the terms page", "body": "x"}, token="priya-test")
     with store.transaction() as c:
-        c.execute("INSERT INTO task_types(id,name,created,updated,numbered) VALUES('t2','Bug',?,?,1)", (H.now(), H.now()))
+        c.execute("INSERT INTO task_types(id,name,created_at,updated_at,numbered) VALUES('t2','Bug',?,?,1)", (H.now(), H.now()))
         c.execute("UPDATE tasks SET type_id='t2', number=90 WHERE id=?", (first["id"],))
         c.execute("UPDATE tasks SET type_id='t2' WHERE id=?", (second["id"],))
     post(api, f"tasks/{first['id']}/delete", {}, token="priya-test")
@@ -294,6 +294,31 @@ def test_a_task_filed_with_a_check_model_deletes_and_comes_back_with_it(api):
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def test_a_deleted_task_takes_its_maintenance_listings_and_handoffs_and_restores_them(api):
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Check the shipment", "body": "x"}, token="ben-test")
+    with store.transaction() as c:
+        now = H.now()
+        c.execute("INSERT INTO maintenance_listings(task_id,kind,appointment,bot_id,listed_at) "
+                  "VALUES(?,'quiet',?,'ops',?)", (ticket["id"], now, now))
+        c.execute("INSERT INTO maintenance_handoffs(id,bot_id,task_id,kind,created_at) "
+                  "VALUES('handoff','ops',?,'quiet',?)", (ticket["id"], now))
+    tables = ("maintenance_listings", "maintenance_handoffs")
+
+    def rows():
+        with store.read() as c:
+            return {table: [tuple(r) for r in c.execute(f"SELECT * FROM {table} WHERE task_id=?", (ticket["id"],))]
+                    for table in tables}
+
+    before = rows()
+    assert post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test") == {"deleted": ticket["id"]}
+    assert rows() == {table: [] for table in tables}
+    post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")
+    assert rows() == before
+    with store.read() as c:
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_every_table_that_points_at_a_task_is_moved_kept_or_refuses_the_delete(api):
     # A new table with a key to tasks(id) must be named in task_delete, or deleting a task that has a row in it fails.
     from backend import task_delete as D
@@ -318,9 +343,25 @@ def test_a_task_whose_type_was_deleted_while_it_was_in_the_trash_comes_back_on_g
     assert (after["type_id"], after["step_id"], after["status"]) == ("general", None, "open")
     with store.read() as c:
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        detail = c.execute("SELECT detail_json FROM events WHERE action='task.restored' AND target=?",
+        detail = c.execute("SELECT detail FROM events WHERE action='task.restored' AND target=?",
                            (ticket["id"],)).fetchone()[0]
     assert "type" in detail
+
+
+def test_a_trashed_idea_whose_snapshot_holds_a_dropped_growth_row_comes_back_and_the_report_counts_it(api):
+    from backend.task_delete import restore_tasks
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Try referral cards", "body": "Try it."}, token="ben-test")
+    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
+    with store.transaction() as c:
+        # A trash row from before the growth rethink dropped the idea tables: its snapshot still holds one of their rows.
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='growth_ideas'").fetchone() is None
+        snap = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
+        snap["rows"]["growth_ideas"] = [{"_rowid": 1, "id": "idea-1", "task_id": ticket["id"], "hypothesis": "Try it."}]
+        c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snap), ticket["id"]))
+        report = restore_tasks(c, [ticket["id"]])
+    assert report["restored"] == [ticket["id"]] and report["skipped"] == {"growth_ideas": 1}
+    assert get(api, "tasks/" + ticket["id"], token="ben-test")["task"]["title"] == "Try referral cards"
 
 
 def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api):
@@ -331,13 +372,13 @@ def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api)
     store = api.app.state.store
     ticket = post(api, "tasks", {"owner": "ben", "title": "Fix the cart page", "body": "x"})
     post(api, f"tasks/{ticket['id']}/comments", {"text": "Seen on mobile."})
-    big = {"turns", "attempt_conversations", "bot_file_activity", "messages", "a", "m"}
+    big = {"attempt_conversations", "bot_file_activity", "messages", "a", "m"}
     with store.transaction() as c:
         conversation, message = c.execute("SELECT t.conversation_id, m.id FROM tasks t JOIN messages m "
                                           "ON m.conversation_id=t.conversation_id WHERE t.id=? LIMIT 1",
                                           (ticket["id"],)).fetchone()
         # Work on the task, so the delete takes the keep_work path, which also updates the jobs about it.
-        c.execute("INSERT INTO turns(id,bot,started,finished,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
                   ("turn-cart", "ops", H.now(), H.now(), "ok", message, ticket["id"]))
         statements = []
         c.set_trace_callback(statements.append)
@@ -351,3 +392,82 @@ def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api)
                     if row[3].startswith("SCAN") and row[3].split()[-1] in big:
                         scans.append(f"{row[3]}  <- {' '.join(sql.split())[:120]}")
     assert scans == []
+
+
+def _as_saved_before(rows, renames_map):
+    """A trash snapshot as a release before the renames saved it: each renamed column under its old name."""
+    for table, found in rows.items():
+        for row in found:
+            for t, old, new, _wave in renames_map:
+                if t == table and new in row:
+                    row[old] = row.pop(new)
+    return rows
+
+
+def test_a_task_deleted_before_the_column_renames_comes_back_with_every_value(api):
+    # task_trash.rows keeps whole rows keyed by the column names they had when the task was deleted. A restore after
+    # the `*_json` renames must read them under the new names: dropping them lost the task's acceptance criteria,
+    # labels, resume note, room participants and message refs for good, since the snapshot goes once it is back.
+    import json
+    from backend.migrations.renames_data import COLUMNS
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Fix the signup page", "body": "x",
+                                 "acceptance_criteria": ["Signup works on a phone"]}, token="ben-test")
+    post(api, f"tasks/{ticket['id']}/comments", {"text": "Copied from the old board."}, token="ben-test")
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET resume=?, labels=? WHERE id=?",
+                  (json.dumps({"note": "pick up at step 2"}), json.dumps(["web"]), ticket["id"]))
+        before = dict(c.execute("SELECT acceptance, labels, resume, conversation_id FROM tasks WHERE id=?",
+                                (ticket["id"],)).fetchone())
+        participants = c.execute("SELECT participants FROM conversations WHERE id=?",
+                                 (before["conversation_id"],)).fetchone()[0]
+        c.execute("UPDATE messages SET refs=? WHERE conversation_id=? AND body='Copied from the old board.'",
+                  (json.dumps([{"kind": "task", "id": ticket["id"]}]), before["conversation_id"]))
+    assert json.loads(before["acceptance"]) and json.loads(before["labels"]) == ["web"] and participants
+    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
+    with store.transaction() as c:
+        saved = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
+        _as_saved_before(saved["rows"], COLUMNS)
+        assert "acceptance_json" in saved["rows"]["tasks"][0] and "refs_json" in saved["rows"]["messages"][0]
+        assert "created" in saved["rows"]["tasks"][0] and "created" in saved["rows"]["messages"][0]   # wave 2
+        c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(saved), ticket["id"]))
+
+    assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")["restored"] == ticket["id"]
+    with store.read() as c:
+        after = dict(c.execute("SELECT acceptance, labels, resume FROM tasks WHERE id=?", (ticket["id"],)).fetchone())
+        assert after == {k: before[k] for k in ("acceptance", "labels", "resume")}
+        assert c.execute("SELECT participants FROM conversations WHERE id=?",
+                         (before["conversation_id"],)).fetchone()[0] == participants
+        assert json.loads(c.execute("SELECT refs FROM messages WHERE body='Copied from the old board.'").fetchone()[0]) \
+            == [{"kind": "task", "id": ticket["id"]}]
+
+
+def test_a_trashed_value_with_no_column_now_refuses_the_restore_and_stays_in_the_trash(api):
+    import json
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Fix the pricing page", "body": "x"}, token="ben-test")
+    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
+    with store.transaction() as c:
+        saved = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
+        saved["rows"]["tasks"][0]["estimate_json"] = '{"hours": 3}'        # a column no release maps
+        c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(saved), ticket["id"]))
+    refused = post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test", expected=409)
+    assert refused["error"]["code"] == "unplaced" and "tasks.estimate_json" in refused["error"]["detail"]
+    get(api, "tasks/" + ticket["id"], token="ben-test", expected=404)
+    with store.read() as c:                                                 # nothing lost: the snapshot is kept whole
+        kept = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
+        assert kept["rows"]["tasks"][0]["estimate_json"] == '{"hours": 3}'
+
+
+def test_snapshot_keys_follow_every_wave_in_order(monkeypatch):
+    from backend.migrations import renames
+    monkeypatch.setattr(renames, "COLUMNS", (("tasks", "started", "started_at", "2"), ("tasks", "labels_json", "labels", "1"),
+                                             ("tasks", "labels", "tags", "3"), ("tasks", "owner", "owner_id", "3")))
+    monkeypatch.setattr(renames, "TABLES", (("old_reminders", "task_reminders"),))
+    row = {"labels_json": "[]", "started": "2026-01-01", "owner": "bot:ops", "title": "x"}
+    assert renames.current_row("tasks", row) == {"tags": "[]", "started_at": "2026-01-01", "owner_id": "bot:ops",
+                                                 "title": "x"}
+    assert row["labels_json"] == "[]"                                       # the stored row itself is not changed
+    assert list(renames.current_rows({"old_reminders": [{"id": 1}]})) == ["task_reminders"]
+    # a row with both an old and a new name keeps both, for the restore to refuse rather than guess
+    assert renames.current_row("tasks", {"owner": "a", "owner_id": "b"}) == {"owner": "a", "owner_id": "b"}

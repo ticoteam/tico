@@ -83,7 +83,7 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     c = H.connect(tmp_path / "hub.db")
     H.sync_registry(c, EMPLOYEES, PEOPLE)
     make = lambda title, **kw: H.task(c, H.task_create(c, ANA, title, "Check it.", CMO, lint=False, **kw)["id"])  # noqa: E731
-    person, bot = {"from_actor": "human:ana"}, {"from_actor": "bot:lead"}
+    person, bot = {"sender_id": "human:ana"}, {"sender_id": "bot:lead"}
     release, critical, plain = make("Release v1", labels=["release-blocker"]), make("PR 7", labels=["critical-path"]), make("Chore")
     assert login_class(c, release, bot, None) == "release"
     assert login_class(c, critical, bot, None) == "review"
@@ -93,8 +93,13 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     assert login_class(c, make("QA: v1", parent_id=release["id"]), bot, None) == "release"
     assert login_class(c, make("Review 1: PR 7", parent_id=critical["id"]), bot, None) == "review"
     # A standing watch never jumps the queue, labelled or not.
-    assert login_class(c, release, {"from_actor": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
+    assert login_class(c, release, {"sender_id": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
     assert login_class(c, release, person, {"id": "r1"}) == "other"
+    # The keeper's carrier of a person's message is the person's turn, not a standing watch.
+    carrier = {"sender_id": "keeper", "refs": {"carries": "m1", "from": "human:ana", "wake": "thread"}}
+    assert login_class(c, plain, carrier, None) == "review"
+    assert login_class(c, plain, {"sender_id": "keeper", "refs": {"carries": "m1", "from": "bot:lead", "wake": "thread"}},
+                       None) == "other"
 
 
 def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswered_and_not_held_for_review(api):
@@ -139,18 +144,18 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
     assert post(api, f"attempts/{a['id']}/renew", {}, r["token"])["stop"] is True
     post(api, f"attempts/{a['id']}/complete", {"outcome": "interrupted", "last_seq": 1}, r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "canceled"
         assert not c.execute("SELECT 1 FROM messages WHERE kind='notice' AND body LIKE 'Stopped by%'").fetchone()
     assert claim(api, r) is None
     # A person's own comment waiting behind the login is never skipped: their words still get an answer.
     tid = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})["id"]
     post(api, f"tasks/{tid}/comments", {"text": "@ops count the blank ones too"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-                  "(SELECT id FROM messages WHERE from_actor NOT LIKE 'human:%')")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+                  "(SELECT id FROM messages WHERE sender_id NOT LIKE 'human:%')")
     b = claim(api, r)
     with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+        assert c.execute("SELECT m.sender_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
                          (b["job_id"],)).fetchone()[0].startswith("human:")
         c.execute("UPDATE tasks SET status='closed',closed_at=? WHERE id=?", ("9999-01-01T00:00:00Z", tid))
     post(api, f"attempts/{b['id']}/events", {"events": [{"seq": 1, "kind": "status", "payload": wait}]}, r["token"])
@@ -164,10 +169,10 @@ def test_a_person_stopping_a_turn_before_it_started_ends_it_unstarted(api):
     ready(api, r, ["ops"])
     post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
     a = claim(api, r)
-    post(api, "bots/ops/stop", {"attempt_id": a["id"]})
+    post(api, "bots/ops/stop", {"run_id": a["id"]})
     assert post(api, f"attempts/{a['id']}/renew", {}, r["token"])["stop"] is True
     # The runner stops before it acknowledges the start (waiting for its login, or preparing): nothing ran.
     post(api, f"attempts/{a['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT 1 FROM messages WHERE kind='notice' AND body='Stopped by Ana'").fetchone()

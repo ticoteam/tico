@@ -4,6 +4,13 @@ A computer runs your bots. **Settings → Computers** lists every computer: its 
 Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
 [Install](install.md#add-computers-to-run-your-bots).
 
+Re-enrolling the same physical computer can leave an older registration behind. The hourly cleanup removes that
+registration after more than 24 hours offline only when a newer, active registration has the same reported device
+identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
+The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
+keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
+
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
@@ -22,9 +29,11 @@ computer, and a run uses, in order, that computer's subscription for the run's A
 computer, then Tico Gateway when it is on. Otherwise the run waits.
 
 1. Open **Settings → Models** and click **Add subscription**.
-2. Pick the **Kind**: **Claude plan** (paste the token from `claude setup-token`), **ChatGPT plan** (paste Codex's
-   `auth.json`), or an Anthropic or OpenAI API key.
-3. Enter a **Name**, such as *Claude Max*, and click **Save**.
+2. Pick the **Kind**: **Claude plan**, **ChatGPT plan**, or an Anthropic or OpenAI API key, and enter a **Name**, such as
+   *Claude Max*.
+3. For a plan, click **Connect**, open the link and sign in with the account that has the plan (paste back the code the
+   page shows, or enter the code Tico shows). Tico saves the result. Or paste it and click **Save**: the token from
+   `claude setup-token`, or Codex's `auth.json`. An API key is always pasted.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
@@ -33,7 +42,7 @@ subscription does the same on each computer that had it. A computer on an older 
 picker until it updates.
 
 Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu. A new value
+cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
 restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
 old one. The page asks first and says how many.
 
@@ -58,19 +67,30 @@ For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 
 The counts describe the computer's total load, including work belonging to other people. Wait reasons never name
 bots, tasks, people or accounts. The bot list still follows each viewer's access.
 
-On an upgraded runner, only running and starting turns occupy a place. A login, quota or other pre-start wait holds
-none, so unrelated work can start. Waiting for a lane or login releases the place; continuing requires a fresh atomic
-reservation. Two turns cannot take the last place together. Codex's shared ChatGPT login does not normally queue
-turns ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
+On an upgraded runner, a turn holds its place from its claim until it ends. A computer runs up to its turn limit, and
+holds at most twice that in claimed work, waiting turns included; the rest stays queued on the server, unleased, until
+a claim ends. A turn claimed past the limit holds no place: its start is refused as "computer busy" until one frees. A
+login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
+other work can start beside it. Waiting for
+a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
+take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
-its work returns to the queue without changing the task. After 10 missed starts for one job since the server last
-started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
+its work returns to the queue without changing the task. After 10 missed starts for one job within the last 24 hours,
+including starts missed before a server restart, Tico reports a pre-start failure instead of retrying forever.
+Leases cut by a hub restart or update and planned pauses do not count as missed starts. Check the computer named
+in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
+below **80%**, so the queue does not flap. A computer whose last sample is more than **2 minutes** old holds new starts
+with **waiting: computer not reporting**, because a computer that stops reporting may be frozen. A computer that has
+never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
+once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the sustained overload clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
+the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
 the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
 not change your account, model or computer size.
 
@@ -116,7 +136,6 @@ One person, or no people with sign-in access, gives **40** and **100**.
 
 Just below the stop, while the count is still at or above the warning, work that waited through the stop keeps first claim on each freed place, in order across computers. Below the warning that list is cleared and each computer starts from its own queue again. Work still waiting for a login, quota or computer remains held for that reason.
 Below the warning level, Health marks the incident resolved and records the time. Crossing the warning again opens a new incident.
-The Health record works even when the optional [Health Monitor](health-monitor.md) is off.
 
 These settings provide the warning record and start limit. See [The turn fixer](#the-turn-fixer) for automatic recovery.
 The company-limit message does not confirm that an automatic repair has run.
@@ -199,12 +218,29 @@ not here.
 
 A **subscription** is one of the company's model logins or keys, saved once in Tico rather than on a computer: a
 Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
-signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. It belongs to the company; the list says
+signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
+
+**Connect** signs a plan in without pasting. Tico picks an online computer on the latest release with that tool
+installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
+own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
+computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
+the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
+**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing. If the sign-in cannot
+accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
+from that page; a code from the previous attempt does not carry over.
+The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
+(code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
+raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
+Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
-computers. Every bot on that computer then runs that tool on it.
+computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
+that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
+candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
+still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
+runners fetch fallback logins up front and restart those turns when a login changes.
 
 - Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
@@ -216,9 +252,9 @@ computers. Every bot on that computer then runs that tool on it.
   refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
 - A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
   passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
-  else wait.
+  else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
-  Gateway) until someone pastes a new value with **Reconnect**. The computer's own login is left alone.
+  Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
 - A computer on an older runner does not take subscriptions; its bots run as before until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
@@ -254,7 +290,8 @@ registered: choose **Add computer**.
 
 ## A computer's pop-up
 
-Click a row to open its pop-up. Its sections, top to bottom:
+Click a row to open its pop-up. Owners and admins rename the computer with the pencil next to its name (1 to 100
+characters; a cloud machine made again keeps the name). Its sections, top to bottom:
 
 1. **Connections**: one line per AI tool, the computer's login for it: the tool, "Computer's login" (or "Shared key"),
    the signed-in account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and
@@ -447,9 +484,9 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
   login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
   account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
-  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  ahead, and from Tico's yes the switch can no longer be canceled (it gets two more minutes of its own to finish).
   Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
-  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  a file or that check fails, the old files go back. Canceling before that point, failing or running out of time leaves
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
   not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
   are cleared.
@@ -463,7 +500,7 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch to subscription** sits on a Computer's own login that runs on an API key (the shared key, the Computer's
   own key or one set in its terminal): in place of **Switch account**, or next to **Replace key** and **Clear key**. It
   is the same sign-in on the side: until the subscription is signed in and in place the key stays in use, and
-  cancelling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
+  canceling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
   **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
   not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
   The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
@@ -517,7 +554,7 @@ login with none. The Computer must be online and on a current runner; an older o
   own connection (the sign-in queue never carries a key) and checks it (Codex signs in with it; the others read it on
   each turn). Until the check passes and Tico agrees the key goes in, the old key stays in use for runs and in the
   Computer's key files, and the Computer's regular key fetch leaves them alone. From Tico's yes the change can no longer
-  be cancelled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
+  be canceled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
   `secrets/_shared.env`. A key that does not work, a cancel, or a check that runs out of time deletes the new key and
   leaves the old one in use (for Codex, signed in again with it). Runs that start afterwards use the new key; for Claude
   Code, a key added here is used even when the computer also has a browser login.
@@ -612,7 +649,7 @@ The rest of this page is for administrators and integrators: where readings come
 
 Weekly reports are scoped to a Computer, profile and runtime. Codex reports its seven-day window when its running host emits one. Claude Code may report the seven-day reset and limit state without a percentage; that percentage stays unknown. No API calls or token-to-percentage estimates are used to invent a provider balance. Usage elsewhere on the same provider account counts toward that allowance.
 
-The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Health Monitor](health-monitor.md), `default_login_limited`).
+The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
 
 Computers report the account each login is signed in to: email, plan and organization from `claude auth status --json`, and email and plan from Codex app-server's `account/read`, always requested with `refreshToken: false`. A Codex turn's or refresh's `planType` keeps the plan current. This deliberately reverses the earlier rule that Tico kept no account records: it is the first stored account identity, so the page can show which account each Computer and profile uses (`signed in as <email> · <plan>`). Credential files and `codex login status` output are never read for it, only allow-listed fields are kept, and a value that looks like a key or token is dropped on the computer and refused by the server, without affecting the sign-in state. The account is read alongside the existing one-minute sign-in probe; Codex's app-server read runs in the background at most every ten minutes. A signed-out login shows no account. An account stays one login's report: two profiles that show the same email are not merged.
 

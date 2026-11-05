@@ -8,6 +8,7 @@ from backend.auth import Identity
 from backend.models import Claim
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 
 def queued_fleet(api, machine, start, stop):
@@ -15,9 +16,9 @@ def queued_fleet(api, machine, start, stop):
     with store.transaction() as c:
         for i in range(start, stop):
             bot = f"queued-{i}"
-            c.execute("INSERT INTO bots(slug,runtime,state,created) VALUES(?,'fake','active',?)", (bot, H.now()))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
-                      (bot, encode({'name': bot, 'runtime': 'fake'})))
+            c.execute("INSERT INTO bots(id,slug,state,created_at) VALUES(?,?,'active',?)", (bot, bot, H.now()))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (bot,))
+            BS.write(c, bot, {'name': bot, 'runtime': 'fake'})
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (bot, machine['runner_id'], H.now()))
             H.say(c, 'human:ana', 'bot:' + bot, 'Synthetic unrelated work')
     ready(api, machine, ['ops', *(f'queued-{i}' for i in range(stop))])
@@ -86,14 +87,14 @@ def test_selected_claim_rechecks_changes_after_read_and_takes_the_next_job(api, 
                 elif change == 'assignment':
                     writer.execute("DELETE FROM assignments WHERE bot='ops'")
                 elif change == 'readiness':
-                    readiness = json.loads(target['readiness_json'])
+                    readiness = json.loads(target['readiness'])
                     readiness['bots']['ops']['ready'] = False
-                    writer.execute('UPDATE runners SET readiness_json=? WHERE id=?',
+                    writer.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?',
                                    (encode(readiness), machine['runner_id']))
                 else:
                     # A currently active turn fences the bot even when it was
                     # absent from the earlier read's global active-attempt set.
-                    writer.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
+                    writer.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                                    "VALUES('other-turn',?,'ops',?,1,'synthetic','running',?,?,'main')",
                                    (row['id'], machine['runner_id'], H.shift(H.now(), minutes=2), H.now()))
         return row

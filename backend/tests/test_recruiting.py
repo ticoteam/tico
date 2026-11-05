@@ -9,13 +9,15 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
 from backend.tests.test_strategy_bot import as_bot
+from backend import bot_settings as BS
 
 
 def strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES('goal-manager','{}','ana')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:
+            BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
     return as_bot(api, "goal-manager")
 
 
@@ -39,11 +41,12 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
 
 
 def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):
-    import time
-    started = time.monotonic()
+    # At once means the first draft is composed from the catalog and never reaches the model, so nothing waits on one.
+    # Checked by the calls made, not by the clock, which a loaded runner can stretch.
+    model_calls = []
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *args, **kwargs: model_calls.append(args) or "")
     drafted = post(api, "seats/draft", {"title": "Customer support lead", "team": "Support"})
-    assert time.monotonic() - started < 1
-    assert drafted["source"] == "catalog"
+    assert drafted["source"] == "catalog" and model_calls == []
     text = drafted["description"]
     assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
     monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(RuntimeError("no key")))
@@ -446,7 +449,7 @@ def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
         # The seats table as the release before recruiting left it, with a person's text: an upgrade keeps it theirs.
         c.execute("DROP TABLE seats")
         c.execute(lifecycle.SCHEMA)
-        c.execute("INSERT INTO seats(id,title,description,reports_to,created,created_by,updated,updated_by) "
+        c.execute("INSERT INTO seats(id,title,description,reports_to,created_at,created_by,updated_at,updated_by) "
                   "VALUES('s-old','Role','Keeps the books.','coo',?,'human:ana',?,'human:ben')", (H.now(), H.now()))
         lifecycle.ensure(c)
         owner = Identity("human:ana", "owner")
@@ -513,19 +516,101 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     assert (bot["stage"], bot["reports_to"], bot["display_name"], hired["name"]) == (
         "onboarding", "coo", "Support Desk", "Support Desk")
     with api.app.state.store.read() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
-        assert H.bot(c, slug)["model"] == other
+        hired_id = H.resolve_bot(c, slug)["id"]          # config and events are keyed by the bot's id, not its slug
+        config = BS.read(c, hired_id)
+        assert config["model"] == other
         # The repository is built from this definition once the bot exists (the computer's `materialize`).
         assert config["materialize"] is True and config["template"] == pick["template"]
         assert "## Job description\nRuns customer support" in config["instructions"]
         kinds = [r["kind"] for r in c.execute("SELECT action AS kind FROM events WHERE target IN (?,?) ORDER BY rowid",
-                                              (slug, seat["id"]))]
+                                              (hired_id, seat["id"]))]
     assert kinds.index("bot.definition_created") < kinds.index("bot.needs_onboarding")
     # The seat is filled: off the Recruiting list, and a second pick is refused.
     open_seats = {s["id"]: s for s in get(api, "seats")["seats"]}
-    assert seat["id"] not in open_seats and open_seats[below["id"]]["reports_to"] == slug
+    assert seat["id"] not in open_seats and open_seats[below["id"]]["reports_to"] == hired_id
     again = api.post(f"/api/v2/seats/{seat['id']}/hire", json={"template": pick["template"]}, headers=headers())
     assert again.status_code == 409 and "Support Desk" in again.text
+
+
+def bot_line(api, hired):
+    """What the bot reports to in its definition: a person or a bot, never a seat."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (hired["bot"],)).fetchone()[0]
+
+
+def fill(api, seat):
+    pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]["template"]
+    return post(api, f"seats/{seat['id']}/hire", {"template": pick})
+
+
+def test_a_bot_hired_under_an_open_manager_seat_reports_above_it_until_that_seat_is_hired(api):
+    providers(api, "anthropic", "openai")
+    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo",
+                               "description": "Leads marketing and sets the content plan."})
+    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the blog and the newsletter."})
+    # The Hire page says who the bot reports to until the manager seat is hired, and that seat's title.
+    assert get(api, f"seats/{writer['id']}")["reports_now"]["until"] == "Head of Marketing"
+    assert "reports_now" not in get(api, f"seats/{head['id']}")
+
+    hired = fill(api, writer)
+    assert hired["reports_to"] == "coo" and bot_line(api, hired) == "coo"
+    assert get(api, f"bots/{hired['slug']}")["stage"] == "onboarding"
+
+    manager = fill(api, head)
+    assert bot_line(api, hired) == manager["bot"]              # the writer moves under the Head of Marketing bot
+    assert bot_line(api, manager) == "coo"
+    assert get(api, "seats")["seats"] == []
+
+
+def test_a_chain_of_open_seats_hired_bottom_up_ends_with_each_bot_under_the_one_above(api):
+    providers(api, "anthropic", "openai")
+    top = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
+    middle = post(api, "seats", {"title": "Content Lead", "reports_to": "seat:" + top["id"],
+                                 "description": "Leads the content team."})
+    bottom = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + middle["id"],
+                                 "description": "Writes the content."})
+    lowest = fill(api, bottom)
+    assert bot_line(api, lowest) == "coo"
+    highest = fill(api, top)
+    middling = fill(api, middle)
+    assert bot_line(api, middling) == highest["bot"]
+    assert bot_line(api, lowest) == middling["bot"]          # moved when the seat above it filled
+    assert bot_line(api, highest) == "coo"
+
+
+def test_a_bot_moved_by_hand_under_an_open_manager_keeps_that_manager_when_the_seat_fills(api):
+    providers(api, "anthropic", "openai")
+    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
+    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the content."})
+    hired = fill(api, writer)
+    # Someone moves the writer by hand before the manager is hired: the line they chose stays.
+    revision = get(api, f"bots/{hired['slug']}")["revision"]
+    post(api, f"bots/{hired['slug']}/definition", {"reports_to": "human:ben", "expected_revision": revision})
+    fill(api, head)
+    assert bot_line(api, hired) == "human:ben"
+
+
+def test_an_open_manager_moved_under_its_own_hire_does_not_circle_when_it_fills(api):
+    providers(api, "anthropic", "openai")
+    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
+    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the content."})
+    hired = fill(api, writer)                                  # placed under the owner, the line it was hired on
+    # The open manager moves under the writer's bot: a legal line while that seat is open.
+    assert api.patch(f"/api/v2/seats/{head['id']}", headers=headers(),
+                     json={"reports_to": "bot:" + hired["slug"]}).status_code == 200
+    manager = fill(api, head)                                  # filling must not close a circle
+    assert bot_line(api, manager) == hired["bot"]              # the manager reports to the writer's bot, as chosen
+    assert bot_line(api, hired) == "coo"                       # the writer stays where it was placed, not under the manager
+    with api.app.state.store.read() as c:                      # walk up from the manager: no bot twice, ends at the top
+        line, seen = manager["bot"], []
+        while H.bot(c, line):
+            assert line not in seen, "the bot hierarchy has a circle"
+            seen.append(line)
+            line = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (line,)).fetchone()[0] or ""
+        assert seen == [manager["bot"], hired["bot"], "coo"]
 
 
 def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):

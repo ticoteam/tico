@@ -11,7 +11,9 @@
 //  - with nothing pending, Save posts the definition only, as before;
 //  - every other row waits for Save bot too: a model, compact-at, keep-tasks and turns-at-once change posts nothing
 //    until Save bot, which then saves all of them, each at the revision the write before it made;
-//  - Archive bot asks first, naming who gets its work, and Cancel archives nothing.
+//  - Archive bot asks first, naming who gets its work, and Cancel archives nothing;
+//  - Slug renames a bot whose id is not its slug: the new slug goes with the definition, a taken one shows the
+//    server's refusal, the bot keeps its id; a built-in bot's slug cannot be changed.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -30,10 +32,16 @@ const {unrouted} = require('./support/routes.cjs');
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
       default: {runtime: 'claude', model: 'opus-5-5'},
     };
-    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', operator: 'ana', repo: 'bot-helper',
+    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5', harness: 'claude', reasoning_effort: 'high',
-      thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
+      thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
     const bots = [helper];
+    const SCOUT_ID = '01990000-0000-7000-8000-00000000a11c';
+    const scout = {id: SCOUT_ID, slug: 'scout', name: 'scout', display_name: 'Scout', description: '', status: 'active', owner_id: 'ana',
+      repo: 'bot-scout', can_manage: true, users: [], bot_owners: [], revision: 1, model: 'opus-5-5', harness: 'claude',
+      reasoning_effort: 'high', thread_mode: 'personal', bot_contact: 'open'};
+    const botops = {...scout, id: 'botops', slug: 'botops', name: 'botops', display_name: 'BotOps', repo: 'bot-botops'};
+    const renames = [];
     let calls = [], refuseFallback = false, refuseDefinition = false, refuseTransition = false;
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
@@ -42,6 +50,13 @@ const {unrouted} = require('./support/routes.cjs');
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (req.method() === 'POST' && p === `/api/v2/bots/${SCOUT_ID}/definition`) {
+        const body = req.postDataJSON();
+        renames.push(body);
+        if (body.slug === 'helper') return json({error: {code: 'duplicate', detail: 'Another bot already uses helper'}}, 409);
+        Object.assign(scout, body.slug ? {slug: body.slug, name: body.slug} : {}, {display_name: body.display_name, revision: scout.revision + 1});
+        return json({id: SCOUT_ID, slug: scout.slug, display_name: scout.display_name, revision: scout.revision});
+      }
       if (req.method() === 'POST' && p.startsWith('/api/v2/bots/helper/')) {
         const body = req.postDataJSON(), what = p.split('/').pop();
         calls.push({what, body});
@@ -58,6 +73,7 @@ const {unrouted} = require('./support/routes.cjs');
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
         }
+        if (what === 'compact-at') helper.compact_at = body.compact_at;
         if (what === 'compact-at' || what === 'keep-tasks-going' || what === 'turns-at-once') {
           return json({bot: 'helper', revision: ++helper.revision});
         }
@@ -73,7 +89,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', operator: 'ana', bots: ['helper']}], services: []});
+      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: ['helper']}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['openai', 'anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['openai', 'anthropic'], default: catalog.default, revision: 1,
         providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}]});
@@ -211,7 +227,9 @@ const {unrouted} = require('./support/routes.cjs');
     // of them save together.
     await open();
     await pick('model', 'codex', 'gpt-6-luna');
-    await editor.locator('[data-bot-compact]').selectOption('400000');
+    assert.deepEqual(await editor.locator('[data-bot-compact] option').allInnerTexts(), ['100k', '150k', '250k', '400k', '600k', '1M'],
+      'the Compact at choices, 100k first; the default stays 250k');
+    await editor.locator('[data-bot-compact]').selectOption('100000');
     await editor.locator('[data-bot-keep-tasks]').fill('3');
     await editor.locator('[data-bot-keep-tasks]').dispatchEvent('change');
     await editor.locator('[data-bot-turns-at-once]').fill('5');
@@ -225,7 +243,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]),
       [['definition', 13], ['compact-at', 14], ['keep-tasks-going', 15], ['turns-at-once', 16], ['transitions', 17]],
       'Save bot saves every held change, chaining the revision');
-    assert.equal(calls[1].body.compact_at, 400000);
+    assert.equal(calls[1].body.compact_at, 100000);
     assert.equal(calls[2].body.keep_tasks_going, 3);
     assert.deepEqual(calls[3].body, {turns_at_once: 5, expected_revision: 16});
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector('#transition-dialog')?.innerText || ''));
@@ -233,6 +251,7 @@ const {unrouted} = require('./support/routes.cjs');
 
     // Archive bot asks first and names who gets the work; Cancel archives nothing and leaves the editor open.
     await open();
+    assert.equal(await editor.locator('[data-bot-compact]').inputValue(), '100000', 'reloads with 100k selected');
     await editor.locator('[data-bot-remove]').click();
     const ask = page.locator('dialog.settings-confirm');
     await ask.waitFor();
@@ -247,6 +266,46 @@ const {unrouted} = require('./support/routes.cjs');
     for (let i = 0; i < 50 && !calls.length; i++) await page.waitForTimeout(100);
     assert.deepEqual(calls.map(c => c.what), ['archive'], 'Archive bot archives once confirmed');
 
+    // Slug: a bot whose id is not its slug is renamed with its definition and keeps its id.
+    bots.push(scout, botops);
+    await page.evaluate(() => loadSettings());
+    await page.waitForFunction(id => S.emps.some(e => e.id === id), SCOUT_ID);
+    await page.evaluate(id => settingsEditBot(id), SCOUT_ID);
+    await page.waitForFunction(id => location.hash === `#/bot/${id}/settings`, SCOUT_ID);
+    const slugField = editor.locator('input[name=slug]');
+    const editScout = async () => {
+      await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
+      await page.evaluate(id => settingsEditBot(id, true), SCOUT_ID);
+      await row('fallback').locator('[data-choice-harness]').waitFor();
+      await slugField.waitFor({state: 'attached'});
+      await editor.locator('[data-bot-advanced]').evaluate(el => { el.open = true; });
+    };
+    await editScout();
+    assert.equal(await slugField.inputValue(), 'scout');
+    assert.equal(await slugField.getAttribute('readonly'), null);
+    await slugField.fill('helper');
+    await save();
+    await editor.locator('[data-bot-status] .err').waitFor();
+    assert.match(await statusText(), /Another bot already uses helper/, 'a taken slug shows the server refusal');
+    assert.equal(renames.at(-1).slug, 'helper');
+    await slugField.fill('scout-2');
+    await save();
+    await closed();
+    assert.equal(renames.at(-1).slug, 'scout-2');
+    await page.waitForFunction(id => S.emps.find(e => e.id === id)?.slug === 'scout-2', SCOUT_ID);
+    assert.equal(await page.evaluate(() => location.hash), `#/bot/${SCOUT_ID}/settings`, 'the page keeps its id address');
+    // Saving with the slug unchanged sends no slug.
+    await editScout();
+    await save();
+    await closed();
+    assert.equal('slug' in renames.at(-1), false);
+    // A built-in bot's slug is fixed.
+    await page.evaluate(() => settingsEditBot('botops'));
+    await page.waitForFunction(() => location.hash === '#/bot/botops/settings');
+    await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
+    await page.evaluate(() => settingsEditBot('botops', true));
+    await row('fallback').locator('[data-choice-harness]').waitFor();
+    assert.equal(await slugField.getAttribute('readonly'), '');
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

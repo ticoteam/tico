@@ -1,6 +1,6 @@
 # Same-day change
 
-Triggered by a task during the working day: a technician is sick, a job overran, a customer cancelled,
+Triggered by a task during the working day: a technician is sick, a job overran, a customer canceled,
 an urgent job came in. Budget 10 minutes. The outcome is a revised plan for the rest of the day with
 the customer messages it needs, in front of the dispatcher.
 

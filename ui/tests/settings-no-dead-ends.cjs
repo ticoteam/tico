@@ -7,6 +7,8 @@
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
 //    (route() called again, as a status change does) keeps Settings and the tab; the old Rules and Routines
 //    addresses open System;
+//  - Mailboxes: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open it, and one
+//    mailbox's page has its own address (#/settings/mailboxes/<id>) that a redraw keeps and the tab leaves;
 //  - a first visit opens General; a tab this person can't see opens General with "That page is for admins", and an
 //    unknown one opens General without it.
 const {chromium} = require('playwright');
@@ -33,6 +35,9 @@ function settingsLinks() {
   return [...names].filter(n => !MOVED.includes(n)).sort();
 }
 
+const MAY = {read: true, organize: true, send: false, change_calendar: false};
+const MAILBOX = {id: 'mb1', address: 'support@acme.example', provider: 'google_workspace', kind: 'shared', person_id: null,
+  person_name: '', connection: 'workspace', status: 'active', state: 'connected', level: 'read_write', routines: []};
 async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
   const context = await browser.newContext({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
   const page = await context.newPage();
@@ -55,10 +60,13 @@ async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', host: 'keeper', can_chat: true,
-      can_manage: admin, operator: 'ana', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
+      can_manage: admin, owner_id: 'ana', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/billing') return json({state: 'no_gateway'});
+    if (p === '/api/v2/mailboxes') return json({admin, domain: 'acme.example', may: MAY, mine: null, shared: [], mailboxes: [MAILBOX]});
+    if (p === '/api/v2/mailboxes/mb1') return json({mailbox: MAILBOX, can_manage: true, can_stop: true, may: MAY, routines: [],
+      candidates: [], accesses: [{id: null, grantee_type: 'admins', grantee_id: '', name: 'Admins', level: 'read_write', implicit: true}]});
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -147,6 +155,28 @@ const address = page => page.evaluate(() => location.hash);
       await page.waitForFunction(() => S.route === '#/updates');
       await page.goBack();
       await page.waitForFunction(() => S.route === SETTINGS && SETTINGS_TAB === 'health' && location.hash === '#/settings/health');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    {
+      // Mailboxes: the old addresses open it, and one mailbox's page keeps its own address until the tab is picked.
+      const {page, context, errors} = await open(browser, {hash: '#/settings/inbox'});
+      await page.waitForFunction(() => SETTINGS_TAB === 'mailboxes' && location.hash === '#/settings/mailboxes');
+      await go(page, '#/settings/google');
+      assert.equal(await address(page), '#/settings/mailboxes');
+      await page.locator('#set-mailboxes a[href="#/settings/mailboxes/mb1"]').click();
+      await page.waitForFunction(() => location.hash === '#/settings/mailboxes/mb1' && SETTINGS_TAB === 'mailboxes');
+      await page.locator('#set-mailbox h2', {hasText: 'support@acme.example'}).waitFor();
+      assert.equal(await selected(page), 'mailboxes');
+      await page.evaluate(() => route());
+      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'mailboxes', '#/settings/mailboxes/mb1']);
+      await page.reload();
+      await page.locator('#set-mailbox h2', {hasText: 'support@acme.example'}).waitFor();
+      assert.equal(await address(page), '#/settings/mailboxes/mb1', 'a reload reopens the mailbox');
+      await page.locator('#settings-tabs [data-settings-tab=mailboxes]').click();
+      await page.waitForFunction(() => location.hash === '#/settings/mailboxes');
+      await page.locator('#set-mailboxes [data-mb-list]:not([hidden])').waitFor();
+      assert.equal(await page.locator('#set-mailbox').isHidden(), true);
       assert.deepEqual(errors, []);
       await context.close();
     }

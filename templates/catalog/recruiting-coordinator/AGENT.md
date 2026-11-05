@@ -43,7 +43,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 requested work and granted Tools. Apply an owner's routine changes directly.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Booking, moving or cancelling an interviewer's event** with `hub calendar schedule`.
+- **Booking, moving or canceling an interviewer's event** with `hub calendar schedule`.
 - **Sharing scores or the debrief pack** beyond the hiring manager and the panel.
 
 Always:

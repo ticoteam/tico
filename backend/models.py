@@ -41,7 +41,10 @@ Repo = Annotated[str, Field(max_length=200), AfterValidator(repo_reference)]
 
 
 class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # defer_build: a model's validator is built when it is first used (a route's body, a model_validate), not when this
+    # module is imported. The server imports about 300 of them on every start and many are only parts of others; the
+    # schema, the validation and the OpenAPI document are the same either way (subclasses inherit this).
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, defer_build=True)
 
 
 class TurnLevels(Contract):
@@ -200,6 +203,8 @@ class TaskCreate(Contract):
     title: str = Field(min_length=1, max_length=300)
     body: Text
     owner: ID
+    check_back_at: str | None = Field(default=None, max_length=80)
+    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
@@ -265,6 +270,8 @@ class TaskUpdate(Contract):
     note: str | None = Field(default=None, max_length=200_000)
     quiet: bool = False
     owner: ID | None = None
+    check_back_at: str | None = Field(default=None, max_length=80)
+    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)   # "" takes the goal off
@@ -708,7 +715,7 @@ class KpiReading(Contract):
 
 class GoalProposalCreate(Contract):
     kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-                  "strategy_draft", "brand_draft", "gtm_draft"]
+                  "strategy_draft", "brand_draft"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -782,7 +789,7 @@ class StrategyDraft(Contract):
     guide: str | None = Field(default=None, max_length=40)
     summary: str | None = Field(default=None, max_length=2000)
     vision: str | None = Field(default=None, max_length=2000)
-    sections: dict | None = None          # {serve, sell, know, not, extra: {key: {title, body}}}, any of them
+    sections: dict | None = None          # {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any
 
 
 class StrategyPublish(Contract):
@@ -848,7 +855,7 @@ class MarketEntityCreate(Contract):
     tier: Literal["core", "lookalike", "phrase-stealer", "secondary"] | None = None
     summary: str = Field(default="", max_length=20_000)
     properties: dict = Field(default_factory=dict)
-    last_verified: str | None = None
+    last_verified_at: str | None = None
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     force: bool = False
     insight_id: str | None = Field(default=None, max_length=80)
@@ -862,7 +869,7 @@ class MarketEntityWrite(Contract):
     clear_tier: bool = False
     summary: str | None = Field(default=None, max_length=20_000)
     properties: dict | None = None
-    last_verified: str | None = None
+    last_verified_at: str | None = None
     status: Literal["active", "retired", "merged"] | None = None
     evidence_ids: list[str] | None = None
     insight_id: str | None = Field(default=None, max_length=80)
@@ -916,7 +923,7 @@ class MarketApply(Contract):
     properties: dict | None = None
     tier: Literal["core", "lookalike", "phrase-stealer", "secondary"] | None = None
     aliases: list[str] | None = None
-    last_verified: str | None = None
+    last_verified_at: str | None = None
 
 
 class MarketImport(Contract):
@@ -967,6 +974,7 @@ class AssistantSettings(Contract):
 class AssistantReadBack(Contract):
     """The approvals the Assistant is about to approve for the person, read back in their chat first."""
     approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
+    note: Annotated[str, Field(max_length=300)] = ""
 
 
 class ApprovalConsume(Contract):
@@ -993,6 +1001,7 @@ class Enrollment(Contract):
     code: str = Field(min_length=32, max_length=200)
     label: str = Field(min_length=1, max_length=100)
     platform: str = Field(default="", max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SlashCommand(Contract):
@@ -1049,6 +1058,11 @@ class SubscriptionWeekly(Contract):
     resets_at: str | None = Field(default=None, max_length=50)
     reported_at: str = Field(max_length=50)
     status: Literal["allowed", "allowed_warning", "rejected"] | None = None
+    # Where the reading came from, as the runner tells it (runner-rs drive.rs, subscription_refresh.rs): "subscription" when a
+    # turn ran on a company subscription (`subscription_id` is its id), "login" for the computer's own login (a background
+    # read or a turn on it). Absent from a runner that predates this, which counts for no plan (model_subscriptions._plan_usage).
+    origin: Literal["subscription", "login"] | None = None
+    subscription_id: str | None = Field(default=None, max_length=80)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.
@@ -1093,7 +1107,7 @@ class ProfileReadiness(GoalReadiness):
 
 
 class HarnessReadiness(GoalReadiness):
-    """One model CLI on the runner (runner/harnesses/*.toml): what is installed and whether it can
+    """One model CLI on the runner (runner-rs/harnesses/*.toml): what is installed and whether it can
     be kept current from Settings."""
     name: str = Field(default="", max_length=100)
     runtime: str = Field(default="", max_length=100)
@@ -1133,7 +1147,7 @@ class RuntimeReadiness(GoalReadiness):
     detail: str = Field(default="", max_length=500)
     data_problem: Annotated[str, _cut(500)] = ""      # as ProfileReadiness
     # On a Docker runner: "own" when each turn on this tool runs as its own leased OS user, "bot" when its turns share
-    # the bot user and can enter every bot's checkout (its sign-in is owner-only state; runner/harnesses `isolated_user`).
+    # the bot user and can enter every bot's checkout (its sign-in is owner-only state; runner-rs/harnesses `isolated_user`).
     turn_user: Literal["", "own", "bot"] = ""
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
@@ -1260,7 +1274,7 @@ class ContainerExecReadiness(Contract):
 
 
 class EngineReadiness(Contract):
-    """Which runner engine the computer runs (runner/engine.py): the Rust runner and its build, or the Python one and why."""
+    """Which runner engine the computer runs (runner_support/engine.py): the Rust runner and its build, or the Python one and why."""
     name: Literal["rust", "python"]
     build: str = Field(default="", max_length=64)
     note: Annotated[str, BeforeValidator(lambda v: v[:300] if isinstance(v, str) else v), Field(max_length=300)] = ""
@@ -1321,7 +1335,7 @@ class StructuredReadiness(Contract):
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
-    mail_key: Literal["exposed"] | None = None      # the mail key is where bots can read it (runner/mail_key.py)
+    mail_key: Literal["exposed"] | None = None      # the mail key is where bots can read it (runner_support/mail_key.py)
     shared_env: Literal[True] | None = None         # secrets/_shared.env holds keys every bot there receives
     container_exec: ContainerExecReadiness | None = None
     # A bot's GitHub App token asked GitHub who it is, and Playwright's Chromium started (runner-rs/src/readiness_extra.rs).
@@ -1399,7 +1413,7 @@ class WorktreeStatus(Contract):
     last_commit: str | None = Field(default=None, max_length=100)
     size_mb: float = Field(default=0, ge=0)
     error: str | None = Field(default=None, max_length=300)
-    # The record's `updated` stamp this report was built from; a report older than the record is stale.
+    # The record's `updated_at` stamp this report was built from; a report older than the record is stale.
     record_updated: str | None = Field(default=None, max_length=40)
 
 
@@ -1420,13 +1434,15 @@ class Heartbeat(Contract):
     repositories: list[RepositoryStatus] | None = None
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
+    device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
     capabilities: list[Literal[
         "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
-        "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1"]] = Field(
+        "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
+        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1"]] = Field(
         default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
@@ -1475,6 +1491,12 @@ Heartbeat.model_rebuild()
 
 class RunnerMemberBots(Contract):
     accepts: bool
+
+
+class RunnerLabel(Contract):
+    # Trimmed first (Contract strips), then 1 to 100 characters on one line.
+    label: StrictStr = Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$",
+                             description="The computer's name, as Settings > Computers shows it.")
 
 
 class RunnerTurnsAtOnce(Contract):
@@ -1539,6 +1561,16 @@ class BotAccess(Contract):
     write: AccessAudience
     revision: int = Field(ge=1)
     # BotOps making the change the requester asked for in chat ("turn", or their message's id).
+    on_behalf_of: ID | None = None
+
+
+class TeammateAccess(Contract):
+    """A person's or a group's See, Read and Write (backend/teammate_access.py), in a bot's shape. `revision` is the
+    one the editor read: 0 while they still have the defaults."""
+    see: AccessAudience
+    read: AccessAudience
+    write: AccessAudience
+    revision: int = Field(ge=0)
     on_behalf_of: ID | None = None
 
 
@@ -1760,6 +1792,8 @@ class AppDeliveryReport(Contract):
 
 class BotDefinitionUpdate(Contract):
     private_tasks_default: StrictBool | None = None
+    # A new slug: the label people type (@slug) and read. The bot's id, its history and every reference keep as they are.
+    slug: Slug | None = None
     template: str | None = Field(default=None, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
@@ -1839,6 +1873,10 @@ class PersonUpdate(Contract):
     notify_slack_bot_messages: bool | None = None
     # Whether the Assistant drafts their daily update (on unless turned off).
     update_draft: bool | None = None
+    # Browser notifications for Needs you while the page is in the background (off unless turned on).
+    notify_browser: bool | None = None
+    # Email digests of the threads they follow on digest (off unless turned on by the person; on by default).
+    email_digest: bool | None = None
     # Bots whose messages to this person stay in Tico even while bot messages in Slack are on.
     slack_muted_bots: list[Slug] | None = Field(default=None, max_length=200)
     # Where this person sits on the org chart: another person's id, or "" for the top.
@@ -1852,7 +1890,7 @@ class PersonUpdate(Contract):
     @model_validator(mode="after")
     def has_change(self):
         if not (self.model_fields_set - {"on_behalf_of"}):
-            raise ValueError("Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, update_draft, slack_muted_bots, github, reports_to or left")
+            raise ValueError("Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, update_draft, notify_browser, email_digest, slack_muted_bots, github, reports_to or left")
         return self
 
 
@@ -1907,7 +1945,7 @@ class BotTaskChoice(Contract):
     harness: ID | None = None
     model: ID | None = None
     effort: ID | None = None
-    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
 
 
 class BotTaskModel(Contract):
@@ -1917,7 +1955,7 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
+    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)
 
 
@@ -2137,11 +2175,11 @@ class AccessRules(Contract):
     admin_sql: bool | None = None
     member_tokens: bool | None = None
     health_monitor_reports: bool | None = None
+    bot_reports_direct: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
     stale_review: bool | None = None
     topic_fresh: bool | None = None
-    stall_triage: bool | None = None
     managers_manage_reports: bool | None = None
     org_rule_checks: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
@@ -2349,7 +2387,7 @@ class RunUsagePart(Contract):
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
     long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
     sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
-    context size (`turns.prompt_tokens`)."""
+    context size (`attempts.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
@@ -2376,6 +2414,11 @@ class UsageLimit(Contract):
 
 class UsageDefault(UsageLimit):
     count_subscription: bool = True
+
+
+class QueuePurge(Contract):
+    """`company`, or `group:<id>` for that group and the groups nested under it."""
+    scope: str = Field(default="company", max_length=200)
 
 
 class SubscriptionUnavailable(Contract):
@@ -2413,6 +2456,9 @@ class Completion(Contract):
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
     text: str = Field(default="", max_length=200_000)
+    # The message this reply goes under when it answers one in a sub-thread (docs/threads.md). Declared so a runner that
+    # sends it is not refused: Completion forbids fields it does not know.
+    parent_message_id: ID | None = None
     last_seq: int = Field(ge=0)
     tokens_in: int | None = Field(default=None, ge=0)
     tokens_out: int | None = Field(default=None, ge=0)
@@ -2450,7 +2496,7 @@ class Retry(Contract):
 
 
 class ReconcileJob(Contract):
-    attempt_id: ID
+    run_id: ID
     decision: Literal["resume", "dismiss"]
     note: str = Field(min_length=20, max_length=4000)
     acknowledge_uncertain_effects: bool
@@ -2480,6 +2526,11 @@ class BotGoLive(Contract):
     setup: bool = True
 
 
+class TaskCheckBack(Contract):
+    at: str = Field(min_length=2, max_length=80)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class TaskSnooze(Contract):
     # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
     until: str = Field(min_length=10, max_length=40)
@@ -2507,12 +2558,46 @@ class Empty(Contract):
     pass
 
 
+class MemoryTidyPilot(Contract):
+    bot: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=100)
+    effort: Literal["low"] = "low"
+
+
 class SystemRoutineUpdate(Contract):
     """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
     changes."""
+    pilots: list[MemoryTidyPilot] | None = Field(default=None, max_length=3)
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)
+
+
+MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+
+
+class MaintenanceStepChange(Contract):
+    """One step's switch, frequency or bot limit (backend/maintenance.py save_step); only what is sent changes."""
+    key: MaintenanceStepKey
+    enabled: bool | None = None
+    frequency: Literal["run", "day", "week", "custom"] | None = None
+    custom_every: int | None = Field(default=None, ge=1, le=999)
+    custom_unit: Literal["hours", "days"] | None = None
+    max_bots: int | None = Field(default=None, ge=1, le=20)
+
+
+class MaintenanceUpdate(Contract):
+    """The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and
+    save_step); only what is sent changes."""
+    schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
+    paused: bool | None = None
+    monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
+
+
+class MaintenanceRunRequest(Contract):
+    """Run now: every step, or the one named (backend/maintenance.py run_now)."""
+    step: MaintenanceStepKey | None = None
 
 
 class ReleaseScheduleUpdate(Contract):
@@ -2534,6 +2619,14 @@ class SettingsPlan(Contract):
     id: str | None = Field(default=None, max_length=200)
 
 
+class SettingsAsk(SettingsPlan):
+    """Ask a person who may change a settings catalogue entry to change it (backend/settings_asks.py): the value and
+    target as for a plan, `to` a person's id to ask (else an admin, or the owner for the owner's settings), and an
+    optional `note` from the asker shown on the request."""
+    to: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ReleaseNow(Contract):
     """Ask the Release Manager to release what is at Pending Release now; `note` goes in its task."""
     note: str | None = Field(default=None, max_length=1000)
@@ -2544,7 +2637,7 @@ class LimitRetry(Contract):
 
 
 class StopTurn(Contract):
-    attempt_id: ID | None = None   # the run the person saw; a newer one is not stopped by mistake
+    run_id: ID | None = None       # the run the person saw; a newer one is not stopped by mistake
     redirect: ID | None = None     # the caller's queued message the next turn starts with (Stop and redirect)
 
 
@@ -2582,6 +2675,11 @@ class DocsAsk(Contract):
     new_conversation: bool = False        # close the docs conversation and start a fresh one (no context)
 
 
+class AssistantWithdraw(Contract):
+    """A bot takes back a Confirm card it proposed; the reason (optional) goes to the person in one line."""
+    reason: str = Field(default="", max_length=1000)
+
+
 class AssistantAction(Contract):
     """What the Assistant proposes: one operation on this API, run as the person only when they
     confirm it (backend/assistant.py)."""
@@ -2589,6 +2687,8 @@ class AssistantAction(Contract):
     method: Literal["POST", "PUT", "PATCH", "DELETE"] = "POST"
     path: Annotated[str, Field(min_length=9, max_length=300)]
     body: dict = Field(default_factory=dict)
+    # The Assistant's own background run puts the card in this person's Assistant chat (`for`); otherwise it is the caller's.
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
 
 
 class InboxOnly(Contract):
@@ -2873,8 +2973,8 @@ class TaskRuleUpdate(Contract):
     at: str | None = Field(default=None, max_length=5)
 
 
-# ----------------------------------------------------------------------------- brand, go-to-market, growth
-# The brand and GTM pages (backend/brand_gtm.py): one body per version, each section optional. The draft is written a
+# ----------------------------------------------------------------------------- brand, growth
+# The brand page (backend/brand.py): one body per version, each section optional. The draft is written a
 # section at a time (null removes one) and checked whole against these shapes.
 S80 = Annotated[str, Field(max_length=80)]
 S300 = Annotated[str, Field(max_length=300)]
@@ -2958,35 +3058,6 @@ class BrandBody(Contract):
     examples: list[BrandExample] | None = Field(default=None, max_length=30)
 
 
-Motion = Literal["self_serve", "sales_led", "partner", "marketplace", "local", "community", "ecommerce"]
-
-
-class GtmMotion(Contract):
-    primary: Motion
-    secondary: Motion | None = None
-
-
-class GtmBuyer(Contract):
-    who_buys: S300 = ""
-    who_uses: S300 = ""
-    deal_size: S80 = ""
-    cycle: S80 = ""
-    objections: list[S300] = Field(default_factory=list, max_length=30)
-
-
-class GtmWish(Contract):
-    text: S300
-    scope: S80 = ""
-    level: Literal["block", "warn", "setting"] = "warn"
-
-
-class GtmBody(Contract):
-    motion: GtmMotion | None = None
-    buyer: GtmBuyer | None = None
-    wishes: list[GtmWish] | None = Field(default=None, max_length=50)
-    playbooks: list[S80] | None = Field(default=None, max_length=30)
-
-
 class PageDraft(Contract):
     """`sections`: {name: value or null}; null removes the section. `revision` is the draft's as read; leave it out to
     write without the check."""
@@ -3015,7 +3086,6 @@ class GrowthChannelCreate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int = 0
-    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
 
 
 class GrowthChannelUpdate(Contract):
@@ -3029,7 +3099,6 @@ class GrowthChannelUpdate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int | None = None
-    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
 
 
 class GrowthSourceCreate(Contract):
@@ -3050,75 +3119,8 @@ class GrowthSourceUpdate(Contract):
     owner_ref: str | None = Field(default=None, max_length=200)
 
 
-IceScore = Annotated[int, Field(ge=1, le=10)]
-IdeaSource = Literal["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
-
-
-class GrowthIdeaCreate(Contract):
-    title: Annotated[str, Field(min_length=1, max_length=300)]
-    hypothesis: str = Field(default="", max_length=2000)
-    prediction: str = Field(default="", max_length=1000)
-    bet_id: str | None = Field(default=None, max_length=200)
-    kpi_id: str | None = Field(default=None, max_length=200)
-    channels: list[Annotated[str, Field(max_length=40)]] = Field(default_factory=list, max_length=10)
-    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
-    ice_i: IceScore | None = None
-    ice_c: IceScore | None = None
-    ice_e: IceScore | None = None
-    source_kind: IdeaSource | None = None
-    source_ref: str | None = Field(default=None, max_length=500)
-    follow_up_of: str | None = Field(default=None, max_length=200)
-    assignee: str | None = Field(default=None, max_length=200)
-    body: str = Field(default="", max_length=20_000)
-
-
-class GrowthIdeaUpdate(Contract):
-    title: str | None = Field(default=None, min_length=1, max_length=300)
-    hypothesis: str | None = Field(default=None, max_length=2000)
-    prediction: str | None = Field(default=None, max_length=1000)
-    bet_id: str | None = Field(default=None, max_length=200)
-    kpi_id: str | None = Field(default=None, max_length=200)
-    judged_kpi_id: str | None = Field(default=None, max_length=200)
-    channels: list[Annotated[str, Field(max_length=40)]] | None = Field(default=None, max_length=10)
-    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
-    source_kind: IdeaSource | None = None
-    source_ref: str | None = Field(default=None, max_length=500)
-    test_from: str | None = Field(default=None, max_length=40)
-    test_to: str | None = Field(default=None, max_length=40)
-    change: str | None = Field(default=None, max_length=2000)
-    stop_if: str | None = Field(default=None, max_length=1000)
-    min_events: int | None = Field(default=None, ge=0)
-    audience: str | None = Field(default=None, max_length=500)
-    external_ref: str | None = Field(default=None, max_length=500)
-
-
-class GrowthIdeaScore(Contract):
-    i: IceScore
-    c: IceScore
-    e: IceScore
-
-
-class GrowthIdeaStart(Contract):
-    test_from: str | None = Field(default=None, max_length=40)
-    test_to: Annotated[str, Field(min_length=1, max_length=40)]
-    change: Annotated[str, Field(min_length=1, max_length=2000)]
-    stop_if: Annotated[str, Field(min_length=1, max_length=1000)]
-    min_events: int | None = Field(default=None, ge=0)
-    judged_kpi_id: str | None = Field(default=None, max_length=200)
-    audience: str | None = Field(default=None, max_length=500)
-
-
-class GrowthIdeaVerdict(Contract):
-    status: Literal["won", "lost", "inconclusive", "dropped", "paused"]
-    result: str | None = Field(default=None, max_length=2000)
-    learning: str | None = Field(default=None, max_length=2000)
-    bet_effect: Literal["supports", "weakens", "none"] | None = None
-    confidence: Literal["low", "medium", "high"] | None = None
-
-
 class GrowthCohortSet(Contract):
     channel: str | None = Field(default=None, max_length=40)       # a channel slug; "unknown" or null is Unknown
-    segment_id: str | None = Field(default=None, max_length=200)   # a growth segment or its market segment; null: not split
     month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
     spend: float | None = Field(default=None, ge=0)
     bot_cost: float | None = Field(default=None, ge=0)
@@ -3132,35 +3134,26 @@ class GrowthCohortSet(Contract):
     sources: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=300)]] | None = None
 
 
-SegmentStatus = Literal["serving", "testing", "next", "dropped"]
-
-
-class GrowthSegmentCreate(Contract):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    segment_id: str | None = Field(default=None, min_length=1, max_length=200)
-    status: SegmentStatus = "testing"
-    motion: Motion | None = None
-    who_buys: str = Field(default="", max_length=300)
-    deal_size: str = Field(default="", max_length=80)
-    why: str = Field(default="", max_length=1000)
-    owner_ref: str | None = Field(default=None, max_length=200)
-    sort: int = 0
-
-
-class GrowthSegmentUpdate(Contract):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    status: SegmentStatus | None = None
-    motion: Motion | None = None
-    who_buys: str | None = Field(default=None, max_length=300)
-    deal_size: str | None = Field(default=None, max_length=80)
-    why: str | None = Field(default=None, max_length=1000)
-    owner_ref: str | None = Field(default=None, max_length=200)
-    sort: int | None = None
-
-
 class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
-    verdict_win_pct: float | None = Field(default=None, ge=0, le=100)
-    framework: str | None = Field(default=None, max_length=80)
+
+
+# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+MailboxLevel = Literal["read", "read_write"]
+
+
+class MailboxCreate(Contract):
+    address: Annotated[str, Field(min_length=3, max_length=254)]
+    shared: StrictBool = False
+
+
+class MailboxAccessCreate(Contract):
+    grantee_type: Literal["person", "bot"]
+    grantee_id: ID
+    level: MailboxLevel
+
+
+class MailboxAccessUpdate(Contract):
+    level: MailboxLevel

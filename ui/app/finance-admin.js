@@ -17,7 +17,7 @@ function finSourcesPage() {
   const caps = finCaps(), s = FIN_SRC;
   FIN.src = {groups: [], lines: [], load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label>
-      <button type="button" class="ghost" data-fin-collapse>Collapse all</button><span class="spacer"></span>
+      <button type="button" class="ghost" data-fin-collapse>Expand all</button><span class="spacer"></span>
       ${finSourceMenuHtml(caps)}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-src">${skelRows(8, {dot: false})}</div>`, '', 'Selected source');
   const body = $('#fin-body');
@@ -27,7 +27,10 @@ function finSourcesPage() {
     if (add) { finPop(add, $('#fin-connect')); return; }
     const pick = ev.target.closest('[data-fin-connect-item]');
     if (pick) { $('#fin-connect').hidden = true; add?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem); return; }
-    if (ev.target.closest('[data-fin-collapse]')) { s.open.clear(); finSrcDraw(); return; }
+    if (ev.target.closest('[data-fin-collapse]')) {
+      if (finSrcAllShut()) for (const g of FIN.src.groups) s.open.add(g.group); else s.open.clear();
+      finSrcDraw(); return;
+    }
     const g = ev.target.closest('[data-fin-group]');
     if (g) { const k = g.dataset.finGroup; if (s.open.has(k)) s.open.delete(k); else s.open.add(k); finSrcDraw(); return; }
     const tr = ev.target.closest('tr[data-fin-src]');
@@ -75,12 +78,16 @@ function finSrcCols(r) {
     last = at ? ago(at) : '';
     status = sync?.status === 'disconnected' ? ['idle', 'Disconnected'] : sync?.status === 'reconnect' ? ['fail', 'Reconnect']
       : err ? ['fail', 'Error'] : !sync ? ['idle', '—']
-      : sync.status === 'new' ? ['waiting', 'Starting'] : ['ok', 'OK'];
+      : sync.status === 'new' ? ['waiting', 'Starting'] : sync.history === 'importing' ? ['waiting', 'Importing'] : ['ok', 'OK'];
   }
   return {has, feeds, how, last, status};
 }
+// Every group shut (a search opens them all): the button then expands them, else it collapses them.
+const finSrcAllShut = () => !FIN_SRC.q && !(FIN.src?.groups || []).some(g => FIN_SRC.open.has(g.group));
 function finSrcDraw() {
   const state = FIN.src, s = FIN_SRC, box = $('#fin-src'); if (!box) return;
+  // A search shows every match open, so the toggle hides until the search clears.
+  const btn = $('#fin-body [data-fin-collapse]'); if (btn) { btn.hidden = !!s.q; btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all'; }
   if (!state.groups.length) { box.innerHTML = finNote('No sources yet.'); return; }
   const match = r => !s.q || [r.name, r.provider, r.last4, r.account?.name].some(v => String(v || '').toLowerCase().includes(s.q));
   const out = [];
@@ -315,6 +322,8 @@ const FIN_ACC = {sel: ''};
 const finAsker = row => row.teammate === 'bot:' + assistantBot();
 function finDefaultLabel(row) {
   if (finAsker(row)) return 'Same as who asks';
+  // backend/finance/tab.py default_team: the one top team a manager's default covers, else none (several, or reports only).
+  if (row.default === 'team_expenses' && row.default_team) return `${finTeamName(row.default_team)} expenses`;
   return {everything: 'Everything', none: 'Nothing', own_expenses: 'Own expenses', team_expenses: 'Team expenses'}[row.default] || 'Own expenses';
 }
 const finDefaultCls = row => finAsker(row) ? 'own' : {everything: 'all', team_expenses: 'mgr', own_expenses: 'own', none: 'none'}[row.default] || 'own';
@@ -343,13 +352,14 @@ function finAccRows(acc) {
     for (const k of finTeamKids(teams, team.id)) if (d < 12) walk(k, d + 1);
   };
   for (const team of finTeamKids(teams, '')) walk(team, 0);
-  for (const t of mates.filter(m => !m.team || !teams.some(x => x.id === m.team))) out.push({t, d: 0});
+  const loose = mates.filter(m => !m.team || !teams.some(x => x.id === m.team));
+  if (loose.length) out.push({group: 'No team', d: 0}, ...loose.map(t => ({t, d: 0})));
   if (helpers.length) out.push({group: 'Helpers', d: 0}, ...helpers.map(t => ({t, d: 0})));
   return out;
 }
 function finAccessPage() {
   const acc = FIN.acc;
-  $('#fin-body').innerHTML = `<div class="fin-bar"><span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
+  $('#fin-body').innerHTML = `<div class="fin-bar">${finApproverHtml(acc)}<span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
       ${acc.can_view_as ? '<button type="button" class="ghost" data-fin-viewas>View as…</button>' : ''}</div>`
     + finSplit(`<h2 class="fin-h2">Org chart</h2><div class="fin-scroll" id="fin-acc"></div><div id="fin-private"></div>`, '', 'Selected teammate');
   if (!acc.teammates.some(t => t.teammate === FIN_ACC.sel)) FIN_ACC.sel = finAccRows(acc).find(r => r.t)?.t.teammate || '';
@@ -361,7 +371,26 @@ function finAccessPage() {
     const tr = ev.target.closest('tr[data-fin-mate]');
     if (tr) { FIN_ACC.sel = tr.dataset.finMate; finAccDraw(); finAccRail(); }
   };
+  const pick = $('#fin-body [data-fin-approver]');
+  if (pick) pick.onchange = () => void finApproverSet(pick);
   finAccDraw(); finAccRail();
+}
+// The one person finance-admin approvals go to (§16): the owner's to name, the owner by default.
+function finApproverHtml(acc) {
+  if (!acc.can_edit_defaults) return '';
+  const people = (acc.teammates || []).filter(t => t.kind === 'person'), owner = people.find(t => t.default === 'everything');
+  const opt = (v, l) => `<option value="${esc(v)}"${v === (acc.finance_approver || '') ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<label class="fin-inline">Finance approver<select data-fin-approver>${opt('', owner ? finWho(owner.teammate) : 'Owner')}${people.filter(t => t !== owner).map(t => opt(t.teammate, finWho(t.teammate))).join('')}</select></label>`;
+}
+async function finApproverSet(pick) {
+  pick.disabled = true;
+  try {
+    const r = await finAct('finance_approver_set', {approver: pick.value});
+    if (r.status === 'committed') toast('Saved');
+  } catch (e) { toast(e.message, true); }
+  await finAccReload();
+  pick.value = FIN.acc.finance_approver || '';
+  pick.disabled = false;
 }
 function finAccDraw() {
   const acc = FIN.acc, box = $('#fin-acc'); if (!box) return;
@@ -377,7 +406,8 @@ function finAccDraw() {
   // even before there is one: its totals follow the managers' payroll default.
   const priv = acc.private_lines || [], d = acc.defaults || {};
   const chip = (name, hidden, full) => `<span class="fin-chip">${esc(name)} <span class="muted">· ${hidden ? 'Hidden' : 'Totals only'}${full.length ? ' · Full detail: ' + esc(full.map(finWho).join(', ')) : ''}</span></span>`;
-  $('#fin-private').innerHTML = finCaps().may('finance.admin') ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${chip('Payroll by person', d.manager_payroll === 'hidden', [])}${priv.map(p =>
+  // Only whoever sees everything reads them (backend/finance/tab.py access); finance.admin adds no view (§7.5).
+  $('#fin-private').innerHTML = finCaps().all ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${chip('Payroll by person', d.manager_payroll === 'hidden', [])}${priv.map(p =>
     chip(p.name, p.others_see === 'hidden', Array.isArray(p.full_detail) ? p.full_detail : [])).join('')}</div>` : '';
 }
 function finAccRail() {

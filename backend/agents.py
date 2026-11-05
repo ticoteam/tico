@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .harnesses import is_external, resolve_harness
 from .store import H, Problem, digest, encode
+from . import bot_settings as BS
 
 # The agent's timer posts every minute; three misses is offline. A Mac runner is offline after
 # 60 s because its heartbeat is every 15 s and a lease depends on it; nothing here does.
@@ -44,7 +45,7 @@ PAIRABLE = ("hermes", "openclaw")
 
 # One bot's config and agent record, read through read_cache so a page that primes them for every bot
 # (views.prime_machines) reads neither again per bot.
-CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+CONFIG_SQL = BS.ONE_SQL
 ROW_SQL = "SELECT * FROM agents WHERE bot=?"
 
 
@@ -54,7 +55,7 @@ def external_harness(c, bot):
     row = one(c, CONFIG_SQL, (bot,))
     if not row:
         return None
-    config = H._json(row["config_json"], {}) or {}
+    config = H._json(row["config"], {}) or {}
     return resolve_harness(config) if is_external(config) else None
 
 
@@ -73,13 +74,13 @@ def presence(c, bot, harness=None, now=None):
     if harness in external_sync.HARNESSES:
         from .read_cache import one
         config = one(c, CONFIG_SQL, (bot,))
-        return external_sync.presence(c, bot, harness, H._json(config["config_json"], {}) or {}, now)
+        return external_sync.presence(c, bot, harness, H._json(config["config"], {}) or {}, now)
     now = now or H.now()
     record = row(c, bot)
     credential = bool(record and not record["revoked_at"])
-    last_seen = record["last_seen"] if record else None
+    last_seen = record["last_seen_at"] if record else None
     online = bool(credential and last_seen and last_seen > H.shift(now, seconds=-PRESENCE_GAP))
-    agent = {"harness": harness, "credential": credential, "last_seen": last_seen,
+    agent = {"harness": harness, "credential": credential, "last_seen_at": last_seen,
              "revoked_at": record["revoked_at"] if record else None,
              "version": (record["version"] if record else "") or "",
              "platform": (record["platform"] if record else "") or "",
@@ -99,12 +100,12 @@ def issue_credential(c, who, bot):
                       "this bot runs on a registered computer", 422)
     token = "tico-agent-" + secrets.token_urlsafe(32)
     now = H.now()
-    c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?) "
+    c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?) "
               "ON CONFLICT(bot) DO UPDATE SET harness=excluded.harness,token_hash=excluded.token_hash,"
-              "created=excluded.created,created_by=excluded.created_by,revoked_at=NULL,revoked_by=NULL,last_seen=NULL",
+              "created_at=excluded.created_at,created_by=excluded.created_by,revoked_at=NULL,revoked_by=NULL,last_seen_at=NULL",
               (bot, harness, digest(token), now, who.actor))
     H.event(c, who.actor, "agent.credential_issued", bot, {"harness": harness})
-    return {"bot": bot, "harness": harness, "token": token, "created": now}
+    return {"bot": bot, "harness": harness, "token": token, "created_at": now}
 
 
 def revoke_credential(c, who, bot):
@@ -124,7 +125,7 @@ def heartbeat(c, who, body):
     now = H.now()
     fields = {key: getattr(body, key) for key in ("version", "platform", "model", "provider", "profile", "detail")
               if key in body.model_fields_set}
-    fields["last_seen"] = now
+    fields["last_seen_at"] = now
     c.execute("UPDATE agents SET " + ",".join(key + "=?" for key in fields) + " WHERE bot=?",
               (*fields.values(), bot))
     if body.tools is not None:
@@ -132,8 +133,10 @@ def heartbeat(c, who, body):
         bot_tools.agent_report(c, bot, body.tools)
     c.execute("UPDATE agent_pairings SET state='claimed',token=NULL WHERE bot=? AND state='approved'", (bot,))
     inbox = H.inbox(c, who.actor, at=now)
-    from . import task_privacy as privacy
-    inbox["messages"] = [m for m in inbox["messages"] if privacy.message_readable(c, privacy.actor(who), m)]
+    from . import task_privacy as privacy, threads
+    reader = threads.Viewer(None, who)
+    inbox["messages"] = [m for m in inbox["messages"] if threads.message_readable(c, reader, m)
+                         and privacy.message_readable(c, privacy.actor(who), m)]
     inbox["tasks"] = [t for t in inbox["tasks"] if privacy.task_readable(c, who, t)]
     return {"server_time": now, "bot": bot, "presence_gap_s": PRESENCE_GAP,
             "waiting": {"messages": len(inbox["messages"]), "tasks": len(inbox["tasks"])}}
@@ -211,7 +214,7 @@ def create_pairing(c, body, client):
     c.execute("UPDATE agent_pairings SET state='expired',token=NULL WHERE expires_at<=? AND state IN ('pending','approved')",
               (now,))
     client_hash = digest("pairing-client:" + client)
-    if c.execute("SELECT count(*) FROM agent_pairings WHERE client_hash=? AND created>?",
+    if c.execute("SELECT count(*) FROM agent_pairings WHERE client_hash=? AND created_at>?",
                  (client_hash, H.shift(now, hours=-1))).fetchone()[0] >= PAIRINGS_PER_CLIENT_HOUR:
         raise Problem("rate_limited", "Too many pairing requests from this address; try again in an hour", 429, retryable=True)
     if c.execute("SELECT count(*) FROM agent_pairings WHERE state='pending'").fetchone()[0] >= PAIRINGS_PENDING_MAX:
@@ -224,7 +227,7 @@ def create_pairing(c, body, client):
             break
     else:
         raise Problem("unavailable", "Could not make a pairing code; try again", 503, retryable=True)
-    c.execute("INSERT INTO agent_pairings(id,code_hash,secret_hash,profile,host,version,harness,client_hash,created,"
+    c.execute("INSERT INTO agent_pairings(id,code_hash,secret_hash,profile,host,version,harness,client_hash,created_at,"
               "expires_at,token_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
               (pairing_id, digest(raw), digest(secret), body.profile, body.host, body.version, body.harness,
                client_hash, now, H.shift(now, seconds=PAIRING_TTL), pairing_public(secret)))
@@ -245,7 +248,8 @@ def poll_pairing(c, pairing_id, secret):
         token = open_held_token(record, secret)
         if token is None:
             return {"state": "expired"}      # nothing this secret opens: pair again
-        return {"state": "approved", "bot": record["bot"], "token": token}
+        return {"state": "approved", "bot": record["bot"], "slug": (H.bot(c, record["bot"]) or {}).get("slug"),
+                "token": token}
     return {"state": state}
 
 
@@ -273,6 +277,7 @@ def approve_pairing(c, who, manager, code, bot):
     if not record["token_key"]:
         # Asked for before this release, which seals the credential for the profile: no key to seal it with.
         raise Problem("not_found", "That code was made before Tico was updated. Run the pair command again for a new one", 404)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     manager(c, who, bot)
@@ -285,8 +290,9 @@ def approve_pairing(c, who, manager, code, bot):
     if state not in ("planned", "active"):
         raise Problem("bot_state", "This bot is " + state + "; make it planned or active first", 409)
     if state == "planned":
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (bot,))
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
+        BS.update(c, bot, {"status": "active"})
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.event(c, who.actor, "bot.activated", bot)
     issued = issue_credential(c, who, bot)
     c.execute("UPDATE agent_pairings SET state='approved',bot=?,token=?,decided_by=?,decided_at=? WHERE id=?",
@@ -323,11 +329,11 @@ def still_reporting(c, bot):
 def listing(c, who, auth):
     """Every external agent this person may see, for Settings."""
     from . import read_cache
-    rows = list(c.execute("SELECT a.*,b.display_name FROM agents a JOIN bots b ON b.slug=a.bot ORDER BY a.bot"))
+    rows = list(c.execute("SELECT a.*,b.display_name FROM agents a JOIN bots b ON b.id=a.bot ORDER BY a.bot"))
     slugs = [r["bot"] for r in rows]
     # One access pass and one config read for the whole list (operations embeds this on every load).
     access = auth.bot_accesses(c, who, slugs) if slugs else {}
-    operators = {r["bot"]: r["operator"] for r in read_cache.configs(c, slugs)}
+    operators = {r["bot"]: r["owner_id"] for r in read_cache.configs(c, slugs)}
     out = []
     for record in rows:
         # bot_accesses answers every slug asked for; a missing one denies rather than allows.
@@ -336,11 +342,11 @@ def listing(c, who, auth):
         operator = operators.get(record["bot"])
         if who.role != "owner" and not (operator and who.actor == "human:" + operator):
             continue
-        value = {k: record[k] for k in ("bot", "display_name", "harness", "created", "created_by",
-                                        "last_seen", "version", "platform", "model", "provider",
+        value = {k: record[k] for k in ("bot", "display_name", "harness", "created_at", "created_by",
+                                        "last_seen_at", "version", "platform", "model", "provider",
                                         "profile", "detail", "revoked_at", "revoked_by")}
-        value["online"] = bool(not record["revoked_at"] and record["last_seen"]
-                               and record["last_seen"] > H.shift(H.now(), seconds=-PRESENCE_GAP))
+        value["online"] = bool(not record["revoked_at"] and record["last_seen_at"]
+                               and record["last_seen_at"] > H.shift(H.now(), seconds=-PRESENCE_GAP))
         out.append(value)
     return out
 
