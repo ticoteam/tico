@@ -343,6 +343,9 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
     assert scan(api, row, "ben-test") == 200
     denied()  # Ben's grant alone cannot carry the letter into the Assistant's turn.
     bot_grant = "postal/addresses/as_de/grants/bot/coo"
+    put(api, bot_grant, {"level": "read"}, token, expected=403)
+    assert not any(g["grantee_type"] == "bot" and g["grantee_id"] == "coo"
+                   for g in get(api, "postal/addresses/as_de/grants")["grants"])
     put(api, bot_grant, {})
     assert get(api, "postal/items", token)["items"][0]["summary"] == "Private court papers"
     assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == "Private court papers"
