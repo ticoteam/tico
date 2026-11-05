@@ -665,6 +665,7 @@ def _unboard(c, ticket, snapshots=None):
     if ticket.get("status") not in (*H.ACTIVE_STATUSES, "done") or ticket.get("blocked_since"):
         return None
     board = F.pr_checks(c, ticket)
+    waiting_result = None
     for pr in sorted(_prs(c, ticket, board[0]), key=lambda p: (p["created_at"], p["id"])):
         if pr.get("state") != "open" or not bot_pr(c, ticket, pr):
             continue
@@ -721,10 +722,12 @@ def _unboard(c, ticket, snapshots=None):
                                        note="The open PR still needs review and merge.")
             result = _dispatch(c, ticket, step, slugs, limit, [pr], selected)
             if result:
-                return result
+                if result.get("owner_id"):
+                    return result
+                waiting_result = waiting_result or result
             break
         V.merge_wake(c, ticket, snapshots=snapshots)
-    return None
+    return waiting_result
 
 
 def _wait(c, ticket, step, title, heads, reason, attempt_id=None):
