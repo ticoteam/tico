@@ -13,7 +13,7 @@ import pytest
 
 from backend import support, support_access
 from backend.auth import Identity
-from backend.store import Problem
+from backend.store import H, Problem, digest
 from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import TICKET_ID, ContractHQ, FakeHQ, documented
 
@@ -77,6 +77,40 @@ def start(api, headers=None, **body):
 
 def bearer(session):
     return {"Authorization": "Bearer " + support_access._tokens[session["id"]], "Idempotency-Key": "k-" + session["id"]}
+
+
+@pytest.mark.parametrize("hours", [None, 8760])
+def test_default_and_maximum_duration_reach_hq_without_a_cap(environment, hq, hours):
+    api = environment()
+    response = start(api, **({} if hours is None else {"hours": hours}))
+    assert response.status_code == 200, response.text
+    session = response.json()
+    duration = timedelta(hours=24 if hours is None else hours)
+    assert H.parse_ts(session["expires_at"]) - H.parse_ts(session["started_at"]) == duration
+    opened = json.loads(next(x for x in hq.seen if x.url.path.endswith("/access")).content)
+    assert opened == {"tier": "app", "expires_at": support_access.hq_stamp(session["expires_at"])}
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM support_access WHERE id=?", (session["id"],)).fetchone()
+        assert row["expires_at"] == session["expires_at"]
+        assert row["token_hash"] == digest(support_access._tokens[session["id"]])
+        event = c.execute("SELECT actor, detail FROM events WHERE action='support_access.started'").fetchone()
+    assert event["actor"] == "human:morgan"
+    assert json.loads(event["detail"])["hours"] == int(duration.total_seconds() / 3600)
+    schema = api.app.openapi()["components"]["schemas"]["AccessStart"]["properties"]["hours"]
+    assert (schema["minimum"], schema["maximum"], schema["default"]) == (1, 8760, 24)
+
+
+@pytest.mark.parametrize("hours", [0, 8761])
+def test_duration_outside_the_limits_is_refused_before_hq_or_a_grant(environment, hq, hours):
+    api = environment()
+    tid = ticket(api)
+    sent = len(hq.seen)
+    response = start(api, ticket_id=tid, hours=hours)
+    assert response.status_code == 422, response.text
+    assert len(hq.seen) == sent
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_access").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM events WHERE action='support_access.started'").fetchone()[0] == 0
 
 
 def test_a_session_starts_shows_everyone_the_banner_and_stops_at_once(environment, hq):
@@ -145,14 +179,14 @@ def test_an_expired_session_lets_nothing_in_and_the_worker_ends_it(environment, 
 def test_only_an_owner_or_admin_starts_one_and_full_access_is_the_owners(environment, hq):
     api = environment()
     member, admin = as_person(api, "quinn"), as_person(api, "riley")
-    assert start(api, member).status_code == 403
-    assert start(api, admin, tier="full").status_code == 403
+    assert start(api, member, hours=8760).status_code == 403
+    assert start(api, admin, tier="full", hours=8760).status_code == 403
     api.app.state.store.settings.test_identities["tok"] = Identity("human:morgan", "owner", email="owner@acme.example",
                                                                    via_token=True)
-    assert api.post("/api/v2/support/access", json={"ticket_id": "sup_x"}, headers=signed_in("tok")).status_code == 403
+    assert api.post("/api/v2/support/access", json={"ticket_id": "sup_x", "hours": 8760}, headers=signed_in("tok")).status_code == 403
     # Another person's ticket is not theirs to open a session from.
     assert start(api, admin, ticket_id=ticket(api)).status_code == 404
-    assert start(api, admin, tier="app").status_code == 200
+    assert start(api, admin, tier="app", hours=8760).status_code == 200
 
 
 @pytest.mark.parametrize("switch", ["flag", "TICO_SUPPORT", "rehearsal", "demo", "rule"])
@@ -298,14 +332,40 @@ def test_the_worker_runs_what_hq_carries_as_the_session_and_logs_it(environment,
         assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "ended_by_hq"
 
 
-def test_a_restart_mints_a_fresh_token_for_a_live_session(environment, hq):
+def test_a_long_session_survives_restart_and_relays_until_its_expiry(environment, hq, monkeypatch):
     api = environment()
-    session = start(api).json()
+    response = start(api, hours=8760)
+    assert response.status_code == 200, response.text
+    session = response.json()
     old = bearer(session)
+    now = [H.shift(session["expires_at"], seconds=-1)]
+    monkeypatch.setattr(H, "now", lambda: now[0])
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = H.parse_ts(now[0])
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(support_access, "datetime", Clock)
+    assert api.get("/api/v2/health", headers=old).status_code == 200
     support_access._tokens.clear()                             # what a restart forgets
     support_access.started(api.app, support_access._runtime["loop"])
     assert api.get("/api/v2/health", headers=old).status_code == 401
-    assert api.get("/api/v2/health", headers=bearer(session)).status_code == 200
+    fresh = bearer(session)
+    assert api.get("/api/v2/health", headers=fresh).status_code == 200
+    active = api.get("/api/v2/support/access", headers=signed_in()).json()["active"]
+    assert active["expires_at"] == session["expires_at"] and active["seconds_left"] == 1
+    hq.queued = [{"rid": "last", "by": "staff", "method": "GET", "path": "/api/v2/health"}]
+    assert support_access.pull_once(api.app) is True
+    assert hq.replies[-1]["rid"] == "last" and hq.replies[-1]["status"] == 200
+    now[0] = session["expires_at"]
+    assert api.get("/api/v2/health", headers=fresh).status_code == 401
+    assert support_access.pull_once(api.app) is False
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT end_reason, token_hash FROM support_access WHERE id=?", (session["id"],)).fetchone()
+    assert row["end_reason"] == "expired" and row["token_hash"] is None
+    assert hq.ended == [session["id"]]
 
 
 class ContractAccessHQ(FakeAccessHQ):
