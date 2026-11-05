@@ -38,7 +38,7 @@ const messages = () => [
 const KEEPER = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
 
 async function open(browser, {phone = false} = {}) {
-  const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
+  const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce', ...(process.env.SHOTS ? {colorScheme: 'dark'} : {}),
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -122,10 +122,12 @@ let browser = null;
     // A normal message after gray lines starts its own group: it keeps its header.
     assert.equal(await msgRow(page, 'b2').locator('.th-head').count(), 1);
 
+    if (process.env.SHOTS) console.log('SHOT lines-desktop-shut ' + (await page.screenshot({type: 'jpeg', quality: 80})).toString('base64'));
     // Open the group: a line each; a redraw keeps it open.
     await group.locator('> summary').click();
     await page.waitForFunction(() => [...THV_VIEWS].some(v => ['k1', 'k2', 'k3'].every(id => v.openLines.has(id))));
     assert.equal(await line(page, 'k1').isVisible(), true);
+    if (process.env.SHOTS) console.log('SHOT lines-desktop-open ' + (await page.screenshot({type: 'jpeg', quality: 80})).toString('base64'));
     await page.evaluate(v => thvDraw(v), await view(page));
     assert.equal(await page.locator('.thv-list details.src-group').evaluate(el => el.open), true, 'a redraw keeps it open');
 
