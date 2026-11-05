@@ -3167,7 +3167,11 @@ impl Recorder {
                         .iter()
                         .find(|delivery| delivery.destination_id == self.router())
                 })
-                .map(|delivery| &delivery.receipt["items"][&item.id])
+                .map(|delivery| {
+                    delivery.receipt["local_fields"]
+                        .get(&item.id)
+                        .unwrap_or(&delivery.receipt["items"][&item.id])
+                })
                 .is_some_and(|row| {
                     !row["text"].is_null()
                         && !tico_recorder_native::workspace::item_fields_match(item, row)

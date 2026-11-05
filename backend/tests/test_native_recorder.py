@@ -311,6 +311,7 @@ def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp
                              'WHERE mc.deleted_at IS NULL').fetchone()[0] == 3
             assert c.execute('SELECT count(*) FROM media_control WHERE deleted_at IS NOT NULL').fetchone()[0] == 0
             assert c.execute('SELECT review_state FROM meetings WHERE id=?', (out['pending'],)).fetchone()[0] == 'dismissed'
+            assert 'I will send the proposal' in c.execute('SELECT transcript_original FROM meetings WHERE id=?', (out['pending'],)).fetchone()[0]
             for table in ('live_meeting_chunks', 'live_meeting_chunk_versions', 'live_meeting_chat', 'live_meeting_events'):
                 assert c.execute(f'SELECT count(*) FROM {table} WHERE meeting_id=?', (out['live'],)).fetchone()[0] > 0
             assert c.execute('SELECT task_id FROM meeting_task_links WHERE meeting_id=?', (out['pending'],)).fetchone()[0] == out['created']

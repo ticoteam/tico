@@ -847,7 +847,10 @@ impl Tico {
                             Value::Null
                         }
                     });
-                let baseline = delivery.receipt["items"][&item.id].clone();
+                let baseline = delivery.receipt["local_fields"]
+                    .get(&item.id)
+                    .unwrap_or(&delivery.receipt["items"][&item.id])
+                    .clone();
                 let mut server_row = listing["sections"][section]
                     .as_array()
                     .into_iter()
@@ -910,7 +913,7 @@ impl Tico {
                     });
                     row
                 });
-                self.reconcile_item(
+                let edited = self.reconcile_item(
                     store,
                     id,
                     &delivery.meeting_id,
@@ -918,6 +921,12 @@ impl Tico {
                     expected,
                     &mut row,
                 )?;
+                delivery.receipt["local_fields"][&item.id] = if edited || expected["text"].is_null()
+                {
+                    row.clone()
+                } else {
+                    expected.clone()
+                };
                 item_version = row["version"].as_u64().unwrap_or(item_version);
                 delivery.receipt["items"][&item.id] = row;
                 store.delivery(id, &delivery)?;
@@ -982,7 +991,7 @@ impl Tico {
                 .unwrap_or_else(|| self.item_payload(item));
             let mut row =
                 self.upload_item(store, id, &mut delivery, item_id, &expected)?["item"].clone();
-            self.reconcile_item(
+            let edited = self.reconcile_item(
                 store,
                 id,
                 &delivery.meeting_id,
@@ -990,6 +999,7 @@ impl Tico {
                 &expected,
                 &mut row,
             )?;
+            delivery.receipt["local_fields"][item_id] = if edited { row.clone() } else { expected };
             delivery.receipt["items"][item_id] = row;
             store.delivery(id, &delivery)?;
         }
@@ -1006,12 +1016,15 @@ impl Tico {
                 .iter()
                 .filter(|item| item.kind != "link")
             {
-                let expected = delivery.receipt["items"][&item.id].clone();
-                if expected["id"].as_str().is_none() {
+                let mut row = delivery.receipt["items"][&item.id].clone();
+                if row["id"].as_str().is_none() {
                     continue;
                 }
-                let mut row = expected.clone();
-                edited |= self.reconcile_item(
+                let expected = delivery.receipt["local_fields"]
+                    .get(&item.id)
+                    .unwrap_or(&row)
+                    .clone();
+                let changed = self.reconcile_item(
                     store,
                     id,
                     &delivery.meeting_id,
@@ -1019,6 +1032,10 @@ impl Tico {
                     &expected,
                     &mut row,
                 )?;
+                if changed {
+                    delivery.receipt["local_fields"][&item.id] = row.clone();
+                }
+                edited |= changed;
                 delivery.receipt["items"][&item.id] = row;
                 store.delivery(id, delivery)?;
             }
