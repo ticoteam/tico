@@ -32,7 +32,7 @@ function frParentOptions(state, slug) {
   const cat = state.catalog, out = [];
   const owner = frOwner();
   for (const person of frPeople()) out.push({value: 'human:' + person.id, label: (person.name || person.id) + (('human:' + person.id) === owner ? ' (you)' : ''), group: 'Humans'});
-  // Built-in and message bots are not on the chart, so nobody reports to one.
+  // Built-ins and explicit catalog helpers are off the chart, so nobody reports to one.
   for (const card of cat.cards) {
     if (!card.required && card.kind !== 'helper' && cat.picked.has(card.slug) && card.slug !== slug && !frDescends(state, card.slug, slug))
       out.push({value: card.slug, label: catalogName(cat, card), group: 'Bots on your team'});
@@ -80,7 +80,7 @@ function frSummaryTeamHTML(state) {
   const cat = state.catalog, org = state.org;
   // In the order they are set up: each department's head first, then its team.
   const rows = Object.keys(frSelection(state)).map(slug => catalogCard(cat, slug)).filter(card => card && !card.required && card.kind !== 'helper');
-  // Built-in and message bots stay outside the chart, in separate review rows.
+  // Built-ins and explicit catalog helpers stay outside the chart, in separate review rows.
   const helpers = cat.cards.filter(card => card.required)
     .map(card => esc(catalogName(cat, card))).join(', ');
   const messageBots = cat.cards.filter(card => !card.required && card.kind === 'helper' && cat.picked.has(card.slug))

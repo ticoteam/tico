@@ -59,6 +59,13 @@ and unsnooze endpoints keep working as before.
 The example is abridged. The old response for the same task had `"created"`, `"snoozed_until"` and `"snoozed_by"`
 at the top level, and no `holds`.
 
+In hub SQL the holds are rows of `task_holds` (`kind`, `cause`, `reason`, `by_id`, `until_at`, `created_at`,
+`released_at`, ...), read with their task. The `tasks` columns `snoozed_until`, `snoozed_by_id`, `snoozed_note`,
+`blocked_since`, `blocked_reason`, `blocked_kind`, `blocked_from_step`, `blocked_from_status`, `blocked_gate` and
+`holds_cleared_at` are gone: a query that read `tasks.snoozed_until` reads
+`(SELECT until_at FROM task_holds h WHERE h.task_id=tasks.id AND h.kind='snoozed' AND h.released_at IS NULL)`.
+The runner wire is unchanged: a claimed task still carries those fields (`blocked_gate_json`, `snoozed_by`, ...).
+
 ## Needs you
 
 Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` and `actions`. It had `created`.

@@ -12,6 +12,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
 from backend.tests.test_github import SECRET, PR, hook, pr_event
+from backend import bot_settings as BS
 
 HEAD, NEW = 'a' * 40, 'b' * 40
 STEPS = [{'name': n, 'status': s} for n, s in (('In Progress', 'doing'), ('Review 1', 'review'), ('Review 1 Fixes', 'doing'),
@@ -58,8 +59,8 @@ def api(tmp_path, monkeypatch):
             H.sync_registry(c, bots, {'people': people})
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({'people': people}),))
             for slug, config in bots.items():
-                c.execute('INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)',
-                          (slug, encode(config), 'product', 'ana'))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
+                BS.write(c, slug, config)
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({'completed': '2026-01-01T00:00:00Z'}),))
             H.type_create(c, H.KEEPER, 'Dev tickets', STEPS)
             # The bot signs in as an agent does (bot-test), so a refusal is the waiver's and not the credential's.
@@ -312,7 +313,7 @@ def test_a_push_recorded_while_github_is_read_refuses_the_stale_green_read(api, 
     r = waive(api, row)
     assert r.status_code == 422 and url + ' changed while GitHub was read' in r.text, r.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver'", (row['id'],)).fetchall()
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE '%waived QA%'").fetchall()
 
 
@@ -324,7 +325,7 @@ def test_a_bot_acting_for_the_person_is_refused_and_records_nothing(api, token):
     r = waive(api, row, token)
     assert r.status_code == 403 and 'Only a person, signed in as themselves' in r.text, r.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver'", (row['id'],)).fetchall()
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE '%waived QA%'").fetchall()
     assert waive(api, row, 'token-test').status_code == 200
 
@@ -337,8 +338,8 @@ def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(a
     from backend.tests.test_api import assign, claim, post, ready, runner
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
-                  (encode({'name': 'botops', 'runtime': 'fake', 'status': 'active'}),))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
     machine = runner(api)
     assign(api, machine, 'botops')
     ready(api, machine, ['botops'])
@@ -352,7 +353,7 @@ def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(a
     assert r.status_code == 403 and 'Only a person, signed in as themselves' in r.text, r.text
     assert api.github.reads == reads
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver'", (row['id'],)).fetchall()
         assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.qa_waiver') IS NOT NULL").fetchall()
     assert shown(api, row)['task']['qa_waivers'] == []
     direct = waive(api, row, 'ana-test')

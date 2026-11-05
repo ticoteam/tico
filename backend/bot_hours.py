@@ -155,13 +155,14 @@ class Counter:
         for _ in range(WEEKS - 1):
             earliest = week_start(earliest - timedelta(days=1))
         lo = min(earliest, now - timedelta(days=7))
-        first = c.execute("SELECT MIN(started_at) FROM turns WHERE started_at IS NOT NULL").fetchone()[0]
+        first = c.execute("SELECT MIN(created_at) FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL)").fetchone()[0]
         people = len(P.visible_people(views.roster(c)))
         human = people * HOURS_PER_PERSON
-        # Runs finished inside the window or still going, by the `turns_finished` index: a run that started weeks
+        # Runs finished inside the window or still going, by the `attempts_settled` index: a run that started weeks
         # before the window still counts for the time it worked inside it.
-        rows = c.execute("SELECT id, started_at, finished_at FROM turns WHERE finished_at > ? AND started_at < ? "
-                         "UNION ALL SELECT id, started_at, finished_at FROM turns WHERE finished_at IS NULL AND started_at < ?",
+        rows = c.execute("SELECT id, created_at AS started_at, settled_at AS finished_at FROM attempts "
+                         "WHERE settled_at > ? AND created_at < ? UNION ALL SELECT id, created_at, settled_at FROM attempts "
+                         "WHERE settled_at IS NULL AND (job_id IS NULL OR trigger IS NOT NULL) AND created_at < ?",
                          (stamp(lo), stamp(now), stamp(now))).fetchall()
         spans = [s for run in self.spans(c, rows, now).values() for s in run]
         week_from = max(earliest, week_start(H.parse_ts(first))) if first else None

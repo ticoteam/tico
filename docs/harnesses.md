@@ -222,13 +222,15 @@ The current OpenAI and Claude choices, reviewed 2026-10-03, are:
 | Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
 | Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
 | Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
+| Codex (OpenAI) | Terra 6.1 | `gpt-6.1-terra` | 2026-10-26 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 
 Release dates: [Claude release notes](https://platform.claude.com/docs/en/release-notes/overview)
 and [OpenAI changelog](https://developers.openai.com/api/docs/changelog).
 The offered effort levels are low, medium, high, xhigh and max, supported by the existing runner
 adapters and documented for [Claude](https://platform.claude.com/docs/en/build-with-claude/effort),
-[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
+[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[Terra 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-terra) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
 No existing bot is migrated automatically.

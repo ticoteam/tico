@@ -16,7 +16,7 @@ def test_profiles_by_runner_matches_per_computer(api):
     with api.app.state.store.read() as c:
         by = subscriptions.profiles_by_runner(c)
         for rid, machine in ((a["runner_id"], a), (b["runner_id"], b)):
-            runner_row = c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone()
+            runner_row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
             assert by.get(rid) == subscriptions.computer_profiles(c, runner_row, True)
 
 
@@ -37,7 +37,7 @@ def test_profiles_by_runner_reads_sign_in_cutoffs_refreshes_and_names_like_each_
                   (rid, "work", json.dumps({"codex": {"signed_in": True, "weekly": {"used_percent": 10, "reported_at": at}}}), at))
         c.executemany("INSERT INTO registry_metadata VALUES(?,?)", [(k, json.dumps(v)) for k, v in rows.items()])
     with api.app.state.store.read_transaction() as c:
-        runner_row = c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone()
+        runner_row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
         [profile] = subscriptions.profiles_by_runner(c)[rid]
         assert [profile] == subscriptions.computer_profiles(c, runner_row, True)
         codex = profile["runtimes"]["codex"]

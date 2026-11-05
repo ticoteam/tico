@@ -22,6 +22,7 @@ function taskDialogWire(d) {
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -97,6 +98,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const peek = !!d.dataset.peek;
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
@@ -206,6 +208,7 @@ function taskPropFocus(d) {
 function taskModalBind(d, task, full = false) {
   fbSync();                     // the task's own 👍 / 👎 in the header, when a bot asked for it
   tfAdopt(d, task);
+  taskMeetingsAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
   d.dataset.version = String(task.version ?? '');
@@ -345,7 +348,8 @@ const taskRunPick = run => ({model: run?.model || '', harness: run?.harness || '
 function taskRunWords(run, rows) {
   if (!run?.model) return "The bot's task model";
   const row = (rows || []).find(m => m.id === run.model);
-  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort].filter(Boolean).join(' · ');
+  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort,
+    modelContextWords(row?.context_tokens)].filter(Boolean).join(' · ');
 }
 // Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
 // /v2/tasks/{id}/model gives); anyone else reads what it runs on.
@@ -356,7 +360,7 @@ function taskRunModelBody(run, rows, pick, may = true) {
   if (!rows) return `${head}${now}<p class="muted">Loading the models…</p>`;
   const row = rows.find(m => m.id === pick.model), harnesses = (row?.harnesses || []).length > 1 ? row.harnesses : [];
   return `${head}${now}<form class="task-run-form" data-run-model-form>
-    <label><span>Model</span><select data-run-model>${taskRunOpts([['', "The bot's task model"], ...rows.map(m => [m.id, m.label || m.id])], pick.model)}</select></label>
+    <label><span>Model</span><select data-run-model>${taskRunOpts([['', "The bot's task model"], ...rows.map(m => [m.id, [m.label || m.id, modelContextWords(m.context_tokens)].filter(Boolean).join(' · ')])], pick.model)}</select></label>
     ${harnesses.length ? `<label><span>Harness</span><select data-run-harness>${taskRunOpts(harnesses.map(h => [h, harnessWords(h) || h]), pick.harness)}</select></label>` : ''}
     ${row?.efforts?.length ? `<label><span>Effort</span><select data-run-effort>${taskRunOpts(row.efforts.map(e => [e, e]), pick.effort)}</select></label>` : ''}
     <button type="submit" class="ghost" data-run-model-apply disabled>Apply</button></form>`;
@@ -558,6 +562,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     if ((x.field === 'type' || x.field === 'step') && x.old == null
       && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
+    if (x.field === 'closed_with') return '';                       // its close's note already says so
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
     // A note saved with a status change or a comment is already shown there; a note on its own says what it is.
@@ -696,28 +701,15 @@ function taskComposerTo(to, draft) {
 }
 // How a comment reaches its bot (docs/tasks.md "Comments"), in the bot chat's words (deliveryMenuHTML, ui/app/pill.js):
 // Steer into its running turn, Queue after its current turn, Defer until its next turn on this task (at the latest
-// after a while), or Set as goal of its task session. With no pick nothing is sent and the server decides; a pick is
-// kept per task. The key is new because the first version's "queue" meant what Defer means now.
-const TASK_DELIVERY_KEY = 'hub.task.delivery.v2';
-const TASK_DELIVERY_MAX = 200;
+// after a while), or Set as goal of its task session. Send shows the person's kept way (sendWayPick, ui/app/pill.js)
+// and the comment always names it; Set as goal is for the next comment only.
 let TASK_MENU_CLOSE = null;                 // closes the open delivery menu; a press elsewhere closes it
 document.addEventListener('pointerdown', ev => {
   if (TASK_MENU_CLOSE && !ev.target.closest?.('.task-send')) TASK_MENU_CLOSE();
 });
-// [task id, choice] pairs, oldest first, so the cap drops the task chosen longest ago.
-function taskDeliveryRows() {
-  try {
-    const rows = JSON.parse(localStorage.getItem(TASK_DELIVERY_KEY) || '[]');
-    return Array.isArray(rows) ? rows.filter(r => Array.isArray(r) && r.length === 2) : [];
-  } catch { return []; }
-}
-function taskDeliveryStore(id, mode) {
-  try {
-    const rows = taskDeliveryRows().filter(([k]) => k !== String(id));
-    localStorage.setItem(TASK_DELIVERY_KEY, JSON.stringify([...rows, [String(id), mode]].slice(-TASK_DELIVERY_MAX)));
-  } catch {}
-}
-// The send is split only where a bot would get the comment (GET /v2/tasks/{id} `comment_delivery`, null without one).
+try { localStorage.removeItem('hub.task.delivery.v2'); } catch {}     // the per-task picks the kept way replaced
+SEND_WAY_PAINT.add(() => { if (TASK_CHAT?.data && taskChatCurrent(TASK_CHAT)) taskComposerToPaint(TASK_CHAT); });
+// The send has ways only where a bot would get the comment (GET /v2/tasks/{id} `comment_delivery`, null without one).
 const taskDeliverySplit = state => state.data?.comment_delivery?.default != null && !!state.data?.comment_to?.bot;
 // The ways this reader may send: steer only for someone who may steer, queue only for someone who may wake the bot,
 // goal only where the session can take one; anyone who may comment may defer.
@@ -729,58 +721,48 @@ const taskDeferDefault = state => {
   const f = state.data?.comment_delivery?.default_for;
   return DELIVERY_FOR.includes(f) ? f : '24h';
 };
-// The way the person picked for this task from the caret menu, or null.
-function taskDeliveryPicked(state) {
-  const saved = String(taskDeliveryRows().find(([k]) => k === String(state.id))?.[1] || '');
-  const way = deliveryWay(saved);
-  if (!taskDeliveryWays(state).includes(way)) return null;
-  return way !== 'defer' || DELIVERY_FOR.includes(deliveryFor(saved)) ? saved : null;
-}
-// The way the next comment is shown to go: the pick, else the way the server reads the draft (queue when it @mentions
-// the bot, else the server's default; a reader who may not wake the bot only defers).
+// Whether this reader may wake the task's bot. A deadline wakes it as a steer would, so a reader who may not defers
+// with none (the server refuses any other defer_for with a 403).
+const taskDeliveryWakes = state => taskDeliveryWays(state).some(w => w === 'steer' || w === 'queue');
+// The way the next comment goes: Set as goal when picked for it, else the kept way, or the nearest one this reader may
+// use (Steer becomes Queue; without either, Defer with no deadline).
 function taskDeliveryMode(state) {
-  const picked = taskDeliveryPicked(state);
-  if (picked) return picked;
-  const ways = taskDeliveryWays(state), to = state.data?.comment_to, draft = $('textarea', state.host)?.value;
-  let way = taskNamed(to?.mention, draft) && ways.includes('queue') ? 'queue' : state.data?.comment_delivery?.default;
-  if (!ways.includes(way)) way = ways.includes('queue') ? 'queue' : 'defer';
-  return way === 'defer' ? 'defer:' + taskDeferDefault(state) : way;
+  const ways = taskDeliveryWays(state);
+  if (state.goalOnce && ways.includes('goal')) return 'goal';
+  if (!taskDeliveryWakes(state)) return 'defer:never';
+  const kept = SEND_WAY, way = deliveryWay(kept);
+  if (ways.includes(way)) return kept;
+  if (way === 'steer' && ways.includes('queue')) return 'queue';
+  return 'defer:' + taskDeferDefault(state);
 }
 // What the chosen way does, said before sending.
 function taskDeliveryHint(state) {
   const who = botDisplayName(state.data.comment_to.bot), mode = taskDeliveryMode(state), way = deliveryWay(mode);
-  const cd = state.data.comment_delivery, mention = state.data.comment_to.mention || [];
+  const cd = state.data.comment_delivery;
   if (way === 'queue') return `Queue: ${who} gets it after its current turn, or now.`;
   if (way === 'goal') return `Set as goal: ${who} works toward this text in the task's session.`;
   if (way === 'steer') return `Steer: into ${who}'s running turn now${cd.steers ? '' : ", or after it if it can't steer"}.`;
   const f = deliveryFor(mode);
-  const nudge = cd.default === 'defer' && mention.length && !taskDeliveryPicked(state) && taskDeliveryWays(state).includes('queue')
-    ? ` Write @${mention[0]} to queue it now.` : '';
-  return `Defer: ${who} gets it with its next turn on this task${f === 'never' ? '' : `, at the latest in ${f}`}.${nudge}`;
+  return `Defer: ${who} gets it with its next turn on this task${f === 'never' ? '' : `, at the latest in ${f}`}.`;
 }
-// The main button says the way the comment is sent; without a bot it stays the plain arrow.
+// Send's icon says the way the comment is sent; without a bot it is the plain arrow, with no caret.
 function taskDeliveryPaint(state) {
   const main = $('[data-task-main]', state.host), caret = $('[data-task-caret]', state.host);
   if (!main || !caret) return;
-  const split = taskDeliverySplit(state), mode = split ? taskDeliveryMode(state) : 'icon';
-  caret.hidden = !split;            // Defer always has its durations to pick from
+  const split = taskDeliverySplit(state);
+  caret.hidden = !split;
   if (!split) taskDeliveryMenu(state, false);
-  if (main.dataset.shows !== mode) {
-    main.dataset.shows = mode;
-    main.classList.toggle('p-send-goal', split);
-    main.innerHTML = split ? esc(deliveryWord(mode)) : ICON_SEND;
-  }
-  main.setAttribute('aria-label', split ? `Send: ${deliveryWord(mode)}` : 'Send');
-  if (!main.disabled) main.title = split ? taskDeliveryHint(state) : 'Send';
+  sendWayPaint(main, split ? taskDeliveryMode(state) : 'steer');
 }
 // The ways to send, opening upward from the caret; choosing one keeps the draft and only sets the way.
 function taskDeliveryMenu(state, open) {
   const menu = $('[data-task-menu]', state.host), caret = $('[data-task-caret]', state.host);
   if (!menu || !caret) return;
   if (!open && menu.hidden) return;
+  if (open && !taskDeliverySplit(state)) return;
   const ways = taskDeliveryWays(state), mode = open ? taskDeliveryMode(state) : '';
   menu.innerHTML = open ? deliveryMenuHTML({steer: ways.includes('steer'), queue: ways.includes('queue'), goal: ways.includes('goal'),
-    current: mode, deferFor: deliveryWay(mode) === 'defer' ? deliveryFor(mode) : taskDeferDefault(state)}) : '';
+    deadlines: taskDeliveryWakes(state), current: mode, deferFor: deliveryWay(mode) === 'defer' ? deliveryFor(mode) : taskDeferDefault(state)}) : '';
   menu.hidden = !open;
   caret.setAttribute('aria-expanded', String(open));
   TASK_MENU_CLOSE = open ? () => taskDeliveryMenu(state, false) : null;
@@ -812,15 +794,18 @@ function taskCommentsRender(state, data, sent = '') {
     host.innerHTML = `<h3>Conversation</h3>
       <div class="task-comments" role="log" aria-live="polite"></div>
       <form class="task-pill"><span class="muted" data-task-chat-to role="note"></span><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
-          <span class="task-send" data-task-send><button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send" data-task-main>${ICON_SEND}</button><button class="task-send-caret" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send" data-task-caret hidden><span class="nav-icon" aria-hidden="true">expand_more</span></button><div class="p-menu p-ways" role="menu" aria-label="Ways to send" data-task-menu hidden></div></span></div>
+          <span class="task-send" data-task-send><button class="task-send-caret p-way" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send" data-task-caret hidden><span class="nav-icon" aria-hidden="true">expand_more</span></button><button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send" data-task-main>${ICON_SEND}</button><div class="p-menu p-ways" role="menu" aria-label="Ways to send" data-task-menu hidden></div></span></div>
           <span class="muted" data-task-chat-status role="status"></span></form>`;
     $('form', host).onsubmit = ev => { ev.preventDefault(); void taskCommentSend(state); };
     const caret = $('[data-task-caret]', host), menu = $('[data-task-menu]', host);
     caret.onclick = () => taskDeliveryMenu(state, menu.hidden);
+    sendWayHold($('[data-task-main]', host), () => taskDeliveryMenu(state, true), () => taskDeliverySplit(state));
     menu.onclick = ev => {
-      const pick = ev.target.closest?.('[data-deliver]');
+      const pick = ev.target.closest?.('[data-deliver]')?.dataset.deliver;
       if (!pick) return;
-      taskDeliveryStore(state.id, pick.dataset.deliver);
+      // Set as goal is for the next comment; any other pick is the person's kept way, in every composer.
+      state.goalOnce = pick === 'goal';
+      if (pick !== 'goal') sendWayPick(pick);
       taskDeliveryMenu(state, false); taskComposerToPaint(state); $('textarea', host).focus();
     };
     menu.addEventListener('keydown', ev => deliveryMenuKeys(menu, ev));
@@ -952,13 +937,13 @@ async function taskCommentSend(state) {
   state.sending = true;
   const button = $('button[type=submit]', form), caret = $('[data-task-caret]', form);
   const status = $('[data-task-chat-status]', form);
-  const split = taskDeliverySplit(state), shown = split ? deliveryWay(taskDeliveryMode(state)) : '';
+  // The way Send shows is the way it goes; a task with no bot names none.
+  const split = taskDeliverySplit(state), mode = split ? taskDeliveryMode(state) : '', shown = deliveryWay(mode);
   // A disabled Send says why on hover; with an aria-label, the title is its screen-reader description too.
   taskDeliveryMenu(state, false);
   button.disabled = box.disabled = true; caret.disabled = true; button.title = 'Sending…'; status.textContent = '';
   try {
-    const picked = split ? taskDeliveryPicked(state) : null;
-    const body = {text, public: !!$('[data-comment-public]', form)?.checked, ...deliveryBody(picked)};
+    const body = {text, public: !!$('[data-comment-public]', form)?.checked, ...deliveryBody(mode)};
     const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, body);
     if (data.held) {
       // Held by an org rule: nothing was written, so the text stays in the box and the hold shows here with its actions.
@@ -966,6 +951,7 @@ async function taskCommentSend(state) {
       status.textContent = '';
       return;
     }
+    if (shown === 'goal') state.goalOnce = false;      // Set as goal was for this comment: back to the kept way
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);
@@ -1025,8 +1011,12 @@ function taskDeferredHTML(t) {
 // A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
 // plain ask's place once it lands.
 function taskQcardWait(t) {
-  if (needsAll() || needsOneHeld(t.id)) return '';
-  void v2NeedsOne(t.id).then(() => {
+  // Before the first Needs you read lands, nothing is known past it: wait for it, then read the item alone if needed.
+  const landed = needsFirstIn();
+  if (landed && (needsAll() || needsOneHeld(t.id))) return '';
+  const read = landed ? v2NeedsOne(t.id)
+    : NEEDS_FIRST.then(() => qcardItem(t) || needsAll() || needsOneHeld(t.id) ? null : v2NeedsOne(t.id));
+  void read.then(() => {
     const el = qcardItem(t) && document.querySelector(`[data-qcard-wait="${CSS.escape(String(t.id))}"]`);
     if (el) el.outerHTML = qcardBoxHTML(t);
   });
@@ -1094,6 +1084,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
+      <section class="tsec task-meetings" data-task-meetings aria-label="Meetings" hidden></section>
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
       </div>
       </div>

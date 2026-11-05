@@ -52,7 +52,7 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
+    return H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
                              "ORDER BY created_at", (task_id, owner)))
 
 
@@ -71,7 +71,7 @@ def _row(it, actor):
     if it.get("person_ask"):
         row["ask"] = it["person_ask"]
     if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has been asked to say plainly what it needs (backend/restate_asks.py).
+        # Nothing to decide yet: the bot has not yet said plainly what it needs.
         row["ask_missing"] = True
     if (it.get("ask") or {}).get("body"):
         row["question"] = _clip(it["ask"]["body"], 1500)
@@ -481,8 +481,9 @@ def _apply_decide(c, auth, who, item, r, boards):
             raise Problem("approve_not_asked", "Approving is the person's own decision: the Assistant can decline here, "
                           "but the person approves it in Tico or with their yes to the Assistant's read-back", 403)
         row = auth.approval(c, who, ident, decide=True)
-        if row["kind"] == "support":
-            # As on the approve route: sending off the install is a person's own tap in Tico, not their token.
+        if row["kind"] == "support" and decision == "approve":
+            # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
+            # sends nothing, so it is anyone's who may decide it.
             from .support import require_person
             try:
                 require_person(who)

@@ -52,6 +52,10 @@ function fixtures() {
         computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana', owner_id: '', owner_name: ''},
       {id: 's4', name: 'Claude Max (Sam)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'needs_reconnect', status_detail: 'Token expired',
         computers: [], usage: null, added_by: 'sam', owner_id: 'human:sam', owner_name: 'Sam'},
+      {id: 's5', name: 'ChatGPT Team (Cy)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
+        computers: ['r2'], usage: {window: 'week', used_pct: 0, cost_usd_month: null}, added_by: 'cy'},
+      {id: 's6', name: 'Claude Max (Dee)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
+        computers: ['r3'], usage: {window: null, used_pct: null, cost_usd_month: null, reason: 'Waiting for a computer to report'}, added_by: 'dee'},
     ],
     assignments: [{runner_id: 'r1', runtime: 'claude', subscription_id: 's1'}, {runner_id: 'r1', runtime: 'codex', subscription_id: 's2'},
       {runner_id: 'r2', runtime: 'claude', subscription_id: 's1'}, {runner_id: 'r3', runtime: 'claude', subscription_id: 's1'}],
@@ -240,7 +244,13 @@ async function modelsTab(browser) {
     ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
     ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13%'],
     ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
-    ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Reconnect']]);
+    ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Reconnect'],
+    ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
+    ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
+  // A reading of 0% still draws its bar, and a plan with no reading says why in muted text.
+  assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage.muted').count(), 1);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Producer');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count .nav-icon').count(), 1);
   // The Gateway is one toggle; the key, address and spend wait behind Advanced. No four-way choice, no provider boxes.
@@ -549,9 +559,9 @@ async function computersTable(browser) {
   assert.doesNotMatch(await table.innerText(), /0 starting/, 'the long queue line is on the computer page');
   // The picker offers the subscriptions for that tool; with none, the computer's own login, else the Gateway.
   const claude = row('r2').locator('[data-subs-pick=claude]');
-  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)']);
+  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)', 'Claude Max (Dee)']);
   assert.equal(await claude.inputValue(), 's1');
-  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)']);
+  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)', 'ChatGPT Team (Cy)']);
   assert.equal(await row('r4').locator('[data-subs-needs-update]').count(), 2, 'an older computer says Needs update');
   assert.equal(await row('r1').locator('.machine-chip').count(), 1, 'Muse Code shows its login as before');
   // Under its own column a tool's chip says its state, not the tool's name again.

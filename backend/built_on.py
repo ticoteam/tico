@@ -34,7 +34,7 @@ def computer(c, bot):
     runner_id = (H._json(row["value"], {}) or {}).get("runner_id") if row else None
     if not runner_id:
         return None
-    return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+    return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
 
 
 def forget(c, bot):

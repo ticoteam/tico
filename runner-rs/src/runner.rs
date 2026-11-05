@@ -550,6 +550,7 @@ impl Runner {
             self.worktree_stamp.store(beat.worktree_record_stamp == Some(true), Ordering::SeqCst);
             self.credential_source.store(beat.runtime_credential_source == Some(true), Ordering::SeqCst);
             self.accounts.store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
+            crate::profiles::set_server_takes_usage_sources(beat.subscription_usage_sources == Some(true));
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
             crate::perf::set_enabled(beat.performance == Some(true));
             // This computer is a browser exit only while its owner shares its internet (crate::browser_exit).
@@ -846,6 +847,7 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(crate::idle_load::run_loop(self.clone()));
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));

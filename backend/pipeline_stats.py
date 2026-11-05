@@ -69,9 +69,9 @@ def steps_report(c, typ, rows, now):
     if ids:
         listed = json.dumps(ids)
         for task_id, at in c.execute(
-                "SELECT e.task_id, max(e.created_at) FROM task_events e JOIN tasks t ON t.id=e.task_id "
-                "WHERE e.task_id IN (SELECT value FROM json_each(?)) AND e.field='step' AND e.new=t.step_id "
-                "GROUP BY e.task_id", (listed,)):
+                "SELECT e.subject_id, max(e.created_at) FROM history_events e JOIN tasks t ON t.id=e.subject_id "
+                "WHERE e.subject_type='task' AND e.subject_id IN (SELECT value FROM json_each(?)) AND e.kind='step' "
+                "AND e.new=t.step_id GROUP BY e.subject_id", (listed,)):
             entered[task_id] = at
         for task_id, created in c.execute(
                 "SELECT task_id, created_at FROM task_links WHERE kind='pr' AND state IN ('open','draft') "

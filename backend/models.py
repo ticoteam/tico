@@ -41,7 +41,10 @@ Repo = Annotated[str, Field(max_length=200), AfterValidator(repo_reference)]
 
 
 class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    # defer_build: a model's validator is built when it is first used (a route's body, a model_validate), not when this
+    # module is imported. The server imports about 300 of them on every start and many are only parts of others; the
+    # schema, the validation and the OpenAPI document are the same either way (subclasses inherit this).
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, defer_build=True)
 
 
 class TurnLevels(Contract):
@@ -976,6 +979,7 @@ class AssistantSettings(Contract):
 class AssistantReadBack(Contract):
     """The approvals the Assistant is about to approve for the person, read back in their chat first."""
     approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
+    note: Annotated[str, Field(max_length=300)] = ""
 
 
 class ApprovalConsume(Contract):
@@ -1058,6 +1062,11 @@ class SubscriptionWeekly(Contract):
     resets_at: str | None = Field(default=None, max_length=50)
     reported_at: str = Field(max_length=50)
     status: Literal["allowed", "allowed_warning", "rejected"] | None = None
+    # Where the reading came from, as the runner tells it (runner-rs drive.rs, subscription_refresh.rs): "subscription" when a
+    # turn ran on a company subscription (`subscription_id` is its id), "login" for the computer's own login (a background
+    # read or a turn on it). Absent from a runner that predates this, which counts for no plan (model_subscriptions._plan_usage).
+    origin: Literal["subscription", "login"] | None = None
+    subscription_id: str | None = Field(default=None, max_length=80)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.
@@ -1485,6 +1494,12 @@ Heartbeat.model_rebuild()
 
 class RunnerMemberBots(Contract):
     accepts: bool
+
+
+class RunnerLabel(Contract):
+    # Trimmed first (Contract strips), then 1 to 100 characters on one line.
+    label: StrictStr = Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$",
+                             description="The computer's name, as Settings > Computers shows it.")
 
 
 class RunnerTurnsAtOnce(Contract):
@@ -2163,11 +2178,11 @@ class AccessRules(Contract):
     admin_sql: bool | None = None
     member_tokens: bool | None = None
     health_monitor_reports: bool | None = None
+    bot_reports_direct: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
     stale_review: bool | None = None
     topic_fresh: bool | None = None
-    stall_triage: bool | None = None
     managers_manage_reports: bool | None = None
     org_rule_checks: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
@@ -2375,7 +2390,7 @@ class RunUsagePart(Contract):
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
     long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
     sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
-    context size (`turns.prompt_tokens`)."""
+    context size (`attempts.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
@@ -2402,6 +2417,11 @@ class UsageLimit(Contract):
 
 class UsageDefault(UsageLimit):
     count_subscription: bool = True
+
+
+class QueuePurge(Contract):
+    """`company`, or `group:<id>` for that group and the groups nested under it."""
+    scope: str = Field(default="company", max_length=200)
 
 
 class SubscriptionUnavailable(Contract):
@@ -2554,6 +2574,33 @@ class SystemRoutineUpdate(Contract):
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily", "business"] | None = None
     at: str | None = Field(default=None, max_length=5)
+
+
+MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+
+
+class MaintenanceStepChange(Contract):
+    """One step's switch, frequency or bot limit (backend/maintenance.py save_step); only what is sent changes."""
+    key: MaintenanceStepKey
+    enabled: bool | None = None
+    frequency: Literal["run", "day", "week", "custom"] | None = None
+    custom_every: int | None = Field(default=None, ge=1, le=999)
+    custom_unit: Literal["hours", "days"] | None = None
+    max_bots: int | None = Field(default=None, ge=1, le=20)
+
+
+class MaintenanceUpdate(Contract):
+    """The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and
+    save_step); only what is sent changes."""
+    schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
+    paused: bool | None = None
+    monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
+
+
+class MaintenanceRunRequest(Contract):
+    """Run now: every step, or the one named (backend/maintenance.py run_now)."""
+    step: MaintenanceStepKey | None = None
 
 
 class ReleaseScheduleUpdate(Contract):

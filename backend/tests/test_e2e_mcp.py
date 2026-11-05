@@ -24,7 +24,10 @@ EXPECTED = json.loads((ROOT / "e2e" / "mcp" / "expected-refusals.json").read_tex
 SMOKE = "Acme smoke"
 # A tool's call needs state that nothing seeds: its refusal is recorded, and its argument set is listed here.
 # Each entry sets arguments the schema alone cannot pick (a value that must exist or match a rule).
-OVERRIDES = {}
+OVERRIDES = {
+    # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
+    "hub_thread_create": {"title": SMOKE},
+}
 # Values a string must match when its schema gives a pattern (the first candidate that matches is used).
 PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)
 # Set to a file path to write every tool's outcome there instead of checking it: the way the recorded list is

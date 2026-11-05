@@ -116,8 +116,9 @@ def apply(c, ticket_id):
         still = task_blocked.wait(c, row)
         if still:
             # Something else still holds it: say that, not the check that works again.
-            c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated_at=? WHERE id=?",
-                      (("Waiting on " + still["why"])[:1000], H.now(), ticket_id))
+            from . import task_holds
+            task_holds.change(c, ticket_id, "blocked", cause="dependency", reason=("Waiting on " + still["why"])[:1000])
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), ticket_id))
             task_blocked.bump(c, row)
         else:
             task_blocked.reconcile(c, ticket_id)

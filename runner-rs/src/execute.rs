@@ -1385,6 +1385,8 @@ impl Runner {
                 config: config.clone(),
                 profile: selected.as_ref().map(|p| p.name.clone()),
                 billing: self.billing(&runtime, selected.as_ref()),
+                // The company subscription is set below, once the turn is placed on it.
+                subscription: None,
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
             // A turn runs as its own leased OS user when its model is a Tico model (required) or when a harness it may
@@ -1422,6 +1424,10 @@ impl Runner {
             }
             if let (Some(d), Some(s)) = (crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
                 s.billing = d.billing;
+                // The turn signs in with it only when it was started with it (above): a busy or held login's turn does not.
+                if busy.is_none() && held.is_none() {
+                    s.subscription = Some(d.id.clone());
+                }
             }
             let socket_path = self.socket.as_ref().map(|s| {
                 match &own {
@@ -2012,12 +2018,13 @@ impl Runner {
                 }
                 let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env);
                 mask(&aid, &mut redactor, &mut vault, placed);
+                let delivered = crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime);
                 segments.push(Segment {
                     meter: Meter::default(),
                     config: hop_config.clone(),
                     profile: selected.as_ref().map(|p| p.name.clone()),
-                    billing: crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime)
-                        .map_or_else(|| self.billing(&hop.runtime, selected.as_ref()), |d| d.billing),
+                    billing: delivered.map_or_else(|| self.billing(&hop.runtime, selected.as_ref()), |d| d.billing),
+                    subscription: delivered.map(|d| d.id.clone()),
                 });
                 let own = crate::harness_tools::caps(&hop.runtime, &hop.harness).isolated_user;
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
@@ -3315,9 +3322,6 @@ mod tests {
 
     #[test]
     fn a_claude_turn_signs_in_with_the_key_added_for_this_computer() {
-        if ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"].iter().any(|k| std::env::var_os(k).is_some()) {
-            return; // a key in this process's environment is the terminal's and comes first
-        }
         let dir = std::env::temp_dir().join(format!("tico-turn-key-{}", uuid::Uuid::new_v4().simple()));
         let secrets = dir.join("projects/secrets");
         std::fs::create_dir_all(&secrets).unwrap();
@@ -3325,7 +3329,10 @@ mod tests {
         std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
-        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let mut runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        // A key in this process's environment is the terminal's and would come first: the test starts with none, on
+        // any machine, so every assertion below runs everywhere (the test never returns early).
+        runner.sign_in.process_env.clear();
         let (computer, team) = (secrets.join(crate::signin::COMPUTER_KEYS_FILE), secrets.join(crate::signin::TEAM_KEYS_FILE));
         let signed_in = |detail: &str| {
             *runner.runtime_rows.lock().unwrap() = [("claude".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();
@@ -3632,7 +3639,7 @@ for line in sys.stdin:
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
                                       wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()), fresh: None };
-        let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
+        let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription", subscription: None };
         let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
         let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
             .await.expect("the turn ended at its safe point").unwrap();
@@ -3708,7 +3715,7 @@ for line in sys.stdin:
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
                                       wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()), fresh: None };
-        let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
+        let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription", subscription: None };
         let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
         let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
             .await.expect("the turn was interrupted at the end of its grace").unwrap();
@@ -4759,7 +4766,7 @@ for line in sys.stdin:
         let wake = Notify::new();
         let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,
                         wake: &wake, redactor: None, runtime: "pi", bot: "ops", session: "c-cap", login: None, fresh: None };
-        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
+        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api", subscription: None };
         let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "c-cap".into()) };
         let mut carried = BTreeMap::new();
         let mut rejected = None;

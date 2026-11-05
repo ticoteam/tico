@@ -95,6 +95,23 @@ The spec describes answers with the fields a frontend relies on (`required`) and
 repository checks those against live responses, and another checks that `openapi/v2.json` is what the server
 generates; after a change to the API, `python -m backend.openapi_v2` rewrites it.
 
+## History
+
+`GET /api/v2/history` is the audit log behind Settings > History > Log, newest first. Each item has `id`, `at`,
+`kind`, `actor`, `about` (the teammate it concerns), `subject`, `result` and `link`; `names` gives display names, and
+`next` is the `before` that continues the list. Pages are at most `limit` rows (200 at most, 100 by default) and
+256 KB.
+
+- `kind`: a comma list of `run`, `task`, `approval.asked`, `approval.granted`, `approval.denied`, `outbound.blocked`,
+  `credential.revealed`, `permission.changed` and `decision`. An unknown kind is a 422.
+- One of `bot`, `person` or `team`: rows that teammate did or that are about them. A team includes its nested teams.
+- `from` and `to`: ISO times with a zone.
+
+`GET /api/v2/history.csv` takes the same filters and returns `time,actor,kind,subject,result,link`, up to 5,000 rows;
+`X-Next` holds the `before` for the rest. The Log's Export CSV saves up to four pages (the newest 20,000 rows) in one
+file; when more remain, it asks the reader to narrow the dates. It is
+the owner's and the Admins' (403 for others). A cell that would start a spreadsheet formula starts with `'`. Both routes are internal for now ([Stable and internal](#stable-and-internal)).
+
 ## Three ways to call it
 
 | From | Credential | Guide |
@@ -134,6 +151,11 @@ Tico does not rate-limit ordinary calls. What it does enforce: writes are limite
 imports 20 MB, `413 too_large`), a few actions have a daily budget (`429`), and each open live stream costs the
 server a small read every second. [custom-frontend.md](custom-frontend.md#rate-limits) has the guidance.
 
+File imports have limits of their own. A conversion stops after 30 seconds, or when it needs more than 1 GiB of memory.
+The import then fails with `422 import_failed`, and its `detail` says to split the file. Two conversions run at once.
+A third import gets `503 imports_busy` at once, and it is retryable. A converted file over 1,000,000 characters also fails
+with `422 import_failed`. The accepted types and the menu are in [Docs](docs.md#internal-docs).
+
 ## Tags
 
 `GET /api/v2/tags` lists tags and templates; `?is_template=true` selects templates and `false`
@@ -153,7 +175,7 @@ Task `labels` remain a list of keys. Task responses also include `tags` with the
 metadata and notes. `GET /api/v2/tasks/labels` preserves `labels` and adds `tags` for those keys.
 `task_tags` is the source of truth; the old `labels` column is kept for one release but
 is no longer read or written. All tag changes are audited in `events`, and task tag changes
-keep the `labels` entry in `task_events`. See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
+keep the `labels` entry in the task's history (`history_events`). See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 
 ## Task pipelines
 

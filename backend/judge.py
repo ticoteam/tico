@@ -211,6 +211,27 @@ NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max
 DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
 
 
+def saved_cap(c):
+    """The monthly cap saved in Settings > Maintenance (registry_metadata `maintenance`, monthly_cap_usd), or None when
+    none is saved: the environment's TICO_DECISIONS_MONTHLY_USD then holds."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='maintenance'").fetchone()
+    try:
+        stored = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        return None
+    cap = stored.get("monthly_cap_usd") if isinstance(stored, dict) else None
+    return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0 else None
+
+
+def budget_cap(c, settings, budget=DECIDE_BUDGET):
+    """The cap a budget enforces: Decide's saved cap when one is saved, else the settings field (the environment's)."""
+    if budget == DECIDE_BUDGET:
+        saved = saved_cap(c)
+        if saved is not None:
+            return saved
+    return float(getattr(settings, budget[0], 0) or 0)
+
+
 def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
     """USD the team's decision calls have cost since the 1st of this UTC month: the sum of the `judge.spend` rows
     `metered` writes after every paid call, whoever made it. (`judge.call` rows repeat the cost for reading.) Another
@@ -238,7 +259,7 @@ def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
 
 def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
     """(spent, cap) when the month's decision spend has reached the cap, else None. A cap of 0 is no cap."""
-    cap = float(getattr(settings, budget[0], 0) or 0)
+    cap = budget_cap(c, settings, budget)
     if cap <= 0:
         return None
     spent = spent_this_month(c, at, budget)
@@ -283,7 +304,8 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
     every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher. Another
     `budget` (cap field, spend action) meters against its own cap and writes its own spend rows."""
     settings = store.settings
-    cap = float(getattr(settings, budget[0], 0) or 0)
+    with store.read() as c:
+        cap = budget_cap(c, settings, budget)
     reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
     with _METER:
         if cap > 0:

@@ -12,6 +12,7 @@ from backend import idea_triage as I
 from backend.tests.test_roadmaps import ORIGIN, public_setup
 from backend.tests.test_tasks_board import api, get, post   # noqa: F401
 from clients import judge as J
+from backend import bot_settings as BS
 
 
 class FakeModel:
@@ -44,8 +45,8 @@ def roadmap(api):
     roadmap item, and idea triage turned on with a fake model."""
     item = public_setup(api, limit=100)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-lead') WHERE bot='cpo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','engineering-lead') WHERE bot='ops'")
+        BS.update(c, 'cpo', {'template': 'product-lead'})
+        BS.update(c, 'ops', {'template': 'engineering-lead'})
     api.app.state.store.settings.decisions_idea_triage = True
     model = FakeModel()
     api.app.state.judge = model

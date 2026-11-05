@@ -90,7 +90,9 @@ async function v2Refresh() {
 }
 // Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
 // server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next
-// page starts (`needsNext`, null once it is all here). A read names the version held; an unchanged list comes back
+// page starts (`needsNext`, null once it is all here), plus counts by kind (`by_kind`) and ids of tasks folded into
+// other cards (`folded_task_ids`) over the whole list.
+// A read names the version held; an unchanged list comes back
 // without its items. Each read is its own request: one already on its way may have been answered before the change
 // this read was asked for (an answer sent, a live event), and sharing it would keep the old list. An older read that
 // lands after a newer one is not kept. A server without pages sends the whole list, and there is no next page.
@@ -134,11 +136,19 @@ function taskAsksRead(id, askId) {
   }
   post(`/v2/tasks/${encodeURIComponent(key)}/seen`, {}).catch(() => { if (askId) ASKS_SENT.read.delete('ask:' + askId); });
 }
+// The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
+// fails holds no list, so the wait goes on to the next one that answers.
+let needsFirstDone = null;
+const NEEDS_FIRST = new Promise(done => { needsFirstDone = done; });
+const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs) {
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   needsSeen(S.v2.needs);
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
+  S.v2.needsByKind = needs.by_kind || null;
+  S.v2.needsFoldedIds = needs.folded_task_ids || null;
+  if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
 let NEEDS_READ = 0, NEEDS_KEPT = 0;
 async function v2NeedsRead() {
@@ -166,6 +176,8 @@ function v2NeedsMore() {
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
       needsSeen(r.items);
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
+      S.v2.needsByKind = r.by_kind || null;
+      S.v2.needsFoldedIds = r.folded_task_ids || null;
       return true;
     } finally { NEEDS_MORE = null; }
   })();
@@ -173,7 +185,7 @@ function v2NeedsMore() {
 // A live `needs` event (live.js asks for changes, not the list): mend the held list from the ids that changed, or read
 // it whole when the event was counted from another version than the one held. One at a time, in order. Resolves true
 // when the list may have moved. A changed item whose place falls past the pages held stays unread: only the count
-// moves, and the next page starts after what is held.
+// moves, and the next page starts after what is held. Missing folded ids keep the held set; null reads it whole.
 let NEEDS_MEND = Promise.resolve(false);
 const v2NeedsChanged = d => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d)));
 async function v2NeedsMend(d) {
@@ -182,7 +194,7 @@ async function v2NeedsMend(d) {
   const held = S.v2.needsVersion;
   if (!d.version || d.version === held) return false;
   const whole = async () => { await v2NeedsRead(); return true; };
-  if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed)) return whole();
+  if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed) || d.folded_task_ids === null) return whole();
   const all = needsAll(), out = new Set([...d.changed, ...d.removed].map(String));
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));
   if (d.changed.length) {
@@ -202,6 +214,8 @@ async function v2NeedsMend(d) {
   needsSeen(items);
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
+  S.v2.needsByKind = d.by_kind || null;
+  if (Array.isArray(d.folded_task_ids)) S.v2.needsFoldedIds = d.folded_task_ids;
   return true;
 }
 // One line above the composer when the bot cannot answer right now: its status says so, or

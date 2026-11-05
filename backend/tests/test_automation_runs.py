@@ -398,7 +398,7 @@ def test_a_turn_that_ends_after_its_run_was_dropped_mid_step_is_still_charged_to
     rid = queued(api, aid)
     hub(api).drain()
     run = run_row(api, rid)
-    priced = sql(api, "SELECT est_cost_usd FROM turns")[0]["est_cost_usd"]
+    priced = sql(api, "SELECT est_cost_usd FROM attempts")[0]["est_cost_usd"]
     assert priced > 0 and run["status"] == "skipped" and run["claimed_at"] is None
     assert run["cost"] == pytest.approx(priced) and run["state"]["cost"] == pytest.approx(priced)
     with api.app.state.store.read() as c:
@@ -428,7 +428,7 @@ def test_a_run_dropped_mid_step_whose_server_stopped_is_charged_its_turn_and_nev
     assert len(sql(api, "SELECT * FROM automation_turn_answers")) == 1
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(minutes=automations.STALE_MINUTES + 5))
     run = run_row(api, rid)
-    priced = sql(api, "SELECT est_cost_usd FROM turns")[0]["est_cost_usd"]
+    priced = sql(api, "SELECT est_cost_usd FROM attempts")[0]["est_cost_usd"]
     assert priced > 0 and run["status"] == "skipped" and run["claimed_at"] is None
     assert run["cost"] == pytest.approx(priced) and run["state"].get("resumes") is None
     assert sql(api, "SELECT * FROM automation_turn_answers") == [] and sql(api, "SELECT * FROM automation_holds") == []

@@ -11,9 +11,11 @@ import pytest
 
 from backend import hubdb as H
 from backend import slack_gateway as G
+from backend import task_check_backs
 from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
+from backend import bot_settings as BS
 
 TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG973DY"
 MARKETING, DM = "C0000000001", "D0AAAAAAA"
@@ -161,8 +163,8 @@ def hub(tmp_path):
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)', (slug, None, 'ana', entry['description'], entry['reports_to']))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     return store
 
 
@@ -455,8 +457,8 @@ channels:
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)', (slug, None, 'ana', entry['description'], entry['reports_to']))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     slack, engine, clock = FakeSlack(), FakeJudge(), Clock()
     gw = G.Gateway(store, slack, judge_engine=engine, clock=clock)
     gw.verify_app()
@@ -787,11 +789,17 @@ def task_reply(hub, private, attachments):
     return made["id"], reply
 
 
+def set_follow_up(hub, task):
+    """Ana sets the task's follow-up time: an explicit time, which the footer shows. Returns it."""
+    with hub.transaction() as c:
+        task_check_backs.set_time(c, H.task(c, task), H.shift(H.now(), hours=5), "Look at the chart", actor=H.human_actor("ana"))
+        return H.task(c, task)["check_back_at"]
+
+
 def test_a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     link_task_requester(hub)
     task, reply = task_reply(hub, False, [visual(), visual("svg", 2)])
-    with hub.read() as c:
-        followup = H.task(c, task)["check_back_at"]
+    followup = set_follow_up(hub, task)
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
@@ -807,13 +815,48 @@ def test_a_task_reply_names_and_links_its_task(gateway, hub):
     task, _ = task_reply(hub, False, [])
     with hub.transaction() as c:
         c.execute("UPDATE tasks SET number=19332, title=? WHERE id=?", ("Voice <tokens> & keys", task))
-        followup = H.task(c, task)["check_back_at"]
+    followup = set_follow_up(hub, task)
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
     [post] = gateway.slack.posts
     assert post["text"] == ("Here is the quarter.\n\n"
                             f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)\nFollow up by {followup}")
+
+
+def test_a_task_reply_with_no_follow_up_time_has_no_follow_up_line(gateway, hub):
+    """Tico sets no follow-up time of its own, so a task nobody set one on gets no follow-up line in the footer."""
+    link_task_requester(hub)
+    task, reply = task_reply(hub, False, [visual()])
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [post] = gateway.slack.posts
+    assert post["text"] == ("Here is the quarter.\n\n"
+                            f"<https://tico.example.com/?task={task}&amp;message={reply}|1 visual - view in Tico>"
+                            f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)")
+
+
+def test_a_task_reply_shows_the_follow_up_line_only_for_a_time_a_person_set(gateway, hub):
+    """A check-back time nobody set explicitly is not a follow-up, so no line; once a person sets one, the line shows."""
+    link_task_requester(hub)
+    task, _ = task_reply(hub, False, [])
+    with hub.transaction() as c:
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), hours=3), task))
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [first] = gateway.slack.posts
+    assert "Follow up by" not in first["text"]
+    followup = set_follow_up(hub, task)
+    with hub.transaction() as c:
+        H.say(c, "bot:legal", "human:ana", "Still on it.", conversation_id=H.task(c, task)["conversation_id"])
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    assert gateway.slack.posts[-1]["text"] == ("Still on it.\n\n"
+                                               f"(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\n"
+                                               f"Follow up by {followup}")
 
 
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
@@ -884,6 +927,23 @@ def test_a_task_done_post_without_a_visual_result_has_no_line(gateway, hub):
     assert gateway.task_completions() == 1
     gateway.deliver()
     assert "visual" not in gateway.slack.posts[0]["text"]
+
+
+def test_a_task_done_notice_whose_task_ref_is_a_list_still_posts_its_result_and_link(gateway, hub):
+    """A saved notice may name its task as a list (what a bot sends). Its first task is the one it is about, so the post
+    still shows the owner's result and the Open task link, and the delivery pass does not fail on it."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        H.task_comment(c, "bot:legal", made["id"], "Here it is.", extra_refs={"attachments": [visual()]})
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?)) "
+                  "WHERE json_extract(refs,'$.task_completion.notify')=1", (made["id"],))
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    text = gateway.slack.posts[0]["text"]
+    assert "1 visual - view in Tico" in text
+    assert text.endswith(f"\n<https://tico.example.com/#/task/{made['id']}|Open task>")
 
 
 def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_after_it_was_made(readers, monkeypatch):
@@ -1141,3 +1201,41 @@ def test_a_link_gets_no_preview_where_its_channel_cannot_be_checked_or_it_is_sti
     assert gateway.receive(shared([ticket], channel=DM)) == "unfurled"
     assert len(slack.unfurls) == 1
     assert len(rows(hub, "SELECT * FROM events WHERE action='slack.unfurl'")) == 1
+
+
+def test_a_done_notice_that_names_the_task_in_a_list_is_its_notice_for_the_same_status(hub):
+    """A saved completion notice whose refs.task lists the task after another id is still that task's notice. Reopening
+    and finishing it again with the same status sends no second one."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) "
+                  "WHERE json_extract(refs,'$.task_completion.notify')=1", ("00000000-0000-4000-8000-000000000000", made["id"]))
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted again")
+    with hub.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.task_completion.notify')=1").fetchone()[0] == 1
+
+
+def test_a_visual_from_before_a_list_notice_for_the_task_is_not_its_later_result(gateway, hub):
+    """A previous completion notice that names the task in a list (not first) marks the boundary too: the owner's visual
+    from before it is not announced again by the next notice."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        other = H.task_create(c, "human:ana", "Other work", "Unrelated.", "bot:legal", lint=False)
+        old = H.task_comment(c, "bot:legal", made["id"], "First cut.", extra_refs={"attachments": [visual(n=7)]})
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute("UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) "
+                  "WHERE json_extract(refs,'$.task_completion.notify')=1", (other["id"], made["id"]))
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_comment(c, "bot:legal", made["id"], "Not doing the rest.")
+        H.task_update(c, "bot:legal", made["id"], status="declined", note="Out of scope")
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    assert "visual" not in gateway.slack.posts[1]["text"] and old["id"] not in gateway.slack.posts[1]["text"]

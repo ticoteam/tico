@@ -600,10 +600,9 @@ impl ClaudeHost {
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
-        // claude.ai connectors) (hosts/claude.py _argv).
-        if t.settings.shared {
-            argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
-        }
+        // claude.ai connectors). Every turn excludes the operator's own instructions, settings and hooks, even
+        // when HOME is the operator's. Packet-only turns also exclude the repository's settings.
+        argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
         argv.push("--strict-mcp-config".into());
         if t.settings.packet_only {
             argv.extend(["--tools".into(), "".into(), "--disable-slash-commands".into(),
@@ -1619,14 +1618,16 @@ mod tests {
     #[test]
     fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
         let host = ClaudeHost::new("synthetic", vec!["claude".into()], tokio::sync::mpsc::unbounded_channel().0);
-        let settings = Settings { packet_only: true, shared: true, ..Settings::default() };
-        let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
-        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
-        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
-        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
-        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
-        assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+        for shared in [false, true] {
+            let settings = Settings { packet_only: true, shared, ..Settings::default() };
+            let thread = host.start_thread(&settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
+            assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
+            assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
+            assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
+            assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
+            assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+        }
     }
 
     #[tokio::test]
@@ -1731,7 +1732,10 @@ mod tests {
         }
         let thread = host.start_thread(&settings);
         let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        assert!(argv.contains(&"--strict-mcp-config".to_string()) && !argv.contains(&"--setting-sources".to_string()));
+        assert!(argv.contains(&"--strict-mcp-config".to_string()));
+        // A bot without branches keeps out the operator's own CLAUDE.md, settings and hooks as a branch bot does.
+        let at = argv.iter().position(|a| a == "--setting-sources").expect("--setting-sources on every turn");
+        assert_eq!(argv[at + 1], "project,local");
         let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
         assert_eq!(config["mcpServers"]["repo"]["command"], "x");
         assert_ne!(config["mcpServers"]["hub"]["command"], "stale");

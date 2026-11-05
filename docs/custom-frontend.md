@@ -263,7 +263,7 @@ it, when you may know) and `at`:
 ```
 id: 4120
 event: tasks
-data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "task": {...as GET /api/v2/tasks shows it...}}
+data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "kind": "update", "kinds": ["files", "update"], "task": {...as GET /api/v2/tasks shows it...}}
 
 id: 4121
 event: runs
@@ -274,7 +274,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
 
 | Topic | `data` |
 |---|---|
-| `tasks` | `id` and `task`, or `gone: true` for a deleted task; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
+| `tasks` | `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and `task`, or `gone: true` for a deleted task; `files` in `kinds` invalidates the task's files and linked pages, even when `kind` is `update`; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
 | `messages` | `id`, `conversation_id` and `message`, or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal` |
 | `runs` | `run_id`, `conversation_id`, `bot_id`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
@@ -290,7 +290,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
   again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
   `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`
   is the same run as a list of `{"kind", "text", "at"}`: `reply` (what the bot wrote), `progress` (what it wrote just
-  before a tool call) and `tool` (a short label such as `Ran hub task create`, never the call's arguments; Claude and
+  before a tool call) and `tool` (a short label such as `Filing a task` or `Ran npm`, never the call's arguments; Claude and
   Codex do not report tools, so their pieces are all `reply`). `text` joins the bot's messages with a blank line and leaves
   the tool labels out.
 - **Resume.** The stream ends after about fifteen minutes by design; `event: ready`
@@ -377,8 +377,10 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 413 | `too_large` | Over 2 MB (uploads 20 MB). |
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
+| 422 | `import_failed` | A file import was refused. `detail` says why: the file took over 30 seconds, needed over 1 GiB of memory, converted to over 1,000,000 characters, or could not be converted. |
 | 429 | `cap`, `budget` | A daily allowance is used. |
 | 503 | `busy` | The database was busy. Wait for `Retry-After` seconds and retry with the same `Idempotency-Key`. |
+| 503 | `imports_busy` | Two file imports are converting already. Wait a minute and send the import again (`retryable: true`). |
 | 503 | `storage_unavailable` | Try again shortly (`retryable: true`); back off. |
 
 Request validation (a missing field, a wrong type or an unknown field) uses the same envelope:

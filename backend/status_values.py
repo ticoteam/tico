@@ -72,10 +72,13 @@ class Column:
 # Hot and growing tables use triggers; small tables use a CHECK rebuilt into the table.
 COLUMNS = (
     Column("tasks", "status", TASK_STATUSES, nullable=True),
-    Column("tasks", "blocked_from_status", TASK_STATUSES, nullable=True),
+    # The status a blocked hold returns its task to (backend/migrations/0075_task_holds.py).
+    Column("task_holds", "from_status", TASK_STATUSES, nullable=True),
     # "done" is the spelling older hubs stored for a finished job (seen on Tico Team, Nov 2).
     Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"), ("done", "completed"))),
-    Column("attempts", "state", ATTEMPT_STATES),
+    # NULL for a run recorded with no lease (backend/migrations/0072_turns_into_attempts.py); attempts' CHECK keeps a
+    # leased run's state set.
+    Column("attempts", "state", ATTEMPT_STATES, nullable=True),
     Column("automation_runs", "status", RUN_STATUSES),
     Column("webhook_sends", "state", WEBHOOK_SEND_STATES, retired=(("cancelled", "canceled"),)),
     Column("bots", "state", BOT_STATES, nullable=True, enforce="check"),
@@ -95,6 +98,7 @@ COLUMNS = (
     Column("model_subscriptions", "status", ("new", "working", "needs_reconnect"), enforce="check"),
     Column("strategy_actions", "state", ("proposed", "done", "undone"), enforce="check"),
     Column("google_connects", "status", GOOGLE_CONNECT_STATUSES, enforce="check"),
+    Column("google_workspaces", "status", ("pending", "connected", "failing"), enforce="check"),
     Column("fin_cards", "status", ("active", "frozen", "canceled"), enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),

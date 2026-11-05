@@ -211,7 +211,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
+      <button type="button" data-settings-tab="inbox" role="tab">Google</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
         <button type="button" data-settings-tab="mail" role="tab">Mail</button>
@@ -234,7 +234,8 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
+        ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
@@ -288,10 +289,11 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
     <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
-    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
+    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Google</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
-      ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
-      <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
+      <div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
+      <div id="set-log"></div>
+      <div id="set-runs" hidden>${skelRows(3, {card: true, dot: false})}</div>
       ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
     <dialog class="tmodal" id="people-dialog" aria-label="People"></dialog>
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
@@ -398,7 +400,7 @@ function settingsShow(tab) {
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
@@ -423,11 +425,11 @@ function settingsShow(tab) {
   if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
   settingsRevealSoon(SETTINGS_REVEAL);
 }
-// While Settings is the page, the address bar names the tab shown: #/settings/<tab>. It replaces the entry: no
-// hashchange, no new history step.
+// While Settings is the page, the address bar names the tab shown: #/settings/<tab>, with History's view and filters.
+// It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}`;
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
@@ -501,6 +503,23 @@ async function renderSettingsAssistantApprovals() {
     catch (e) { toast(e.message, true); }
     void renderSettingsAssistantApprovals();
   });
+}
+// Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
+// backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.
+async function renderSettingsBotReports() {
+  const host = $('#settings-bot-reports');
+  if (!host || formBusy(host)) return;
+  let rules;
+  try { rules = (await get('/v2/access')).rules || {}; }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
+    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.querySelector('#bot-reports-direct').onchange = async ev => {
+    const box = ev.target;
+    try { await put('/v2/access/rules', {bot_reports_direct: box.checked}); toast('Saved'); void renderSettingsBotReports(); }
+    catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
+  };
 }
 // Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
 async function renderSettingsPrivacy() {
@@ -618,7 +637,6 @@ function renderSettingsIssues() {
   el.querySelectorAll('[data-execution-review]').forEach(button => {
     button.onclick = () => executionReview(button.dataset.executionReview);
   });
-  bindRunnerRestart(el);
 }
 // The stopped-run card is the decision only (Chris, Oct 22: "remove 80%, give me clear action items"): one line
 // on what stopped, one recommendation with its button first, the rest under Details. `stopped` comes from

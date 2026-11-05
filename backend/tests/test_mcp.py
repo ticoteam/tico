@@ -13,6 +13,7 @@ from backend.mcp import ApiProblem, InProcessApi
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
 from clients import bot_files as BF, hubcli, hubtools
 from clients.tico import MultipartBody
+from backend import bot_settings as BS
 
 
 def rpc(api, method, params=None, token="ana-test", rid=1):
@@ -85,12 +86,13 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
 
 
 THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_thread_members_list",
-                "hub_thread_home", "hub_thread_dm"}
+                "hub_thread_home", "hub_thread_dm", "hub_thread_catch_up", "hub_thread_bot_status"}
 THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
                  "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
                  "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack", "hub_thread_dm_group",
                  "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier", "hub_thread_task",
-                 "hub_thread_delete", "hub_thread_upload", "hub_thread_slack_resume"}
+                 "hub_thread_delete", "hub_thread_upload", "hub_thread_slack_resume", "hub_thread_pin",
+                 "hub_thread_unpin"}
 
 
 def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
@@ -141,6 +143,13 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run("hub_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
     run("hub_thread_open_earlier", {"thread_id": "th1"})
     run("hub_thread_task", {"message_id": "m7", "title": "Ship it", "owner": "bot:ops", "operation_id": "op1"})
+    run("hub_thread_pin", {"thread": "th1"})
+    run("hub_thread_unpin", {"thread": "th1"})
+    run("hub_thread_catch_up", {"limit": 5})
+    run("hub_thread_dm_group", {"members": ["human:ana", "bot:coo"], "title": "Launch"})
+    run("hub_thread_post", {"thread": "th1", "text": "Yes", "reply_to": "m7", "operation_id": "op2"})
+    run("hub_thread_show", {"thread": "th1", "flat": True})
+    run("hub_thread_bot_status", {"thread": "th1"})
     assert recorder.calls == [
         ("GET", "threads/home/bot:ops", {}),
         ("GET", "threads", {"with": "human:ben", "limit": 5}),
@@ -150,6 +159,13 @@ def test_thread_tools_reach_the_routes_of_the_contract():
         ("DELETE", "messages/m7/reactions/:+1:", None),
         ("POST", "threads/th1/open-earlier", {}),
         ("POST", "threads/messages/m7/task", {"title": "Ship it", "owner": "bot:ops"}),
+        ("PUT", "threads/th1/pin", None),
+        ("DELETE", "threads/th1/pin", None),
+        ("GET", "threads/catch-up", {"limit": 5}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": None, "title": "Launch"}),
+        ("POST", "threads/th1/messages", {"text": "Yes", "kind": "say", "in_reply_to": "m7"}),
+        ("GET", "threads/th1/timeline", {"flat": 1}),
+        ("GET", "threads/th1/bot-status", {}),
     ]
 
 
@@ -458,7 +474,8 @@ def add_bots(api, slugs, runner_id=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", (slug, encode(config)))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,))
+            BS.write(c, slug, config)
             if runner_id:
                 c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, runner_id, H.now()))
 
