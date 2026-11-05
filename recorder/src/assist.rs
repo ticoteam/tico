@@ -119,12 +119,21 @@ fn owner(row: &Value, people: &[Value]) -> String {
 }
 
 const DRAFT_PROMPT: &str = "You find action items in a meeting transcript while the meeting is \
-happening. An action item is something a person committed to, asked for, or the group agreed \
-should happen: a task, a follow-up to send, a document to change. Read the NEW lines (EARLIER \
+happening. Keep concrete commitments, requests and agreed changes, even small ones. Suggest \
+each distinct piece of real work; more of these is fine. Read the NEW lines (EARLIER \
 lines are context only). Return JSON only: {\"items\":[{\"title\":\"...\",\"quote\":\"...\",\"owner\":\"...\"}]}. \
-title: a short imperative sentence naming the deliverable and, when said, who it is for or by \
-when (\"Send Dana the revised pricing by Friday\"). quote: the exact words, copied character for \
+title: a short imperative sentence naming the actual deliverable or outcome and, when said, \
+who it is for or by when (\"Send Dana the revised pricing by Friday\"). A ping, message, \
+reminder or follow-up with stated work becomes that underlying work: \
+\"I'll ping Eli to get his sign-off on the pricing doc\" becomes \
+\"Get Eli's sign-off on the pricing doc\", still owned by the speaker. \
+Do not invent a purpose when none is stated. Drop bare communication steps: ping, message, \
+reach out, let someone know, remind, follow up or check in with no stated work. \
+\"Let's sync later\" alone is not an item. Sending a concrete deliverable is real work. \
+quote: the exact words, copied character for \
 character from one NEW line, that the item comes from (at most 25 words). \
+Apply the ownership rules below only to retained work; rewriting a title never transfers \
+ownership to the person being contacted. Bare-ping ownership examples do not make them items. \
 PEOPLE lists the org's people and bots (with jobs when known). ME identifies the signed-in \
 person; transcript speaker Me means ME. Keep named speakers and unknown Speaker N distinct. \
 speaker_actor identifies a speaker only when their label uniquely matches PEOPLE, or they are Me. \
@@ -141,9 +150,10 @@ when no bot is listed. 'Let's' does not assign that role's work to Me. In contra
 People being pinged or receiving a document are not its owners. Use surrounding lines to \
 resolve 'you' only when clear. Never invent an actor or infer who Speaker N is. If several \
 people could own it, the name is ambiguous, or the doer is absent from PEOPLE, use \"\". \
-Leave out small talk, \
-vague ideas, questions nobody took on, things finished during the meeting, and anything already \
-in EXISTING. TASKS lists active tasks. If new speech belongs to one, return \
+Leave out small talk, vague ideas, questions nobody took on, things finished during the meeting, \
+and steps that will obviously happen in the next few minutes of this meeting, such as sharing \
+a screen or opening the agenda. Drop restatements of EXISTING items, even reworded or framed \
+as a ping about the same work. TASKS lists active tasks. If new speech belongs to one, return \
 {\"link\":N,\"quote\":\"...\",\"owner\":\"...\"} instead of a title. N must be in TASKS. Return {\"items\":[]} when there are none.";
 
 const ASK_PROMPT: &str = "You answer the user's private questions about their meeting, using \
