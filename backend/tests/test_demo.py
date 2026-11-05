@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 
 from backend import demo, demo_seed, screen_binary, usage_limits
@@ -19,6 +20,13 @@ from backend import server as serving
 from backend.app import create_app
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # a Friday, so a week in review exists
+
+
+@pytest.fixture(scope="module", autouse=True)
+def demo_clock():
+    """Builds and API reads see the same day, including clocks outside hubdb.now."""
+    with time_machine.travel(NOW, tick=False):
+        yield
 
 
 @pytest.fixture(scope="module")
