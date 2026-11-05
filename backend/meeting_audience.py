@@ -109,14 +109,18 @@ def revoke_saved(c, rid):
     if c.execute("SELECT 1 FROM sqlite_master WHERE name='meeting_task_links'").fetchone():
         sources += " UNION SELECT task_id FROM meeting_task_links WHERE meeting_id=? AND kind='sent'"
         args.append(rid)
-    c.execute("DELETE FROM task_roles AS r WHERE role='participant' AND task_id IN (" + sources + ") "
-              "AND NOT EXISTS (SELECT 1 FROM meetings m WHERE m.id=? AND " + saved_read_sql('r.actor') + ")", (*args, rid))
+    revoke_unreadable(c, sources, args)
+
+
+def revoke_unreadable(c, sources, args):
+    # A participant keeps the grant while any source still permits their task read.
+    c.execute("DELETE FROM task_roles AS revoked WHERE role='participant' AND task_id IN (" + sources + ") "
+              "AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id=revoked.task_id AND "
+              + participant_sql(c, 'revoked.actor') + ")", args)
 
 
 def revoke_live(c, rid):
-    c.execute("DELETE FROM task_roles AS r WHERE role='participant' AND task_id IN "
-              "(SELECT id FROM tasks WHERE live_meeting_id=?) AND NOT EXISTS "
-              "(SELECT 1 FROM live_meetings m WHERE m.id=? AND " + live_read_sql('r.actor') + ")", (rid, rid))
+    revoke_unreadable(c, "SELECT id FROM tasks WHERE live_meeting_id=?", (rid,))
 
 
 def participant_access_sql(c, actor_sql):

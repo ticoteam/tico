@@ -403,7 +403,9 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             if body.status == "pushed":
                 if not body.result_ref:
                     raise Problem("result_ref", "A sent item needs a task", 422)
-                auth.task(c, who, body.result_ref)
+                task = auth.task(c, who, body.result_ref)
+                if task['requester_id'] != who.actor:
+                    raise Problem('forbidden', 'Only the requester may link a sent task', 403)
             elif body.result_ref:
                 raise Problem("result_ref", "Only a sent item has a task", 422)
             item = add(c, record, who.actor, body)
@@ -431,13 +433,16 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         def work(c):
             record, row = pushable(c, who, rid, iid)
             if body.result_ref is not None:
-                auth.task(c, who, body.result_ref)
+                task = auth.task(c, who, body.result_ref)
                 if body.text is not None or body.detail is not None:
                     raise Problem("validation", "Save edits before linking a sent task", 422)
                 if row["status"] == "pushed" and row["result_ref"] != body.result_ref:
                     raise Problem("status", "Already sent to another task", 409)
-                if row["status"] != "pushed":
-                    require_version(row, body.version)
+                if row["status"] == "pushed":
+                    return {"item": view(row), "pushed": False}
+                if task['requester_id'] != who.actor:
+                    raise Problem('forbidden', 'Only the requester may link a sent task', 403)
+                require_version(row, body.version)
                 item = record_push(c, who, rid, iid, body.result_ref)
                 meeting_audience.record_sent_link(c, rid, body.result_ref, who.actor)
                 return {"item": item, "pushed": row["status"] != "pushed"}

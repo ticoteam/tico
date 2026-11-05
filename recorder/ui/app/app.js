@@ -364,14 +364,16 @@
   }
   /** Tasks: ones already in Tico by number, then proposals drafted as people talk, each created or dismissed. */
   function actions(a) {
-    if (a.saved) return sharedActions(a);
+    const recovered = nativeClosedDrafts(a);
+    if (a.saved) return sharedActions(a, recovered);
     let html = `<section class="section"><div class="label head">Tasks<span class="grow"></span><button class="btn small" data-act="add-open">${icon('plus', 12)}Add</button></div>`;
 
     if (a.draft_status) html += `<div class="notice inline">${icon('alert')}<span class="grow">${esc(a.draft_status)}</span></div>`;
     if (a.mode === 'choose' && a.items.some((it) => !it.sent)) {
       html += `<div class="choose-org"><span class="faint">Owners from</span>${a.orgs.map((o) => `<button class="btn small" data-act="choose-org" data-id="${esc(o.id)}">${esc(o.name)}</button>`).join('')}</div>`;
     }
-    const sent = a.items.filter((it) => it.sent);
+    const sent = a.items.filter((it) => it.sent && !recovered.some(r => r.localId === it.id));
+    html += recovered.map(it => sharedClosedCard(it, sharedDraft(it.id), a)).join('');
     const proposed = a.items.filter((it) => !it.sent);
     if (sent.length) html += `<ul class="items tasks">${sent.map(task).join('')}</ul>`;
     if (proposed.length) html += `<ul class="items">${proposed.map(proposal).join('')}</ul>`;
@@ -379,6 +381,7 @@
     return html + '</section>';
   }
   const sharedDrafts = new Map();
+  const nativeDraftAcknowledged = new Set();
   const sharedKey = id => `${S.meeting.id}:${S.meeting.actions.shared_scope || ''}:${id}`;
   function sharedDraft(id) {
     const key = sharedKey(id);
@@ -394,20 +397,35 @@
     }
     draft.version = item.version; draft.base = item; draft.current = null;
   }
-  function sharedActions(a) {
+  function nativeClosedDrafts(a) {
+    return (a.items || []).flatMap(local => {
+      const closed = local.closed_draft;
+      if (!closed) return [];
+      const key = `${S.meeting.id}:${a.org}:${local.id}:${closed.item.id}`;
+      if (nativeDraftAcknowledged.has(key)) return [];
+      const draft = sharedDraft(closed.item.id);
+      draft.closed ||= {text:closed.text, detail:closed.detail};
+      draft.nativeRecovery = key;
+      return [{...closed.item, localId:local.id}];
+    });
+  }
+  function sharedClosedCard(it, draft, a) {
+    clearTimeout(draft.timer);
+    draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
+    const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
+    const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
+    return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : 'Dismissed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
+  }
+  function sharedActions(a, recovered = []) {
     const data = a.shared;
     if (data?.gone) return '';
-    if (!data || !data.sections) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
-    const here = (data.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
+    if ((!data || !data.sections) && !recovered.length) return '<section class="section"><h2>Tasks</h2>' + (data?.gone ? '' : '<span>Loading…</span>') + '</section>';
+    const here = (data?.presence?.actors || []).filter(p => p.actor !== a.actor).map(p => p.name);
     return `<section class="section" data-shared-panel><div class="section-head"><h2>Tasks</h2><span class="aside">${here.length ? esc(here.join(', ') + (here.length === 1 ? ' is here' : ' are here')) : ''}</span></div>` +
-      Object.values(data.sections).flat().map(it => {
+      [...Object.values(data?.sections || {}).flat(), ...recovered.filter(it => !Object.values(data?.sections || {}).flat().some(row => row.id === it.id))].map(it => {
         const draft = sharedDraft(it.id);
         if (it.status !== 'proposed' && !(draft.sending && it.updated_by === a.actor) && !draft.closedAcknowledged && (draft.closed || draft.flight || Object.keys(draft.dirty).length)) {
-          clearTimeout(draft.timer);
-          draft.closed ||= mergeShared(mergeShared(draft.base || it, draft.inflightPatch || {}), draft.patch);
-          const text = [draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n');
-          const name = a.owners.find(o => o.actor === it.updated_by)?.name || it.updated_by;
-          return `<div class="shared-item" data-shared-row="${esc(it.id)}"><div>${it.status === 'pushed' ? 'Sent by ' : 'Dismissed by '}${esc(name)}</div><pre class="selectable" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(text)}</pre><div class="actions"><button class="btn small" data-act="shared-copy" data-id="${esc(it.id)}">Copy</button><button class="btn small" data-act="shared-close" data-id="${esc(it.id)}">Close</button></div></div>`;
+          return sharedClosedCard(it, draft, a);
         }
         if (it.status === 'dismissed' || draft.closedAcknowledged) return '';
         if (it.status === 'pushed') return `<div class="item sent" data-shared-row="${esc(it.id)}">${esc(it.text)} · Sent${it.result_ref && a.shared_url ? ` · <button class="link" data-act="open-url" data-url="${esc(a.shared_url + '/#/task/' + encodeURIComponent(it.result_ref))}">Open</button>` : ''}</div>`;
@@ -503,6 +521,7 @@
     const draft = sharedDraft(id);
     if (!draft.closed) return;
     if (copy) await copyText([draft.closed.text, ...Object.values(draft.closed.detail || {})].filter(Boolean).join('\n\n'));
+    if (draft.nativeRecovery) nativeDraftAcknowledged.add(draft.nativeRecovery);
     draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {};
     render();
   }

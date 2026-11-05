@@ -595,6 +595,7 @@ impl Tico {
         push_items: bool,
         audience: &str,
     ) -> Result<String> {
+        let _guard = store.live_lock();
         ensure!(
             ["", "team", "participants"].contains(&audience),
             "Unknown audience"
@@ -796,7 +797,7 @@ impl Tico {
                 let mut item_version = delivery.receipt["items"][&item.id]["version"]
                     .as_u64()
                     .unwrap_or(1);
-                if item_id.is_empty() {
+                if item_id.is_empty() && delivery.receipt["uploads"][&item.id].is_null() {
                     if let Some(existing) = listing["sections"][section]
                         .as_array()
                         .into_iter()
@@ -814,11 +815,7 @@ impl Tico {
                     }
                 }
                 if item_id.is_empty() {
-                    let reply = self.call_meeting(
-                        &path,
-                        Some(&payload),
-                        &format!("recorder:{id}:{}:item:{}", item.id, hash(&payload)),
-                    )?;
+                    let reply = self.upload_item(store, id, &mut delivery, &item.id, &payload)?;
                     item_version = reply["item"]["version"].as_u64().unwrap_or(1);
                     item_id = reply["item"]["id"]
                         .as_str()
@@ -886,6 +883,41 @@ impl Tico {
             store.delivery(id, &delivery)?;
         }
         result
+    }
+
+    fn upload_item(
+        &self,
+        store: &Store,
+        id: &str,
+        delivery: &mut Delivery,
+        item_id: &str,
+        payload: &Value,
+    ) -> Result<Value> {
+        // Persist the exact request before sending: a lost reply must replay this upload.
+        if delivery.receipt["uploads"][item_id].is_null() {
+            delivery.receipt["uploads"][item_id] = json!({
+                "body":payload,
+                "key":format!("recorder:{id}:{item_id}:item:{}", hash(payload)),
+            });
+            store.delivery(id, delivery)?;
+        }
+        let upload = &delivery.receipt["uploads"][item_id];
+        let reply = self.call_meeting(
+            &format!("/meetings/{}/items", delivery.meeting_id),
+            Some(&upload["body"]),
+            upload["key"].as_str().context("Missing item upload key")?,
+        )?;
+        ensure!(
+            reply["item"]["id"].as_str().is_some(),
+            "Tico did not return an item ID"
+        );
+        delivery.receipt["items"][item_id] = reply["item"].clone();
+        delivery.receipt["uploads"]
+            .as_object_mut()
+            .unwrap()
+            .remove(item_id);
+        store.delivery(id, delivery)?;
+        Ok(reply)
     }
 }
 impl Tico {
@@ -960,14 +992,23 @@ impl Tico {
             owner.starts_with("bot:") || owner.starts_with("human:"),
             "Choose an owner"
         );
+        let mut filed = record
+            .deliveries
+            .iter()
+            .find(|entry| {
+                entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
+            })
+            .cloned();
+        if let Some(entry) = filed.as_mut()
+            && !entry.receipt["uploads"][item_id].is_null()
+        {
+            self.upload_item(store, id, entry, item_id, &Value::Null)?;
+        }
         let base = self.task_browser_url()?;
-        let filed = record.deliveries.iter().find(|entry| {
-            entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
-        });
         let link = if base.is_empty() {
             String::new()
         } else {
-            match (filed, context.live_id.is_empty()) {
+            match (filed.as_ref(), context.live_id.is_empty()) {
                 (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
                 (None, false) => format!("{base}/#/meetings/live/{}", context.live_id),
                 (None, true) => String::new(),
@@ -982,8 +1023,9 @@ impl Tico {
         if !context.live_id.is_empty() {
             body["live_meeting_id"] = json!(context.live_id);
         }
-        let reply = if let Some(entry) =
-            filed.filter(|entry| entry.receipt["items"][item_id]["id"].as_str().is_some())
+        let (reply, adopted) = if let Some(entry) = filed
+            .as_ref()
+            .filter(|entry| entry.receipt["items"][item_id]["id"].as_str().is_some())
         {
             let server_item = entry.receipt["items"][item_id]["id"]
                 .as_str()
@@ -996,13 +1038,17 @@ impl Tico {
                 Some(&json!({"version":entry.receipt["items"][item_id]["version"].as_u64().unwrap_or(1),"text":item.title,"detail":{"owner":owner}})),
                 &format!("recorder:{id}:push:{server_item}:{}", hash(&body)),
             )?;
-            json!({"task":{"id":result["item"]["result_ref"]}})
+            let adopted = (result["pushed"] == false).then(|| result["item"].clone());
+            (json!({"task":{"id":result["item"]["result_ref"]}}), adopted)
         } else {
-            self.call(
-                "/api/v2/tasks",
-                Some(&body),
-                &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
-            )?
+            (
+                self.call(
+                    "/api/v2/tasks",
+                    Some(&body),
+                    &format!("recorder:{id}:task:{item_id}:{}", hash(&body)),
+                )?,
+                None,
+            )
         };
         let task = reply["task"]["id"]
             .as_str()
@@ -1011,6 +1057,12 @@ impl Tico {
         store.update_context(id, |current| {
             current.live_destination = self.destination.id.clone();
             if let Some(item) = current.items.iter_mut().find(|item| item.id == item_id) {
+                if let Some(server) = adopted
+                    && (server["text"] != item.title || server["detail"]["owner"] != owner)
+                {
+                    item.closed_draft =
+                        Some(json!({"item":server,"text":item.title,"detail":{"owner":owner}}));
+                }
                 item.task_url = if base.is_empty() {
                     String::new()
                 } else {

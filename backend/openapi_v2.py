@@ -3172,11 +3172,11 @@ SCHEMAS.update({
 STABLE.extend([
     ("/api/v2/meetings/{rid}/items", "get", "Meetings", "listMeetingItems",
      "Pending and sent items grouped by section; can_send for every reader of a live meeting, audience for a private meeting. Task references are redacted per viewer", None),
-    ("/api/v2/meetings/{rid}/items", "post", "Meetings", "addMeetingItem", "Add a pending item, or upload an already sent item with status=pushed and an authorized result_ref", None),
+    ("/api/v2/meetings/{rid}/items", "post", "Meetings", "addMeetingItem", "Add a pending item, or upload an already sent item with status=pushed and a result_ref for a task you requested", None),
     ("/api/v2/meetings/{rid}/items/{iid}", "post", "Meetings", "editMeetingItem",
      "Edit at the expected version; stale writes return 409 with the current item. Detail merges keys, null or empty clears a key. Sent items refuse text and detail edits", None),
     ("/api/v2/meetings/{rid}/items/{iid}/push", "post", "Meetings", "sendMeetingItem",
-     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task with an authorized result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
+     "Apply final fields at the expected version and send in one transaction, or reconcile an already created task you requested with result_ref. An already sent item returns its existing task with pushed=false even at a stale version; other stale sends return 409 with the current item. Private meetings require every new task reader inside the meeting audience", None),
     ("/api/v2/presence", "get", "Live events", "getPresence", "Current actors aggregated across unexpired sessions at an authorized place", None),
     ("/api/v2/presence", "post", "Live events", "heartbeatPresence", "Heartbeat one session every 15 seconds, or leave with gone=true; sessions expire after 30 seconds", None),
 ])

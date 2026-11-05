@@ -141,6 +141,48 @@ const path = require('node:path');
     await page.locator('[data-shared-item]').getByRole('textbox',{name:'Title',exact:true}).fill('Still editing');
     await page.evaluate(()=>window.pendingFixture.a.shared={gone:true});
     await page.locator('[data-shared-item]').waitFor({state:'detached'});
+    await page.evaluate(() => {
+      const original = window.__TAURI__.core.invoke;
+      window.__TAURI__.core.invoke = async (cmd, args) => {
+        if (cmd !== 'send_item') return original(cmd, args);
+        const f = window.pendingFixture, local = f.a.items.find(it => it.id === args.id);
+        const server = {id:'server-'+local.id,version:2,section:'task',status:'pushed',
+          text:'Original server title',detail:{owner:'human:sam'},updated_by:'human:sam',result_ref:'existing-task'};
+        local.sent=true; local.task_id=server.result_ref;
+        local.closed_draft={item:server,text:local.title,detail:{owner:local.owner}};
+        f.adopted=structuredClone(server);
+        return {};
+      };
+    });
+    for (const close of ['Copy','Close']) {
+      const id='native-'+close.toLowerCase();
+      await page.evaluate(id => {
+        const a=window.pendingFixture.a;
+        a.saved=false; a.shared=null; a.shared_scope='partial-'+id;
+        a.items=[{id,title:'Original server title',owner:'human:sam',owner_name:'Sam Okafor',can_send:true,sent:false}];
+      },id);
+      const local=page.getByRole('textbox',{name:'Task',exact:true});
+      await local.fill('My native unsaved title');
+      await page.getByRole('button',{name:'Create',exact:true}).click();
+      const closed=page.locator(`[data-shared-row="server-${id}"]`);
+      await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
+      assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
+      assert.equal(await closed.locator('textarea,input,select').count(),0);
+      // Save recovers and switches to server cards with a new connection scope.
+      await page.evaluate(() => {
+        const f=window.pendingFixture;
+        f.a.saved=true; f.a.shared_scope+='-saved';
+        f.a.shared={can_send:true,sections:{task:[f.adopted]}};
+      });
+      await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();
+      assert.match(await closed.locator('pre').textContent(),/My native unsaved title/);
+      await closed.getByRole('button',{name:close,exact:true}).click();
+      await closed.locator('pre').waitFor({state:'detached'});
+      if(close==='Copy') assert.match(await page.evaluate(()=>window.copiedText),/My native unsaved title/);
+      await page.evaluate(()=>window.pendingFixture.a.shared_scope+='-refresh');
+      await page.getByText('Original server title · Sent',{exact:false}).waitFor();
+      assert.equal(await page.locator('[data-shared-row] pre').count(),0);
+    }
     assert.deepEqual(errors,[]);
     console.log('Recorder: in-flight draft, retry and final Send passed');
   } finally { await browser.close(); }

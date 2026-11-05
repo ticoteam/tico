@@ -2814,3 +2814,149 @@ fn create_uses_a_known_server_item_in_every_delivery_state() {
         assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
     }
 }
+
+#[test]
+fn create_replays_uncertain_item_upload_before_adopting_another_readers_task() {
+    for in_flight in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Uncertain upload");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    title: "Server title".into(),
+                    kind: "task".into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test","name":"Test"});
+        // Save commits A, loses its response, then another reader Sends the original A.
+        let sent = json!({"id":"server-a","section":"task","version":2,"status":"pushed",
+            "text":"Server title","detail":{"owner":"human:test"},
+            "result_ref":"one-task","updated_by":"human:ben"});
+        let (release, held) = std::sync::mpsc::channel();
+        let (tico, seen, worker) = server_gated(
+            vec![
+                Some(who.clone()),
+                Some(json!({"id":"saved-meeting"})),
+                Some(json!({"sections":{"task":[]}})),
+                None,
+                Some(who.clone()),
+                Some(json!({"item":sent})),
+                Some(json!({"url":"https://acme.example"})),
+                Some(json!({"item":sent,"pushed":false})),
+                Some(who),
+                Some(json!({"sections":{"task":[sent]}})),
+            ],
+            in_flight.then_some((3, held)),
+        );
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| tico.send(&store, &record.id, false));
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() < 4 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Save did not upload A"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |context| {
+                    context.items[0].title = "My unsaved title".into();
+                    Ok(())
+                })
+                .unwrap();
+            if !in_flight {
+                assert!(saving.join().unwrap().is_err());
+            }
+            let creating =
+                scope.spawn(|| tico.send_task(&store, &record.id, "a", "human:test", "Test", true));
+            if in_flight {
+                release.send(()).unwrap();
+            }
+            creating.join().unwrap().unwrap();
+        });
+        let context = store.context(&record.id).unwrap();
+        assert_eq!(context.items[0].task_id, "one-task");
+        let closed = context.items[0].closed_draft.as_ref().unwrap();
+        assert_eq!(closed["text"], "My unsaved title");
+        assert_eq!(closed["item"]["updated_by"], "human:ben");
+        tico.send(&store, &record.id, false).unwrap();
+        worker.join().unwrap();
+        assert_eq!(store.get(&record.id).unwrap().deliveries[0].status, "sent");
+        let calls = seen.lock().unwrap();
+        let uploads: Vec<_> = calls
+            .iter()
+            .filter(|r| {
+                r.0.starts_with("POST /api/v2/meetings/saved-meeting/items ")
+            })
+            .collect();
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[0].1, uploads[1].1);
+        assert_eq!(uploads[0].2, uploads[1].2);
+        assert_eq!(uploads[1].1["text"], "Server title");
+        assert!(
+            calls[7]
+                .0
+                .starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+        );
+        assert_eq!(calls[7].1["text"], "My unsaved title");
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+    }
+}
+
+#[test]
+fn create_stops_if_replaying_the_uncertain_upload_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Still uncertain");
+    store
+        .update_context(&record.id, |context| {
+            context.items.push(crate::workspace::Item {
+                id: "a".into(),
+                title: "Local title".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let payload = json!({"section":"task","text":"Original title"});
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved-meeting".into(),
+                status: "failed".into(),
+                error: String::new(),
+                receipt: json!({"uploads":{"a":{"body":payload,"key":"original-upload-key"}}}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"status":503,"error":{"code":"unavailable"}})),
+    ]);
+    assert!(
+        tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+            .is_err()
+    );
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].1, payload);
+    assert_eq!(calls[1].2, "original-upload-key");
+    assert!(
+        store.context(&record.id).unwrap().items[0]
+            .task_id
+            .is_empty()
+    );
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["uploads"]["a"]["key"],
+        "original-upload-key"
+    );
+}

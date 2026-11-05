@@ -483,3 +483,51 @@ def test_recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
     assert len(items(api, rid)['sections']['task']) == 2
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == count
+
+
+def test_reader_cannot_use_sent_reconciliation_to_change_other_participant_access(api):
+    from backend.tests.test_api import post
+    source = record(api, {'private': True, 'participants': ['ben@acme.example', 'cara@acme.example']})
+    item = add(api, source, {'section': 'task', 'text': 'Shared source', 'detail': {'owner': 'human:ana'}})['item']
+    tid = push(api, source, item['id'])['item']['result_ref']
+    other = record(api, {'private': True}, 'ben-test')
+    sent = {'section': 'task', 'text': 'Readable task', 'status': 'pushed', 'result_ref': tid}
+    add(api, other, sent, 'ben-test', expected=403)
+    proposed = add(api, other, {'section': 'task', 'text': 'Readable task'}, 'ben-test')['item']
+    push(api, other, proposed['id'], {'result_ref': tid}, 'ben-test', expected=403)
+    post(api, f'meetings/{other}/edit', {'version': 1, 'title': 'My private meeting'}, token='ben-test')
+    assert get(api, 'tasks/' + tid, 'cara-test')['task']['id'] == tid
+    with api.app.state.store.read() as c:
+        assert {r[0] for r in c.execute("SELECT actor FROM task_roles WHERE task_id=? AND role='participant'", (tid,))} == {
+            'human:ana', 'human:ben', 'human:cara'}
+        assert not c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=? AND task_id=?', (other, tid)).fetchone()
+
+
+def test_participant_revocation_keeps_every_remaining_saved_or_live_source(api):
+    from backend.tests.test_api import post
+    for origin in ('saved', 'live'):
+        if origin == 'saved':
+            source = record(api, {'private': True, 'participants': ['ben@acme.example']})
+            item = add(api, source, {'section': 'task', 'text': 'Saved source', 'detail': {'owner': 'human:ana'}})['item']
+            tid = push(api, source, item['id'])['item']['result_ref']
+        else:
+            source = post(api, 'live-meetings', {'title': 'Live source', 'visibility': 'private'})['id']
+            post(api, f'live-meetings/{source}/access', {'add': ['human:ben']})
+            tid = post(api, 'tasks', {'title': 'Live source', 'body': 'Words', 'owner': 'human:ana', 'live_meeting_id': source})['id']
+        other = record(api, {'private': True, 'participants': ['ben@acme.example']})
+        add(api, other, {'section': 'task', 'text': 'Same task', 'status': 'pushed', 'result_ref': tid})
+        unrelated = record(api, {'private': True})
+        add(api, unrelated, {'section': 'task', 'text': 'Same task', 'status': 'pushed', 'result_ref': tid})
+        post(api, f'meetings/{unrelated}/edit', {'version': 1, 'title': 'Private meeting'})
+        assert get(api, 'tasks/' + tid, 'ben-test')['task']['id'] == tid
+        if origin == 'saved':
+            post(api, f'meetings/{source}/delete', {})
+        else:
+            post(api, f'live-meetings/{source}/access', {'remove': ['human:ben']})
+        assert get(api, 'tasks/' + tid, 'ben-test')['task']['id'] == tid
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'", (tid,)).fetchone()
+        post(api, f'meetings/{other}/delete', {})
+        assert api.get('/api/v2/tasks/' + tid, headers=headers('ben-test')).status_code in (403, 404)
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM task_roles WHERE task_id=? AND role='participant' AND actor='human:ben'", (tid,)).fetchone()
