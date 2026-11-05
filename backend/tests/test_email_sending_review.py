@@ -83,7 +83,7 @@ def test_named_inline_bodies_cannot_hide_commitments_from_classification(inbox, 
         result = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
     assert ask.call_count == int(supported)
     assert result["classification"]["legal_or_money"] is (True if supported else None)
-    assert result["state"] == "waiting_approval" and claim(inbox) is None
+    assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
 
 
 def test_new_old_format_approval_cannot_authorize_an_added_internal_bcc(inbox):
@@ -224,6 +224,9 @@ def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario
                         scheduling.datetime.fromisoformat(args.slot)+scheduling.DURATION, CONTACT, "older-duplicate", receipt["body"])
                     duplicate.pop("sendUpdates")
                     duplicate.pop("conferenceDataVersion")
+                    duplicate.update(eventType="default", guestsCanInviteOthers=True, guestsCanModify=False,
+                                     reminders={"useDefault": True})
+                    duplicate["attendees"][0].update(displayName="Guest", responseStatus="needsAction")
                     receipt.update(event=duplicate["id"], expected_event_id=duplicate["id"], state="canceled", queued=False)
                     receipt.pop("hold")
                     connection.execute("INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)",

@@ -223,12 +223,21 @@ class Calendar:
             matches = unchanged_hold(event, snapshot)
         else:
             # Older receipts predate snapshots. Accept only the exact original booking shape.
+            defaults = {"eventType": "default", "transparency": "opaque", "visibility": "default",
+                        "anyoneCanAddSelf": False, "guestsCanInviteOthers": True, "guestsCanModify": False,
+                        "guestsCanSeeOtherGuests": True, "endTimeUnspecified": False, "attendeesOmitted": False,
+                        "privateCopy": False, "locked": False}
             allowed = EVENT_METADATA | {"id", "summary", "status", "start", "end", "attendees", "description",
-                                        "conferenceData", "hangoutLink", "reminders"}
+                                        "conferenceData", "hangoutLink", "reminders"} | defaults.keys()
             conference = (event.get("conferenceData") or {}).get("createRequest") or {}
+            attendees = event.get("attendees") or []
+            guest = attendees[0] if len(attendees) == 1 else {}
             matches = (not (set(event) - allowed) and event.get("summary") == summary
                        and event.get("description") == description and event.get("status") == "confirmed"
-                       and event.get("attendees") in ([{"email": attendee}], [{"email": attendee, "responseStatus": "needsAction"}])
+                       and guest.get("email") == attendee and guest.get("responseStatus", "needsAction") == "needsAction"
+                       and not (set(guest) - {"email", "responseStatus", "displayName", "id", "organizer", "self"})
+                       and not guest.get("organizer") and not guest.get("self")
+                       and all(event.get(k, v) == v for k, v in defaults.items())
                        and event.get("reminders") in (None, {"useDefault": True})
                        and conference.get("requestId") == event_id)
         try:
@@ -238,6 +247,8 @@ class Calendar:
         return copy.deepcopy(event) if matches and event.get("status") == "confirmed" else None
 
     def reuse_scheduling_event(self, snapshot):
+        oauth.require(self.granted, "calendar-write", self.mailbox, "reuse calendar events")
+        oauth.company_allows(self.company, "calendar-write", self.mailbox, "reuse calendar events")
         event = self._exec(self.service.events().get(calendarId="primary", eventId=snapshot["id"]), "events.get reused hold")
         if not unchanged_hold(event, snapshot):
             raise Failure("The calendar hold changed; review it before rescheduling.")
