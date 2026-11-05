@@ -99,6 +99,8 @@ enrolled, every line that sets `TICO_ENROLL_TOKEN` is taken out of `/etc/environ
 the file `TICO_BOOT_ENV_FILE` names, at every boot. A code that survives somewhere still enrolls nothing: it is used
 and expires in 15 minutes.
 
+Saving the same mode and placement again keeps the machine's problem and any retry wait. A real change of mode or placement clears the problem, but a retry wait already running still has to end. The exception is a machine that never connected: any save lets Tico make it again.
+
 ## The runner on the machine
 
 The machine runs the native Linux runner from a checkout of the release (docs/install.md, "A Linux checkout"), as
