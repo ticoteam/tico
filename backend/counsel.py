@@ -43,7 +43,7 @@ from . import screening
 from .auth import Identity
 from .blobs import register
 from .models import Contract
-from .store import Problem
+from .store import Problem, encode
 
 SLUG = H.COUNSEL
 NAME = "Counsel"
@@ -522,7 +522,7 @@ def scrub_page_task(c, tid):
         c.execute("UPDATE attempts SET thread_id=NULL,final_text=?,summary=?,result=json_set(coalesce(result,'{}'),'$.text',?) "
                   "WHERE id=?", (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, aid))
         # Keep sequence receipts so a runner can safely retry output already acknowledged before revocation.
-        c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (json.dumps({"text": REMOVED_PAGE}), aid))
+        c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (encode({"text": REMOVED_PAGE}), aid))
         c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,))
         c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
     if attempts:
