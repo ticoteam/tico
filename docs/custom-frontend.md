@@ -374,6 +374,8 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 404 | `not_found` | Missing, or not visible to this human (the two look the same on purpose). |
 | 409 | `version_conflict` | The task changed since you read it; read again and reapply. |
 | 409 | `idempotency_conflict` | An `Idempotency-Key` was reused with a different body. Use a new key per action. |
+| 409 | `moved` | Who the message goes to, or its thread, changed while it was checked. Send it again (`retryable: true`). |
+| 409 | `recipient` | A question to `keeper` (the system) found no manager or company owner who can read and answer it. Set one who can read it. |
 | 413 | `too_large` | Over 2 MB (uploads 20 MB). |
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
