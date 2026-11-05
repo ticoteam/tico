@@ -22,7 +22,7 @@ def raw(message):
     return base64.urlsafe_b64encode(message.as_bytes()).decode()
 
 
-@pytest.mark.parametrize("form", ["alternative", "inline_text", "primary_text", "primary_unknown"])
+@pytest.mark.parametrize("form", ["alternative", "inline_text", "primary_text", "primary_unknown", "primary_multipart"])
 @pytest.mark.parametrize("legal_prompt", [True, False])
 def test_unsupported_recipient_visible_bodies_always_ask(inbox, form, legal_prompt):
     autonomous(inbox, ask_attachments=False, ask_legal_money=legal_prompt)
@@ -40,6 +40,9 @@ def test_unsupported_recipient_visible_bodies_always_ask(inbox, form, legal_prom
         message.attach(part)
     elif form == "primary_text":
         message.set_content(commitment, subtype="enriched")
+    elif form == "primary_multipart":
+        message.make_mixed()
+        message.replace_header("Content-Type", "multipart/x-body")
     else:
         message.set_content(commitment.encode(), maintype="application", subtype="x-body")
     snap = S.snapshot(raw(message), BOX)

@@ -76,6 +76,8 @@ def body_parts(msg):
     if not msg.is_multipart():
         return [msg]
     children = list(msg.iter_parts())
+    if msg.get_content_subtype() not in ("mixed", "related", "alternative"):
+        return [msg]
     if msg.get_content_subtype() == "alternative":
         return [part for child in children for part in body_parts(child)]
     if msg.get_content_subtype() == "related":
@@ -109,7 +111,8 @@ def snapshot(raw, mailbox):
         from .mail_settings import ADDRESS
         if not to or len(to) > 100 or sender != [mailbox] or any(not ADDRESS.fullmatch(a) for a in to):
             raise ValueError("Invalid envelope")
-        bodies, files, texts, visible, complete = body_parts(msg), [], [], [], True
+        bodies, files, texts, visible = body_parts(msg), [], [], []
+        complete = all(not body.is_multipart() for body in bodies)
         leaves = file_parts(msg)
         attached_children = {id(child) for parent in leaves if parent.is_multipart() for child in list(parent.walk())[1:]}
         for index, part in enumerate(leaves):
