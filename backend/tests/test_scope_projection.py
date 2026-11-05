@@ -291,9 +291,13 @@ def test_scoped_history_uses_retained_canonical_page_ids(api, monkeypatch):
     data = sources(api)
     tid, fid = data["task"]["id"], data["hidden"]
     old_name = "Earlier archived page name"
+    uploaded = post(api, f"tasks/{tid}/files", {"name": "restricted.html",
+                                              "text": HTML.decode() + "<p>Retained older alias</p>"})
+    assert uploaded["file_id"] == fid
     with api.app.state.store.transaction() as c:
         event = c.execute("SELECT id FROM history_events WHERE subject_id=? AND kind='file' "
-                          "AND json_extract(data,'$.file')=? LIMIT 1", (tid, fid)).fetchone()
+                          "AND EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.page_files')) WHERE value=?) "
+                          "ORDER BY rowid DESC LIMIT 1", (tid, fid)).fetchone()
         assert event
         # Main's history migration retains page_files after an old display/blob identity is unavailable.
         c.execute("UPDATE history_events SET old=?,new=NULL,data=? WHERE id=?",
