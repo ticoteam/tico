@@ -133,6 +133,13 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
              "meetings/transcript?id=" + shared, "docs/manual"]
     for path in paths:
         response = api.get("/api/v2/" + path, headers=headers(token))
+        if assistant and path not in {
+                "tasks/" + t["id"] + "/context", "pages", "pages?ids=" + hidden + "," + allowed,
+                "pages/" + allowed, "files/" + allowed + "/meta", "files/" + allowed + "/versions",
+                "files/" + allowed + "/activity", "meetings/search", "meetings/transcript?id=" + shared}:
+            assert response.status_code == 404, (path, response.text)
+            no_sources(response.json(), secrets)
+            continue
         assert response.status_code == 200, (path, response.status_code, response.text)
         no_sources(response.json(), secrets)
         assert int(response.headers["content-length"]) == len(response.content)
@@ -140,7 +147,7 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
             assert response.json()["pages"] and all(p["id"].startswith("manual:") for p in response.json()["pages"])
     if assistant:
         response = api.get("/api/v2/assistant", headers=headers(token))
-        assert response.status_code == 403
+        assert response.status_code == 404
         no_sources(response.json(), secrets)
     for path in ("pages/" + hidden, "files/" + hidden + "/meta", "files/" + hidden + "/versions",
                  "files/" + hidden + "/activity", "files/" + hidden, "files/" + bid,
@@ -165,6 +172,10 @@ def test_every_stored_shape_is_projected_at_every_delivery(api, assistant):
         result = post(api, "mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                    "params": {"name": name, "arguments": arguments}}, token)
         assert not result.get("error"), result
+        if assistant and name != "hub_task_context":
+            assert result["result"].get("isError"), result
+            no_sources(result, secrets)
+            continue
         assert not result["result"].get("isError"), result
         no_sources(result, secrets)
         if name == "hub_task_show":

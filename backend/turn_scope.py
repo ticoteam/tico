@@ -376,8 +376,11 @@ def require_read_route(c, who, method, path):
     scoped = scope(c, who)
     if not scoped or not scoped.make_page or method not in ("GET", "HEAD"):
         return
+    if path == "/api/v2/events" or path.endswith("/events"):
+        raise Problem("forbidden", "Scoped turns do not receive live events", 403)
     if (path == "/api/v2/me" or re.fullmatch(r"/api/v2/(?:files|pages|meetings)(?:/.*)?", path)
-            or re.fullmatch(r"/api/v2/tasks/[^/]+/context", path) or path.startswith("/api/meetings/")):
+            or re.fullmatch(r"/api/v2/tasks/[^/]+/context", path)
+            or path.startswith(("/api/meetings/", "/visuals/"))):
         return
     raise Problem("not_found", "Context not found", 404)
 
