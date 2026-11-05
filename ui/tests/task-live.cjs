@@ -94,6 +94,16 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    await a.locator('[data-task-edit-retry]').click();
    await a.waitForFunction(() => !taskModal().taskLive.draft.error && !taskModal().taskLive.draft.flight);
    assert.equal(task.title, 'Keep this refused draft');
+   await a.evaluate(() => { S.me.mover = false; });
+   task.owner_id = 'human:sam'; task.requester_id = 'human:sam'; task.version++;
+   await update();
+   await a.waitForFunction(() => taskModal().liveTask.owner_id === 'human:sam');
+   await title.focus(); await a.keyboard.press('Enter');
+   assert.equal(await title.getAttribute('contenteditable'), 'false', 'a retained title cannot re-enable editing after write rights are lost');
+   await a.evaluate(() => { S.me.mover = true; });
+   task.owner_id = 'bot:eng'; task.requester_id = 'human:ana'; task.version++;
+   await update();
+   await a.waitForFunction(() => taskModal().liveTask.owner_id === 'bot:eng');
    // A slow successful save coalesces the later title, still sharing the dialog's property queue.
    const slow = gate(); hold = slow;
    await fillTitle('Slow title');

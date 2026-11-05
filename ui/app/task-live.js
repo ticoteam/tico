@@ -85,7 +85,10 @@ function taskLiveBind(d, task) {
   titleMode(live.titleEditing || (live.focus?.field === title && !!live.focus.text));
   title.onclick = () => { if (may) { titleMode(true); title.focus(); } };
   if (may) { title.dataset.taskField = 'title'; title.setAttribute('aria-label', 'Title'); }
-  else { delete title.dataset.taskField; title.removeAttribute('role'); title.removeAttribute('aria-label'); }
+  else {
+    delete title.dataset.taskField; title.removeAttribute('role'); title.removeAttribute('aria-label');
+    title.oninput = title.onblur = title.onkeydown = null;
+  }
   let details = $('[data-task-field="body"]', d);
   const edit = $('[data-task-body-edit]', d);
   if (details) details.disabled = !may;
