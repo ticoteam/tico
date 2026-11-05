@@ -185,7 +185,7 @@ class Inbound:
 
     def remote(self, method, path, body=None):
         if self.off:
-            raise Problem('inbound_unconfigured','Email & Phone is not connected. Ask your owner to set it up.',409)
+            raise Problem('inbound_unconfigured','Tico addresses and numbers are not connected. Ask your owner to set them up in Settings > Inboxes.',409)
         try:
             with httpx.Client(transport=TRANSPORT,timeout=35,follow_redirects=False,verify=outbound_tls.context()) as client:
                 response = client.request(method,self.url+'/v1/inbound/'+path,json=body,
@@ -206,7 +206,7 @@ class Inbound:
                     raise ValueError('oversized_delivery')
                 return response.json()
         except (httpx.HTTPError,ValueError,KeyError):
-            raise Problem('inbound_unavailable','Email & Phone did not answer. Please retry.',503) from None
+            raise Problem('inbound_unavailable','Tico addresses and numbers did not answer. Please retry.',503) from None
 
     def list_inboxes(self, who, after="", limit=100):
         with self.store.read_transaction() as c:

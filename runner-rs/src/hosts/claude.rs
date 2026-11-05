@@ -401,6 +401,7 @@ struct ToolCall {
 }
 
 struct Shared {
+    allocation: super::Allocation,
     bot: String,
     cmd: Vec<String>,
     tx: Events,
@@ -448,6 +449,7 @@ pub async fn note_version(cmd: &[String], version: &str) {
 impl ClaudeHost {
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events) -> ClaudeHost {
         ClaudeHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             bot: bot.into(),
             cmd,
             tx,
@@ -516,6 +518,10 @@ impl ClaudeHost {
         if let Some(r) = reader {
             let _ = tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(1), r).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -600,10 +606,9 @@ impl ClaudeHost {
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
-        // claude.ai connectors) (hosts/claude.py _argv).
-        if t.settings.shared {
-            argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
-        }
+        // claude.ai connectors). Every turn excludes the operator's own instructions, settings and hooks, even
+        // when HOME is the operator's. Packet-only turns also exclude the repository's settings.
+        argv.extend(["--setting-sources".into(), if t.settings.packet_only { "".into() } else { "project,local".into() }]);
         argv.push("--strict-mcp-config".into());
         if t.settings.packet_only {
             argv.extend(["--tools".into(), "".into(), "--disable-slash-commands".into(),
@@ -685,6 +690,7 @@ impl ClaudeHost {
             command.env(crate::reap::tests::ARGS, Value::Array(args).to_string());
         }
         let mut child = command.spawn()?;
+        self.0.allocation.mark();
         let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &turn_env(&t.settings));
         Ok((child, stderr, reaping))
     }
@@ -1619,14 +1625,16 @@ mod tests {
     #[test]
     fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
         let host = ClaudeHost::new("synthetic", vec!["claude".into()], tokio::sync::mpsc::unbounded_channel().0);
-        let settings = Settings { packet_only: true, shared: true, ..Settings::default() };
-        let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
-        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
-        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
-        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
-        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
-        assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+        for shared in [false, true] {
+            let settings = Settings { packet_only: true, shared, ..Settings::default() };
+            let thread = host.start_thread(&settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
+            assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
+            assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
+            assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
+            assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
+            assert!(!argv.contains(&"--bare".into()), "subscription login must remain available");
+        }
     }
 
     #[tokio::test]
@@ -1731,7 +1739,10 @@ mod tests {
         }
         let thread = host.start_thread(&settings);
         let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        assert!(argv.contains(&"--strict-mcp-config".to_string()) && !argv.contains(&"--setting-sources".to_string()));
+        assert!(argv.contains(&"--strict-mcp-config".to_string()));
+        // A bot without branches keeps out the operator's own CLAUDE.md, settings and hooks as a branch bot does.
+        let at = argv.iter().position(|a| a == "--setting-sources").expect("--setting-sources on every turn");
+        assert_eq!(argv[at + 1], "project,local");
         let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
         assert_eq!(config["mcpServers"]["repo"]["command"], "x");
         assert_ne!(config["mcpServers"]["hub"]["command"], "stale");
@@ -2472,9 +2483,8 @@ mod feature_tests {
         let exe = root.join("claude");
         let log = root.join("spawns.log");
         std::fs::write(&exe, format!("#!/bin/sh\necho \"$*\" >> '{}'\necho '2.1.300 (Claude Code)'\necho '--autocompact'\n", log.display())).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (vec![exe.display().to_string()], log)
+        // Read the script through the shell so parallel forks cannot hold its writable inode open at exec.
+        (vec!["/bin/sh".into(), exe.display().to_string()], log)
     }
 
     fn runs(log: &std::path::Path) -> usize {
@@ -2489,6 +2499,7 @@ mod feature_tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         // The probe passes the version as `installed_version` reads it, which is what a turn's start is keyed by too.
         let version = installed_version(&cmd, "--version").await;
+        assert_eq!(version, "2.1.300 (Claude Code)\n--autocompact", "the version probe runs the fixture");
         let read = runs(&log);
         note_version(&cmd, &version).await;
         assert_eq!(runs(&log), read + 1, "a new version is read once, for --help");

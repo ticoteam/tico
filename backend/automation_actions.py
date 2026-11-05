@@ -4,8 +4,8 @@ Each runs inside one short write transaction (backend/automations.py opens it) a
 the rules' task and event runners (backend/rules.py), outgoing webhooks, updates, and tasks. An action never raises
 for an ordinary refusal; it answers {"ok": False, "detail": ...} and the run records it.
 
-Mail is changed on the computer that reads the mailbox, not here: archive, label, leave for you, draft, send and
-forward on a message from mail are queued in `automation_mail_actions` for its runner to claim
+Mail actions are queued in `automation_mail_actions`; archive, label and leave run on the server for Whole Workspace
+mailboxes. Other mail actions wait for the mailbox's computer to claim and report them
 (POST .../mail-actions/claim, POST .../mail-actions/{id}/result; backend/automations.py). The step waits until the
 result comes back. On a Slack message, send_reply posts in the thread (the `slack_posts` outbox) and draft_reply
 leaves the draft with the owner as a task.
@@ -104,6 +104,12 @@ def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None, 
                      "AND msg_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
                      (run_id, step, mailbox, msg_id)).fetchone() if step else None
     after, state = (prev["id"] if prev else None), "queued"
+    if not refused and mailbox:
+        # The owner's level on the mailbox now (backend/mailbox_access.py); each executor checks it again. A message with
+        # no mailbox (a test run's sample) names nothing a computer can claim, so it waits as it always did.
+        from . import mailbox_access
+        refused = mailbox_access.action_refusal(c, ((auto.get("flow") or {}).get("owner") or auto.get("owner_id")),
+                                                mailbox, action, args, queued=True)
     if prev and prev["state"] in ("failed", "skipped", "canceled"):
         state = "canceled" if prev["state"] == "canceled" else "skipped"
     elif refused:

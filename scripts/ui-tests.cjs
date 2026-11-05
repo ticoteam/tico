@@ -221,9 +221,19 @@ function stoppedReport({pending, calls, stopped}) {
 // Named groups of scripts: a group is every ui/tests script whose name starts with its prefix.
 const GROUPS = {e2e: 'e2e-'};
 
+// Frame and time budgets need spare CPU throughout the measurement, after the other browsers have finished.
+const ALONE = ['dot-perf.cjs', 'strategy-budget.cjs'];
+async function runScripts(files, jobs, run) {
+  const queue = files.filter(file => !ALONE.includes(file));
+  await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
+    while (queue.length) await run(queue.shift());
+  }));
+  for (const file of files.filter(file => ALONE.includes(file))) await run(file);
+}
+
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
-  const CORE = ['account-status', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
+  const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meeting-page', 'meetings-pending', 'task-live', 'task-live-drafts', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
                 'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'threads-halfway', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs;
@@ -278,10 +288,7 @@ async function main() {
     }
   };
 
-  const queue = [...files];
-  await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
-    while (queue.length) await run(queue.shift());
-  }));
+  await runScripts(files, jobs, run);
   const secs = ((Date.now() - started) / 1000).toFixed(0);
   if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
   console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (${secs}s)`
@@ -289,7 +296,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-module.exports = {resources, runScript, sampleCpu, inSlot, stopTree, stoppedReport, redact};
+module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact};
 // A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh), before it samples
 // the CPU; hosted CI, a run already in a slot, or a computer without bash goes straight on.
 function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }

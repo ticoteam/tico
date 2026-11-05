@@ -74,8 +74,7 @@ def test_a_question_asked_outside_any_task_is_in_the_persons_needs_you_until_ans
     assert all(it["id"] != asked["id"] for it in needs())
 
 
-def test_a_wait_with_no_plain_ask_goes_last_and_its_bot_is_asked_once_to_restate_it(api):
-    from backend import restate_asks
+def test_a_wait_with_no_plain_ask_goes_last_on_needs_you_and_reading_it_asks_nobody(api):
     store = api.app.state.store
     plain = "Approve the venue for Friday? If yes, I'll book it."
     explained = post(api, "tasks", {"owner": "ops", "title": "Book the venue", "body": "x"})["id"]
@@ -89,19 +88,15 @@ def test_a_wait_with_no_plain_ask_goes_last_and_its_bot_is_asked_once_to_restate
     def needs():
         return {it["id"]: it for it in api.get("/api/v2/needs-you", headers=headers()).json()["items"]}
 
-    def restate_requests():
+    def roundup_lists():
         with store.read() as c:
-            return c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND sender_id=? "
-                             "AND refs LIKE '%restate_ask%'", (H.KEEPER,)).fetchone()[0]
+            return c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:ops' "
+                             "AND refs LIKE '%task_roundup%'").fetchone()[0]
 
     items = needs()
     assert list(items)[-1] == legacy and items[legacy]["ask_missing"] and not items[legacy]["person_ask"]
     assert (items[explained]["person_ask"], items[explained]["ask_missing"]) == (plain, False)
-    assert restate_requests() == 0, "reading Needs you asks nobody"
-    for expected in ([legacy], []):
-        with store.transaction() as c:
-            assert restate_asks.ask_restate(c) == expected
-    assert restate_requests() == 1
+    assert roundup_lists() == 0, "reading Needs you asks nobody"
     # The bot restating it plainly clears the mark: the ask becomes Ana's card, the task stays the bot's.
     with store.transaction() as c:
         card = H.task_update(c, "bot:ops", legacy, status="waiting", waiting_on="ana",

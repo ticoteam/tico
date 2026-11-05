@@ -208,9 +208,7 @@ def redact_audit(c, auth, who, found):
             cite = snap.get("cite") if isinstance(snap, dict) else None
             if not cite:
                 continue
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
-            if not _cite_visible(c, auth, who, row, memo):
-                snap["cite"] = {"hidden": True}
+            snap["cite"] = _cite(c, auth, who, cite, memo)
 
 
 def _audit(c, actor, rule_id, before, after, who):
@@ -540,6 +538,10 @@ def _cite_visible(c, auth, who, row, memo):
 def _cite(c, auth, who, cite, memo=None):
     if not cite:
         return None
+    from .files import page_ref_denials
+    denied = page_ref_denials(c, auth, who, cite)
+    if "A deleted page" in denied.values():
+        return {"removed": True, "label": "A deleted page"}
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
     if not _cite_visible(c, auth, who, row, memo if memo is not None else {}):
         return {"hidden": True}
@@ -608,7 +610,8 @@ def settings_for(c, bot, ctx=None):
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
     mail = mail_settings.stored(c, bot)
-    sends = bool(mail and mail["outbound_send"])
+    from .google_workspace import permissions
+    sends = bool(mail and mail["outbound_send"]) and permissions(c)["send_mail"]   # the company's Send mail too
     out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
                 "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
 

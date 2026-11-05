@@ -18,7 +18,7 @@ function qcardQuestion(it) {
   return q;
 }
 // Who really asks: the bot by its name, or Tico for its own checks. Never the assistant's name or "You asked".
-const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? 'Tico' : actorLabel(actor);
+const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? KEEPER_LABEL : actorLabel(actor);
 function qcardAge(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
   if (!iso || isNaN(s)) return '';
@@ -192,7 +192,7 @@ function qcardRetick(root, it, q, ticked, attr) {
 // What the person has ticked and typed on a task's card, kept while the page redraws it (the task's details landing,
 // a property saved). Keyed by the ask and the question as asked, so a question the bot rewords starts afresh.
 const QC_DRAFTS = new Map();
-const qcardDraftKey = (it, q) => JSON.stringify([it.id, it.ask?.id, q.id, q.question, (q.options || []).map(o => o.label)]);
+const qcardDraftKey = (it, q) => JSON.stringify([it.id, it.ask?.id, q.id, q.question, (q.options || []).map(o => o.label), sessionIdentity()]);
 // A draft belongs to the question the box shows (its `data-qc-key`), never to a newer one the Needs you data holds:
 // if the bot rewords while the old box is open, the next draw finds the draft stale and says so.
 function qcardDraft(box) {

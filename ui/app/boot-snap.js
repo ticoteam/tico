@@ -75,7 +75,7 @@ function snapDb() {
       if (!db.objectStoreNames.contains(SNAP_STORE)) { db.close(); indexedDB.deleteDatabase(SNAP_DB); reject(new Error('no store')); return; }
       // Another tab deletes the database (a sign-out that could not move the epoch) or upgrades it: this one closes and
       // keeps nothing more, since a database made again would start at epoch 0.
-      db.onversionchange = () => { db.close(); SNAP.db = null; SNAP.banned = true; SNAP.who = ''; clearTimeout(SNAP.timer); };
+      db.onversionchange = () => { db.close(); SNAP.db = null; SNAP.banned = true; SNAP.who = ''; clearTimeout(SNAP.timer); if (typeof rdNavStop === 'function') rdNavStop(); };
       resolve(db);
     };
     req.onerror = () => reject(req.error);
@@ -147,6 +147,7 @@ function snapDelete() {
 }
 // Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {
+  if (typeof rdNavForget === 'function') rdNavForget();   // the sidebar rows kept for them, too (redesign.js)
   SNAP.who = ''; SNAP.done = true; SNAP.banned = true;
   clearTimeout(SNAP.timer);
   bootSnapRelease();
@@ -271,6 +272,7 @@ function bootSnapSaveSoon() {
 if (snapChannel) snapChannel.onmessage = e => {
   if (!e.data?.signedOut) return;
   SNAP.banned = true; SNAP.who = ''; clearTimeout(SNAP.timer);
+  if (typeof rdNavStop === 'function') rdNavStop();   // and keeps no sidebar rows for them (redesign.js)
   bootSnapRelease();
 };
 window.addEventListener('hashchange', bootSnapSaveSoon);

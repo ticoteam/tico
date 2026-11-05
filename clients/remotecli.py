@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import uuid
@@ -95,7 +96,7 @@ def via_tool(client, args, **more):
         fields["sharing"] = fields["sharing"] == "on"
     if args.fn == "thread update" and fields.pop("keep_forever", False):
         fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
-    fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+    fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
@@ -248,7 +249,9 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "connections"):
+    if args.cmd in ("mail", "email", "letter", "connections", "alerts"):
+        return via_tool(client, args)
+    if args.cmd == "maintenance":
         return via_tool(client, args)
     if args.cmd == "thread":
         return via_tool(client, args)
@@ -339,7 +342,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task bulk", "task model"):
+    if fn in ("task child create", "task tree", "task bulk", "task model", "task meetings", "task context"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):
@@ -358,7 +361,7 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
-    if fn in ("stall-triage", "audit"):
+    if fn == "audit":
         return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools
@@ -371,12 +374,6 @@ def run(args, who=None):
                   "task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
                   "task-manager bot": {"bot": getattr(args, "state", None)}}[fn]
         return hubtools.task_manager_set(client, {**change, "operation_id": op})
-    if fn in ("health-monitor findings", "health-monitor report"):
-        from clients import hubtools
-        if fn == "health-monitor findings":
-            return hubtools.health_monitor_findings(client, {})
-        return hubtools.health_monitor_report(client, {"key": args.key, "process": args.process, "cpu": args.cpu,
-                                                       "mb": args.mb, "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if fn in ("support report", "support send"):
         from clients import hubtools
         key = os.environ.get("HUB_OPERATION_ID")
@@ -540,6 +537,8 @@ def run(args, who=None):
         pending, failed = hubtools.ask_create(client, args.words[:-1], args.words[-1], wait, fields)
         # Said before the wait: a shell that kills a long wait still leaves the bot holding each id.
         for mid, bot in pending.items():
+            if routed := pending.routed.get(bot):
+                print("hub: " + routed["rerouted"], file=sys.stderr, flush=True)
             print(f"hub: asked {bot}, message {mid}; waiting up to {wait} s for the answer", file=sys.stderr, flush=True)
         return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
@@ -1049,7 +1048,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "health-monitor", "bookkeeper")
+    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "bookkeeper")
     return catalog.free_slug(args.name or card.get("name") or args.template, lambda slug: (
         slug in known or slug in reserved
         or any((workspace / (prefix + slug)).exists() for prefix in (REPO_PREFIX, OLD_REPO_PREFIX))))
@@ -1365,10 +1364,49 @@ def strategy_section_text(result, key):
     return (current.get("sections") or {}).get(key) or ""
 
 
+def email_text(result, action):
+    if action in ("archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"):
+        verb = {"archive": "Archived", "unarchive": "Unarchived", "mark-read": "Marked read",
+                "mark-unread": "Marked unread", "label": "Labeled", "unlabel": "Unlabeled"}[action]
+        text = f"{verb} {result['count']} messages in {result['mailbox']}."
+        if not result['count']:
+            return text
+        undo = result['undo']
+        words = ['hub', 'email', undo['action'].replace('_', '-'), result['mailbox']]
+        if 'label' in undo:
+            words.append(undo['label'])
+        command = shlex.join(words + undo['ids'])
+        return text + (" Undo: " + command if len(command) <= 1000 else
+                       " Undo: use the inverse action and ids from --json.")
+    if action == "mailboxes":
+        boxes = result.get("mailboxes") or []
+        return "# Email mailboxes\n\n" + ("\n".join("- " + box["address"] for box in boxes) or "No readable mailboxes.")
+    messages = [result] if action == "message" else result.get("messages") or []
+    lines = ["# Email", ""]
+    if not messages:
+        lines.append("No messages.")
+    for message in messages:
+        lines.extend(["## " + (message.get("subject") or "(no subject)"),
+                      f"Mailbox: {message['mailbox']}",
+                      f"Message: {message['msg_id']} · Thread: {message['thread_id']}",
+                      "From: " + (message.get("from_header") or message.get("from_addr") or ""),
+                      "To: " + ", ".join(message.get("to") or []), "Date: " + (message.get("date") or ""),
+                      "Labels: " + ", ".join(message.get("labels") or []), "",
+                      message.get("body", message.get("snippet") or ""), ""])
+        for attachment in message.get("attachments") or []:
+            lines.append(f"Attachment: {attachment['name']} ({attachment['type']}, {attachment['size']} bytes)")
+    if result.get("next_cursor"):
+        lines.extend(["Next cursor: " + result["next_cursor"], ""])
+    return "\n".join(lines)
+
+
 def main(args, who=None):
     try:
         result = run(args, who)
-        if args.cmd == "sql" and not args.json:
+        if args.cmd == "email" and args.sub in ("mailboxes", "inbox", "search", "thread", "message", "archive",
+                                                "unarchive", "mark-read", "mark-unread", "label", "unlabel") and not args.json:
+            print(email_text(result, args.sub))
+        elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))
         elif args.cmd == "db" and not args.json:
             from clients import dbquery
@@ -1385,6 +1423,8 @@ def main(args, who=None):
         elif args.cmd in ("brand", "growth") and not getattr(args, "json", False) and args.fn != "growth numbers":
             print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
+            print(result["text"])
+        elif args.fn == "meeting read" and getattr(args, "notes", False):
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.

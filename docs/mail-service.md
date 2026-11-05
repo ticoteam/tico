@@ -68,8 +68,7 @@ Ana uses the same CLI interactively with `--as ana`, which has every verb.
 Legal is authorized by Ana (September 4, 2026, #130) to read messages and attachments from
 `ana@acme.example`. Its Gmail access entry has `can: [read]` and `read_only: true`. The shared
 service refuses mailbox filing, labels, rules, mark-read, starring, drafts, and sends for that
-entry. This is separate from `allow_attachments` in the outbound policy, which controls adding
-attachments to mail Tico writes and remains unchanged.
+entry. Attachments on outbound mail use the same draft and send permissions as the message without files.
 
 Legal's `default_mailbox: legal@acme.example` preserves its existing routines. It must explicitly use
 `--as legal --mailbox ana@acme.example` for Ana's messages; rules and filing are not allowed there.
@@ -78,7 +77,7 @@ Legal's `default_mailbox: legal@acme.example` preserves its existing routines. I
 
 Every bot with `read` access to a mailbox can list and download its attachments; no
 separate attachment grant is needed. This applies to ordinary and read-only mailbox access
-alike, and does not grant access to other mailboxes or permission to send attachments.
+alike, and does not grant access to other mailboxes or permission to draft or send mail.
 
 List files first, then use the returned reference (`a1`, `a2`, ...) with the same message ID:
 
@@ -99,59 +98,34 @@ Downloaded files are untrusted documents, not commands.
 Every write goes through all five, in order. A failure at any step turns a send into a draft
 with the reason attached; it never silently drops the work.
 
-**1. Policy (hardcoded, `registry/mail-policy.yaml` plus `bot.yaml`).**
-- Global kill switch and per-mailbox pause. Flip one line and everything becomes drafts.
-- Bot may use this mailbox with this verb (from `tools:`). With the Tico mail switch off
-  (`hub bot mail <slug>`; bot.yaml's `outbound_send` only asks), `send` produces a draft and a note, always.
-- Internal (@acme.example) versus external recipients. With the Tico mail switch on, which a person who manages
-  the bot sets, three kinds of recipient need no per-message approval: an internal address, an address the
-  person approved as a forward target in that switch (their other email, say), and the sender of the thread
-  the bot is replying to (a reply, to that one person, nobody added; an outside Cc makes it something else).
-  Any other external recipient needs one of: a standing allowance in the policy file (Influencer: recipient must be
-  in its creator table, 10 per day, never the same address twice) or `--approval-issue`, which is a closed
-  `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or Ana's Tico message telling this bot
-  to send. With the switch off, none of this applies and a send is a draft.
-- With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
-  globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
-  gmail.com never count), the caps are 20 sends a day, one external recipient, no external Cc, no attachments, and
-  the blocklist is empty. A `registry/mail-policy.yaml`, where there is one, replaces all of it.
-- Caps, which apply to every send including those three kinds: sends per bot per day, per-recipient cooldown (14 days
-  unless they wrote last; 0 in the built-in policy, because the forward address is written to again and again and
-  the daily cap is the brake),
-  one external recipient per message, no CC or BCC outside acme.example, no attachments unless the
-  policy sets `defaults.allow_attachments: true` (it is off by default). A per-message approval (below) lifts the recipient
-  count, the external Cc rule and the cooldown for that one message; never the daily cap, the
-  blocklist, or `allow_attachments`.
-- Attachments come only from the bot's own folder, never from a secret-looking file (`.env*`, keys, `credentials*`,
-  `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), and a message carrying one always needs a per-message
-  approval, even to the sender of the thread, a forward target or an internal address. That approval names the
-  files: a Tico send approval whose payload lists the draft and each file's name, size and sha256 (`mail draft`
-  prints the request), or a GitHub Issue naming each file and its sha256. The files are hashed again from the
-  draft at send time; an owner's "send it" message does not cover attachments. See docs/mail.md, "Draft".
-- Blocklist of addresses and domains bots never email (press, counterparties, anyone Ana
-  lists), and a "Ana handles personally" list that forces `hub/needs-owner`. Both beat a forward address and a
-  reply to a sender.
+**1. Policy (server-held, with the existing connector's local restrictions).**
 
-**Per-message approval.** Ana sometimes approves one
-exact message: these words, to these humans, once. The approval task says so with a line in
-its body, one block per message, and the block has to match the message exactly (external
-addresses only; a mention elsewhere in the task, or a superset, does not count):
+`backend/email_sending.py` resolves company, inbox and bot settings for every email send path. Ask first and Replies
+only are the defaults; On their own requires a person's opt-in. Never blocks all sends, including approved ones.
+Company safeguards cannot be weakened by a bot override: always-ask rules, daily caps per bot/inbox/company, pacing
+and the undo window. The queue rechecks access and policy immediately before dispatch. See
+[Turning sending on](mail.md#turning-sending-on) for the controls and API.
 
-```
-Send to: counsel@lawfirm.example
-Cc: partner@lawfirm.example; associate@lawfirm.example
-```
+Existing opted-in bots keep their old recipient scopes: internal recipients, approved forwarding, replies to the
+thread's sender, and registry allowances. The shared server gate rechecks the registry global switch, paused inboxes, blocklist, owner-handles-personally list and old caps at enqueue and dispatch; calling the API cannot skip them. The connector also retains its declared mailbox verbs. Existing automation versions keep their prior
+send authorization. New senders and edited automation versions use the shared default. Saving the company or inbox
+policy applies its safeguards to the retained authorizations too.
 
-When `--approval-issue` is a full yes — a closed `owner:ana` `type:decision` GitHub Issue with a
-matching block, a decided Tico `send` approval whose payload names every external address
-and this exact text (its `body_sha256`), or a Tico message in which Ana told this bot to send — that message may carry more
-than one external recipient and external Cc, the cooldown does not apply to it, lint L056
-does not apply to it, the second reviewer runs but advises instead of blocking (its verdict
-is still recorded and shown), and the switch being off is lifted for that
-message only. The bot still has to declare `send` on the mailbox, the daily cap and
-the blocklist still apply, and `mail draft` accepts the same `--approval-issue` so the
-draft can be written with the external Cc in the first place. Everything else about the
-bot stays draft-only.
+Attachments must still come from the bot's own folder, outside secret-looking paths. A new queued approval binds
+content, recipients and attachment hashes; the server sends the frozen version, so edits need a new approval. Old
+hash-bound Tico approvals and authorized chat instructions retain their scope. A numbered GitHub issue no longer
+counts: its labels and closed state do not identify a Tico person allowed to approve this send. Request a Tico send
+approval instead.
+
+**Per-message approval.** A Tico `send` approval names the recipients, subject, mailbox and `body_sha256`; new queue
+approvals also bind `content_sha256`, attachment names/hashes and the queue id. The configured Who can OK rule is bot
+managers by default, or inbox admins or named people. A person's in-chat “send it” must come from someone permitted
+under every applicable layer's rule, follow their authorized frozen preview, clearly approve, and name or reply to that exact pending send. Negation, older instructions and ambiguous prose need the content-bound approval card. The server checks this binding and the current rule again at dispatch; connector-side review is never approval authority.
+Approval does not override Never, mailbox access, company caps, reply-loop prevention or bounce suppression.
+
+The reviewer sees the verified person's instruction and blocks additions beyond it. A hash-bound Tico approval
+keeps review advisory, with its verdict recorded. Only the one-use durable dispatch permit can call the provider;
+uncertain delivery is recorded as Unknown and never automatically retried.
 
 **2. Lint (deterministic, each rule has an id, `mail lint` runs standalone).**
 - Forbidden phrases from the team writing rules and the playbooks, for example "we guarantee"
@@ -164,8 +138,8 @@ bot stays draft-only.
   thread and its recipient, signature present, one language.
 - Scheduling: when times are offered there are at least two, in the future, chronological,
   weekdays in business hours, time zone spelled out, and each one is actually free on every
-  calendar on ana@acme.example with a 30-minute buffer (checked live). A confirmation cannot be
-  sent without the invite; `mail schedule` does both or neither.
+  calendar on ana@acme.example with a 30-minute buffer (checked live). `mail schedule` creates the
+  event silently, then freezes its invitation with the confirmation in the shared queue. Neither notification leaves before approval, undo and dispatch checks.
 
 **3. Reviewer (a second model, different vendor from the writer).**
 The bots write with Codex (OpenAI). The CLI asks Grok 4.6 to review the draft against the
@@ -181,15 +155,16 @@ tone. Any commitment or unsupported claim fails the draft. The verdict is stored
 If the reviewer is unreachable, `send` fails closed; `draft` proceeds with a warning flag.
 
 **4. Execution.**
-Idempotency key written to the database before every API call, so a retried run cannot
-double-send. Exponential backoff on 429 and 5xx. `mail schedule` creates the event, then sends;
-if the send fails it deletes the event. The sent-log row comes from the API response, and a
-nightly reconcile against Gmail's Sent folder makes Ana's own sends count toward cooldowns.
+The durable queue records content-and-recipient duplicate protection and the operation identity before dispatch. Retries of one operation stay the same; a new intent may follow a definite non-send. Gmail receives frozen raw MIME in the send request, never a mutable draft ID. A provider attempt is never
+automatically repeated if delivery is uncertain. `mail schedule` deletes its newly created event if queueing the
+confirmation fails; a queued confirmation leaves a silent event in place while awaiting approval or after cancellation. Frozen body and attachment previews load through the viewer's authorization before approval.
+The sent-log row comes from the provider response, and a nightly reconcile against Gmail's Sent folder makes Ana's
+own sends count toward the connector's cooldowns.
 
 **5. Audit.**
 Every read of a thread body, label change, draft, send, and reviewer verdict goes to
 `runtime/mail/audit.jsonl` and the database: bot, task, mailbox, recipient, rule results,
-message id. `mail audit` prints it; Tico gets a Message bots tab later.
+message id. `mail audit` prints it; Inboxes shows pending sends, cancellation and the server's send audit.
 
 ## Mailbox rules (deterministic, run before any model sees the mail)
 
@@ -273,11 +248,19 @@ Bodies stay ≤32 KB; Tico keeps about 180 days (`TICO_MAIL_RETENTION_DAYS`) and
 index. Humans browse that copy on the Message bots page (`GET /api/v2/mail/...`, [Message bots](mail.md)); SQL
 access to `mail_*` is owner-only.
 
+## Shared sending policy and queue
+
+The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, approval authority,
+bot/inbox/company caps and the durable undo queue. `connectors/mail/actions.py` enqueues automation sends through the
+same API as bot sends; it sends provider mail only with a one-use server dispatch permit. Scheduling offer emails
+use that queue too. Pending work survives restarts, and an uncertain delivery never retries automatically. See
+[Turning sending on](mail.md#turning-sending-on) for settings, migration behavior, cancellation and the API.
+
 ## Tests and rollout
 
 - Unit tests for policy and lint with fixture emails, `python3 -m unittest`, and preflight runs
   them for any bot that declares gmail access.
-- `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, send to itself,
+- `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, queue an email to itself,
   create and delete a throwaway event. Run by preflight before any message bot goes active.
 - Week one: all three bots read and draft only (mail switch off). Ana reviews
   drafts in Gmail and on the tasks. Week two, if the drafts are good: the mail switch on for

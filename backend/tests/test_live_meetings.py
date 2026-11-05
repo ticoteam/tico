@@ -313,14 +313,14 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     }
 
 
-def test_joined_human_can_remove_bot_and_revoke_queued_turn_access(live):
+def test_attaching_human_can_remove_bot_and_revoke_queued_turn_access(live):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider", "ms": 1,
         "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
     meeting = connect(live, cooldown_seconds=0)
     mid = meeting["id"]
-    attach(live, mid, "ops")
     post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
+    attach(live, mid, "ops", token="ben-test")
     chunk(live, mid, 1, 0, 30_000, "Queue a bot reply")
     turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
 
@@ -596,7 +596,7 @@ def test_private_meeting_is_hidden_until_owner_adds_people_or_opens_it_to_the_te
     # The owner can always add a bot; the bot reads only this meeting.
     assert attach(live, mid, "ops")["added"] == ["ops"]
     assert get(live, f"live-meetings/{mid}", token="ops-live")["id"] == mid
-    # Only the owner changes who can see it.
+    # People outside the meeting cannot add themselves.
     denied = live.post(f"/api/v2/live-meetings/{mid}/access", json={"add": ["ben"]}, headers=headers("cara-test"))
     assert denied.status_code == 404
     shared = post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})
@@ -1419,3 +1419,39 @@ def test_idle_screen_wait_does_not_fill_slow_request_diagnostics(live):
         assert route['max'] < 1000, route
     finally:
         live.app.state.timing.recorder = None
+
+
+def test_discard_removes_the_transcript_copies_sent_to_bots(live):
+    meeting = post(live, "live-meetings", {"title": "Kept here", "cooldown_seconds": 0})
+    other = post(live, "live-meetings", {"title": "Another room", "cooldown_seconds": 0})
+    for room in (meeting, other):
+        attach(live, room["id"], "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, meeting["id"], 1, 0, 1000, "Ops, the synthetic codename is confidential")
+    turn = claimed_turn(live, machine)
+    assert "confidential" in turn["message"]["body"]
+    post(live, f"attempts/{turn['id']}/complete", {"outcome": "completed", "text": "Noted the codename confidential.",
+                                                   "last_seq": 0}, token=machine["token"])
+    chunk(live, other["id"], 1, 0, 1000, "Ops, the synthetic harbour plan")
+    kept = claimed_turn(live, machine)
+    post(live, f"attempts/{kept['id']}/complete", {"outcome": "completed", "text": "Harbour plan noted.",
+                                                   "last_seq": 0}, token=machine["token"])
+    run_log = lambda run: live.get(f"/api/runs/{run}/log", headers=headers())
+    assert "codename" in run_log(turn["id"]).text
+    post(live, f"live-meetings/{meeting['id']}/discard", {})
+    with live.app.state.store.read() as c:
+        conv = turn["conversation"]["id"]
+        bodies = [row[0] for row in c.execute("SELECT body FROM messages WHERE conversation_id=?", (conv,))]
+        closed = c.execute("SELECT closed_at FROM conversations WHERE id=?", (conv,)).fetchone()[0]
+        attempt = c.execute("SELECT final_text,result FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+        events = [row[0] for row in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (turn["id"],))]
+    assert bodies and not any("codename" in (body or "") for body in bodies)
+    assert closed
+    assert attempt is not None and "codename" not in (attempt["final_text"] or "") + (attempt["result"] or "")
+    assert not any("codename" in payload for payload in events)
+    log = run_log(turn["id"])
+    assert log.status_code in (200, 404) and "codename" not in log.text and "confidential" not in log.text
+    # A run from another meeting keeps its words.
+    assert "Harbour plan noted." in run_log(kept["id"]).text

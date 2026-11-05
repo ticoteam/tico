@@ -661,6 +661,10 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
         let refused = if signin::bot_keyed(&runtime) { sign.rejection(&runtime, profile.as_ref(), &bot) } else { None };
         let mut sign_in = status.get("authenticated").cloned().unwrap_or(json!("unknown"));
         let mut problems: Vec<String> = vec![];
+        let repo_problem = if app { None } else { crate::repo_safety::outside_installation(&path).err() };
+        if let Some(problem) = &repo_problem {
+            problems.push(problem.clone());
+        }
         let mut warnings: Vec<String> = crate::readiness_extra::credential_warnings(&bot);
         if !requested.is_empty() && !profiles::covers(expected) {
             problems.push(format!("Subscription {requested} doesn't cover {runtime}"));
@@ -668,8 +672,8 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
         if !profiles::missing(&config.data, &requested).is_empty() {
             problems.push(profiles::subscription_problem(&config.data, assignments, &requested, false, &computer));
         }
-        let repository_present = path.join("AGENT.md").is_file();
-        if !repository_present && !app {
+        let repository_present = repo_problem.is_none() && path.join("AGENT.md").is_file();
+        if !repository_present && !app && repo_problem.is_none() {
             problems.push(crate::product_files::problem(&bot).or_else(|| crate::fetchrepo::problem(&bot)).unwrap_or_else(|| "Missing bot repository or AGENT.md".into()));
         } else if repository_present {
             if caps.repo_permission_lint {
@@ -853,7 +857,7 @@ pub fn document(runtimes: &Map<String, Value>, checks: &[Map<String, Value>], st
     }
     // `worktree_waits`: a worktree the server reserves for a waiting task is prepared here while its bot is
     // idle (worktrees.rs prepare), so the server records a wait instead of refusing a task at its limit.
-    let mut doc = json!({"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": true, "worktree_waits": true});
+    let mut doc = json!({"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": true, "worktree_waits": true, "worktree_recovery": true});
     // Bots run as their own user here, so the server may hand this computer a turn on a Tico model
     // (backend/models_preset.py); without it the server keeps such turns away (gateway_relay.rs refuses them).
     doc["isolated"] = json!(crate::isolation::enabled());
@@ -1067,6 +1071,29 @@ mod tests {
 
     fn row_of<'a>(rows: &'a [Map<String, Value>], bot: &str) -> &'a Map<String, Value> {
         rows.iter().find(|r| r["bot"] == bot).unwrap()
+    }
+
+    #[tokio::test]
+    async fn explicit_named_and_shared_bot_roots_inside_the_install_are_not_ready() {
+        let mut config = checkouts(&["guard-root", "guard-named", "guard-shared"]);
+        let projects = config.projects_dir();
+        for name in ["alias", "bot-named", "bot-source"] {
+            std::os::unix::fs::symlink(crate::env::root(), projects.join(name)).unwrap();
+        }
+        config.data.insert("repos".into(), json!({"guard-root": projects.join("alias/templates")}));
+        let assignments = vec![
+            json!({"bot": "guard-root", "config": {"runtime": "codex"}}),
+            json!({"bot": "guard-named", "config": {"runtime": "codex", "folder": "bot-named"}}),
+            json!({"bot": "guard-shared", "config": {"runtime": "codex", "shared_from": "guard-source", "repo": "acme/bot-source"}}),
+        ];
+        let sign = SignIn::new(&projects);
+        let rows = preflight(&config, &sign, &assignments, &Map::new(), false).await;
+        for row in rows {
+            assert_eq!(row["ready"], false);
+            assert!(row["problems"].to_string().contains("inside the Tico install"), "{row:?}");
+            assert_eq!(row["repository_present"], false);
+        }
+        std::fs::remove_dir_all(projects).unwrap();
     }
 
     #[tokio::test]

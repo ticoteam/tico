@@ -10,7 +10,10 @@
           "runs",
           "bots",
           "needs",
-          "threads"
+          "threads",
+          "meeting_items",
+          "presence",
+          "letters"
         ]
       },
       "event": "ready",
@@ -93,6 +96,11 @@
           "root_id": "<id1>",
           "sender_id": "keeper",
           "seq": 1,
+          "source": {
+            "kind": "system",
+            "link": null,
+            "name": ""
+          },
           "superseded_at": null,
           "thread_id": "<id1>",
           "wait_s": null
@@ -219,6 +227,11 @@
           "root_id": "<id5>",
           "sender_id": "keeper",
           "seq": 2,
+          "source": {
+            "kind": "system",
+            "link": null,
+            "name": ""
+          },
           "superseded_at": null,
           "thread_id": "<id5>",
           "wait_s": null
@@ -335,6 +348,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 3,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -410,6 +428,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 4,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -470,6 +493,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 5,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -577,6 +605,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 6,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -641,6 +674,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 7,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -705,6 +743,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 8,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -767,6 +810,11 @@
           "root_id": "<conversation>",
           "sender_id": "keeper",
           "seq": 9,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -816,6 +864,11 @@
           "root_id": "<id12>",
           "sender_id": "keeper",
           "seq": 10,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id12>",
           "wait_s": null
@@ -868,6 +921,11 @@
         "actor": "human:ana",
         "at": "<time>",
         "id": "<task>",
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
         "seq": 80,
         "task": {
           "acceptance": "[]",
@@ -910,6 +968,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "Accepted.",
           "number": null,
@@ -1042,6 +1101,11 @@
           "root_id": "<conversation>",
           "sender_id": "keeper",
           "seq": 11,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -1091,6 +1155,11 @@
           "root_id": "<id23>",
           "sender_id": "keeper",
           "seq": 12,
+          "source": {
+            "kind": "task_update",
+            "link": null,
+            "name": "Task update"
+          },
           "superseded_at": null,
           "thread_id": "<id23>",
           "wait_s": null
@@ -1158,6 +1227,11 @@
         "actor": "human:ana",
         "at": "<time>",
         "id": "<open_task>",
+        "kind": "update",
+        "kinds": [
+          "insert",
+          "update"
+        ],
         "seq": 97,
         "task": {
           "acceptance": "[]",
@@ -1199,6 +1273,7 @@
           "labels": [],
           "lane": "company",
           "links": [],
+          "live_meeting_id": null,
           "next_run": false,
           "note": "",
           "number": null,
@@ -1284,6 +1359,11 @@
           "root_id": "<conversation>",
           "sender_id": "human:ana",
           "seq": 13,
+          "source": {
+            "kind": "person",
+            "link": null,
+            "name": "Ana"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null
@@ -1431,6 +1511,11 @@
           "root_id": "<id31>",
           "sender_id": "bot:ops",
           "seq": 14,
+          "source": {
+            "kind": "bot",
+            "link": null,
+            "name": "ops"
+          },
           "superseded_at": null,
           "thread_id": "<id31>",
           "wait_s": null
@@ -1478,6 +1563,11 @@
           "root_id": "<id31>",
           "sender_id": "keeper",
           "seq": 15,
+          "source": {
+            "kind": "system",
+            "link": null,
+            "name": ""
+          },
           "superseded_at": null,
           "thread_id": "<id31>",
           "wait_s": null
@@ -1557,6 +1647,7 @@
         "actor": "bot:ops",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
@@ -1599,6 +1690,7 @@
             "what": "spend"
           }
         ],
+        "plate_count": 1,
         "seq": 130,
         "went_away": {
           "assistant": 0,
@@ -1644,6 +1736,11 @@
           "root_id": "<id31>",
           "sender_id": "bot:ops",
           "seq": 16,
+          "source": {
+            "kind": "bot",
+            "link": null,
+            "name": "ops"
+          },
           "superseded_at": null,
           "thread_id": "<id31>",
           "wait_s": null
@@ -1720,6 +1817,7 @@
         "actor": "runner:<id30>",
         "at": "<time>",
         "count": 1,
+        "folded_task_ids": [],
         "items": [
           {
             "actions": [
@@ -1762,6 +1860,7 @@
             "what": "spend"
           }
         ],
+        "plate_count": 1,
         "seq": 143,
         "went_away": {
           "assistant": 0,
@@ -1813,6 +1912,11 @@
           "root_id": "<conversation>",
           "sender_id": "bot:ops",
           "seq": 17,
+          "source": {
+            "kind": "bot",
+            "link": null,
+            "name": "ops"
+          },
           "superseded_at": null,
           "thread_id": "<conversation>",
           "wait_s": null

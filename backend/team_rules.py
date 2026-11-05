@@ -7,8 +7,7 @@ manages in its own runs and who is a credential administrator (backend/auth.py),
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether a bot's report to the Tico team goes without a card
 (backend/support.py send_by_rule), whether Tico support may be let in (backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
-chat starts fresh when the topic changes (backend/topic_change.py), whether Decide reads a quiet task before its stall
-check stays silent (backend/stall_triage.py), and whether a bot manages its direct reports, and how many it may add or archive a week (backend/report_managers.py).
+chat starts fresh when the topic changes (backend/topic_change.py), and whether a bot manages its direct reports, and how many it may add or archive a week (backend/report_managers.py).
 The stale review and fresh topics are off by default; those two and
 triage an admin may turn too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
 """
@@ -33,18 +32,16 @@ DEFAULTS = {
     "support_access": True,         # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
     "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
-    "stall_triage": True,           # Decide reads a quiet task that nothing has changed on before a stall check stays silent (backend/stall_triage.py)
     "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
     "org_rule_checks": True,        # a bot's outputs are checked against the org rules that apply to them (backend/org_rule_check.py)
 }
 # Rules an admin may change too, not only the owner (Settings > General).
-ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
+ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
 # The rules that grant access to credentials, personal tokens, the SQL page or Tico support: a turn never changes them.
 CREDENTIAL_RULES = ("admin_credentials", "members_store_credentials", "member_tokens", "admin_sql", "support_access")
 # A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
-# server, `TICO_STALL_TRIAGE=0` to start a server with triage off). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
-ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH",
-                "stall_triage": "TICO_STALL_TRIAGE"}
+# server). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
+ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH"}
 # Numbers the owner sets, with their default and bounds.
 NUMBERS = {
     "go_ahead_days": (3, 1, 14),    # days an ask with a default waits for a person before the bot goes ahead

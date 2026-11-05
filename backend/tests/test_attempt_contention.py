@@ -236,7 +236,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
 
 def test_health_flags_runner_p95_and_clears_after_the_window(api):
     import sqlite3
-    from backend import health, health_monitor
+    from backend import health, maintenance_health
     with sqlite3.connect(":memory:") as empty:
         assert health.runner_route_latency(empty) is None
     store = api.app.state.store
@@ -249,11 +249,12 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
     with store.transaction() as c:
         flight.write(c, rec.take(now // 60 * 60))
         assert "renew" in health.runner_route_latency(c, now)["summary"]
-        assert any(row["key"] == "runner_route_latency" for row in health_monitor._server_checks(c))
+        assert any(row["key"] == "runner_route_latency" for row in maintenance_health._server_checks(c))
         assert health.runner_route_latency(c, now + 16 * 60) is None
 
 
 @pytest.mark.slow
+@pytest.mark.alone
 def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
     computer = fleet(api)
     store = api.app.state.store
@@ -323,6 +324,6 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
     assert not failures, failures
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE state='running' AND lease_until>?", (H.now(),)).fetchone()[0] == 100
-    # Held to the health monitor's 1 s warning: the gate runs this beside other tests on the same VM, which roughly
-    # doubles the 300 ms an idle 4-vCPU VM takes here.
+    # Held to the health monitor's 1 s warning. Marked alone: the release gate runs it by itself after the parallel
+    # tests, since three other xdist workers on the same 4-vCPU VM pushed a route's p95 past 1 s (v0.5.165 try 1).
     assert all(row["p95_ms"] < 1000 for row in receipt.values()), receipt

@@ -107,6 +107,39 @@ a.th-status-act:hover{text-decoration:none}
 .th-update:hover{text-decoration:none;border-color:var(--g4)}
 .th-update-k{color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
 
+/* a daily update request and the bot's turn that writes it: one quiet line, their messages under it while it is open */
+.th-upd{display:flex;align-items:center;gap:var(--s2);padding:4px 6px}
+.th-upd::before{content:"";width:18px;height:1px;background:var(--line)}
+.th-upd-btn{padding:2px 0;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.th-upd-btn:hover{color:var(--ink)}
+.th-upd-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+
+/* A row no person or bot wrote (rowSource, ui/app/hub-v2.js): a small gray line, no avatar or sender row. A built-in's
+   name leads in bold, an automation's is a link; a run of task updates is one "N task updates" row, shut until opened.
+   Lines sit tight together; the next message keeps its own spacing. Shared by threads, the chat and a task's thread. */
+.src-line{display:flex;align-items:baseline;gap:0 6px;min-width:0;padding:1px 6px;color:var(--muted);font-size:var(--t-sm);line-height:1.45}
+.src-name{color:inherit;font-weight:600}
+a.src-name:hover{color:var(--ink);text-decoration:underline}
+.src-name{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-time{margin-left:auto;flex:none;font-size:var(--t-xs);color:var(--muted)}
+.src-line>button{flex:none}
+.src-group>summary{list-style:none;cursor:pointer;align-items:center}
+.src-group>summary::-webkit-details-marker{display:none}
+.src-group>summary:hover{color:var(--ink)}
+.src-group>summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.src-chev{display:inline-block;font-size:10px;transition:transform .15s}
+.src-group[open] .src-chev{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){.src-chev{transition:none}}
+.src-group>.src-line:not(summary){padding-left:18px}
+/* in a thread the words line up with the messages' text, past the avatar */
+.thv-list .src-line{padding-left:48px}
+.thv-list .src-group>.src-line:not(summary){padding-left:60px}
+.th-line.th-flash{border-radius:8px}
+/* the chat and a task's thread */
+.chat-line{margin:2px 0}
+.task-comments .tcomment.tline,.tcomment.tline.src-line{display:flex;background:none;border:0;border-radius:0;padding:1px 4px;font-size:var(--t-sm);line-height:1.45}
+
 /* sending, held, failed */
 .th-pending .th-body{color:var(--muted)}
 .th-state{color:var(--muted);font-size:var(--t-xs)}
@@ -248,9 +281,13 @@ button.ths-link:hover .ths-val{color:var(--ink)}
   /* no room beside the title and actions, so the audience takes a line of its own under them */
   .thv-titleline{flex-wrap:wrap}
   .thv-aud{order:1;flex:0 0 100%;font-size:var(--t-xs)}
-  .th-msg,.th-status,.th-fold{padding-left:4px;padding-right:4px}
-  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply */
+  .th-msg,.th-status,.th-fold,.th-upd{padding-left:4px;padding-right:4px}
+  /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply, an update line */
   .th-quote{min-height:44px}
+  .th-upd-btn{min-height:44px;display:inline-flex;align-items:center}
+  .thv-list .src-line{padding-left:46px}
+  .thv-list .src-group>.src-line:not(summary){padding-left:56px}
+  .src-group>summary{min-height:44px}
   .th-react{height:36px;padding:0 10px}
   .th-status-act{min-height:44px;display:inline-flex;align-items:center}
   .thv-replying-x{width:44px;height:44px}

@@ -92,6 +92,20 @@ def require_person(who, bot=""):
                                    "with their own token" + (". " + mail_settings_hint(bot) if bot else ""), 403)
 
 
+def message_sender_can_approve_send(c, auth, row):
+    """A message's human sender may approve mail for its bot addressee when they may manage its sending."""
+    sender, recipient = str(row.get("sender_id") or ""), str(row.get("recipient_id") or "")
+    if not sender.startswith("human:") or not recipient.startswith("bot:"):
+        return False
+    from .email_sending import can_ok, effective
+    bot = H.actor_id(recipient)
+    from . import mailbox_access
+    boxes = mailbox_access.mailboxes_for(c, recipient)
+    if boxes:
+        return any(can_ok(c, auth, sender, box["address"], bot, effective(c, box["address"], bot)) for box in boxes)
+    return can_ok(c, auth, sender, "", bot, effective(c, bot=bot))
+
+
 def update(c, auth, who, bot, body):
     require_person(who, bot)
     if not H.bot(c, bot):
@@ -118,6 +132,8 @@ def update(c, auth, who, bot, body):
               "ON CONFLICT(bot) DO UPDATE SET outbound_send=excluded.outbound_send, "
               "forward_to=excluded.forward_to, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (bot, int(bool(on)), json.dumps(targets), H.now(), who.actor))
+    from .email_sending import PolicyUpdate, update_policy
+    update_policy(c, who, "bot:" + bot, PolicyUpdate(mode="on_their_own" if on else "ask_first"))
     H.event(c, who.actor, "bot.mail_settings", bot, {"outbound_send": bool(on), "forward_to": targets})
     return view(c, bot)
 
@@ -164,6 +180,18 @@ def install(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             found = view(c, bot)
+            from .email_sending import effective
+            found["sending_policy"] = effective(c, bot=bot)
+            # What Tico may do in Settings > Inboxes is the company's own switch over every bot's: with Send mail off
+            # the bot's connector refuses each send before any approval (connectors/mail/policy.py), and the bot reads
+            # sending as off. Organize mail and Change calendar gate the connector's other writes the same way,
+            # whichever credential it holds (connectors/mail/oauth.py company_allows).
+            from .google_workspace import permissions
+            may = permissions(c)
+            found.update(company_send=may["send_mail"], company_organize=may["organize_mail"],
+                         company_calendar=may["change_calendar"])
+            if who.actor == "bot:" + bot and not found["company_send"]:
+                found["outbound_send"] = False
             from . import lifecycle
             if who.actor == "bot:" + bot and lifecycle.is_onboarding(c, bot):
                 # An onboarding bot sends nothing (backend/lifecycle.py): its mail connector reads sending as off and

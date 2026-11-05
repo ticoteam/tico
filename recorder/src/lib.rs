@@ -1,6 +1,8 @@
+pub mod app_location;
 pub mod assist;
 pub mod audio;
 pub mod capture;
+pub mod desktop;
 #[cfg(feature = "diarize")]
 pub mod diarize;
 pub mod engine;
@@ -14,5 +16,6 @@ pub mod signin;
 pub mod speech;
 pub mod store;
 pub mod stream;
+pub mod task_links;
 pub mod transcript;
 pub mod workspace;

@@ -164,9 +164,9 @@ def check_back_refusal(api, machine, job_id):
         return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner), execution.roots_on(runner))
 
 
-def test_a_check_back_whose_turn_started_or_a_person_resumed_is_not_refused_as_obsolete_while_check_backs_are_off(api):
-    # With the check-backs off every check-back is stale (task_check_backs.stale) and the claim refuses it, but the rest of a
-    # turn that started, or that a person resumed, runs: obsolete_notices_sql keeps those, and so must the refusal.
+def test_a_check_back_whose_turn_started_or_a_person_resumed_is_not_refused_as_obsolete(api):
+    # Every check-back is stale (task_check_backs.stale) and the claim refuses it, but the rest of a turn that started,
+    # or that a person resumed, runs: obsolete_notices_sql keeps those, and so must the refusal.
     r = fleet(api)
     store = api.app.state.store
     with store.transaction() as c:
@@ -174,7 +174,7 @@ def test_a_check_back_whose_turn_started_or_a_person_resumed_is_not_refused_as_o
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")         # the new-task notices are not this test
         back = H._wake(c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back")
         job_id = c.execute("SELECT id FROM jobs WHERE message_id=?", (back["id"],)).fetchone()[0]
-    assert check_back_refusal(api, r, job_id) == "obsolete_check_back", "unstarted, with the check-backs off, it is stale"
+    assert check_back_refusal(api, r, job_id) == "obsolete_check_back", "unstarted, it is stale"
     now = H.now()
     with store.transaction() as c:
         runner_id = c.execute("SELECT id FROM runners LIMIT 1").fetchone()[0]

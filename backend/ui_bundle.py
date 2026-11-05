@@ -4,8 +4,14 @@ ui/index.html lists the files: the <link> tags between `<!-- bundle:css:start --
 `<!-- bundle:css:end -->`, and the <script> tags between `<!-- bundle:js:start -->` and
 `<!-- bundle:js:end -->`. That list, in that order, is the only one. The server concatenates each list
 when the page is asked for (again only when a file changed) and serves index.html with each region
-replaced by a single tag whose URL carries the content hash. The bundle is immutable for that URL, so a
+replaced by the bundle's tags, whose URLs carry the content hash. The bundle is immutable for that URL, so a
 browser fetches it once per release; index.html itself is revalidated on every load.
+
+Each bundle is cut, between files, into parts of at most PART_BYTES (app.bundle.js, app.bundle.2.js, ...), loaded in
+order. WebKit's disk cache keeps no response larger than an eighth of its capacity (NetworkResourceLoader,
+maximumCacheBufferSize), and the one 4.3 MB script went past that: the desktop app downloaded 1.2 MB on every open
+(366-893 ms of its boot). Every part carries the hash of its whole bundle, so the page and the config's `ui_build`
+name one build as before.
 
 The scripts the page loads on their own (theme.js in the head, marked) are named by their content too: the page's tag
 gets `?v=<hash of the file>`, and the server keeps that URL for a year (backend/app.py, `versioned`), so an open
@@ -24,7 +30,9 @@ from pathlib import Path
 
 PREFIX = "/tico/ui/"
 JS_PATH, CSS_PATH = PREFIX + "app.bundle.js", PREFIX + "app.bundle.css"
-PATHS = (JS_PATH, CSS_PATH)
+# The largest part (decoded): a WebKit cache of 4 MB or more keeps it. The files are cut between, never inside.
+PART_BYTES = 512 * 1024
+PART = re.compile(re.escape(PREFIX) + r"app\.bundle(?:\.([2-9]|[1-9][0-9]))?\.(js|css)")
 IMMUTABLE = "public, max-age=31536000, immutable"
 REGION = re.compile(r"[ \t]*<!-- bundle:(js|css):start -->\n(.*?)[ \t]*<!-- bundle:\1:end -->\n?", re.S)
 REF = re.compile(r'(?:src|href)="([^"]+)"')
@@ -46,18 +54,52 @@ def _tag(kind, url):
     return (f'<script src="{url}"></script>\n' if kind == "js" else f'<link rel="stylesheet" href="{url}">\n')
 
 
+def part_path(kind, n):
+    """The URL path of a bundle's nth part (0 is the first)."""
+    return f"{PREFIX}app.bundle.{kind}" if n == 0 else f"{PREFIX}app.bundle.{n + 1}.{kind}"
+
+
+def is_part(path):
+    return bool(PART.fullmatch(path))
+
+
+def split(chunks, limit=PART_BYTES):
+    """The chunks (each one file's text, in order) packed into parts of at most `limit` bytes; a file larger than that
+    is a part of its own."""
+    parts, size = [[]], 0
+    for chunk in chunks:
+        if parts[-1] and size + len(chunk) > limit:
+            parts.append([])
+            size = 0
+        parts[-1].append(chunk)
+        size += len(chunk)
+    return [b"".join(p) for p in parts]
+
+
 class Bundle:
-    def __init__(self, page, js, css, versions=None):
-        self.page, self.js, self.css = page, js, css
+    def __init__(self, page, js_parts, css_parts, versions=None):
+        self.page, self.js, self.css = page, b"".join(js_parts), b"".join(css_parts)
         # STANDALONE path -> the `?v=` the page names it with.
         self.versions = dict(versions or {})
-        self.etag = {JS_PATH: _etag(js), CSS_PATH: _etag(css)}
+        # The bundle's URL path -> the part served there.
+        self.parts = {**{part_path("js", n): b for n, b in enumerate(js_parts)},
+                      **{part_path("css", n): b for n, b in enumerate(css_parts)}}
+        self.etag = {path: _etag(body) for path, body in self.parts.items()}
         # Sent to a browser that accepts it (the server has no other compression); its own strong ETag.
-        self.gz = {JS_PATH: gzip.compress(js, 6, mtime=0), CSS_PATH: gzip.compress(css, 6, mtime=0)}
+        self.gz = {path: gzip.compress(body, 6, mtime=0) for path, body in self.parts.items()}
         self.gz_etag = {k: v[:-1] + '-gzip"' for k, v in self.etag.items()}
         self.page_etag = _etag(page)
-        # What the page's own tags carry (`?v=`), joined: a page that finds a different one in the config is out of date.
-        self.build = self.etag[JS_PATH][1:17] + "." + self.etag[CSS_PATH][1:17]
+        self.whole_etag = {kind: _etag(body)[:-1] + '-whole"' for kind, body in (("js", self.js), ("css", self.css))}
+        self.whole_gz = {}
+        # What the page's own tags carry (`?v=`, the hash of each whole bundle), joined: a page that finds a different
+        # one in the config is out of date.
+        self.version = {kind: tag[1:17] for kind, tag in self.whole_etag.items()}
+        self.build = self.version["js"] + "." + self.version["css"]
+
+    def gzip_whole(self, kind):
+        if kind not in self.whole_gz:
+            self.whole_gz[kind] = gzip.compress(getattr(self, kind), 6, mtime=0)
+        return self.whole_gz[kind]
 
 
 def _etag(data):
@@ -81,16 +123,21 @@ def build(ui_dir):
         raise BundleError("index.html has no bundle regions")
     # One script is one scope for 'use strict': a directive only counts at the top of a script, so the
     # bundle opens with it once, and every file must already be strict.
-    js = ["'use strict';\n" + BUNDLE_MARK]
+    js = []
     for name, path in files["js"]:
         text = path.read_text()
         if not re.search(r"^'use strict';", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")
-        js.append(f"// file: {name}\n{text.rstrip()}\n")
-    css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n" for name, path in files["css"]]
-    js_b, css_b = "\n".join(js).encode(), "\n".join(css).encode()
-    urls = {"js": f"{JS_PATH}?v={_etag(js_b)[1:17]}", "css": f"{CSS_PATH}?v={_etag(css_b)[1:17]}"}
-    page = REGION.sub(lambda m: _tag(m.group(1), urls[m.group(1)]), html)
+        js.append(f"// file: {name}\n{text.rstrip()}\n\n".encode())
+    css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n\n".encode() for name, path in files["css"]]
+    # Each part is a script of its own, so each opens with the directive; the first also marks where the run starts.
+    js_parts = [b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n" + part
+                for n, part in enumerate(split(js))]
+    css_parts = split(css)
+    version = {"js": _etag(b"".join(js_parts))[1:17], "css": _etag(b"".join(css_parts))[1:17]}
+    count = {"js": len(js_parts), "css": len(css_parts)}
+    page = REGION.sub(lambda m: "".join(_tag(m.group(1), f"{part_path(m.group(1), n)}?v={version[m.group(1)]}")
+                                        for n in range(count[m.group(1)])), html)
     versions, standalone = {}, []
     for url, name in STANDALONE.items():
         path, tag = ui_dir / name, f'src="{url}"'
@@ -100,7 +147,7 @@ def build(ui_dir):
         page = page.replace(tag, f'src="{url}?v={versions[url]}"')
         standalone.append(path)
     listed = [p for kind in files.values() for _, p in kind] + standalone + [ui_dir / "index.html"]
-    return Bundle(page.encode(), js_b, css_b, versions), listed
+    return Bundle(page.encode(), js_parts, css_parts, versions), listed
 
 
 class UiBundle:
@@ -166,5 +213,5 @@ if __name__ == "__main__":
     bundle, _ = build(ui)
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_bytes(bundle.page)
-    (out / "app.bundle.js").write_bytes(bundle.js)
-    (out / "app.bundle.css").write_bytes(bundle.css)
+    for path, body in bundle.parts.items():
+        (out / path[len(PREFIX):]).write_bytes(body)

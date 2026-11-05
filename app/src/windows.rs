@@ -2,6 +2,7 @@
 //! follows, the window frame kept between launches, and the page's eval and reload.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
 use std::sync::Mutex;
@@ -320,6 +321,144 @@ pub(crate) fn first_page(usual: url::Url, hub: &url::Url, sign_in: bool) -> url:
     hub.join(signin::LOGIN_PATH).unwrap_or(usual)
 }
 
+/// Where an org's new page opens: the hub's sign-in when the org needs it (`first_page`), otherwise where its page
+/// last was (`last`, checked again here: orgs.json is only a file), otherwise its usual first page. A usual first page
+/// that is not the hub's own address (a local server's token sign-in) is kept as it is.
+pub(crate) fn opening_page(usual: url::Url, hub: &url::Url, sign_in: bool, last: Option<&str>) -> url::Url {
+    if sign_in || usual != *hub {
+        return first_page(usual, hub, sign_in);
+    }
+    last.and_then(|last| url::Url::parse(last).ok()).and_then(|last| place_of(hub, &last).flatten()).unwrap_or(usual)
+}
+
+/// Where a page at `url` is in the web app on `hub`, to open there next time: `Some(Some(place))` at a route (the
+/// hub's own address with the route `route_of` keeps, and nothing else of `url`), `Some(None)` at the web app's start,
+/// and `None` anywhere else, which leaves the last place as it was: another origin (a sign-in provider, Cloudflare
+/// Access), any other path on the hub (its sign-in, its API), or a hash `route_of` refuses. Used both when a place is
+/// saved and when one is read back from orgs.json.
+pub(crate) fn place_of(hub: &url::Url, url: &url::Url) -> Option<Option<url::Url>> {
+    if url.origin() != hub.origin() || url.path() != hub.path() || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let Some(fragment) = url.fragment().filter(|fragment| !fragment.is_empty() && *fragment != "/") else { return Some(None) };
+    let route = route_of(fragment)?;
+    if route == "/" {
+        return Some(None);
+    }
+    let mut place = hub.clone();
+    place.set_query(None);
+    place.set_fragment(Some(&route));
+    Some(Some(place))
+}
+
+/// The view settings of a route's query (`#/...?name=value`) that a place keeps, as the web app's pages read them
+/// (ui/app): Mail's mailbox and open thread, Messaging's bot and source, Tasks' and Files' filters, Finance's account
+/// and P&L filter, Rules, Replay, Updates, Meetings, Threads and the rest. Anything else is dropped, including the
+/// one-time ones: a books connect's result (`books`, `reason`), a bot hand-off (`recruit`), a meeting window
+/// (`window`), Granola's connect (`connect`), an update link's whole-org visit (`scope`), and old addresses that only
+/// redirect (`live`, `approval`, `with`, `show`).
+const PLACE_PARAMS: &[&str] = &[
+    // shared
+    "view", "kind", "type", "q", "who", "item", "m", "focus", "from", "to", "day", "month", "place", "collection",
+    // Mail and Messaging
+    "mailbox", "thread", "tbox", "label", "attach", "bot", "source",
+    // Tasks and Files
+    "owner", "tag", "team", "side", "asked", "due", "need", "parent", "pr", "repo", "requester", "status", "task", "days",
+    "pinned", "archived", "issues",
+    // Finance
+    "account_id", "view_as", "teams", "teammates", "unattributed",
+    // Rules, Replay, Updates, Meetings, Strategy and the rest
+    "rule", "party", "person", "speed", "update", "meeting", "recording", "kpi", "night", "edition", "s",
+];
+
+/// Words that mark a credential, in a route's path, or a query name or value, anywhere: a place with one is refused.
+const CREDENTIAL_WORDS: &[&str] = &["token", "secret", "password", "passwd", "key", "code", "sig", "auth", "session"];
+
+/// The route a hash (`fragment`, as the address holds it) keeps as a place, or `None` to refuse it. Decoded first
+/// (until it stops changing, three rounds at most), so no escape hides a word: a path of plain segments only
+/// (`[A-Za-z0-9._~:@-]`), and in its query only the view settings in `PLACE_PARAMS`, the rest dropped. Any credential
+/// word refuses the whole place.
+pub(crate) fn route_of(fragment: &str) -> Option<String> {
+    fn credential(text: &str) -> bool {
+        let text = text.to_ascii_lowercase();
+        CREDENTIAL_WORDS.iter().any(|word| text.contains(word))
+    }
+    if fragment.len() > 2000 || credential(&decoded(fragment)?) {
+        return None;
+    }
+    let (path, query) = fragment.split_once('?').unwrap_or((fragment, ""));
+    let path = decoded(path)?;
+    let segments = path.strip_prefix('/')?;
+    let plain = |segment: &str| !segment.is_empty() && segment != "." && segment != ".."
+        && segment.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b':' | b'@' | b'-'));
+    if !(segments.is_empty() || segments.split('/').all(plain)) || credential(&path) {
+        return None;
+    }
+    let mut kept = url::form_urlencoded::Serializer::new(String::new());
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        // As the web app reads them (URLSearchParams): `+` is a space.
+        let (name, value) = (decoded(&name.replace('+', " "))?, decoded(&value.replace('+', " "))?);
+        if credential(&name) || credential(&value) {
+            return None;
+        }
+        if PLACE_PARAMS.contains(&name.as_str()) {
+            kept.append_pair(&name, &value);
+        }
+    }
+    let query = kept.finish();
+    Some(if query.is_empty() { path } else { format!("{path}?{query}") })
+}
+
+/// `text` percent-decoded until it stops changing, or `None` if three rounds are not enough.
+fn decoded(text: &str) -> Option<String> {
+    let mut text = text.to_string();
+    for _ in 0..3 {
+        let next = percent_decode(&text);
+        if next == text {
+            return Some(text);
+        }
+        text = next;
+    }
+    (percent_decode(&text) == text).then_some(text)
+}
+
+/// One round of percent-decoding; a `%` not followed by two hex digits stays as it is.
+fn percent_decode(text: &str) -> String {
+    let (bytes, mut out, mut i) = (text.as_bytes(), Vec::with_capacity(text.len()), 0);
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if let (b'%', Some(high), Some(low)) = (bytes[i], bytes.get(i + 1).and_then(|b| hex(*b)), bytes.get(i + 2).and_then(|b| hex(*b))) {
+            out.push((high * 16 + low) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Notes where org `id`'s page (`page`) is, for its next page to open there, after this run too (orgs.json).
+fn remember_place(app: &App, id: &str, page: &Webview) {
+    let Ok(url) = page.url() else { return };
+    let state = app.state::<AppState>();
+    let mut list = state.orgs.lock().unwrap();
+    let Some(hub) = list.get(id).and_then(Org::hub) else { return };
+    if let Some(place) = place_of(&hub, &url) {
+        list.set_last_url(id, place.map(String::from));
+    }
+}
+
+/// Notes where the open org's page is: the window is closing, or the app quitting. Never waits on `changing`, so it
+/// may run on the main thread.
+pub(crate) fn remember_open_place(app: &App) {
+    let Some(org) = active_org(app) else { return };
+    if let Some(page) = org_page(app, &org.id) {
+        remember_place(app, &org.id, &page);
+    }
+}
+
 /// Opens an org's page as a child of the main window, on the org's own data store (macOS 14+). A page built for a
 /// prefetch (`on_screen` false) loads hidden, off to the side, until a switch shows it. Answers whether the page
 /// started on the hub's sign-in.
@@ -330,13 +469,17 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
     timing::mark(app, &home.id, "granted");
     let config = Config::new(home.hub.clone());
     // A prefetch that is never shown leaves the flag for the page that is.
-    let sign_in = {
+    let (sign_in, last) = {
         let state = app.state::<AppState>();
         let mut list = state.orgs.lock().unwrap();
-        if on_screen { list.take_sign_in(&home.id) } else { list.get(&home.id).is_some_and(|org| org.sign_in) }
+        let sign_in = if on_screen { list.take_sign_in(&home.id) } else { list.get(&home.id).is_some_and(|org| org.sign_in) };
+        let last = list.get(&home.id).and_then(|org| org.last_url.clone());
+        // A new page has captured nothing yet.
+        state.capture.lock().unwrap().remove(&home.id);
+        (sign_in, last)
     };
-    let start = first_page(config.start_url(), &home.hub, sign_in);
-    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), Some(home.id.clone()));
+    let start = opening_page(config.start_url(), &home.hub, sign_in, last.as_deref());
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), Some(label.clone()));
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(start))
         .user_agent(USER_AGENT)
@@ -348,9 +491,14 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         // stop loading until shown. Throttling slows its timers, which the hub's boot runs on, so neither is used.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
         .initialization_script(&bridge_script(app))
-        .on_new_window(new_window_handler(app, home.clone(), true))
+        .on_new_window(new_window_handler(app, home.clone(), Some(label.clone())))
         .on_navigation(navigate)
-        .on_page_load(move |_, payload| page(payload));
+        .on_page_load(move |webview, payload| {
+            if payload.event() == PageLoadEvent::Started {
+                close_if_kept(&webview);
+            }
+            page(payload)
+        });
     #[cfg(target_os = "macos")]
     {
         if let Some(store) = home.store {
@@ -396,9 +544,10 @@ pub(crate) fn first_grant(granted: &std::collections::HashSet<String>, identifie
     !granted.contains(identifier)
 }
 
-/// Whether org `id`'s page is the one on screen: the last shown, and not a prefetch waiting to be.
-pub(crate) fn on_screen(shown: &[String], prefetched: Option<&str>, id: &str) -> bool {
-    shown.last().is_some_and(|last| last == id) && prefetched != Some(id)
+/// Whether org `id`'s page is the one on screen: the last shown, and neither a prefetch waiting to be shown nor a page
+/// kept hidden after a switch away (the last shown once the open org was removed, until the switch that follows).
+pub(crate) fn on_screen(shown: &[String], prefetched: Option<&str>, kept: &Kept, id: &str) -> bool {
+    shown.last().is_some_and(|last| last == id) && prefetched != Some(id) && !kept.contains(id)
 }
 
 /// Whether org `id`'s page is the one on screen now.
@@ -406,12 +555,132 @@ pub(crate) fn page_on_screen(app: &App, id: &str) -> bool {
     let state = app.state::<AppState>();
     let prefetched = state.prefetch.lock().unwrap().org.clone();
     let shown = state.shown.lock().unwrap();
-    on_screen(&shown, prefetched.as_deref(), id)
+    let kept = state.kept.lock().unwrap();
+    on_screen(&shown, prefetched.as_deref(), &kept, id)
 }
 
-/// How many org pages stay open: the open one only, so a switch closes the previous page once the new one is on
-/// screen. A prefetched page (see `prefetch`) is apart from these.
-pub(crate) const KEEP_ALIVE: usize = 1;
+/// The exact webview shown, independent of the selected org: adding/removing an org changes that selection before
+/// its page is shown. A fresh webview of the same org has a different label, so a closing page cannot stand in for it.
+fn shown_page_label(app: &App) -> Option<String> {
+    let state = app.state::<AppState>();
+    let id = {
+        let prefetched = state.prefetch.lock().unwrap();
+        let shown = state.shown.lock().unwrap();
+        let kept = state.kept.lock().unwrap();
+        shown.last().filter(|id| on_screen(&shown, prefetched.org.as_deref(), &kept, id)).cloned()
+    }?;
+    org_page(app, &id).map(|page| page.label().to_string())
+}
+
+/// Auxiliary windows follow their own org even after a switch. An org page must be the exact webview shown.
+fn source_is_shown(source: Option<&str>, shown: Option<&str>) -> bool {
+    source.is_none() || source.is_some_and(|source| Some(source) == shown)
+}
+
+fn may_open_from(app: &App, source: Option<&str>) -> bool {
+    source.is_none() || source_is_shown(source, shown_page_label(app).as_deref())
+}
+
+/// How many org pages stay open: the open one and up to two kept hidden after a switch away (`Kept`), so clicking
+/// across many orgs never piles pages up: past the cap, the least recently shown closes at once. A prefetched page
+/// (see `prefetch`) is apart from these.
+pub(crate) const KEEP_ALIVE: usize = 3;
+
+/// How long a page stays open, hidden, after a switch away from it: a switch back within this shows it as it was,
+/// with no reload. Each time it goes hidden it gets the full time again.
+pub(crate) const KEEP_FOR: Duration = Duration::from_secs(30);
+
+/// The pages kept open, hidden, after a switch away from them, until `KEEP_FOR` after they went hidden.
+#[derive(Default)]
+pub(crate) struct Kept {
+    pages: Vec<KeptPage>,
+    // Moves on at every hiding: a page's close timer goes ahead only if its ticket is still the page's.
+    serial: u64,
+}
+
+struct KeptPage {
+    org: String,
+    ticket: u64,
+    // A switch is showing it again (until the switch takes it out of the kept ones): the watch leaves it be.
+    showing: bool,
+    // The visual allowance the page had when it was open: it follows the page while hidden (its navigation, and
+    // `visualOrigin` from the page itself) and becomes the open one again when the page is shown.
+    visual: Option<VisualOrigin>,
+}
+
+impl Kept {
+    /// `id`'s page went hidden with its visual allowance: the ticket for its close.
+    pub(crate) fn hide(&mut self, id: &str, visual: Option<VisualOrigin>) -> u64 {
+        self.serial += 1;
+        self.pages.retain(|page| page.org != id);
+        self.pages.push(KeptPage { org: id.to_string(), ticket: self.serial, showing: false, visual });
+        self.serial
+    }
+
+    /// `id`'s page is shown again: its close is off. Answers its allowance, `None` if the page was not kept.
+    pub(crate) fn show(&mut self, id: &str) -> Option<Option<VisualOrigin>> {
+        let index = self.pages.iter().position(|page| page.org == id)?;
+        Some(self.pages.remove(index).visual)
+    }
+
+    pub(crate) fn contains(&self, id: &str) -> bool {
+        self.pages.iter().any(|page| page.org == id)
+    }
+
+    /// Whether `id`'s page is still hidden since the hiding with `ticket`, and no switch is showing it.
+    pub(crate) fn holds(&self, id: &str, ticket: u64) -> bool {
+        self.pages.iter().any(|page| page.org == id && page.ticket == ticket && !page.showing)
+    }
+
+    /// A switch is about to show `id`'s kept page.
+    pub(crate) fn showing(&mut self, id: &str) {
+        for page in self.pages.iter_mut().filter(|page| page.org == id) {
+            page.showing = true;
+        }
+    }
+
+    /// `id`'s close with `ticket` is due: whether the page is still hidden since that hiding (it goes now), not shown
+    /// or hidden again meanwhile.
+    pub(crate) fn expire(&mut self, id: &str, ticket: u64) -> bool {
+        let before = self.pages.len();
+        self.pages.retain(|page| page.org != id || page.ticket != ticket);
+        self.pages.len() != before
+    }
+
+    /// `id`'s page closes some other way (past the cap, or its org going): its close is off.
+    pub(crate) fn forget(&mut self, id: &str) {
+        self.pages.retain(|page| page.org != id);
+    }
+
+    /// A kept page sent its own allowance (`visualOrigin`): whether `id` is a kept page, which takes it.
+    pub(crate) fn set_visual(&mut self, id: &str, visual: Option<VisualOrigin>) -> bool {
+        let Some(page) = self.pages.iter_mut().find(|page| page.org == id) else { return false };
+        page.visual = visual;
+        true
+    }
+
+    /// The allowance of the kept page on `hub`, if one is.
+    fn visual_for(&mut self, hub: Option<&url::Url>) -> Option<&mut Option<VisualOrigin>> {
+        self.pages.iter_mut().map(|page| &mut page.visual).find(|visual| visual.as_ref().is_some_and(|visual| visual.serves(hub)))
+    }
+}
+
+/// The page on screen as a switch to `id` begins, which the switch hides: the last shown, unless that is `id` itself
+/// or a page already kept (the open org was removed, so none is on screen). Found from what was shown, never from the
+/// open org: an org just added is already the open one when the switch to it begins.
+pub(crate) fn outgoing_page(shown: &[String], kept: &Kept, id: &str) -> Option<String> {
+    shown.last().filter(|last| last.as_str() != id && !kept.contains(last)).cloned()
+}
+
+/// The order of the pages once `id`'s is on screen: the least recently shown beyond `KEEP_ALIVE` go, and are kept no
+/// longer (their close is off). Answers them, to close now.
+pub(crate) fn note_switch(shown: &mut Vec<String>, kept: &mut Kept, id: &str) -> Vec<String> {
+    let gone: Vec<String> = note_shown(shown, id, KEEP_ALIVE).into_iter().filter(|other| other != id).collect();
+    for other in &gone {
+        kept.forget(other);
+    }
+    gone
+}
 
 /// Records that `id`'s page is on screen, most recent last, and returns the orgs whose pages go: the least recently
 /// shown beyond `keep`.
@@ -423,9 +692,12 @@ pub(crate) fn note_shown(order: &mut Vec<String>, id: &str, keep: usize) -> Vec<
 }
 
 /// Makes another org the open one: its page replaces the old one in the main window. A page already built (a
-/// prefetch) is shown at once, as far as it has loaded; otherwise a new one opens. The old page closes once the new
-/// one is on screen. No restart and no new sign-in: the org's own store keeps its sign-in. The org becomes the open
-/// one only once its page exists: if the page cannot open, the old org and its page stay.
+/// prefetch, or a page kept hidden since a switch away from it) is shown at once, as it is: a kept page with no
+/// reload. Otherwise a new one opens. The old page goes hidden once the new one is on screen, and closes `KEEP_FOR`
+/// later unless it is shown again first (`Kept`), or at once past `KEEP_ALIVE`, or at once when it is in a call
+/// (`leaving_page`); either way its call ends as the switch begins (`HIDE_PAGE`). No restart and no new sign-in: the
+/// org's own store keeps its sign-in. The org becomes the open one only once its page exists: if the page cannot
+/// open, the old org and its page stay.
 pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     timing::begin(app, id);
     let state = app.state::<AppState>();
@@ -436,41 +708,70 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     let (org, was_open, previous) = {
         let orgs = state.orgs.lock().unwrap();
         let Some(org) = orgs.get(id).cloned() else { return Ok(()) };
-        let previous = orgs.active().map(|org| org.id.clone());
-        (org, previous.as_deref() == Some(id), previous)
+        let previous = orgs.active().cloned();
+        (org, previous.as_ref().is_some_and(|previous| previous.id == id), previous)
     };
     let Some(home) = Home::of(&org) else {
         log::warn!("could not open an org: its address is not usable");
         return Ok(());
     };
     let live = org_page(app, &org.id);
+    let kept = live.is_some() && state.kept.lock().unwrap().contains(id);
     let showing = {
         let prefetched = state.prefetch.lock().unwrap().org.clone();
-        on_screen(&state.shown.lock().unwrap(), prefetched.as_deref(), id)
+        let shown = state.shown.lock().unwrap();
+        on_screen(&shown, prefetched.as_deref(), &state.kept.lock().unwrap(), id)
     };
-    // Open and on screen: nothing to show. Open but hidden (the prefetch became the open org when the open one was
-    // removed) goes on to be shown.
-    if was_open && live.is_some() && showing {
+    let connected = state.connection.lock().unwrap().as_ref().is_some_and(|config| config.hub == home.hub);
+    if kept {
+        timing::mark(app, id, "kept");
+    }
+    // Open, on screen and connected: nothing to switch. The page is shown all the same, so a page the books call on
+    // screen is never left hidden. Open but hidden (the prefetch, or a kept page, became the open org when the open
+    // one was removed) goes on to be shown, and the connection with it.
+    if let (true, true, true, Some(page)) = (was_open, showing, connected, &live) {
+        layout_page(app, page);
+        let _ = page.show();
         timing::finish(app, id, "already open");
         refresh_chrome(app);
         return Ok(());
     }
+    // The page on screen as the switch begins: kept hidden from here on, unless it may be capturing (`keeps`), when
+    // it closes instead (`ending`), its microphone and camera stopped first. Told now, before the next page shows, so
+    // its own call ends cleanly (`HIDE_PAGE`).
+    let leaving = {
+        let shown = state.shown.lock().unwrap();
+        let kept = state.kept.lock().unwrap();
+        outgoing_page(&shown, &kept, id)
+    };
+    let leaving_page = leaving.as_deref().and_then(|other| org_page(app, other));
+    if let Some(page) = &leaving_page {
+        let _ = page.eval(HIDE_PAGE);
+    }
+    let keep = leaving_page.as_ref().is_none_or(|page| {
+        let note = leaving.as_deref().and_then(|other| state.capture.lock().unwrap().get(other).copied()).unwrap_or_default();
+        keeps(native_capture_now(page), note)
+    });
+    let (outgoing, ending) = if keep { (leaving, None) } else { (None, leaving) };
     if main_window(app).is_none() {
         // The window opens on the open org, so the org is made the open one first, and put back if that fails.
         state.orgs.lock().unwrap().set_active(id);
         if let Err(e) = build_window(app) {
             log::warn!("could not open the window for an org: {e}");
             if let Some(previous) = &previous {
-                state.orgs.lock().unwrap().set_active(previous);
+                state.orgs.lock().unwrap().set_active(&previous.id);
             }
             return Err(e);
         }
         show_when_painted(app);
     } else if let Some(page) = &live {
+        // Before it shows: a capture check running now for it while kept stops nothing on it (`native_capture`).
+        state.kept.lock().unwrap().showing(id);
         layout_page(app, page);
         let _ = page.show();
         let _ = page.set_focus();
-        // The flag is used up only by a page that went to the hub's sign-in with it: a prefetch built on it.
+        // The flag is used up only by a page that went to the hub's sign-in with it: a prefetch built on it. A kept
+        // page used it up when it was first shown (it is never the prefetch: see `prefetch`).
         if state.prefetch.lock().unwrap().started_on_sign_in(id) {
             state.orgs.lock().unwrap().take_sign_in(id);
         }
@@ -480,19 +781,321 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
     }
     state.orgs.lock().unwrap().set_active(id);
     state.prefetch.lock().unwrap().take(id);
-    // The connection follows the open org, and the status starts over.
-    select_org(&state, Config::new(home.hub.clone()), live.is_some());
+    let outgoing_hub = outgoing.as_ref().and_then(|other| state.orgs.lock().unwrap().get(other).and_then(Org::hub));
+    // The connection follows the open org, the allowances follow their pages, and the status starts over.
+    let hidden = select_org(&state, Config::new(home.hub.clone()), id, live.is_some(), outgoing.as_deref().map(|other| (other, outgoing_hub)));
     *state.status.lock().unwrap() = crate::hub::HubStatus::default();
     layout(app);
-    timing::shown(app, id);
-    let gone = note_shown(&mut state.shown.lock().unwrap(), id, KEEP_ALIVE);
-    for other in gone.iter().filter(|other| other.as_str() != id) {
+    if kept {
+        // Nothing left to time: the app on it has been up since it was first shown.
+        timing::finish(app, id, "shown");
+    } else {
+        timing::shown(app, id);
+    }
+    let gone = {
+        let mut shown = state.shown.lock().unwrap();
+        if let Some(other) = &ending {
+            shown.retain(|shown| shown != other);
+        }
+        note_switch(&mut shown, &mut state.kept.lock().unwrap(), id)
+    };
+    // Every org page but this one is hidden: child webviews keep their order, so one left showing would stay above it.
+    // The page that was on screen notes where it was, and is kept until its close.
+    for (label, page) in app.webviews() {
+        let Some(other) = org_of(&label).filter(|other| *other != id) else { continue };
+        if outgoing.as_deref() == Some(other) {
+            remember_place(app, other, &page);
+            let _ = page.hide();
+        } else if ending.as_deref() == Some(other) {
+            remember_place(app, other, &page);
+            let _ = page.close();
+            state.capture.lock().unwrap().remove(other);
+            log::info!("org page {other} closed: it may be capturing");
+        } else {
+            let _ = page.hide();
+        }
+    }
+    if let (Some(other), Some(ticket)) = (outgoing, hidden) {
+        close_later(app, other, ticket);
+    }
+    for other in &gone {
         if let Some(page) = org_page(app, other) {
+            remember_place(app, other, &page);
             let _ = page.close();
         }
     }
     refresh_chrome(app);
     Ok(())
+}
+
+/// What the page on screen runs as a switch away begins: its own leave (`window.ticoPageHidden`, which ends a call
+/// and a join on its way: ui/app/thread-call.js), and media it was playing pauses: it is no longer on screen. Only
+/// for a clean leave: whether the page is then kept is `keeps`, which does not trust the page.
+const HIDE_PAGE: &str = "try { window.ticoPageHidden && window.ticoPageHidden(); } catch (e) {}\n\
+    document.querySelectorAll('video, audio').forEach(m => { try { m.pause(); } catch (e) {} });";
+
+/// How often a kept page is checked for capture while hidden.
+const WATCH_EVERY: Duration = Duration::from_secs(1);
+/// The longest a capture check waits for WebKit's answer: no answer counts as capturing.
+#[cfg(target_os = "macos")]
+const CAPTURE_ANSWER: Duration = Duration::from_secs(1);
+
+/// What a page's own webview says about its capture. Each platform builds only some of these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum Native {
+    /// Nothing captured, nor muted: the microphone and camera, and the screen too when `screen` (WebKit told).
+    Idle { screen: bool },
+    /// Something is captured or muted: it was stopped as this was asked, unless the page was shown meanwhile.
+    Capturing,
+    /// No answer in time, or the webview is gone.
+    Unknown,
+    /// This platform's webview cannot tell (Linux, Windows).
+    Unsupported,
+}
+
+/// What a page said about its capture (bridge `capture`) since its page was built: a hint only, which a page can get
+/// around.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CaptureNote {
+    pub(crate) live: bool,
+    pub(crate) ever: bool,
+    /// It asked to share its screen.
+    pub(crate) display: bool,
+}
+
+/// Whether a page left by a switch, or kept since one, stays kept: only when nothing says it may be capturing. On
+/// macOS WebKit's own answer decides; where it cannot tell about the screen, a page that ever said it asked to share
+/// its screen is closed. Elsewhere a page that ever said it captured anything is closed. Closing is always safe: the
+/// page opens again where it was.
+pub(crate) fn keeps(native: Native, note: CaptureNote) -> bool {
+    match native {
+        Native::Idle { screen: true } => true,
+        Native::Idle { screen: false } => !note.display,
+        Native::Unsupported => !(note.live || note.ever || note.display),
+        Native::Capturing | Native::Unknown => false,
+    }
+}
+
+/// What org `id`'s page said about its capture (bridge `capture`).
+pub(crate) fn note_capture(notes: &mut HashMap<String, CaptureNote>, id: &str, live: bool, display: bool) {
+    let note = notes.entry(id.to_string()).or_default();
+    note.live = live;
+    note.ever |= live;
+    note.display |= display;
+}
+
+/// One capture question: whoever takes it first, WebKit's answer on the main thread or the wait that gave up on it,
+/// decides. An answer that comes after the wait gave up changes nothing.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct Question(AtomicBool);
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+impl Question {
+    pub(crate) fn new() -> Arc<Question> {
+        Arc::new(Question(AtomicBool::new(true)))
+    }
+
+    /// Takes the question: true for the first to ask only.
+    pub(crate) fn take(&self) -> bool {
+        self.0.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// WebKit's screen capture (SPI, `_displayCaptureState`, macOS 13+): `None` when this WebKit does not have it.
+#[cfg(target_os = "macos")]
+unsafe fn display_capture(view: &objc2_web_kit::WKWebView) -> Option<bool> {
+    use objc2::{msg_send, sel};
+    let has: bool = msg_send![view, respondsToSelector: sel!(_displayCaptureState)];
+    if !has {
+        return None;
+    }
+    let state: isize = msg_send![view, _displayCaptureState];
+    Some(state != 0)
+}
+
+/// Stops WebKit's screen capture, where this WebKit can (SPI, `_setDisplayCaptureState:completionHandler:`).
+#[cfg(target_os = "macos")]
+unsafe fn stop_display_capture(view: &objc2_web_kit::WKWebView) {
+    use objc2::{msg_send, sel};
+    let has: bool = msg_send![view, respondsToSelector: sel!(_setDisplayCaptureState:completionHandler:)];
+    if has {
+        let done = block2::RcBlock::new(|| {});
+        let _: () = msg_send![view, _setDisplayCaptureState: 0isize, completionHandler: &*done];
+    }
+}
+
+/// Asks `page`'s WKWebView whether it captures the microphone, camera or screen (captured or muted), and calls
+/// `answer` with (capturing, whether the screen was told), on the main thread, unless the wait already gave up
+/// (`question`). What is captured is stopped there only while `hidden()` still holds, checked right before.
+/// Answers whether the question went.
+#[cfg(target_os = "macos")]
+fn ask_capture(page: &Webview, question: Arc<Question>, hidden: impl FnOnce() -> bool + Send + 'static,
+               answer: impl FnOnce(bool, bool) + Send + 'static) -> bool {
+    use objc2_web_kit::{WKMediaCaptureState, WKWebView};
+    page.with_webview(move |platform| unsafe {
+        if !question.take() {
+            return;
+        }
+        // `inner` is the page's live WKWebView while this closure runs, lent by the runtime. The microphone and
+        // camera states are macOS 12+; the app needs 14.
+        let view = &*platform.inner().cast::<WKWebView>();
+        let screen = display_capture(view);
+        let on = view.microphoneCaptureState() != WKMediaCaptureState::None
+            || view.cameraCaptureState() != WKMediaCaptureState::None || screen == Some(true);
+        if on && hidden() {
+            view.setMicrophoneCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            view.setCameraCaptureState_completionHandler(WKMediaCaptureState::None, None);
+            stop_display_capture(view);
+        }
+        answer(on, screen.is_some());
+    }).is_ok()
+}
+
+/// What WebKit answered, as a `Native`.
+#[cfg(target_os = "macos")]
+fn native_of(answer: Option<(bool, bool)>) -> Native {
+    match answer {
+        Some((true, _)) => Native::Capturing,
+        Some((false, screen)) => Native::Idle { screen },
+        None => Native::Unknown,
+    }
+}
+
+/// `page`'s capture, waiting here for WebKit's answer (never on the main thread, which gives it). For the page a
+/// switch is leaving, which nothing else shows meanwhile: the switch holds `changing`.
+fn native_capture_now(page: &Webview) -> Native {
+    #[cfg(target_os = "macos")]
+    {
+        let (sender, answer) = std::sync::mpsc::channel();
+        let question = Question::new();
+        if !ask_capture(page, question.clone(), || true, move |on, screen| { let _ = sender.send((on, screen)); }) {
+            return Native::Unknown;
+        }
+        let mut got = answer.recv_timeout(CAPTURE_ANSWER).ok();
+        // Given up on, unless the answer was already on its way.
+        if got.is_none() && !question.take() {
+            got = answer.recv_timeout(CAPTURE_ANSWER).ok();
+        }
+        native_of(got)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = page;
+        Native::Unsupported
+    }
+}
+
+/// `page`'s capture, for the watch on org `id`'s page kept with `ticket`: anything captured is stopped only while the
+/// page is still that kept one, and not being shown (`Kept::holds`), as checked on the main thread right before.
+async fn native_capture(app: &App, page: &Webview, id: &str, ticket: u64) -> Native {
+    #[cfg(target_os = "macos")]
+    {
+        let (sender, answer) = tokio::sync::oneshot::channel();
+        let question = Question::new();
+        // `kept` is never held while waiting on the main thread, so taking it there is safe; `changing` is not.
+        let (app, id) = (app.clone(), id.to_string());
+        let hidden = move || app.state::<AppState>().kept.lock().unwrap().holds(&id, ticket);
+        if !ask_capture(page, question.clone(), hidden, move |on, screen| { let _ = sender.send((on, screen)); }) {
+            return Native::Unknown;
+        }
+        let mut answer = answer;
+        let mut got = tokio::time::timeout(CAPTURE_ANSWER, &mut answer).await.ok().and_then(Result::ok);
+        if got.is_none() && !question.take() {
+            got = tokio::time::timeout(CAPTURE_ANSWER, answer).await.ok().and_then(Result::ok);
+        }
+        native_of(got)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, page, id, ticket);
+        Native::Unsupported
+    }
+}
+
+// A hostile org server that gets around the page's capture report could keep a screen share it was granted for up
+// to KEEP_FOR on a WebKit without `_displayCaptureState`; macOS's own screen-recording indicator stays on meanwhile.
+
+/// A kept page started a new document while hidden (a reload, or a navigation of its own): it closes, as a page
+/// hidden from the person never starts over unseen. On a task, under `changing` as every close is (the main thread,
+/// which this is called on, never waits for it); a page shown again meanwhile stays.
+fn close_if_kept(page: &Webview) {
+    let Some(id) = org_of(page.label()).map(str::to_string) else { return };
+    let app = page.app_handle().clone();
+    if !app.state::<AppState>().kept.lock().unwrap().contains(&id) {
+        return;
+    }
+    let label = page.label().to_string();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        let Some(page) = org_page(&app, &id).filter(|page| page.label() == label) else { return };
+        if !forget_reloaded(&mut state.shown.lock().unwrap(), &mut state.kept.lock().unwrap(), &id) {
+            return;
+        }
+        let _ = page.close();
+        state.capture.lock().unwrap().remove(&id);
+        log::info!("org page {id} closed: it loaded again while hidden");
+    });
+}
+
+/// `close_if_kept`'s bookkeeping: whether `id`'s page is still kept, and if so it is counted no longer.
+pub(crate) fn forget_reloaded(shown: &mut Vec<String>, kept: &mut Kept, id: &str) -> bool {
+    if !kept.contains(id) {
+        return false;
+    }
+    kept.forget(id);
+    shown.retain(|shown| shown != id);
+    true
+}
+
+/// Closes org `id`'s kept page `KEEP_FOR` after it went hidden (`ticket`), unless it was shown (or hidden again,
+/// which starts its own wait) meanwhile, or closed some other way.
+fn close_later(app: &App, id: String, ticket: u64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Checked every `WATCH_EVERY` meanwhile: a page that captures while hidden (a join that finishes, or a page
+        // that gets around its own leave) has its microphone and camera stopped, and closes at once.
+        let mut waited = Duration::ZERO;
+        let why = loop {
+            if waited >= KEEP_FOR {
+                break format!("hidden for {} s", KEEP_FOR.as_secs());
+            }
+            tokio::time::sleep(WATCH_EVERY).await;
+            waited += WATCH_EVERY;
+            let state = app.state::<AppState>();
+            if !state.kept.lock().unwrap().holds(&id, ticket) {
+                return;
+            }
+            let Some(page) = org_page(&app, &id) else { return };
+            let note = state.capture.lock().unwrap().get(&id).copied().unwrap_or_default();
+            if !keeps(native_capture(&app, &page, &id, ticket).await, note) {
+                break "it may be capturing".to_string();
+            }
+        };
+        let state = app.state::<AppState>();
+        let _changing = state.changing.lock().unwrap();
+        // Checked before anything changes. The open org's page is never closed here: one still kept as it became the
+        // open org (the open one was removed, and the switch to it comes next) stays kept, for that switch to show.
+        let open = active_org(&app).map(|open| open.id);
+        if !close_due(&mut state.kept.lock().unwrap(), open.as_deref(), &id, ticket) {
+            return;
+        }
+        state.shown.lock().unwrap().retain(|shown| shown != &id);
+        if let Some(page) = org_page(&app, &id) {
+            remember_place(&app, &id, &page);
+            let _ = page.close();
+            state.capture.lock().unwrap().remove(&id);
+            log::info!("org page {id} closed: {why}");
+        }
+    });
+}
+
+/// Whether `id`'s close with `ticket` goes ahead, taking the page out of the kept ones: only while it is still hidden
+/// since that hiding, and never for the open org (`open`). Checked before anything changes, so a close that does not
+/// go ahead leaves everything as it was.
+pub(crate) fn close_due(kept: &mut Kept, open: Option<&str>, id: &str, ticket: u64) -> bool {
+    open != Some(id) && kept.expire(id, ticket)
 }
 
 /// Numbers a rail click, in the order the clicks came.
@@ -528,17 +1131,27 @@ fn layout_page(app: &App, page: &Webview) {
     let _ = page.set_bounds(page_bounds(app, true));
 }
 
-/// The open org's server becomes the connection. Its page's visual allowance comes along when the page was already
-/// built (a prefetch sent it while hidden); a new page sends its own.
-fn select_org(state: &AppState, config: Config, built: bool) {
+/// Org `id`'s server becomes the connection, in one step with the visual allowances, so a navigation never finds a
+/// page's allowance in neither place: the open one goes with the page that was on screen (`outgoing`, with its hub;
+/// only ever to it), which is kept from here on, and `id`'s page gets its own back when it was already built (one it
+/// kept while hidden, or one a prefetch sent while hidden); a new page sends its own. A kept page of `id` is no longer
+/// kept, so its close is off. Answers the ticket for the outgoing page's close.
+pub(crate) fn select_org(state: &AppState, config: Config, id: &str, built: bool, outgoing: Option<(&str, Option<url::Url>)>) -> Option<u64> {
     let mut connection = state.connection.lock().unwrap();
     let mut visual = state.visual_origin.lock().unwrap();
     let mut parked = state.parked_visual.lock().unwrap();
-    *visual = None;
-    if built && parked.as_ref().is_some_and(|parked| parked.serves(Some(&config.hub))) {
-        *visual = parked.take();
+    let mut kept = state.kept.lock().unwrap();
+    let left = visual.take();
+    let returning = kept.show(id).flatten();
+    if built {
+        if let Some(returning) = returning.filter(|returning| returning.serves(Some(&config.hub))) {
+            *visual = Some(returning);
+        } else if parked.as_ref().is_some_and(|parked| parked.serves(Some(&config.hub))) {
+            *visual = parked.take();
+        }
     }
     *connection = Some(config);
+    outgoing.map(|(other, hub)| kept.hide(other, left.filter(|left| left.serves(hub.as_ref()))))
 }
 
 /// The page built ahead of a click: at most one, for the org the pointer last rested on in the rail.
@@ -620,9 +1233,12 @@ pub(crate) fn prefetch(app: &App, id: &str) -> tauri::Result<()> {
         let list = state.orgs.lock().unwrap();
         list.get(id).filter(|_| list.active().map(|open| open.id.as_str()) != Some(id)).cloned()
     };
-    let Some(org) = org.filter(|_| main_window(app).is_some()) else {
-        // Nothing to build (a rest on the open org, say). The rest still called off the close of the page built for
-        // another org, so for that page it counts as a leave: its close is scheduled again.
+    // A page kept hidden since a switch away is shown as it is on a click: nothing to build, and it never becomes the
+    // prefetch, so it never gets a second page and a leave's close never reaches it (its own `close_later` does).
+    let kept = state.kept.lock().unwrap().contains(id);
+    let Some(org) = org.filter(|_| !kept && main_window(app).is_some()) else {
+        // Nothing to build (a rest on the open org or a kept one, say). The rest still called off the close of the
+        // page built for another org, so for that page it counts as a leave: its close is scheduled again.
         leave(app);
         return Ok(());
     };
@@ -678,7 +1294,8 @@ pub(crate) fn leave(app: &App) {
     });
 }
 
-/// Closes a prefetched page that was never shown. Callers hold `changing`.
+/// Closes a prefetched page that was never shown. A page in `shown` (the open one, or one kept hidden since a switch
+/// away) is never the prefetch's to close: the switch away or its own `close_later` closes it. Callers hold `changing`.
 fn close_unused(app: &App, id: &str) {
     let state = app.state::<AppState>();
     let open = state.orgs.lock().unwrap().active().is_some_and(|org| org.id == id);
@@ -692,14 +1309,22 @@ fn close_unused(app: &App, id: &str) {
     }
 }
 
-/// An org went: its page is no longer counted as shown or prefetched. Callers hold `changing` and close the page.
+/// An org went: its page is no longer counted as shown, kept or prefetched, and a kept page's pending close is off.
+/// Callers hold `changing` and close the page at once.
 pub(crate) fn forget_page(app: &App, id: &str) {
     let state = app.state::<AppState>();
-    state.shown.lock().unwrap().retain(|shown| shown != id);
     let mut prefetch = state.prefetch.lock().unwrap();
-    if prefetch.take(id) {
+    if forget_org(&mut state.shown.lock().unwrap(), &mut state.kept.lock().unwrap(), &mut prefetch, id) {
         *state.parked_visual.lock().unwrap() = None;
     }
+    state.capture.lock().unwrap().remove(id);
+}
+
+/// `forget_page`'s bookkeeping: answers whether `id` was the prefetch, whose allowance then goes too.
+pub(crate) fn forget_org(shown: &mut Vec<String>, kept: &mut Kept, prefetch: &mut Prefetch, id: &str) -> bool {
+    shown.retain(|shown| shown != id);
+    kept.forget(id);
+    prefetch.take(id)
 }
 
 /// Loads org `id`'s open page again after Tico sign-in renewed its session: on the hub's sign-in when the server
@@ -763,23 +1388,335 @@ mod page_tests {
         assert_eq!(shown, order(&["b", "a"]));
         assert_eq!(note_shown(&mut shown, "c", 2), order(&["b"]));
         assert_eq!(shown, order(&["a", "c"]));
-        // The cap in use: only the open page stays.
-        assert_eq!(note_shown(&mut shown, "d", KEEP_ALIVE), order(&["a", "c"]));
-        assert_eq!(shown, order(&["d"]));
-        assert!(note_shown(&mut shown, "d", KEEP_ALIVE).is_empty(), "the open page never closes itself");
-        assert_eq!(note_shown(&mut shown, "e", 0), order(&["d"]), "a cap below one still keeps the open page");
-        assert_eq!(shown, order(&["e"]));
+        // The cap in use: the open page and two kept ones.
+        assert!(note_shown(&mut shown, "d", KEEP_ALIVE).is_empty());
+        assert_eq!(note_shown(&mut shown, "e", KEEP_ALIVE), order(&["a"]));
+        assert_eq!(shown, order(&["c", "d", "e"]));
+        assert!(note_shown(&mut shown, "e", KEEP_ALIVE).is_empty(), "the open page never closes itself");
+        assert_eq!(note_shown(&mut shown, "f", 0), order(&["c", "d", "e"]), "a cap below one still keeps the open page");
+        assert_eq!(shown, order(&["f"]));
     }
 
     #[test]
-    fn an_open_org_is_on_screen_only_when_it_was_shown_last_and_is_not_a_prefetch() {
+    fn an_open_org_is_on_screen_only_when_it_was_shown_last_and_is_neither_a_prefetch_nor_kept() {
+        let none = Kept::default();
         let shown = order(&["a"]);
-        assert!(on_screen(&shown, None, "a"));
-        assert!(!on_screen(&shown, None, "b"));
-        assert!(!on_screen(&shown, Some("a"), "a"));
+        assert!(on_screen(&shown, None, &none, "a"));
+        assert!(!on_screen(&shown, None, &none, "b"));
+        assert!(!on_screen(&shown, Some("a"), &none, "a"));
         // Open A, prefetch B, remove A: B is the open org but was never shown, so it must still be shown.
-        assert!(!on_screen(&[], Some("b"), "b"));
-        assert!(!on_screen(&[], None, "b"));
+        assert!(!on_screen(&[], Some("b"), &none, "b"));
+        assert!(!on_screen(&[], None, &none, "b"));
+        // B kept, then A (open) removed: B is shown last but hidden, so the switch to it must still show it.
+        let mut kept = Kept::default();
+        kept.hide("b", None);
+        assert!(!on_screen(&order(&["b"]), None, &kept, "b"));
+        assert!(kept.show("b").is_some());
+        assert!(on_screen(&order(&["b"]), None, &kept, "b"));
+    }
+
+    /// A switch as `switch_to` keeps its books: the page on screen goes hidden, `id`'s is shown (its close off), and
+    /// pages past the cap go. Answers the pages to close now and the hidden page with its close's ticket.
+    fn switch(shown: &mut Vec<String>, kept: &mut Kept, id: &str) -> (Vec<String>, Option<(String, u64)>) {
+        let (gone, hidden, ending) = switch_keeping(shown, kept, true, id);
+        assert_eq!(ending, None);
+        (gone, hidden)
+    }
+
+    /// `switch_to`'s bookkeeping, with whether the page left is kept (`keeps`): (gone, kept, ending).
+    fn switch_keeping(shown: &mut Vec<String>, kept: &mut Kept, keep: bool, id: &str)
+        -> (Vec<String>, Option<(String, u64)>, Option<String>) {
+        let leaving = outgoing_page(shown, kept, id);
+        let (outgoing, ending) = if keep { (leaving, None) } else { (None, leaving) };
+        kept.show(id);
+        let hidden = outgoing.map(|other| { let ticket = kept.hide(&other, None); (other, ticket) });
+        if let Some(other) = &ending {
+            shown.retain(|shown| shown != other);
+        }
+        (note_switch(shown, kept, id), hidden, ending)
+    }
+
+    #[test]
+    fn only_a_page_nothing_says_is_capturing_is_kept() {
+        let idle = CaptureNote::default();
+        let mut notes = HashMap::new();
+        // macOS: WebKit's answer decides for the microphone and camera, whatever the page said.
+        assert!(keeps(Native::Idle { screen: false }, idle));
+        note_capture(&mut notes, "a", true, false);
+        assert!(keeps(Native::Idle { screen: false }, notes["a"]), "a page that says it captures, where WebKit says it does not");
+        assert!(!keeps(Native::Capturing, idle), "a page that got around its own report");
+        assert!(!keeps(Native::Unknown, idle), "no answer in time closes");
+        // A screen share, where WebKit cannot tell: asked for once, the page is never kept. Where WebKit tells, its
+        // answer decides.
+        note_capture(&mut notes, "b", false, true);
+        note_capture(&mut notes, "b", false, false);
+        assert_eq!(notes["b"], CaptureNote { live: false, ever: false, display: true });
+        assert!(!keeps(Native::Idle { screen: false }, notes["b"]));
+        assert!(keeps(Native::Idle { screen: true }, notes["b"]));
+        // Elsewhere: a page that ever captured anything is closed, even after its call ended.
+        assert!(keeps(Native::Unsupported, idle));
+        note_capture(&mut notes, "a", false, false);
+        assert_eq!(notes["a"], CaptureNote { live: false, ever: true, display: false });
+        assert!(!keeps(Native::Unsupported, notes["a"]));
+        assert!(!keeps(Native::Unsupported, notes["b"]));
+    }
+
+    #[test]
+    fn a_page_that_may_be_capturing_is_closed_by_a_switch_away_not_kept() {
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        switch_keeping(&mut shown, &mut kept, true, "a");
+        let (gone, hidden, ending) = switch_keeping(&mut shown, &mut kept, false, "b");
+        assert_eq!((gone, hidden, ending.as_deref()), (vec![], None, Some("a")));
+        assert!(!kept.contains("a") && kept.pages.is_empty());
+        assert_eq!(shown, order(&["b"]), "a closed page is not counted against the cap");
+        // Back to A opens a new page; B, capturing nothing, is kept as usual.
+        let (gone, hidden, ending) = switch_keeping(&mut shown, &mut kept, true, "a");
+        assert!(gone.is_empty() && ending.is_none() && hid(hidden.clone()).as_deref() == Some("b") && kept.contains("b"));
+        // While kept, its watch checks it is still that hiding, and that no switch is showing it.
+        let ticket = hidden.unwrap().1;
+        assert!(kept.holds("b", ticket) && !kept.holds("b", ticket + 1) && !kept.holds("a", ticket));
+        kept.showing("b");
+        assert!(!kept.holds("b", ticket) && kept.contains("b"), "being shown, it is still kept until the switch takes it");
+    }
+
+    #[test]
+    fn a_capture_question_is_settled_once() {
+        // WebKit's answer first: the wait takes nothing after it.
+        let question = Question::new();
+        assert!(question.take() && !question.take());
+        // The wait gave up first: an answer that comes later changes nothing.
+        let late = Question::new();
+        assert!(late.take());
+        assert!(!late.take(), "the late answer stops nothing");
+    }
+
+    #[test]
+    fn a_kept_page_that_loads_again_while_hidden_is_closed() {
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        switch(&mut shown, &mut kept, "a");
+        switch(&mut shown, &mut kept, "b");
+        assert!(forget_reloaded(&mut shown, &mut kept, "a"));
+        assert!(!kept.contains("a") && shown == order(&["b"]));
+        // The open page, or one shown again before the close ran, stays.
+        assert!(!forget_reloaded(&mut shown, &mut kept, "b"));
+        assert_eq!(shown, order(&["b"]));
+    }
+
+    #[test]
+    fn the_page_left_runs_its_own_leave_and_nothing_it_could_undo() {
+        assert!(HIDE_PAGE.contains("window.ticoPageHidden()") && HIDE_PAGE.contains("m.pause()"));
+        assert!(!HIDE_PAGE.contains("__tico"), "no page-reachable switch for capture");
+        assert_eq!(HIDE_PAGE.matches("try {").count(), 2);
+    }
+
+    fn hid(hidden: Option<(String, u64)>) -> Option<String> {
+        hidden.map(|(other, _)| other)
+    }
+
+    #[test]
+    fn a_switch_keeps_the_page_left_hidden_and_closes_only_past_the_cap() {
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        assert_eq!(switch(&mut shown, &mut kept, "a"), (vec![], None), "the first page hides nothing");
+        // A to B and back: A is kept, then shown again as it was, and B is kept.
+        let (gone, hidden) = switch(&mut shown, &mut kept, "b");
+        assert!(gone.is_empty() && hid(hidden).as_deref() == Some("a") && kept.contains("a"));
+        let (gone, hidden) = switch(&mut shown, &mut kept, "a");
+        assert!(gone.is_empty() && hid(hidden).as_deref() == Some("b"));
+        assert!(!kept.contains("a") && kept.contains("b"));
+        assert_eq!(shown, order(&["b", "a"]));
+        // C, then D: two pages stay hidden besides the open one, and the least recently shown (B) goes first.
+        assert!(switch(&mut shown, &mut kept, "c").0.is_empty());
+        assert_eq!(shown, order(&["b", "a", "c"]));
+        let (gone, hidden) = switch(&mut shown, &mut kept, "d");
+        assert_eq!(gone, order(&["b"]));
+        assert_eq!(hid(hidden).as_deref(), Some("c"));
+        assert_eq!(shown, order(&["a", "c", "d"]));
+        assert!(!kept.contains("b") && kept.contains("a") && kept.contains("c") && !kept.contains("d"));
+        // Rapid clicks across many orgs never hold more than the cap.
+        for id in ["e", "f", "g", "h", "a", "b", "c"] {
+            switch(&mut shown, &mut kept, id);
+            assert!(shown.len() <= KEEP_ALIVE && kept.pages.len() < KEEP_ALIVE, "{shown:?}");
+            assert!(shown[..shown.len() - 1].iter().all(|other| kept.contains(other)), "every page but the open one is kept");
+        }
+        // A switch to the org already open hides nothing.
+        assert_eq!(switch(&mut shown, &mut kept, "c"), (vec![], None));
+        // No page was on screen (the last org went): nothing to hide.
+        assert_eq!(outgoing_page(&[], &Kept::default(), "a"), None);
+    }
+
+    #[test]
+    fn the_page_hidden_is_the_one_on_screen_even_when_an_added_org_is_already_the_open_one() {
+        // Open A, switch to B, add C (adding makes C the open org before the switch to it begins), then back to A.
+        let (mut shown, mut kept) = (Vec::new(), Kept::default());
+        switch(&mut shown, &mut kept, "a");
+        switch(&mut shown, &mut kept, "b");
+        let (_, hidden) = switch(&mut shown, &mut kept, "c");
+        assert_eq!(hid(hidden).as_deref(), Some("b"), "B was on screen, so B goes hidden");
+        let (_, hidden) = switch(&mut shown, &mut kept, "a");
+        assert_eq!(hid(hidden).as_deref(), Some("c"));
+        assert!(kept.contains("b") && kept.contains("c") && !kept.contains("a"));
+    }
+
+    #[test]
+    fn a_close_that_comes_after_the_page_was_shown_again_closes_nothing() {
+        let mut kept = Kept::default();
+        let first = kept.hide("a", None);
+        // Shown again within the wait: the close that comes later does nothing.
+        kept.show("a");
+        assert!(!kept.expire("a", first));
+        // Hidden again: a fresh wait. The first hiding's close still does nothing; the second's closes it.
+        let second = kept.hide("a", None);
+        assert_ne!(first, second);
+        assert!(!kept.expire("a", first) && kept.contains("a"));
+        let other = kept.hide("b", None);
+        assert!(!kept.expire("b", second), "a ticket is one page's only");
+        assert!(kept.expire("a", second) && !kept.contains("a"));
+        assert!(!kept.expire("a", second), "it closes once");
+        assert!(kept.expire("b", other));
+    }
+
+    #[test]
+    fn removing_an_org_forgets_its_kept_page_and_calls_off_its_close() {
+        let (mut shown, mut kept, mut prefetch) = (Vec::new(), Kept::default(), Prefetch::default());
+        switch(&mut shown, &mut kept, "a");
+        let (_, hidden) = switch(&mut shown, &mut kept, "b");
+        let (_, ticket) = hidden.unwrap();
+        assert!(!forget_org(&mut shown, &mut kept, &mut prefetch, "a"), "A was kept, not the prefetch");
+        assert_eq!(shown, order(&["b"]));
+        assert!(!kept.contains("a") && !close_due(&mut kept, Some("b"), "a", ticket), "its close is off; the caller closes the page at once");
+        // The prefetch goes the same way, and says so, so its parked allowance goes too.
+        prefetch.org = Some("c".into());
+        assert!(forget_org(&mut shown, &mut kept, &mut prefetch, "c"));
+    }
+
+    #[test]
+    fn removing_the_open_org_leaves_a_kept_page_for_the_switch_to_it_even_when_its_close_comes_first() {
+        // B kept, A open; A is removed, so B is the open org, and the switch to it comes once the removal is done.
+        let (mut shown, mut kept, mut prefetch) = (Vec::new(), Kept::default(), Prefetch::default());
+        switch(&mut shown, &mut kept, "b");
+        let (_, hidden) = switch(&mut shown, &mut kept, "a");
+        let (_, ticket) = hidden.unwrap();
+        forget_org(&mut shown, &mut kept, &mut prefetch, "a");
+        // B's close comes in between: it changes nothing, since B is the open org now.
+        assert!(!close_due(&mut kept, Some("b"), "b", ticket));
+        assert!(kept.contains("b"));
+        // So the switch to B does not take it for on screen, and shows it.
+        assert!(!on_screen(&shown, None, &kept, "b"));
+        let (gone, hidden) = switch(&mut shown, &mut kept, "b");
+        assert!(gone.is_empty() && hidden.is_none() && !kept.contains("b"));
+        assert!(on_screen(&shown, None, &kept, "b"));
+        // A close that finds its page still hidden, and not the open org's, goes ahead.
+        let ticket = kept.hide("c", None);
+        assert!(close_due(&mut kept, Some("b"), "c", ticket) && !kept.contains("c"));
+    }
+
+    #[test]
+    fn a_switch_moves_each_visual_allowance_with_its_own_page() {
+        let (acme, tidy) = (url::Url::parse("https://acme.example.com/").unwrap(), url::Url::parse("https://tidy.example.com/").unwrap());
+        let doc = crate::orgs::Document { version: 1, active: Some("o_aaaaaaaa".into()), orgs: vec![] };
+        let state = AppState::new(crate::orgs::Orgs::new(doc, None), Some(Config::new(acme.clone())));
+        let allowance = |hub: &url::Url| VisualOrigin::new(hub, "https://visuals.example.net").unwrap();
+        let kept_visual = |state: &AppState, id: &str| state.kept.lock().unwrap().pages.iter().find(|page| page.org == id).map(|page| page.visual.clone());
+        *state.visual_origin.lock().unwrap() = Some(allowance(&acme));
+        // A (open, with an allowance) to B (a new page): A's allowance goes to A, kept, in the same step; B has none yet.
+        let ticket = select_org(&state, Config::new(tidy.clone()), "o_bbbbbbbb", false, Some(("o_aaaaaaaa", Some(acme.clone()))));
+        assert!(ticket.is_some() && state.visual_origin.lock().unwrap().is_none());
+        assert!(kept_visual(&state, "o_aaaaaaaa").flatten().unwrap().serves(Some(&acme)));
+        *state.visual_origin.lock().unwrap() = Some(allowance(&tidy));
+        // While A is hidden, its navigation uses its own allowance, and its new top-level page clears only its own.
+        let signing_in = AtomicBool::new(false);
+        let frame = url::Url::parse("https://visuals.example.net/visuals/WyJodW1hbjphIiwiZjEiLDEsIiIsMjAwMDAwMDAwMF0.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn-_0").unwrap();
+        assert!(follow_window(&state, &signing_in, true, Some(&acme), &frame), "A's frame follows A's own allowance");
+        top_level_window(&state, &signing_in, true, Some(&acme), &acme);
+        assert_eq!(kept_visual(&state, "o_aaaaaaaa").map(|visual| visual.is_none()), Some(true), "a new top-level page sends its config again");
+        assert!(!follow_window(&state, &signing_in, true, Some(&acme), &frame), "and until then has none");
+        assert!(follow_window(&state, &signing_in, true, Some(&tidy), &frame), "the open page keeps its own");
+        assert!(state.kept.lock().unwrap().set_visual("o_aaaaaaaa", Some(allowance(&acme))), "the kept page sends it again");
+        assert!(!state.kept.lock().unwrap().set_visual("o_cccccccc", Some(allowance(&acme))), "only a kept page keeps one");
+        // Back to A: its allowance comes back with it, and B's goes to B, kept.
+        assert!(select_org(&state, Config::new(acme.clone()), "o_aaaaaaaa", true, Some(("o_bbbbbbbb", Some(tidy.clone())))).is_some());
+        assert!(state.visual_origin.lock().unwrap().as_ref().unwrap().serves(Some(&acme)));
+        assert!(kept_visual(&state, "o_aaaaaaaa").is_none(), "A is no longer kept");
+        assert!(kept_visual(&state, "o_bbbbbbbb").flatten().unwrap().serves(Some(&tidy)));
+        // An allowance never goes to a page of another hub: A, kept under the wrong hub, keeps none.
+        select_org(&state, Config::new(tidy.clone()), "o_bbbbbbbb", true, Some(("o_aaaaaaaa", Some(tidy.clone()))));
+        assert_eq!(kept_visual(&state, "o_aaaaaaaa").map(|visual| visual.is_none()), Some(true));
+        assert!(state.visual_origin.lock().unwrap().as_ref().unwrap().serves(Some(&tidy)), "B got its own back");
+    }
+
+    #[test]
+    fn only_a_route_on_the_orgs_own_hub_is_remembered_as_its_place() {
+        let hub = url::Url::parse("https://team.example.com/").unwrap();
+        let place = |url: &str| place_of(&hub, &url::Url::parse(url).unwrap());
+        assert_eq!(place("https://team.example.com/#/threads/t_1").flatten().unwrap().as_str(), "https://team.example.com/#/threads/t_1");
+        // Nothing of the address but the route is kept.
+        assert_eq!(place("https://team.example.com/?message=m_1&task=k_2#/task/k_2").flatten().unwrap().as_str(), "https://team.example.com/#/task/k_2");
+        // The web app's start clears the place.
+        assert_eq!(place("https://team.example.com/"), Some(None));
+        assert_eq!(place("https://team.example.com/#/"), Some(None));
+        // Anywhere else leaves the last place as it was.
+        for other in ["https://team.example.com/auth/login", "https://team.example.com/auth/login#/threads/t_1",
+                      "https://team.example.com/api/v2/local-signin?token=t&next=%2F", "https://team.example.com/cdn-cgi/access/login/team.example.com",
+                      "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com", "https://accounts.google.com/ServiceLogin#/x",
+                      "http://team.example.com/#/threads/t_1", "https://team.example.com:8443/#/threads/t_1", "https://other.example.com/#/threads/t_1",
+                      "https://user:pass@team.example.com/#/threads/t_1", "https://team.example.com/#access_token=abc",
+                      "https://team.example.com/#/invite?token=abc", "about:blank"] {
+            assert_eq!(place(other), None, "{other}");
+        }
+        // No escape hides a credential, however many times it is encoded.
+        for hidden in ["https://team.example.com/#/threads/t_1?access_%74oken=secret", "https://team.example.com/#/threads/t_1?access_%2574oken=x",
+                       "https://team.example.com/#/threads/t_1?access_%252574oken=x", "https://team.example.com/#/threads/t_1?view=%2573ecret",
+                       "https://team.example.com/#/%61uth/callback", "https://team.example.com/#/threads/t_1?q=my+password",
+                       "https://team.example.com/#/threads/%2e%2e/x", "https://team.example.com/#/threads/t 1", "https://team.example.com/#/a//b"] {
+            assert_eq!(place(hidden), None, "{hidden}");
+        }
+        // Four rounds of encoding are more than a route ever needs: refused.
+        assert_eq!(route_of("/threads/t_1?q=%25252541"), None);
+        assert_eq!(route_of("/threads/t_1?q=%252541").as_deref(), Some("/threads/t_1?q=A"));
+        // The view settings a route uses survive; anything else is dropped, not the whole place.
+        assert_eq!(place("https://team.example.com/#/updates?kind=weekly&view=archive").flatten().unwrap().as_str(),
+                   "https://team.example.com/#/updates?kind=weekly&view=archive");
+        assert_eq!(place("https://team.example.com/#/finance/sources?books=ok&reason=x&month=2026-10").flatten().unwrap().as_str(),
+                   "https://team.example.com/#/finance/sources?month=2026-10");
+        assert_eq!(route_of("/meetings?window=1").as_deref(), Some("/meetings"));
+        assert_eq!(route_of("/library?q=road%20map&who=me").as_deref(), Some("/library?q=road+map&who=me"));
+        assert_eq!(place("https://team.example.com/#/?window=1"), Some(None), "a start with nothing kept is the start");
+        // Each page's own view settings come back with it: Mail's open thread, Messaging's bot, Tasks' filters.
+        for route in ["/mail?mailbox=inbox_1&thread=thread_1&tbox=inbox_1", "/messaging?bot=ops&source=slack",
+                      "/tasks?owner=bot:ops&status=open&view=board&type=video", "/rules/due?due=d_1", "/library/files?bot=ops&pinned=1",
+                      "/finance/books?account_id=a_1&teams=t_1&teams=t_2&unattributed=true", "/updates?day=2026-11-03&update=u_1"] {
+            assert_eq!(route_of(route).as_deref().map(|kept| kept.replace("%3A", ":")).as_deref(), Some(route), "{route}");
+        }
+        // One-time ones go: a whole-org visit, Granola's connect, an old redirect.
+        assert_eq!(route_of("/updates?update=u_1&scope=all").as_deref(), Some("/updates?update=u_1"));
+        assert_eq!(route_of("/meetings?connect=granola&meeting=r_1").as_deref(), Some("/meetings?meeting=r_1"));
+        assert_eq!(route_of("/threads?with=human:bea").as_deref(), Some("/threads"));
+        // A hand-edited orgs.json gets the same check when the place is read back.
+        let hub_text = Some("https://team.example.com/#/threads/t_1?access_%74oken=secret");
+        assert_eq!(opening_page(hub.clone(), &hub, false, hub_text), hub);
+        assert_eq!(opening_page(hub.clone(), &hub, false, Some("https://team.example.com/#/updates?view=archive&x=1")).as_str(),
+                   "https://team.example.com/#/updates?view=archive");
+        // A hub under a path: only its own address, with a route.
+        let prefixed = url::Url::parse("https://team.example.com/tico/").unwrap();
+        assert!(place_of(&prefixed, &url::Url::parse("https://team.example.com/tico/#/inbox").unwrap()).flatten().is_some());
+        assert_eq!(place_of(&prefixed, &url::Url::parse("https://team.example.com/#/inbox").unwrap()), None);
+    }
+
+    #[test]
+    fn a_new_page_opens_where_the_org_last_was_unless_it_needs_its_sign_in() {
+        let hub = url::Url::parse("https://team.example.com/").unwrap();
+        let last = Some("https://team.example.com/#/threads/t_1");
+        assert_eq!(opening_page(hub.clone(), &hub, false, last).as_str(), "https://team.example.com/#/threads/t_1");
+        assert_eq!(opening_page(hub.clone(), &hub, true, last).as_str(), "https://team.example.com/auth/login", "sign-in comes first");
+        assert_eq!(opening_page(hub.clone(), &hub, false, None), hub);
+        // A place that is not one (orgs.json is only a file) opens the usual first page.
+        for bad in ["https://evil.example/#/threads/t_1", "https://team.example.com/auth/login", "not a url"] {
+            assert_eq!(opening_page(hub.clone(), &hub, false, Some(bad)), hub, "{bad}");
+        }
+        // A local server's token sign-in keeps its own first page.
+        let local = url::Url::parse("http://localhost:8765/api/v2/local-signin?token=t&next=%2F").unwrap();
+        let local_hub = url::Url::parse("http://localhost:8765/").unwrap();
+        assert_eq!(opening_page(local.clone(), &local_hub, false, Some("http://localhost:8765/#/inbox")), local);
     }
 
     #[test]
@@ -919,18 +1856,19 @@ pub(crate) fn clear_label(id: &str) -> String {
 /// browser. Each webview keeps its own `signing_in` and its own hub, so a window opened for one org keeps
 /// following that org after the person switches to another. Embedded frames navigate through the same
 /// handler with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the
-/// hub origin; and only the hub's own logins start one. `page_org` is the org of an org page (the main window's
+/// hub origin; and only the hub's own logins start one. `page_label` identifies an org page (the main window's
 /// children, which also follow visual links); other windows have none.
-fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
+fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_label: Option<String>) -> (impl Fn(&url::Url) -> bool + Send + 'static, impl Fn(PageLoadPayload<'_>) + Send + Sync + 'static) {
     let signing_in = Arc::new(AtomicBool::new(false));
-    let visuals = page_org.is_some();
+    let visuals = page_label.is_some();
     let (opener, page_app) = (app.clone(), app.clone());
+    let page_org = page_label.as_deref().and_then(org_of).map(str::to_string);
     let (committed, page_hub, loaded_org) = (signing_in.clone(), hub.clone(), page_org.clone());
     let navigate = move |url: &url::Url| {
         if let Some(org) = &page_org {
             timing::mark(&opener, org, &format!("nav {}", url.host_str().unwrap_or(url.scheme())));
         }
-        stays_in_app(&opener, &signing_in, page_org.as_deref(), hub.as_ref(), url)
+        stays_in_app(&opener, &signing_in, page_label.as_deref(), hub.as_ref(), url)
     };
     // `Started` is the top-level page committing, with its address; frames never send it.
     let page = move |payload: PageLoadPayload<'_>| {
@@ -958,31 +1896,38 @@ fn sign_in_hooks(app: &App, hub: Option<url::Url>, page_org: Option<String>) -> 
 
 /// Whether a window follows a navigation; one it does not follow opens in the default browser, except from a page
 /// that is not on screen (a prefetch), which opens nothing.
-fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_org: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
-    let stays = follow_window(&opener.state::<AppState>(), signing_in, page_org.is_some(), hub, url);
-    let on_screen = page_org.is_none_or(|org| active_org(opener).is_some_and(|open| open.id == org));
-    if !stays && on_screen {
-        let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+fn stays_in_app(opener: &App, signing_in: &AtomicBool, page_label: Option<&str>, hub: Option<&url::Url>, url: &url::Url) -> bool {
+    let stays = follow_window(&opener.state::<AppState>(), signing_in, page_label.is_some(), hub, url);
+    if !stays && may_open_from(opener, page_label) {
+        open_in_browser(opener, url);
     }
     stays
 }
 
-/// The visual allowance of the page on `hub`: the open page's, or the prefetched page's while it is hidden. Neither
-/// page ever reads or clears the other's.
-fn own_visual<'a>(open: &'a mut Option<VisualOrigin>, parked: &'a mut Option<VisualOrigin>, hub: Option<&url::Url>) -> Option<&'a mut Option<VisualOrigin>> {
+pub(crate) fn open_in_browser(app: &App, url: &url::Url) {
+    if let Err(error) = app.opener().open_url(url.as_str(), None::<&str>) {
+        // Links can carry sign-in codes or signed downloads; the log needs the failure, not those credentials.
+        log::warn!("could not open {} link in the default browser: {}", url.scheme(), error.to_string().replace(url.as_str(), "[URL]"));
+    }
+}
+
+/// The visual allowance of the page on `hub`: the open page's, the prefetched page's while it is hidden, or a kept
+/// page's while it is hidden. No page ever reads or clears another's.
+fn own_visual<'a>(open: &'a mut Option<VisualOrigin>, parked: &'a mut Option<VisualOrigin>, kept: &'a mut Kept, hub: Option<&url::Url>) -> Option<&'a mut Option<VisualOrigin>> {
     if open.as_ref().is_some_and(|visual| visual.serves(hub)) {
         Some(open)
     } else if parked.as_ref().is_some_and(|visual| visual.serves(hub)) {
         Some(parked)
     } else {
-        None
+        kept.visual_for(hub)
     }
 }
 
 pub(crate) fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, hub: Option<&url::Url>, url: &url::Url) -> bool {
     let mut visual = state.visual_origin.lock().unwrap();
     let mut parked = state.parked_visual.lock().unwrap();
-    let own = own_visual(&mut visual, &mut parked, hub);
+    let mut kept = state.kept.lock().unwrap();
+    let own = own_visual(&mut visual, &mut parked, &mut kept, hub);
     let allowed = if visuals { own.as_ref().and_then(|own| own.as_ref()) } else { None };
     let stays = follow(hub, allowed, signing_in, url);
     if visuals && (navigation(hub, false, url) == Navigation::Start || session_exit(hub, url)) {
@@ -997,9 +1942,10 @@ pub(crate) fn top_level_window(state: &AppState, signing_in: &AtomicBool, visual
     if visuals {
         let mut visual = state.visual_origin.lock().unwrap();
         let mut parked = state.parked_visual.lock().unwrap();
+        let mut kept = state.kept.lock().unwrap();
         // A new top-level Hub page must authenticate and send its config again. A permitted
         // visual commit changes neither its allowance nor sign-in state.
-        if let Some(own) = own_visual(&mut visual, &mut parked, hub) {
+        if let Some(own) = own_visual(&mut visual, &mut parked, &mut kept, hub) {
             if !own.as_ref().is_some_and(|visual| visual.permits(hub, url)) {
                 *own = None;
             }
@@ -1083,11 +2029,14 @@ enum NewWindow {
     Hub,
     /// A new tab in the default browser, as a browser would open it.
     Browser,
-    /// Nothing the browser could open (`about:blank`, `javascript:`, `data:`, `blob:`, `file:`).
+    /// A hidden source page, or nothing the browser could open (`about:blank`, `javascript:`, `data:`, `blob:`, `file:`).
     Ignore,
 }
 
-fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
+fn new_window_target(hub: Option<&url::Url>, url: &url::Url, source_shown: bool) -> NewWindow {
+    if !source_shown {
+        return NewWindow::Ignore;
+    }
     match url.scheme() {
         "http" | "https" if hub.is_some_and(|hub| url.origin() == hub.origin()) && url.path().starts_with("/api/") => NewWindow::Hub,
         "http" | "https" | "mailto" | "tel" | "sms" => NewWindow::Browser,
@@ -1096,20 +2045,17 @@ fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
 }
 
 /// Where a page's new window goes: a hub file opens in a window of its own, on the page's org; other links open in
-/// the default browser. An org page (`org_page`) that is not on screen (a prefetch) opens nothing.
-fn new_window_handler(app: &App, home: Home, org_page: bool) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
+/// the default browser. An org page (`page_label`) that is not on screen (prefetched or kept) opens nothing.
+fn new_window_handler(app: &App, home: Home, page_label: Option<String>) -> impl Fn(url::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
     let opener = app.clone();
     move |url, _| {
-        if org_page && !active_org(&opener).is_some_and(|open| open.id == home.id) {
-            return NewWindowResponse::Deny;
-        }
-        match new_window_target(Some(&home.hub), &url) {
+        match new_window_target(Some(&home.hub), &url, may_open_from(&opener, page_label.as_deref())) {
             NewWindow::Hub => {
                 // Built off the web view's own callback, which may not block on a new window.
                 let (app, home) = (opener.clone(), home.clone());
                 tauri::async_runtime::spawn(async move { open_hub_window(&app, url, &home) });
             }
-            NewWindow::Browser => { let _ = opener.opener().open_url(url.as_str(), None::<&str>); }
+            NewWindow::Browser => open_in_browser(&opener, &url),
             NewWindow::Ignore => {}
         }
         NewWindowResponse::Deny
@@ -1131,7 +2077,7 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone(), false))
+        .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
@@ -1208,6 +2154,43 @@ mod new_window_tests {
     use super::*;
 
     #[test]
+    fn cloud_shell_follows_the_shown_webview_through_switches_and_recreation() {
+        let hub = url::Url::parse("https://acme.example/").unwrap();
+        let cloud_shell = url::Url::parse("https://shell.cloud.google.com/?show=terminal").unwrap();
+        let (a, b) = (new_page_label("o_aaaaaaaa"), new_page_label("o_bbbbbbbb"));
+        let target = |source: &str, shown: Option<&str>| {
+            new_window_target(Some(&hub), &cloud_shell, source_is_shown(Some(source), shown))
+        };
+        // A is shown, B is prefetched. Selection can already name B (an org was just added), but A still owns clicks.
+        assert_eq!(target(&a, Some(&a)), NewWindow::Browser);
+        assert_eq!(target(&b, Some(&a)), NewWindow::Ignore);
+        // B is shown, A is kept hidden; switching back restores the same A webview's ability to open links.
+        assert_eq!(target(&b, Some(&b)), NewWindow::Browser);
+        assert_eq!(target(&a, Some(&b)), NewWindow::Ignore);
+        assert_eq!(target(&a, Some(&a)), NewWindow::Browser);
+        assert_eq!(target(&b, Some(&a)), NewWindow::Ignore);
+        // A recreated page does not authorize callbacks from the old instance of the same org.
+        let replacement = new_page_label("o_aaaaaaaa");
+        assert_eq!(target(&a, Some(&replacement)), NewWindow::Ignore);
+        assert_eq!(target(&replacement, Some(&replacement)), NewWindow::Browser);
+        assert_eq!(target(&replacement, None), NewWindow::Ignore);
+    }
+
+    #[test]
+    fn hidden_pages_open_neither_browser_links_nor_authenticated_hub_files() {
+        let hub = url::Url::parse("https://acme.example/").unwrap();
+        for address in ["https://shell.cloud.google.com/?show=terminal", "https://acme.example/api/v2/files/f1"] {
+            let url = url::Url::parse(address).unwrap();
+            assert_eq!(new_window_target(Some(&hub), &url, false), NewWindow::Ignore);
+        }
+        // An independent hub/meeting window keeps following its own org after the main window switches or closes.
+        let file = hub.join("api/v2/files/f1").unwrap();
+        for shown in [None, Some("org-o_bbbbbbbb-1")] {
+            assert_eq!(new_window_target(Some(&hub), &file, source_is_shown(None, shown)), NewWindow::Hub);
+        }
+    }
+
+    #[test]
     fn new_windows_open_in_the_browser_except_hub_files() {
         for hub in ["https://team.example.com/", "https://team.example.com/tico/"] {
             let hub = url::Url::parse(hub).unwrap();
@@ -1231,10 +2214,10 @@ mod new_window_tests {
                 ("blob:https://team.example.com/0b1c", NewWindow::Ignore),
                 ("file:///etc/passwd", NewWindow::Ignore),
             ] {
-                assert_eq!(new_window_target(Some(&hub), &url::Url::parse(address).unwrap()), expected, "{hub} {address}");
+                assert_eq!(new_window_target(Some(&hub), &url::Url::parse(address).unwrap(), true), expected, "{hub} {address}");
             }
         }
-        assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap()), NewWindow::Browser);
+        assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap(), true), NewWindow::Browser);
     }
 
     const HUB: &str = "https://team.example.com/";
@@ -1385,7 +2368,7 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
         .resizable(true)
         .user_agent(USER_AGENT)
         .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone(), false))
+        .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
@@ -1396,6 +2379,45 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     }
     if builder.build().is_ok() {
         owned_by(app, &label, &home.id);
+    }
+}
+
+/// A small window, above the main window, showing the approval page Tico Recorder asked for (`recorder::open_link`)
+/// on org `home`'s data store, so it has that org's Tico session; the org's own page is left as it is. Tico's answer
+/// to the Recorder, a redirect to the Recorder's loopback, is handed over by `recorder::deliver` instead of loaded.
+pub(crate) fn open_approval_window(app: &App, home: &Home, label: &str, url: url::Url) -> bool {
+    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), None);
+    let (opener, own) = (app.clone(), label.to_string());
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+        .title("Tico Recorder")
+        .inner_size(520.0, 680.0)
+        .resizable(true)
+        .center()
+        .focused(true)
+        .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
+        .on_new_window(new_window_handler(app, home.clone(), None))
+        .on_navigation(move |url| !crate::recorder::deliver(&opener, &own, url) && navigate(url))
+        .on_page_load(move |_, payload| page(payload));
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(store) = home.store {
+            builder = builder.data_store_identifier(*store.as_bytes());
+        }
+        if let Some(parent) = main_window(app).filter(|main| main.is_visible().unwrap_or(false)).and_then(|main| main.ns_window().ok()) {
+            builder = builder.parent_raw(parent);
+        }
+    }
+    match builder.build() {
+        Ok(_) => {
+            owned_by(app, label, &home.id);
+            true
+        }
+        Err(e) => {
+            log::warn!("could not open Tico's approval page: {e}");
+            false
+        }
     }
 }
 

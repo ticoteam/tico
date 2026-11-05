@@ -138,7 +138,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 |---|---|---|
 | `bots` | `id, slug, display_name, effort, state, created_at, last_turn_at` | `id` is the bot's permanent id, which actor strings and foreign keys use; `slug` is its name and can change. `state`: active, paused, planned, quarantined, archived; a bot's runtime, model and host are in its declaration (`bot_settings`), not here |
 | `bot_config` | `bot, team, owner_id, description, reports_to, repo, thread_mode, revision` | the team chart |
-| `bot_settings` | `bot_id, harness, model, reasoning_effort, template, profile, session, wake_preset, shared_from, extra` | a bot's declared settings (bot.yaml): one column per setting the server reads by name, the rest as JSON in `extra` |
+| `bot_settings` | `bot_id, harness, runtime, model, reasoning_effort, host, template, profile, session, wake_preset, shared_from, bot_contact, repo_access_mode, folder, github_login, compact_at, turns_per_hour, turns_per_day, max_run_minutes, stateless, fallback, app_delivery, extra, updated_at` | a bot's declared settings (bot.yaml): one column per setting the server reads by name, the rest as JSON in `extra` |
 | `bot_status` | `bot, state, focus, task_id, changed_at, last_turn_at, last_result, next_due_at, open_tasks, needs_human` | live status; history in `bot_status_history(bot, state, focus, started_at, ended_at, reason, by)` |
 | `humans` | `id, name, email, slack_id, teams` | bots do not get `email` |
 | `principals` | `id, kind, deleted_at` | one row per human, bot and known system actor: `id` is the actor string, `kind` is human, bot, agent, service or system. `deleted_at` is set when the person or bot is removed; the row stays so history still names it |
@@ -173,7 +173,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `refusals` | `created_at, actor, rule, detail, severity` | the rule a bot broke |
 | `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created_at, updated_at` | your notes; every team meeting |
 | `meeting_items` | `id, meeting_id, section, text, detail, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created_at, updated_at` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
-| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | the thread beside a meeting: anyone who can open it can add to it ([Meetings](meetings.md)). Visible exactly where its meeting is |
+| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | an older thread beside a meeting, no longer written or shown ([Meetings](meetings.md)). Visible exactly where its meeting is |
 | `import_refs` | `source, external_id, meeting_id, runner_id, created_at` | which outside record a meeting was imported from — one row per Close call imported before the transcript-only worker ([Meetings](meetings.md), Close). Visible exactly where its meeting is |
 | `docs` | `id, path, title, body, locked, version, created_by_id, created_at, updated_by_id, updated_at` | internal Docs, readable by teammates |
 | `doc_versions` | `doc_id, version, title, path, body, actor, created_at, note` | versions of visible internal Docs |
@@ -240,10 +240,10 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
 - **`trigger_kind`**: `comment` (a bot wrote to it: a task comment or a message), `person_message` (a person
   wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, unblocked, a
   subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
-  merge conflict, merge or release), `stall_check` (a ticket late at its working step, a task
+  merge conflict, merge or release), `stall_check` (legacy: a ticket late at its working step, a task
   not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
   a next-run task, an update request), `background_done` (background commands an earlier turn left running
-  when the runner ended it on its wait have ended), `task_roundup` (the list of a bot's tasks with a missed update, gone quiet, or a follow-up time that has come, one per run) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  when the runner ended it on its wait have ended), `task_roundup` (the list of a bot's tasks: a follow-up time that came, an unanswered question, a task to restate, a late ticket, an engineering exception, a backlog, a missed update or a quiet task, one per run) or `other` (anything else: a Slack digest, a meeting turn, a worktree
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
@@ -310,7 +310,7 @@ FROM rule_weekly WHERE week >= date('now', '-27 days', 'weekday 1') GROUP BY rul
 
 Wakes that waited (token saving 2/9, `backend/wake_rules.py`): each is one `wake.skipped` event naming the bot, the
 task, the held message (`target`; for a bot's own comment on its task, that comment), its trigger and the rule
-(`parked`, `own_write` or `same_state`, token saving 3/9: a stall or status check on an idle task that stands as at
+(`parked`, `own_write` or `same_state`, token saving 3/9: a legacy stall or status check on an idle task that stands as at
 its owner's last checkpoint). Leased or running task sessions keep their recovery checks. Overlapping turns of the
 same bot leave no settled comparison state because their writes cannot be attributed to one turn. A sample of 50
 from last week for the audit:

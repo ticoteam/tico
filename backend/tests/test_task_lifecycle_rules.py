@@ -160,7 +160,6 @@ class PrivateParent(Case):
         parent = self.make(ANA, "Plan the board pack", CMO, private=True)
         later = H.shift(H.now(), hours=3)
         self.assertIn(parent["id"], [r["id"] for r in H.stalled_tasks(self.conn, at=later)])
-        self.assertIn("cannot read a private task", H._no_diagnosis(self.conn, H.task(self.conn, parent["id"]), 4))
 
 
 class Renaming(Case):

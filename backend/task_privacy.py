@@ -317,6 +317,13 @@ def prime_messages(c, messages):
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
     not a few queries per comment."""
     messages = [dict(m) for m in messages]
+    if has_letters(c) and read_cache.cache(c) is not None:
+        for part in H.chunks(sorted({m["id"] for m in messages if m.get("id")})):
+            found = {row["approval_message_id"]: row for row in c.execute(
+                "SELECT l.*,a.message_id AS approval_message_id FROM approvals a JOIN letters l "
+                "ON l.id=json_extract(a.payload,'$.letter_id') WHERE a.kind='letter' "
+                f"AND a.message_id IN ({','.join('?' * len(part))})", part)}
+            read_cache.prime(c, LETTER_MESSAGE_SQL, {(mid,): found.get(mid) for mid in part})
     refs = [H._json(m.get("refs"), {}) or {} for m in messages]
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
@@ -383,10 +390,16 @@ def message_readable(c, actor, message, current=False):
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
         return False
+    if has_letters(c) and message.get("id"):
+        letter = read_cache.one(c, LETTER_MESSAGE_SQL, (message["id"],))
+        if letter and not letter_content_readable(c, actor, letter):
+            return False
     from . import threads
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
+    if not page_message_readable(c, actor, carried):
+        return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
         source = H.message(c, carried["carries"], include_deleted=True)
@@ -468,10 +481,14 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
             if not readable(c, reader, tasks):
                 return False
+            if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
         except Problem:
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
+        from .files import readable_page_refs
         message["refs"] = H._json(stored["refs"], {}) or {}
+        message = readable_page_refs(c, None, who, message, task_id=task_id)
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -587,6 +604,10 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
         raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
+        if isinstance(payload.get("letter_id"), str) and "approval_hash" in payload:
+            letter = c.execute("SELECT * FROM letters WHERE id=?", (payload["letter_id"],)).fetchone() if has_letters(c) else None
+            if not letter or not letter_content_readable(c, principal, letter):
+                raise Problem("privacy", "This letter is no longer readable", 403)
         key = payload.get("key")
         if isinstance(key, str) and key.startswith("report:") and not message_readable(c, principal, H.message(c, key[7:])):
             raise Problem("privacy", "This report is no longer available", 403)
@@ -1016,8 +1037,26 @@ def require_batch(c, who, row):
             require_message(c, who, H.message(c, row["message_id"]))
 
 
+PAGE_MESSAGE_KEYS = ("target", "answer", "review", "body_sources")
+
+
+def page_message_readable(c, actor, refs):
+    """Generated file-review messages carry names in prose as well as structured refs."""
+    return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get(key) for key in PAGE_MESSAGE_KEYS])
+
+
+def page_content_readable(c, actor, payload):
+    from . import files, teammate_access
+    if not files.page_references(payload, c):
+        return True
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    return all(viewer is not None and not files.page_ref_denials(c, None, viewer, payload)
+               for principal in principals if (viewer := teammate_access._viewer_for(c, principal)) is not None)
+
+
 def content_readable(c, actor, payload):
-    return (meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
+    return (page_content_readable(c, actor, payload)
+            and meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
             and readable(c, actor, references(c, payload)))
 
 
@@ -1340,6 +1379,72 @@ BLOB_FILES_SQL = ("SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
                   "OR v.poster_blob_id=? OR v.thumb_blob_id=?")
 BLOB_MESSAGES_SQL = "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?"
 BLOB_TRASHED_SQL = "SELECT 1 FROM task_trash_assets WHERE blob_id=?"
+LETTER_BLOBS_SQL = ("SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id "
+                    "FROM letters l WHERE source_blob_id=? OR "
+                    "EXISTS (SELECT 1 FROM letter_proofs p WHERE p.letter_id=l.id AND p.blob_id=?)")
+LETTER_MESSAGE_SQL = ("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
+                      "WHERE a.kind='letter' AND a.message_id=?")
+
+
+def letter_content_readable(c, principals, row):
+    from . import letters
+    from .auth import bot_identity
+    for principal in principals if isinstance(principals, tuple) else (principals,):
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
+    return blob_readable(c, principals, row["source_blob_id"])
+
+
+def has_letters(c):
+    # Privacy also runs while upgrading older schemas, before the Letters tables exist.
+    return read_cache.value(c, "privacy_letters_table", lambda: bool(c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='letters'").fetchone()))
+
+
+def letter_blob_readable(c, principals, row, seen, memo):
+    from . import letters
+    from .auth import bot_identity
+    for principal in principals if isinstance(principals, tuple) else (principals,):
+        if H.is_bot(principal):
+            try:
+                bot_identity(c, principal)
+            except Problem:
+                return False
+            if not letters.bot_reader(c, principal, row):
+                return False
+    sources = H._json(row["source_provenance"], {}) or {}
+    tasks = set(sources.get("tasks", [])) | ({row["task_id"]} if row["task_id"] else set())
+    attempts = set(sources.get("attempts", [])) | ({row["attempt_id"]} if row["attempt_id"] else set())
+    rooms = set(sources.get("threads", [])) | ({row["thread_id"]} if row["thread_id"] else set())
+    if not readable(c, principals, tasks):
+        return False
+    if any(not attempt_readable(c, principals, aid, memo) for aid in attempts):
+        return False
+    if rooms:
+        from . import threads
+        for cid in rooms:
+            room = H.conversation(c, cid)
+            for principal in principals if isinstance(principals, tuple) else (principals,):
+                try:
+                    viewer = (threads.Viewer(None, bot_identity(c, principal)) if H.is_bot(principal)
+                              else threads.actor_viewer(c, principal))
+                except Problem:
+                    return False
+                viewers = [viewer] if viewer else []
+                if viewer and H.is_bot(principal) and not viewer.who.agent:
+                    # A stored proof keeps the original bot run's thread grant, with current task privacy.
+                    for aid in attempts:
+                        attempt = read_cache.one(c, "SELECT bot_id FROM attempts WHERE id=?", (aid,))
+                        if attempt and "bot:" + attempt["bot_id"] == principal:
+                            viewers.append(threads.Viewer(None, bot_identity(c, principal, attempt_id=aid)))
+                if not any(threads.denial(c, candidate, room) is None for candidate in viewers):
+                    return False
+    return not row["original_blob_id"] or blob_readable(c, principals, row["original_blob_id"], seen, memo)
 
 
 def prime_blobs(c, bids):
@@ -1406,6 +1511,36 @@ def _prime_blob_links(c, bids):
         read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
         read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
+        from . import postal_mail
+        scans = {bid: [] for bid in part}
+        for row in c.execute(f"SELECT * FROM mail_items WHERE blob_id IN ({marks})", part):
+            scans[row["blob_id"]].append(row)
+        read_cache.prime_rows(c, postal_mail.SCANS_SQL, {(bid,): scans[bid] for bid in part})
+        if has_letters(c):
+            links = {bid: [] for bid in part}
+            rows = c.execute("SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id,"
+                "source_blob_id AS bid FROM letters "
+                f"WHERE source_blob_id IN ({marks}) UNION ALL SELECT l.original_blob_id,l.task_id,l.attempt_id,"
+                "l.thread_id,l.source_provenance,l.requested_by,l.acting_bot_id,p.blob_id AS bid "
+                f"FROM letter_proofs p JOIN letters l ON l.id=p.letter_id WHERE p.blob_id IN ({marks})",
+                part * 2)
+            rooms = set()
+            for row in rows:
+                links[row["bid"]].append(row)
+                frozen = H._json(row["source_provenance"], {}) or {}
+                task_ids.update(frozen.get("tasks", []))
+                attempt_ids.update(frozen.get("attempts", []))
+                rooms.update(frozen.get("threads", []))
+                if row["original_blob_id"]:
+                    parent_ids.add(row["original_blob_id"])
+                if row["task_id"]:
+                    task_ids.add(row["task_id"])
+                if row["attempt_id"]:
+                    attempt_ids.add(row["attempt_id"])
+                if row["thread_id"]:
+                    rooms.add(row["thread_id"])
+            H.prime_conversations(c, rooms)
+            read_cache.prime_rows(c, LETTER_BLOBS_SQL, {(bid, bid): links[bid] for bid in part})
     return parent_ids, task_ids, attempt_ids, message_rows
 
 
@@ -1414,12 +1549,24 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     `memo` is attempt_tasks' cache for one read transaction. Only linkage rows are cached
     for blobs: a cycle or depth refusal depends on this walk, not just the blob."""
     snapshot(c)
+    # A scan's explicit Read grant exempts only that principal from its private task's attachment fence.
+    # Every other principal still passes the normal provenance checks below.
+    from . import postal_mail
+    principals = actor if isinstance(actor, tuple) else (actor,)
+    principals = tuple(person for person in principals if not postal_mail.scan_granted(c, person, bid))
+    if not principals:
+        return True
+    actor = principals[0] if len(principals) == 1 else principals
     seen = set() if seen is None else seen
     if bid in seen:
         return True
     if len(seen) >= 100:
         return False
     seen.add(bid)
+    if has_letters(c):
+        for row in read_cache.rows(c, LETTER_BLOBS_SQL, (bid, bid)):
+            if not letter_blob_readable(c, actor, row, seen, memo):
+                return False
     for parent in read_cache.rows(c, BLOB_PARENTS_SQL, (bid, bid)):
         if not blob_readable(c, actor, parent[0], seen, memo):
             return False
@@ -1446,6 +1593,30 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    if has_letters(c):
+        letter = None
+        if str(event.get("action", "")).startswith("letter."):
+            letter = c.execute("SELECT * FROM letters WHERE id=?", (event.get("target"),)).fetchone()
+        elif str(event.get("action", "")).startswith("approval."):
+            letter = c.execute("SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
+                "WHERE a.kind='letter' AND a.id=?", (event.get("target"),)).fetchone()
+        if letter and not letter_content_readable(c, actor, letter):
+            return False
+    from . import files, teammate_access
+    principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
+    for principal in principals:
+        viewer = teammate_access._viewer_for(c, principal)
+        if viewer is not None and not files.page_event_readable(c, None, viewer, event.get("target"), event.get("detail")):
+            return False
+    detail = H._json(event.get("detail"), {}) or {}
+    if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
+        recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)
+        if recipient != event.get("actor"):
+            return False
+        # Old accepted events without task provenance fail closed; their alert target alone carries no permission.
+        if event["action"] == "alerts.accepted" and detail.get("kind") != "test":
+            if not detail.get("task_id") or not _task(c, detail["task_id"]):
+                return False
     meetings = meeting_sources(c)
     if not meetings.readable(actor, meetings.references(H._json(event.get("detail"), {}) or {})):
         return False

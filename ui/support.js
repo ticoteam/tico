@@ -155,6 +155,7 @@
   const POLL_FAILED = 'Could not check for replies just now. Tico will try again.';
   async function refresh() {
     if (busyRefresh) return busyRefresh;
+    own();
     busyRefresh = (async () => {
       const revision = stateRevision;
       try {
@@ -345,8 +346,8 @@
       <form class="tmodal-body" data-access-form>
       <label class="support-check"><input type="radio" name="tier" value="app" checked><span><strong>App only.</strong> The team sees settings, Health, computers, bots, tasks and runs, and can change setup (a bot's model, a computer's runner restart). It cannot see credential values, approve for you, send, spend, publish or run bots.</span></label>
       <label class="support-check"><input type="radio" name="tier" value="full"${access.can_full ? '' : ' disabled'}><span><strong>Full access.</strong> What the owner can do in Tico, except tokens, credential values and ownership. Its changes can outlast the session.${access.can_full ? '' : ' Only the owner can give it.'}</span></label>
-      <label>How long <select name="hours"><option value="1">1 hour</option><option value="4">4 hours</option><option value="24" selected>24 hours</option><option value="168">7 days</option><option value="custom">Other…</option></select></label>
-      <label data-custom hidden>Hours (1 to 720) <input name="custom" type="number" min="1" max="720" step="1" value="24"></label>
+      <label>How long <select name="hours"><option value="1">1 hour</option><option value="4">4 hours</option><option value="24">24 hours</option><option value="72" selected>3 days</option><option value="168">7 days</option><option value="720">30 days</option><option value="2160">90 days</option><option value="8760">365 days</option><option value="custom">Other…</option></select></label>
+      <label data-custom hidden>Hours (1 to 8760) <input name="custom" type="number" min="1" max="8760" step="1" value="72"></label>
       <p class="support-note">A banner shows on every screen while it lasts, and Stop there ends it at once. Everything the team does is listed in the chat.</p>
       <p class="err" data-error role="alert" hidden></p>
       <div class="support-row"><button class="ghost" type="button" data-close>Cancel</button><button class="primary" type="submit">Start</button></div></form>`;
@@ -356,7 +357,7 @@
     form.onsubmit = async e => {
       e.preventDefault();
       const hours = Number(form.elements.hours.value === 'custom' ? form.elements.custom.value : form.elements.hours.value);
-      if (!Number.isInteger(hours) || hours < 1 || hours > 720) { err.textContent = 'Choose 1 to 720 hours.'; err.hidden = false; return; }
+      if (!Number.isInteger(hours) || hours < 1 || hours > 8760) { err.textContent = 'Choose 1 to 8760 hours.'; err.hidden = false; return; }
       form.querySelectorAll('button, input, select').forEach(el => { el.disabled = true; });
       try {
         await call('POST', '/support/access', {ticket_id: t.id, tier: form.elements.tier.value, hours});
@@ -708,10 +709,18 @@
     if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
     else if (!pop.contains(document.activeElement) || document.activeElement === pop) pop.querySelector('[data-close]').focus();
   }
+  // Whose chat this is: someone else signed in, and everything kept for the last person goes. Every read of the list
+  // asks first, so a reply the check at load announced is not news again to the chat's own load (it re-opened the chat
+  // when Escape came before that load answered).
+  function own() {
+    const actor = (typeof S === 'undefined' ? '' : S.me?.id) || '';
+    if (owner === actor) return;
+    stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null;
+    state = {enabled: null, tickets: [], unread: 0}; lastUnread = 0; announceWaiting = false;
+  }
   // Loads this person's conversation and the reply email a new ticket carries; a failure keeps what was loaded before.
   async function load() {
-    const actor = typeof S === 'undefined' ? '' : S.me?.id;
-    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null; state = {enabled: null, tickets: [], unread: 0}; lastUnread = 0; announceWaiting = false; }
+    own();
     try {
       const revision = stateRevision;
       const data = await call('GET', '/support/tickets');
@@ -757,7 +766,9 @@
   document.addEventListener('focusout', () => { if (announceWaiting) setTimeout(announceReply, 0); });
   document.addEventListener('close', () => { if (announceWaiting) setTimeout(announceReply, 0); }, true);
   window.addEventListener('load', () => setTimeout(async () => {
-    if (typeof S === 'undefined' || !S.me || state.enabled !== null) return;
+    if (typeof S === 'undefined' || !S.me) return;
+    own();
+    if (state.enabled !== null) return;
     const revision = stateRevision;
     try { const data = await call('GET', '/support/tickets'); if (revision === stateRevision) accept(data); schedule(); } catch (_) { /* opening the chat tries again */ }
   }, 3000));

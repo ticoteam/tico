@@ -77,7 +77,7 @@ def test_python_dash_m_runner_engine_keeps_its_exit_codes_and_answers():
         assert old.returncode == 0 and Path(old.stdout.strip()).is_file(), old.stderr
 
 
-@pytest.mark.parametrize("module", ["release_update", "cloud_machine", "systemd_units", "git_credentials"])
+@pytest.mark.parametrize("module", ["release_update", "release_branch", "cloud_machine", "systemd_units", "git_credentials", "checkout_links"])
 def test_python_dash_m_runner_entry_points_run_runner_support(module):
     old, new = run("-m", "runner." + module, "--help"), run("-m", "runner_support." + module, "--help")
     assert old.returncode == new.returncode == 0, old.stderr

@@ -36,6 +36,41 @@ const ORG_SCRIPT: &str = r#"
 })();
 "#;
 
+/// What a page captures, as it says (`capture`: {live, display}) whatever the page's version: whether it is sending a
+/// microphone, camera or screen now, and whether it ever shared its screen. Only a hint, which a page can get around:
+/// the keep-or-close rule at a switch asks WebKit itself on macOS (windows::native_capture), and closes a page that
+/// ever shared its screen, which WebKit cannot tell; elsewhere a page that ever captured anything is closed.
+const CAPTURE_SCRIPT: &str = r#"
+(() => {
+  const Media = window.MediaDevices, Track = window.MediaStreamTrack;
+  if (!Media || !Track || !window.__TAURI__ || !window.__TAURI__.core) return;
+  const invoke = window.__TAURI__.core.invoke;
+  const live = new Set();
+  let said = '', display = false;
+  const say = () => {
+    for (const track of live) if (track.readyState !== 'live') live.delete(track);
+    const now = JSON.stringify({live: live.size > 0, display});
+    if (now === said) return;
+    said = now;
+    invoke('bridge', {name: 'capture', body: JSON.parse(now)}).catch(() => {});
+  };
+  const stop = Track.prototype.stop, clone = Track.prototype.clone;
+  const watch = track => { live.add(track); track.addEventListener('ended', say); return track; };
+  Track.prototype.stop = function () { stop.call(this); if (live.has(this)) say(); };
+  Track.prototype.clone = function () { const copy = clone.call(this); if (live.has(this)) watch(copy); return copy; };
+  for (const name of ['getUserMedia', 'getDisplayMedia']) {
+    const ask = Media.prototype[name];
+    if (typeof ask !== 'function') continue;
+    const wrapped = function (...args) {
+      if (name === 'getDisplayMedia') { display = true; say(); }
+      return ask.apply(this, args).then(stream => { stream.getTracks().forEach(watch); say(); return stream; });
+    };
+    Media.prototype[name] = wrapped;
+    if (navigator.mediaDevices && Object.prototype.hasOwnProperty.call(navigator.mediaDevices, name)) navigator.mediaDevices[name] = wrapped;
+  }
+})();
+"#;
+
 /// The page's `alert` and `confirm`, as the dialog plugin makes them (`alert` returns at once, `confirm` returns a
 /// promise of true for OK), but through `page_dialog`, which shows them only for the page on screen. Org pages have
 /// no dialog plugin permission; this runs after the plugin's own script, so it is the one that stays.
@@ -49,16 +84,27 @@ const DIALOG_SCRIPT: &str = r#"
 })();
 "#;
 
+/// What only a Mac build answers: whether Tico Recorder is installed (`hasRecorder`) and opening it on the page's org
+/// (`openRecorder`).
+const RECORDER_SCRIPT: &str = r#"
+(() => {
+  if (!window.ticoNativeFeatures) return;
+  window.ticoNativeFeatures.push('openRecorder');
+})();
+"#;
+
 /// The bridge plus this shell's version, which Settings shows beside the server's.
 pub(crate) fn bridge_script(app: &App) -> String {
-    script_for(&app.package_info().version.to_string(), orgs::multi_org_build())
+    script_for(&app.package_info().version.to_string(), orgs::multi_org_build(), cfg!(target_os = "macos"))
 }
 
-/// The page script for a build: the bridge, the org features when this build keeps a list of orgs, and the version.
-fn script_for(version: &str, several_orgs: bool) -> String {
+/// The page script for a build: the bridge, the org features when this build keeps a list of orgs, the Recorder's on
+/// a Mac, and the version.
+fn script_for(version: &str, several_orgs: bool, recorder: bool) -> String {
     let version = serde_json::to_string(version).unwrap_or_else(|_| "\"\"".into());
     let extra = if several_orgs { ORG_SCRIPT } else { "" };
-    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{extra}window.ticoNativeVersion = {version};\n")
+    let recorder = if recorder { RECORDER_SCRIPT } else { "" };
+    format!("{BRIDGE_SCRIPT}{DIALOG_SCRIPT}{CAPTURE_SCRIPT}{extra}{recorder}window.ticoNativeVersion = {version};\n")
 }
 
 // ----------------------------------------------------------------------------- bridge
@@ -82,11 +128,12 @@ fn server_document(hub: Option<&url::Url>, caller: &str, open: Option<&str>, doc
     })
 }
 
-/// What a page that is not on screen (a prefetch) may still post: about itself only, so that it is ready when shown,
-/// and its own `bootTiming` (one checked log line, so a prefetched open is timed too). Everything else (windows,
-/// menus, updates, opening the log) is the open page's alone.
+/// What a page that is not on screen (a prefetch, or one kept since a switch away) may still post: about itself
+/// only, so that it is ready when shown, its own `bootTiming` (one checked log line, so a prefetched open is timed
+/// too), and whether it is capturing (`capture`). Everything else (windows, menus, updates, opening the log) is the
+/// open page's alone.
 fn own_page_call(name: &str) -> bool {
-    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming")
+    matches!(name, "orgInfo" | "visualOrigin" | "multiOrg" | "bootTiming" | "capture" | "hasRecorder")
 }
 
 /// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
@@ -112,15 +159,21 @@ fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>,
     let caller = org_of(label).unwrap_or_default();
     let open = list.active().map(|org| org.id.as_str());
     if open != Some(caller) {
-        // The prefetched page, hidden: its allowance waits apart from the open page's until it is shown.
-        let prefetched = state.prefetch.lock().unwrap().org.clone();
-        let hub = prefetched.filter(|id| id == caller).and_then(|id| list.get(&id).and_then(|org| org.hub()));
+        // A hidden page, the prefetched one or one kept since a switch away: its allowance waits apart from the open
+        // page's until it is shown.
+        let prefetched = state.prefetch.lock().unwrap().org.as_deref() == Some(caller);
+        let hub = list.get(caller).and_then(|org| org.hub());
         if hub.is_none() || !server_document(hub.as_ref(), caller, Some(caller), document) {
             return Err("Only the selected server's page may configure visuals.".into());
         }
-        let mut parked = state.parked_visual.lock().unwrap();
-        *parked = visual_from(hub.as_ref(), body);
-        return Ok(parked.is_some());
+        let visual = visual_from(hub.as_ref(), body);
+        let set = visual.is_some();
+        if prefetched {
+            *state.parked_visual.lock().unwrap() = visual;
+        } else if !state.kept.lock().unwrap().set_visual(caller, visual) {
+            return Err("Only the selected server's page may configure visuals.".into());
+        }
+        return Ok(set);
     }
     let connection = state.connection.lock().unwrap();
     let hub = connection.as_ref().map(|c| &c.hub);
@@ -169,10 +222,24 @@ pub(crate) fn bridge(app: App, webview: Webview, name: String, body: Option<Valu
             let since = app.state::<AppState>().page_opened.lock().unwrap().remove(webview.label()).map(|at| at.elapsed().as_millis());
             log::info!("{}", boot_line(body.as_ref(), since)?);
         }
+        // The page started or stopped sending a microphone, camera or screen (CAPTURE_SCRIPT).
+        "capture" => {
+            let flag = |name: &str| body.as_ref().and_then(|b| b.get(name)).and_then(Value::as_bool).unwrap_or(false);
+            crate::windows::note_capture(&mut app.state::<AppState>().capture.lock().unwrap(), &caller, flag("live"), flag("display"));
+        }
         // The org menu, at the page's point. It lists the shell's own orgs; the page is told nothing back.
         "showOrgMenu" => if orgs::multi_org_build() { popup_orgs(&app) },
         "addOrg" => {
             if orgs::multi_org_build() { add_org(&app); }
+        }
+        // Whether Record (Tico Recorder) can be offered instead of its download.
+        "hasRecorder" => return Ok(Value::Bool(crate::recorder::installed())),
+        // Record: the Recorder opens on the caller's own org, from its label, never an address the page names.
+        "openRecorder" => {
+            let org = org_of(webview.label()).and_then(|org| app.state::<AppState>().orgs.lock().unwrap().get(org).cloned());
+            if let Some(hub) = org.and_then(|org| org.hub()) {
+                crate::recorder::open_recorder(&hub);
+            }
         }
         _ => {}
     }
@@ -439,7 +506,7 @@ mod visual_bridge_tests {
     const LABEL: &str = "org-o_7f3a0001";
 
     fn org(id: &str, url: &str, name: &str, email: &str) -> Org {
-        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new(), sign_in: false }
+        Org { id: id.into(), url: url.into(), store: None, name: name.into(), email: email.into(), added_at: String::new(), sign_in: false, last_url: None }
     }
 
     /// One org, open, on its own page's label.
@@ -573,8 +640,8 @@ mod visual_bridge_tests {
         assert!(state.visual_origin.lock().unwrap().is_some());
         assert!(state.parked_visual.lock().unwrap().is_none());
         // Only calls about the page itself are let through from a page that is not on screen.
-        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming"] { assert!(own_page_call(name)); }
-        for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode"] { assert!(!own_page_call(name)); }
+        for name in ["orgInfo", "visualOrigin", "multiOrg", "bootTiming", "capture", "hasRecorder"] { assert!(own_page_call(name)); }
+        for name in ["openWindow", "checkForUpdates", "showLog", "showOrgMenu", "addOrg", "windowMode", "openRecorder"] { assert!(!own_page_call(name)); }
     }
 
     #[test]
@@ -594,11 +661,12 @@ mod visual_bridge_tests {
         }
         // The page script carries no org data in any build, and only this build's org features.
         for several in [false, true] {
-            let script = script_for("0.5.0", several);
+            let script = script_for("0.5.0", several, several);
             for secret in secrets {
                 assert!(!script.contains(secret), "the page script carries {secret}");
             }
             assert_eq!(script.contains("'multiOrg'"), several);
+            assert_eq!(script.contains("'openRecorder'"), several, "Record is offered only by a Mac build");
         }
         assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
     }
@@ -618,9 +686,18 @@ mod visual_bridge_tests {
     }
 
     #[test]
+    fn every_page_reports_its_capture() {
+        for several in [false, true] {
+            let script = script_for("0.5.0", several, several);
+            assert!(script.contains("name: 'capture'") && !script.contains("__ticoCapture"), "nothing the page can call to switch it off");
+            assert!(script.contains("'getUserMedia', 'getDisplayMedia'"));
+        }
+    }
+
+    #[test]
     fn a_page_alert_and_confirm_go_through_the_on_screen_check() {
         for several in [false, true] {
-            let script = script_for("0.5.0", several);
+            let script = script_for("0.5.0", several, !several);
             assert!(script.contains("window.alert =") && script.contains("window.confirm ="));
             assert!(script.contains("invoke('page_dialog'") && !script.contains("plugin:dialog"));
         }

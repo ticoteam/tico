@@ -2,6 +2,7 @@
 import os
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -120,3 +121,80 @@ def test_no_two_files_declare_the_same_top_level_name():
                 seen.setdefault(name, []).append((path.name, kind))
     clashes = {n: d for n, d in seen.items() if len(d) > 1 and any(k in ("const", "let", "class") for _, k in d)}
     assert clashes == {}
+
+
+@served
+def test_the_bundle_is_cut_into_parts_a_webkit_cache_keeps(api):
+    # WebKit's disk cache keeps no response larger than an eighth of its capacity (NetworkResourceLoader
+    # maximumCacheBufferSize): the one 4.3 MB script was downloaded again on every open of the desktop app.
+    page = api.get("/", headers=AUTH).text
+    for kind in ("js", "css"):
+        tag = r'src="(/tico/ui/app\.bundle(?:\.\d+)?\.js)\?v=([0-9a-f]{16})"' if kind == "js" else \
+            r'href="(/tico/ui/app\.bundle(?:\.\d+)?\.css)\?v=([0-9a-f]{16})"'
+        parts = re.findall(tag, page)
+        assert [p for p, _ in parts] == [ui_bundle.part_path(kind, n) for n in range(len(parts))]
+        assert len({v for _, v in parts}) == 1                       # one build: every part names the whole bundle
+        whole = b""
+        for path, v in parts:
+            r = api.get(f"{path}?v={v}", headers={**AUTH, "Accept-Encoding": "identity"})
+            assert r.status_code == 200 and r.headers["cache-control"] == ui_bundle.IMMUTABLE
+            assert len(r.content) <= ui_bundle.PART_BYTES + 64 * 1024, path      # a file is never cut
+            assert api.get(path, headers={**AUTH, "Accept-Encoding": "identity", "If-None-Match": r.headers["etag"]}).status_code == 304
+            assert api.get(path).status_code == 401
+            if kind == "js":
+                assert r.text.startswith("'use strict';\n")             # each part is a strict script of its own
+            whole += r.content
+        assert v == ui_bundle._etag(whole)[1:17]
+    assert len(re.findall(r"app\.bundle(?:\.\d+)?\.js\?v=", page)) > 1      # today's 4 MB script is more than one part
+    assert api.get("/tico/ui/app.bundle.99.js", headers=AUTH).status_code == 404
+
+
+@served
+@pytest.mark.parametrize("kind", ("js", "css"))
+@pytest.mark.parametrize("n", (0, 1))
+def test_an_old_bundle_url_is_complete_and_never_cached(api, monkeypatch, kind, n):
+    bundle = ui_bundle.Bundle(b"", [b"'use strict';\nconst A = 1;\n", b"'use strict';\nconst B = A + 1;\n"],
+                              [b"a{color:red}\n", b"b{color:blue}\n"])
+    monkeypatch.setattr(ui_bundle.UiBundle, "get", lambda self: bundle)
+    path = ui_bundle.part_path(kind, n)
+    old = f"{path}?v=old-build"
+    expected = getattr(bundle, kind) if n == 0 else bundle.parts[path]
+    with patch.object(ui_bundle.gzip, "compress", wraps=ui_bundle.gzip.compress) as compress:
+        plain = api.get(old, headers={**AUTH, "Accept-Encoding": "identity"})
+        assert plain.status_code == 200 and plain.content == expected
+        assert plain.headers["cache-control"] == "no-store" and "content-encoding" not in plain.headers
+        assert plain.headers["etag"].startswith('"') and plain.headers["vary"] == "Accept-Encoding"
+        if n == 0:
+            assert plain.headers["etag"] != bundle.etag[path]
+        # Current and unversioned URLs still serve just this part, with the same cache policy and tags.
+        for suffix in (f"?v={bundle.version[kind]}", ""):
+            kept = api.get(path + suffix, headers={**AUTH, "Accept-Encoding": "identity"})
+            assert kept.status_code == 200 and kept.content == bundle.parts[path]
+            assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE and kept.headers["etag"] == bundle.etag[path]
+            zipped_part = api.get(path + suffix, headers={**AUTH, "Accept-Encoding": "gzip"})
+            assert zipped_part.content == bundle.parts[path] and zipped_part.headers["content-encoding"] == "gzip"
+            assert zipped_part.headers["cache-control"] == ui_bundle.IMMUTABLE
+            assert zipped_part.headers["etag"] == bundle.gz_etag[path]
+        compress.assert_not_called()
+        assert bundle.whole_gz == {}
+        zipped = api.get(old, headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert zipped.status_code == 200 and zipped.content == expected       # TestClient decodes gzip
+        assert zipped.headers["cache-control"] == "no-store" and zipped.headers["content-encoding"] == "gzip"
+        assert zipped.headers["etag"].startswith('"') and zipped.headers["etag"] != plain.headers["etag"]
+        if n == 0:
+            assert zipped.headers["etag"] != bundle.gz_etag[path]
+        again = api.get(old, headers={**AUTH, "Accept-Encoding": "gzip"})
+        assert again.content == expected and again.headers["etag"] == zipped.headers["etag"]
+        unchanged = api.get(old, headers={**AUTH, "Accept-Encoding": "gzip", "If-None-Match": zipped.headers["etag"]})
+        assert unchanged.status_code == 304 and unchanged.headers["cache-control"] == "no-store"
+        assert compress.call_count == (1 if n == 0 else 0)
+
+
+def test_parts_are_cut_between_files_in_order():
+    chunks = [b"a" * 300, b"b" * 300, b"c" * 700, b"d" * 10]
+    assert ui_bundle.split(chunks, limit=600) == [b"a" * 300 + b"b" * 300, b"c" * 700, b"d" * 10]
+    assert ui_bundle.split([b"x"], limit=600) == [b"x"]
+    assert [ui_bundle.part_path("js", n) for n in range(3)] == [
+        "/tico/ui/app.bundle.js", "/tico/ui/app.bundle.2.js", "/tico/ui/app.bundle.3.js"]
+    assert ui_bundle.is_part("/tico/ui/app.bundle.12.css") and not ui_bundle.is_part("/tico/ui/app.bundle.1.js")
+    assert not ui_bundle.is_part("/tico/ui/app.bundle.js.map")

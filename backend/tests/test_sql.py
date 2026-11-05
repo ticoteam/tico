@@ -248,7 +248,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
                        "NOT LIKE 'computer-profiles:%'") == [
         "access", "access_bot_limit", "bot-chats-to-home", "bot_access", "ceo-bot", "company-turn-incident",
         "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
-        "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
+        "idempotency_messages.ready", "inbox-only-runners", "inbox_prompt_repair", "librarian_wording35",
+        "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text", "stale_review_repair", "strategy-bot", "task_session_default",
@@ -397,6 +398,114 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         assert checked in ([], ['message-public'])
 
 
+def test_fast_sql_gates_skip_python_callbacks_and_keep_the_privacy_fallback(api, world, monkeypatch):
+    from backend import sql as S
+
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        messages = [H.say(c, 'human:ben', 'human:ana', 'Synthetic history', conversation_id=room, refs=refs)['id']
+                    for refs in (None, {}, {'task': world['coo_task']['id']})]
+        fallback = H.say(c, 'human:ben', 'human:ana', 'Synthetic escaped refs', conversation_id=room,
+                         refs={'task': world['coo_task']['id'], 'note': 'say "hi"'})['id']
+        c.execute('UPDATE messages SET conversation_id=? WHERE id=(SELECT j.message_id FROM jobs j '
+                  'JOIN attempts a ON a.job_id=j.id WHERE a.id=?)', (room, world['attempt']['id']))
+        # Exercise the SQL gates even when the stored provenance index has not caught up yet.
+        c.execute('DELETE FROM read_index')
+
+    callbacks, create_function = [], S.ReadConnection.create_function
+
+    def register(conn, name, arity, fn, **kwargs):
+        kind = name.split('_privacy_')[-1]
+        if kind in ('message', 'attempt', 'settled_message', 'settled_attempt'):
+            def counted(*args):
+                callbacks.append(args[0])
+                return fn(*args)
+            return create_function(conn, name, arity, counted, **kwargs)
+        return create_function(conn, name, arity, fn, **kwargs)
+
+    monkeypatch.setattr(S.ReadConnection, 'create_function', register)
+    for token in (world['attempt']['token'], 'ben-test'):
+        callbacks.clear()
+        assert query(api, 'SELECT count(*) FROM messages WHERE id IN (?,?,?)', token,
+                     params=messages)['rows'] == [[3]]
+        assert query(api, 'SELECT id FROM attempts WHERE id=?', token,
+                     params=[world['attempt']['id']])['rows'] == [[world['attempt']['id']]]
+        assert callbacks == []
+        assert query(api, 'SELECT id FROM messages WHERE id=?', token, params=[fallback])['rows'] == [[fallback]]
+        assert callbacks == [fallback]
+
+
+def test_every_guarded_view_prepares_for_each_caller(api, world):
+    """A deep message predicate must not break unrelated SQL reads while building the request's views."""
+    from dataclasses import replace
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
+               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
+               replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]
+    for who in callers:
+        statements = []
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+            try:
+                views = [match[1] for statement in statements
+                         if (match := re.match(r'CREATE TEMP VIEW "(\w+)" AS', statement))
+                         and not match[1].startswith(conn.private_prefix)]
+                assert {'messages', 'attempts', 'jobs'} <= set(views)
+                for view in views:
+                    conn.execute(f'SELECT * FROM "{view}" LIMIT 0').fetchall()
+            finally:
+                conn.close()
+
+
+def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
+    from backend import sql as S
+    from backend.tests.test_page_audience import edit
+    from backend.tests.test_pages import page
+
+    made = page(api, world['attempt'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    edit(api, fid, {'people': ['ana']}, token='ana-test')
+    assert api.get('/api/v2/pages/' + fid, headers=headers('cara-test')).status_code == 404
+    store, room = api.app.state.store, world['coo_task']['conversation_id']
+    with store.transaction() as c:
+        plain = [H.say(c, 'human:ben', 'human:ana', 'Synthetic plain', conversation_id=room, refs=refs)['id']
+                 for refs in (None, {}, {'task': world['coo_task']['id']})]
+        reviews = []
+        for refs in [{'target': fid}, {'answer': {'file': fid}}, {'review': [fid]}, {'body_sources': [{'file': fid}]}]:
+            reviews.append(H.say(c, 'human:ben', 'human:ana', 'Synthetic review', conversation_id=room, refs=refs)['id'])
+        # SQLite reads the first duplicate key and Python the last; escaped keys must also reach Python.
+        for raw in ('{"target":null,"target":' + json.dumps(fid) + '}',
+                    '{"t\\u0061rget":' + json.dumps(fid) + '}'):
+            mid = H.say(c, 'human:ben', 'human:ana', 'Synthetic encoded review', conversation_id=room)['id']
+            c.execute('UPDATE messages SET refs=? WHERE id=?', (raw, mid))
+            reviews.append(mid)
+
+    called, register = [], S.ReadConnection.create_function
+
+    def counted(conn, name, arity, fn, **kwargs):
+        if name.endswith('_privacy_page_message'):
+            def check(refs):
+                called.append(refs)
+                return fn(refs)
+            return register(conn, name, arity, check, **kwargs)
+        return register(conn, name, arity, fn, **kwargs)
+    monkeypatch.setattr(S.ReadConnection, 'create_function', counted)
+
+    def count(ids, token):
+        marks = ','.join('?' for _ in ids)
+        return query(api, f'SELECT count(*) FROM messages WHERE id IN ({marks})', token, params=ids)['rows']
+
+    assert count(plain, 'cara-test') == [[3]]
+    assert called == []
+    for token, expected in (('cara-test', 0), ('ana-test', len(reviews))):
+        assert count(reviews, token) == [[expected]]
+    assert called
+
+
 def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, world, monkeypatch):
     from collections import Counter
     from backend.auth import Identity
@@ -421,6 +530,11 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         (['unsupported'], False),
         ({'inputs': ['missing-fixture-message'], 'task': public}, True),
         ({'turn_id': world['attempt']['id']}, True),
+        ({'task': [public, public]}, True),
+        ({'task_id': [public, 7]}, False),
+        ({'task': [public, 'unknown-fixture-task']}, False),
+        ({'task': [public, hidden['id']]}, False),
+        ({'task': []}, False),
     ]
     with store.read() as c:
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -820,8 +934,9 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
                 found = S.run(conn, 'SELECT * FROM tasks ORDER BY id', [], 5000, 20)
                 actual = json.dumps([dict(zip(found['columns'], row)) for row in found['rows']], sort_keys=True)
                 assert actual == expected
-                with pytest.raises(__import__("sqlite3").DatabaseError):
-                    conn.execute('SELECT * FROM "' + conn.private_prefix + 'visible_tasks"').fetchall()
+                for name in ('visible_tasks', 'known_tasks', 'plain_refs'):
+                    with pytest.raises(__import__("sqlite3").DatabaseError):
+                        conn.execute('SELECT * FROM "' + conn.private_prefix + name + '"').fetchall()
             finally:
                 conn.close()
     for who in callers:
@@ -1125,3 +1240,44 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
         finally:
             conn.close()
     assert access_reads <= 1, access_reads
+
+
+def test_a_message_whose_task_ref_is_a_list_is_visible_only_when_every_listed_task_is_known_and_undenied(api, world):
+    """The SQL gate and ReadIndex refuse a list that names an unknown, denied or non-text id, or nothing at all, and
+    accept one whose every id is known and undenied, as a scalar is accepted."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden list source', '', 'bot:finance', private=True, lint=False)
+        public = world['coo_task']['id']
+        listed = {'known': [public], 'known-twice': [public, public], 'unknown-second': [public, 'unknown-fixture-task'],
+                  'denied-second': [public, hidden['id']], 'empty': [], 'non-text': [public, 7]}
+        ids = {name: H.say(c, 'bot:ops', 'human:ana', 'List ' + name, conversation_id=world['ana_room'],
+                           refs={'task': tasks})['id'] for name, tasks in listed.items()}
+    # Read as the bot whose granted room holds them: the private task is denied to it, the public one is not.
+    visible = column(api, "SELECT id FROM messages WHERE id IN (" + ",".join(f"'{i}'" for i in ids.values()) + ")",
+                     world["attempt"]["token"])
+    assert visible == sorted(ids[name] for name in ('known', 'known-twice'))
+
+
+def test_an_event_or_blob_on_a_message_whose_task_list_cannot_be_read_is_hidden_and_the_query_still_runs(api, world):
+    """A message whose task list is empty or names a missing task has no readable provenance. Its event and its
+    attachment are hidden, and the query returns the other rows instead of failing on the unreadable one."""
+    store = api.app.state.store
+    public = world['coo_task']['id']
+    with store.transaction() as c:
+        empty = H.say(c, 'bot:ops', 'human:ana', 'List empty', conversation_id=world['ana_room'], refs={'task': []})['id']
+        missing = H.say(c, 'bot:ops', 'human:ana', 'List missing', conversation_id=world['ana_room'],
+                        refs={'task': [public, 'unknown-fixture-task']})['id']
+        good = H.say(c, 'bot:ops', 'human:ana', 'Scalar', conversation_id=world['ana_room'], refs={'task': public})['id']
+        for mid in (empty, missing, good):
+            H.event(c, 'human:ana', 'fixture.note', mid, {'text': 'Note on ' + mid})
+        for bid, mid in (('blob-list-empty', empty), ('blob-list-missing', missing), ('blob-scalar', good)):
+            c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+                      (bid, 'human:ben', bid, 1, bid + '.txt', 'text/plain', '2026-11-04T00:00:00Z'))
+            c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (mid, bid))
+    # The owner reads the audit trail through the event gate; the three notes are the only fixture rows with that action.
+    assert column(api, "SELECT target FROM events WHERE action='fixture.note' AND target IN ('"
+                  + "','".join((empty, missing, good)) + "')") == [good]
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'") == ['blob-scalar']
+    # The bot reads the same rows through its own gate and reaches the scalar message's blob too.
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'", world["attempt"]["token"]) == ['blob-scalar']

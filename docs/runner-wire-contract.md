@@ -9,6 +9,16 @@ renew, complete and the `GET runners/me/events` stream. Everything else a runner
   test and the Rust runner (`runner-rs/src/wire.rs`) both read them.
 - `contracts/runner/releases/<version>/`: the contract and fixtures as each kept release shipped them.
 
+A runner reports `harness_allocated: true` on `start_place` and `started` only after a process actually launches for
+that turn, including a live process acquired from a pool. Host and thread preparation alone do not count. The hub
+retains an allocated turn's admission under memory pressure. The `harness_allocation_v1` heartbeat capability
+opts into memory rechecks on unallocated grants; without it, the hub preserves existing grants under memory
+pressure because the runner cannot report whether it already has a process. A 422 naming the field makes the
+runner retry the request without it for an older hub; a refused capability is dropped by `lanes::refused_field`.
+The allocation signal remains true through fallback within the same turn. Start acknowledgement is tracked
+separately: after `/started` succeeds, an unallocated fallback checks memory only locally and keeps its running
+place, without calling `/start-place` or acknowledging the same start again.
+
 ## Supported skew
 
 A runner and a server work together when each is on the current or the previous minor release, in either direction:
@@ -19,6 +29,11 @@ current contract against each kept release copy in both directions and fails on 
 
 Answers are read leniently: a runner ignores fields it does not know. Requests are read strictly: the server's models
 forbid unknown fields (a 422 `validation` error naming the field).
+
+Claim attempts may include `task_context`: up to ten pages and ten meetings as ids, titles, versions and dates.
+It contains no source content. An older server omits it; the runner then renders no context block. The bot pulls
+content with its normal read commands and its own permissions, the same during task work as in any other turn.
+Claim retries rebuild the reference list using current access ([Pages](pages.md#publishing)).
 
 - **New answer field**: add it as optional. A new required field breaks the old server for a new runner.
 - **Removing or retyping an answer field**: not inside the window. Stop reading it first, and drop it two minors later.

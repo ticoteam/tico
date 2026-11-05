@@ -73,7 +73,9 @@ def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'ops-a1',?,0,'h','running',?,?)", (job, machine["runner_id"], H.now(), H.now()))
-        reminder = H._setup_reminder(c, "ops-a1")
+        reminder = H.task_create(c, H.KEEPER, "Finish onboarding ops-a1", "Still onboarding.", "human:ana",
+                                 deduplicate=False, lint=False)
+        H.event(c, H.KEEPER, "bot.setup_reminder", "ops-a1", {"task": reminder["id"], "owner": "human:ana"})
         retire_assignments(c)
         assert H.task(c, task["id"])["owner_id"] == "bot:ops-a1"
         assert H.bot(c, "ops-a1")["state"] == "active"

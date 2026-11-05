@@ -25,10 +25,25 @@ def source_db(tmp_path):
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
+        c.execute("INSERT INTO alert_preferences(person_id,phone,phone_version,verified_at,call_consent,updated_at) "
+                  "VALUES('morgan','+14155550123','consent-1',?,1,?)", (now, now))
+        for state in ('pending', 'sending', 'accepted'):
+            c.execute("INSERT INTO personal_alerts(id,person_id,incident_key,kind,subject_id,phone_version,state,created_at) "
+                      "VALUES(?,'morgan',?,'test','','consent-1',?,?)", (state, state, state, now))
+        c.execute("UPDATE alert_company_settings SET monthly_cap=7 WHERE id=1")
         c.execute("INSERT INTO bots(id,slug,state) VALUES('sales','sales','active')")
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES('ch','morgan',?)", (now,))
+        c.execute("INSERT INTO cloud_machine_deletions(machine_id,bot,runner_id,reason,next_try_at,failures,created_at) "
+                  "VALUES('machine-old','sales','r1','never_enrolled',0.0,1,0.0)")
+        c.execute("INSERT INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES('machine-old','sales')")
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status) "
+                  "VALUES('linked-task','Review the plan','human:morgan','human:morgan','open')")
+        c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) "
+                  "VALUES('linked-meeting','Plan review','morgan@acme.example','{}',?,?)", (now, now))
+        c.execute("INSERT INTO meeting_task_links VALUES('meeting-link','linked-meeting','linked-task',"
+                  "'linked','human:morgan',?)", (now,))
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
                       "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))
@@ -68,9 +83,12 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     assert removed["task_rules"] == 1                                  # scheduled actions never enter the copy
     assert source.read_bytes() == before                                    # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
+    assert removed['alert_preferences'] == 1 and removed['personal_alerts'] == 3
+    assert removed["cloud_machine_deletions"] == 1 and removed["cloud_machine_enrollment_failures"] == 1
     assert stat.S_IMODE(dest.stat().st_mode) == 0o600
     assert not any((dest.parent / name).exists() for name in ("credential.key", "github-app.key", "slack.key"))
     with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT monthly_cap FROM alert_company_settings WHERE id=1").fetchone() == (7,)
         for table in devcopy.emptied(c):
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
@@ -82,6 +100,8 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert c.execute("SELECT attempt_id FROM attempt_inputs").fetchall() == [("done",)]
         assert c.execute("SELECT token_hash,revoked_at IS NOT NULL FROM runners").fetchall() == [("devcopy-revoked:r1", 1)]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert c.execute("SELECT meeting_id,task_id FROM meeting_task_links").fetchall() == [
+            ('linked-meeting', 'linked-task')]
         assert c.execute("SELECT count(*) FROM sqlite_master WHERE name='message_links_insert'").fetchone()[0] == 1
     env = dict(line.split("=", 1) for line in (dest.parent / "server.env").read_text().splitlines()
                if "=" in line and not line.startswith("#"))

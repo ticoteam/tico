@@ -105,6 +105,15 @@ def headers(token="ana-test", key=None):
     return {"Authorization": "Bearer " + token, "Idempotency-Key": key or str(uuid.uuid4())}
 
 
+def legacy_send_approval(api, payload, *, actor="bot:ops", task_id=None):
+    """An existing pre-cutover card for compatibility reads; new email asks use the frozen queue."""
+    with api.app.state.store.transaction() as c:
+        row = H.approval_request(c, actor, "send", payload, task_id=task_id)
+        cutover = c.execute("SELECT applied_at FROM schema_migrations WHERE version='20261105040656_email_sending_queue'").fetchone()[0]
+        c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(cutover, seconds=-1), row["id"]))
+        return H.approval(c, row["id"])
+
+
 def post(api, path, body, token="ana-test", key=None, expected=200):
     r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
@@ -175,9 +184,12 @@ def put(api, path, body, token="ana-test", expected=200):
     return r.json()
 
 
-def runner(api, operator="ana", label="Test Mac"):
+def runner(api, operator="ana", label="Test Mac", device_id=None):
     code = post(api, "enrollments", {"operator": operator})["code"]
-    return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
+    body = {"code": code, "label": label, "platform": "test"}
+    if device_id is not None:
+        body["device_id"] = device_id
+    return post(api, "runners/enroll", body)
 
 
 def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
@@ -345,8 +357,8 @@ def awake_since(api, r):
 
 def test_approval_decision_and_consumption_have_separate_authority(api):
     r, _, a = setup_attempt(api)
-    payload = {"to": "colleague@acme.example", "cc": [], "subject": "Draft", "body_sha256": "a" * 64, "mailbox": "work"}
-    approval = post(api, "approvals", {"kind": "send", "payload": payload}, token=a["token"])
+    payload = {"url": "https://acme.example/draft", "content_sha256": "a" * 64}
+    approval = post(api, "approvals", {"kind": "publish", "payload": payload}, token=a["token"])
     path = "approvals/" + approval["id"]
     post(api, path, {"decision": "approved"}, token="ben-test", expected=403)
     post(api, path, {"decision": "approved"})

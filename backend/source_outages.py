@@ -35,8 +35,7 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             f"{int(waiting)} turns waiting. Expected return: {expected}.")
     # A board can name its own Engineering manager. Never assume the company's bot slug.
     managers = {r[0] for r in c.execute("SELECT manager FROM task_types WHERE role='engineering' AND manager IS NOT NULL")}
-    from .health_monitor import SLUG
-    recipients = {H.bot_actor(x) for x in managers if x} | {H.bot_actor(SLUG)}
+    recipients = {H.bot_actor(x) for x in managers if x}
     for target in sorted(recipients):
         bot = H.bot(c, H.actor_id(target))
         if not bot or bot['state'] in ('planned', 'archived'):
@@ -152,12 +151,23 @@ def batch_waiters(c, bot):
             wake_presets._release(c, bot, jobs)
 
 
-def github_read(c, prs, snapshots):
-    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+def github_recoveries(c, prs, snapshots):
+    """Repositories whose complete read can clear an open access outage, without taking a writer."""
     repos = {}
     for pr in prs:
         if pr.get('repo'):
             repos.setdefault(pr['repo'].lower(), []).append(snapshots.get(pr['id']))
+    restored = []
     for repo, results in repos.items():
         if results and all(r and not r.get('error') and r.get('head_sha') for r in results):
-            observe(c, 'github:' + repo, 'GitHub checks access', active=False)
+            key = PREFIX + hashlib.sha256(('github:' + repo).encode()).hexdigest()[:32]
+            saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
+            if saved and (H._json(saved[0], {}) or {}).get('active'):
+                restored.append(repo)
+    return restored
+
+
+def github_read(c, prs, snapshots):
+    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+    for repo in github_recoveries(c, prs, snapshots):
+        observe(c, 'github:' + repo, 'GitHub checks access', active=False)

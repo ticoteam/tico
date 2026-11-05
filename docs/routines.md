@@ -11,7 +11,9 @@ An install that had routines moved them once, on the upgrade to Automations; see
 ## Making one
 
 - **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.
-  An automation's page shows its **Runs** and **Versions**.
+  An automation's page shows its **Runs** and **Versions**. On **Runs**, click a run to see its steps. A failed step
+  shows its reason after the word failed: the first line of its error, or the detail of its first failed action,
+  cut at 80 characters.
 - **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
   action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 
@@ -109,7 +111,7 @@ An automation that keeps starting runs for 20 minutes (more than 120, spread ove
 starts more than 500 in 10 minutes, is put **on hold**. That is most often a loop, but a slow catch-up after an outage looks the
 same, so nothing is lost: its queued runs, any run whose wait ends meanwhile, and up to 500 new ones wait as **Held**
 instead of running (past that a trigger is counted as dropped, and the hold shows how many). A run mid-step finishes
-that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and the Health Monitor
+that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and BotOps
 one notice. The automation's page shows **On hold · N held**: fix what starts it, then **Release** (the held runs
 queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
 

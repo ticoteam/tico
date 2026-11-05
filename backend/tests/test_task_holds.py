@@ -28,22 +28,19 @@ def withdrawn_label(c, ask_id):
     return (H._json(H.message(c, ask_id)["refs"], {}) or {}).get("withdrawn")
 
 
-def test_a_question_on_an_open_subtask_outlives_its_parent_ending(api):
-    """Criterion 2: the bot asks on a subtask, then marks the parent done; the question stays."""
+def test_finishing_parent_closes_its_subtask_and_withdraws_its_question(api):
+    """A subtask closes with its parent, clearing the question and its hold."""
     with api.app.state.store.transaction() as c:
         parent = bot_task(c, "Spec Settings search")
-        child = bot_task(c, "Ask Ana about search scope", parent=parent)
+        child = bot_task(c, "Ask Ana about search scope", parent=parent, actor="bot:ops")
         question = ask(c, child, "Search titles only, or bodies too?")
         wait(c, child)
         H.task_update(c, "bot:ops", parent, status="done", note="Spec written")
-        assert not H.message(c, question["id"])["superseded_at"]
+        assert H.message(c, question["id"])["superseded_at"]
         row = H.task(c, child)
-        assert row["status"] == "waiting"
-        ana = task_holds.name(c, "human:ana")
-        assert row["blocked_reason"] == f"Waiting on {ana}: Search titles only, or bodies too?"
+        assert row["status"] == "closed" and not row["blocked_reason"]
         assert approval_expiry.sweep(c)["asks"] == []
-        assert not H.message(c, question["id"])["superseded_at"]
-        assert child in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
+        assert child not in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
 
 
 def test_ending_the_question_s_own_task_tells_the_asker_whether_the_person_saw_it(api):
@@ -85,7 +82,7 @@ def test_still_needed_returns_the_question_and_reopens_its_bot_task_without_a_se
         assert withdrawn_label(c, question["id"]).startswith(f"Withdrawn before {ana} saw it: no answer in two")
         row = H.task(c, tid)
         assert row["status"] == "open" and "nothing left to wait on" in row["note"]
-        assert notices(c, "bot:ops") == []      # still needed? sent its own one notice
+        assert notices(c, "bot:ops") == []      # still needed? sends no notice of its own: the roundup lists it
 
 
 def test_the_last_child_finishing_reopens_a_bot_task_and_one_of_two_keeps_it_waiting_on_the_other(api):
@@ -138,11 +135,6 @@ def test_a_note_only_update_keeps_the_tracked_reason_and_never_names_an_untracke
         assert row["blocked_reason"] == task_holds.NOTHING
         H.task_update(c, "bot:ops", loose, note="Still waiting on Chris Hawkins")
         assert H.task(c, loose)["blocked_reason"] == task_holds.NOTHING
-        # The stranded clock runs from when the wait on nothing began, not from the note.
-        old = H.shift(H.now(), hours=-3)
-        set_holds(c, loose, blocked_since=old)
-        assert (loose, "open") in H.sweep_stranded(c)
-        assert held not in [t for t, _ in H.sweep_stranded(c, H.shift(H.now(), hours=3))]
 
 
 def test_a_person_s_task_stays_put_and_an_owner_s_own_hold_is_kept(api):

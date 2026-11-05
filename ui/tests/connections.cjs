@@ -17,8 +17,8 @@ const row = (kind, ident, name, status, scope, readers, configure, extra = {}) =
 const ROWS = [
   row('slack', '', 'Slack', 'on', 'company', 'Everyone', '#/library/tools/slack', {bots: [{slug: 'eng-lead', name: 'Engineering Lead'}, {slug: 'builder', name: 'Builder'}]}),
   row('github', '', 'GitHub', 'waiting', 'company', 'Bots with repository access', '#/library/tools/github'),
-  row('mailbox', 'ops@acme.example', 'ops@acme.example', 'error', 'person', 'Ana Silva', '#/settings/inbox', {detail: 'Sign-in expired'}),
-  row('inbox', 'ibx_a', 'Account logins', 'on', 'team', 'Engineering', '#/settings/inbound', {can_configure: false}),
+  row('mailbox', 'ops@acme.example', 'ops@acme.example', 'error', 'person', 'Ana Silva', '#/settings/inboxes', {detail: 'Sign-in expired'}),
+  row('inbox', 'ibx_a', 'Account logins', 'on', 'team', 'Engineering', '#/settings/inboxes/tico/ibx_a', {can_configure: false}),
   row('meetings', 'zoom', 'Zoom', 'on', 'company', 'Meeting attendees', '#/meetings'),
   row('webhook', 'wh-1', 'Order alerts', 'paused', 'person', 'Ana Silva', '#/settings/webhooks/outgoing'),
   row('listening', '', 'Listening', 'off', 'company', 'Everyone', '#/strategy/market/listening'),

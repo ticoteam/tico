@@ -30,7 +30,7 @@
           - {id: e0a4b7f2-9400-4000-8000-000000000311, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Meeting import leaves speaker names blank (import 1190).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000011}, created: "2026-11-03T07:50:00Z"}
           - {id: e0a4b7f2-9400-4000-8000-000000000312, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Mail sync fails on one Gmail label with a 429 (sync 6621).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000012}, created: "2026-11-03T07:51:00Z"}
           - {id: e0a4b7f2-9400-4000-8000-000000000313, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Board view loads slowly past 400 tasks (trace 0917).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000013}, created: "2026-11-03T07:52:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000314, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Health monitor reports a stale runner on the Oregon cell (report 2280).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000014}, created: "2026-11-03T07:53:00Z"}
+          - {id: e0a4b7f2-9400-4000-8000-000000000314, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Check health reports a stale runner on the Oregon cell (report 2280).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000014}, created: "2026-11-03T07:53:00Z"}
           - {id: e0a4b7f2-9400-4000-8000-000000000315, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Export to CSV cuts the last column on wide tables (report 1044).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000015}, created: "2026-11-03T07:54:00Z"}
           - {id: e0a4b7f2-9400-4000-8000-000000000316, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Login loop on Safari 18.1 after session timeout (report 902).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000016}, created: "2026-11-03T07:55:00Z"}
           - {id: e0a4b7f2-9400-4000-8000-000000000317, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Attachments over 20 MB fail silently in the Ask panel (report 1311).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000017}, created: "2026-11-03T07:56:00Z"}
@@ -68,17 +68,17 @@
   prompt: "Clear my list. Test pings and the per-release docs tasks can go. Everything else stays."
   hub:
     - match: '^needs-you show'
-      out: {total: 9, by_kind: {task: 9}, by_bot: [{bot: health-monitor, count: 4}, {bot: technical-writer, count: 3}, {bot: copywriter, count: 2}]}
+      out: {total: 9, by_kind: {task: 9}, by_bot: [{bot: botops, count: 4}, {bot: technical-writer, count: 3}, {bot: copywriter, count: 2}]}
       after:
         - when: '^task bulk close'
           out: {total: 2, by_kind: {task: 2}, by_bot: [{bot: copywriter, count: 1}, {bot: person, count: 1}]}
     - match: '^task list'
       out:
         tasks:
-          - {id: 6a0c5e11-9500-4000-8000-000000000001, title: "Test ping: runner queue, build 4390", status: open, owner: "human:dana", requester: "bot:health-monitor", created: "2026-11-02T09:00:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000002, title: "Test ping: runner queue, build 4391", status: open, owner: "human:dana", requester: "bot:health-monitor", created: "2026-11-02T15:00:00Z", updated: "2026-11-02T15:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000003, title: "Test ping: runner queue, build 4392", status: open, owner: "human:dana", requester: "bot:health-monitor", created: "2026-11-03T03:00:00Z", updated: "2026-11-03T03:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000004, title: "Test ping: runner queue, build 4393", status: open, owner: "human:dana", requester: "bot:health-monitor", created: "2026-11-03T09:00:00Z", updated: "2026-11-03T09:00:00Z"}
+          - {id: 6a0c5e11-9500-4000-8000-000000000001, title: "Test ping: runner queue, build 4390", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-02T09:00:00Z", updated: "2026-11-02T09:00:00Z"}
+          - {id: 6a0c5e11-9500-4000-8000-000000000002, title: "Test ping: runner queue, build 4391", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-02T15:00:00Z", updated: "2026-11-02T15:00:00Z"}
+          - {id: 6a0c5e11-9500-4000-8000-000000000003, title: "Test ping: runner queue, build 4392", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-03T03:00:00Z", updated: "2026-11-03T03:00:00Z"}
+          - {id: 6a0c5e11-9500-4000-8000-000000000004, title: "Test ping: runner queue, build 4393", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-03T09:00:00Z", updated: "2026-11-03T09:00:00Z"}
           - {id: 6a0c5e11-9500-4000-8000-000000000005, title: "Docs for v0.5.19", status: open, owner: "human:dana", requester: "bot:technical-writer", created: "2026-10-30T10:00:00Z", updated: "2026-10-30T10:00:00Z"}
           - {id: 6a0c5e11-9500-4000-8000-000000000006, title: "Docs for v0.5.20", status: open, owner: "human:dana", requester: "bot:technical-writer", created: "2026-11-01T10:00:00Z", updated: "2026-11-01T10:00:00Z"}
           - {id: 6a0c5e11-9500-4000-8000-000000000007, title: "Docs for v0.5.21", status: open, owner: "human:dana", requester: "bot:technical-writer", created: "2026-11-02T10:00:00Z", updated: "2026-11-02T10:00:00Z"}
@@ -309,7 +309,7 @@
     - match: '^automation list'
       out:
         automations:
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true}
         next: null
     - match: '^automation create\b'
       out:
@@ -404,7 +404,7 @@
   reply: |
     Dana wants the billing inbox seen by the Finance team only. The turn changes that one inbox with `hub inbound audience
     ibx_billing team --group finance`. The support inbox and its sending are left alone. Reply: one line that billing@ is now
-    for Finance only, with the link [Settings > More > Email & Phone](#/settings/inbound), and "say undo to put it back".
+    for Finance only, with the link [Settings > Inboxes](#/settings/inboxes), and "say undo to put it back".
 
 - id: admin-meeting-share-and-tasks
   group: admin

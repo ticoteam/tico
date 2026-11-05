@@ -1,5 +1,6 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -12,8 +13,10 @@ from . import goals as G
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
-from .store import (H, encode, reclaim_free_pages, sweep_credential_uses, sweep_deltas, sweep_events, sweep_idempotency,
-                    sweep_mail, sweep_tokens)
+from .store import H, encode
+from . import sources as SRC
+
+LOG = logging.getLogger("tico.scheduler")
 
 
 def stamp(at):
@@ -44,15 +47,6 @@ def remind(c, row, at):
 
 # The controlled system routines' blocks (backend/system_routines.py CONTROLS), shared by the scheduler and Run now: a
 # manual run goes through the same code, so the same limits.
-def run_still_wanted(store, auth, at, failures=None):
-    # A task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
-    with SR.recording(store, "still_wanted", failures) as run:
-        from . import still_wanted
-        with store.transaction() as c:
-            asked = still_wanted.ask_idle(c, stamp(at))
-        run.did(SR.words_of(asked, "task asked about", "No idle tasks"))
-
-
 def run_kpi_asks(store, auth, at, failures=None):
     # A KPI that went stale as time passed becomes its owner's task here (backend/goal_asks.py). Its own transaction: a
     # failure here never undoes the goal colours.
@@ -62,15 +56,6 @@ def run_kpi_asks(store, auth, at, failures=None):
             found = goal_asks.sync(c, auth.owner_id(c), at, goal_asks.readers(c, auth))
         run.did(SR.words_of({"asked": (found or {}).get("created") or [],
                              "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
-
-
-def run_health_scan(store, auth, at, failures=None):
-    # Only while the owner has the Health Monitor on (backend/health_monitor.py). Plain code; it wakes the bot only for a
-    # finding the last scan did not have.
-    with SR.recording(store, "health_scan", failures, "health_monitor") as run:
-        from . import health_monitor
-        woke = health_monitor.check(store, auth, store.settings)
-        run.did(SR.words_of(woke, "new finding", "No new findings"))
 
 
 def run_ask_deadlines(store, auth, at, failures=None):
@@ -92,16 +77,6 @@ def run_task_manager_report(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
-def run_engineering_exceptions(store, auth, at, failures=None):
-    # Plain code (backend/pipeline_exceptions.py): a manager on the Manager profile is woken with its board's exceptions
-    # only when an entry is new since the last list; no entry, or no new one, is a quiet run.
-    with SR.recording(store, "engineering_exceptions", failures) as run:
-        from . import pipeline_exceptions
-        with store.transaction() as c:
-            woke = pipeline_exceptions.deliver(c, stamp(at))
-        run.did(SR.words_of(woke, "manager woken", "No new exceptions"), quiet=not woke)
-
-
 def run_invariants(store, auth, at, failures=None):
     # Plain SQL over the hub (backend/invariants.py): no model. Reads take no write lock; a run is recorded only when a
     # check changed, inside the one write transaction that changes it. A quiet sweep writes nothing.
@@ -113,7 +88,8 @@ def run_invariants(store, auth, at, failures=None):
         SR.keep(c, run.did(f"{len(firing)} failing: {', '.join(firing)}" if firing else "All checks pass"))
 
     try:
-        invariants.sweep(store, auth, store.settings, at, record=record)
+        with SRC.writing_as("check-health"):
+            invariants.sweep(store, auth, store.settings, at, record=record)
     except Exception as exc:
         run.error = SR.failure_words(exc)
         if failures is None:
@@ -152,14 +128,13 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
 
 
 def run_thread_followups(store, auth, at, failures=None):
-    # Asks a bot left unanswered for a day get one nudge in their thread, and a bot's managers one notice about its Home's
-    # closed history (backend/thread_followups.py). Nothing due is a quiet run: no post, no model.
+    # A bot's managers get one notice about its Home's closed history (backend/thread_followups.py). Nothing due is a quiet
+    # run: no post, no model.
     with SR.recording(store, "thread_followups", failures, "helper") as run:
         from . import thread_followups
         with store.transaction() as c:
-            nudged = thread_followups.sweep(c, stamp(at))
-            thread_followups.earlier_sweep(c, auth, stamp(at))
-        run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
+            notices = thread_followups.earlier_sweep(c, auth, stamp(at))     # scoped "earlier-messages" there
+        run.did(SR.words_of(notices, "notice", "Nothing to tell"), quiet=not notices)
 
 
 def run_thread_digest(store, auth, at, failures=None):
@@ -189,31 +164,9 @@ def run_thread_retention(store, auth, at, failures=None):
         run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
 
 
-def run_task_roundup(store, auth, at, failures=None):
-    # Three times a day by default (6am, noon and 6pm company time), each active bot gets at most one list of its tasks with
-    # a missed update, gone quiet or a follow-up time that has come (backend/task_roundup.py). Plain code: no model call,
-    # and nothing to list is a quiet run. The run is the schedule's time at or before this tick, and a bot already sent a
-    # list since that time gets no more. The lists are read in one read transaction; each bot is then sent in its own short
-    # transaction, which rebuilds its list from the live database.
-    from . import task_roundup
-    with SR.recording(store, "task_roundup", failures) as run:
-        with store.read_transaction() as c:
-            run_at = SR.occurrence(SR.config_of(c, "task_roundup"), at)
-            plans = task_roundup.discover(c, stamp(run_at))
-        woke, listed = [], 0
-        for plan in plans:
-            with store.transaction() as c:
-                count = task_roundup.send(c, plan)
-            if count:
-                woke.append(plan["slug"])
-                listed += count
-        run.did(SR.words_of({"bots woken": woke, "tasks listed": listed}, none="Nothing to list"), quiet=not woke)
-
-
-QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
+QUICK = {"kpi_asks": run_kpi_asks,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check,
-         "task_roundup": run_task_roundup}
+         "bookkeeper_check": run_bookkeeper_check}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # a person switches). The Bookkeeper's pause is their off switch.
@@ -227,8 +180,8 @@ FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
 
 def run_now(store, auth, key, actor):
     """Run now (Settings > Routines): one controlled job, once. A plain-code job runs here and its run record is on its
-    row when this returns (a failure is recorded, not raised); the stale ticket review and the learning run start on
-    their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
+    row when this returns (a failure is recorded, not raised); stale ticket review starts on its own thread. Learn
+    runs through Maintenance. Returns whether background work started. Raises a 409 when stale review is running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
     if key in QUICK:
@@ -245,15 +198,8 @@ def run_now(store, auth, key, actor):
         from . import memory_tidy_controls
         running = memory_tidy_controls.run_now(store, auth, actor)
     elif key == "learnings":
-        from . import learnings
-        with store.transaction() as c:
-            run_id = learnings.claim_tonight(c)
-        learnings.start(store, run_id)
-        running = True
-    elif key == "auto_dream":
-        from . import dream_auto
-        dream_auto.run_now(store, auth)
-        running = False
+        from . import maintenance
+        _, running = maintenance.run_now(store, auth, actor, step="learn")
     else:
         raise Problem("invalid", "Nothing to run", 422)
     with store.transaction() as c:
@@ -262,8 +208,9 @@ def run_now(store, auth, key, actor):
 
 
 class Scheduler:
-    def __init__(self, store, execution, onboarding=None, auth=None):
+    def __init__(self, store, execution, onboarding=None, auth=None, github_app=None):
         self.store, self.execution = store, execution
+        self.github_app = github_app
         self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
         self.onboarding, self.auth = onboarding, auth   # the Bookkeeper is built the tick Finance is set up
         self.swept = None
@@ -448,33 +395,16 @@ class Scheduler:
         from . import delivery
         with locked("deferred") as c:
             delivery.due(c, stamp(at), failures)
-        from . import assigned_start
-        if not self.store.settings.rehearsal:
-            unstarted = []
-            try:
-                # One snapshot for the cursor read and the selection, so the runs' provenance primes together.
-                with self.store.read_transaction() as c:
-                    saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
-                                      (assigned_start.CURSOR_KEY,)).fetchone()
-                    cursor = [H._json(saved[0], "") if saved else ""]
-                    unstarted = assigned_start.due(c, stamp(at), cursor=cursor, failures=failures)
-                with locked("assigned_start_cursor") as c:
-                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                              (assigned_start.CURSOR_KEY, H._dump(cursor[0])))
-            except Exception as exc:
-                failures.append({'assigned_start': 'selection', 'error': type(exc).__name__})
-            for task_id in unstarted:
-                with locked("assigned_start:" + task_id) as c:
-                    with isolated(c, "assigned_start", task_id, failures):
-                        assigned_start.sweep(c, stamp(at), [task_id])
-            from . import queue_refusals
-            # One snapshot for the whole scan, so the bots' shared reads (runners, providers, holds) are read once.
-            with self.store.read_transaction() as c:
-                observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
-            for change in observations:
-                with locked("queue_refusals:" + change[0]) as c:
-                    with isolated(c, "queue_refusals", change[0], failures):
-                        queue_refusals.apply(c, change)
+        # The fleet scan is a read: it runs outside the write lock, in one snapshot, so the bots' shared reads (runners,
+        # providers, holds) are read once and other writers are not held while it runs.
+        from . import queue_refusals
+        with self.store.read_transaction() as c:
+            observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
+        # Each observation is its own short write: the writer gate is not reentrant, so one inside "deferred" would wait out its timeout.
+        for change in observations:
+            with locked("queue_refusals:" + change[0]) as c:
+                with isolated(c, "queue_refusals", change[0], failures):
+                    queue_refusals.apply(c, change)
         # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
         from . import thread_bot_status
         with self.store.read() as c:
@@ -541,7 +471,7 @@ class Scheduler:
                                "hold_ms": round(longest[0] * 1000), "hold_step": longest[2],
                                "wait_ms": round(max((h[1] for h in holds), default=0) * 1000),
                                "transactions": len(holds)})))
-        # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
+        # Updates (backend/updates.py): pump the queue built by Maintenance, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
         # holds the write lock; its row stays out until the thread posts it (or gives up on it).
@@ -560,7 +490,7 @@ class Scheduler:
             settings = self.store.settings
             with self.store.transaction() as c:
                 writer = updates.writer_for(c, settings, self.store)
-                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None)
+                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None, build=False)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
@@ -577,19 +507,9 @@ class Scheduler:
             company_page_readers.tick(self.store)
         except Exception as exc:
             failures.append({"company_page_readers": type(exc).__name__})
-        # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
-        # in a background thread, so the decision model's calls never hold the write lock.
-        try:
-            from . import learnings
-            learnings.nightly(self.store, at)
-        except Exception as exc:
-            failures.append({"learnings": type(exc).__name__})
-        # The nightly auto dreams (backend/dream_auto.py): a bot whose memory changed a lot gets a dream; claimed per night.
-        try:
-            from . import dream_auto
-            dream_auto.nightly(self.store, self.execution.auth, at)
-        except Exception as exc:
-            failures.append({"auto_dream": type(exc).__name__})
+        # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
+        from . import maintenance
+        maintenance.tick(self.store, self.execution.auth, at, failures)
         try:
             from . import memory_tidy_controls
             from .store import Problem
@@ -623,43 +543,25 @@ class Scheduler:
             failures.append({"webhook_delivery": type(exc).__name__})
         self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
-            # Outside the scheduling transaction: the sweep takes its own short write
-            # locks. Marked first so a failing sweep retries hourly, not every tick.
+            # Deadline work that cannot wait for Clean up (backend/maintenance_steps/clean_up.py holds the pruning). Marked
+            # first, so a failing sweep retries hourly, not every tick.
             self.swept = at
-            with SR.recording(self.store, "cleanup") as run:
+            try:
                 with self.store.transaction() as c:
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
-                    # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
-                    SR.prune(c)                                # each system job keeps its last runs
-                    from . import rules
-                    rules.prune_events(c)                      # the webhook rules' repeat ledger keeps 30 days
-                    from . import webhook_delivery
-                    webhook_delivery.prune(c, stamp(at))       # outgoing webhooks: events and finished sends keep a month
-                    from . import automations
-                    automations.prune(c, stamp(at))            # automation runs: step detail keeps 30 days
                     from . import webhooks
-                    webhooks.auto_disable(c, stamp(at))        # an endpoint that failed every attempt for five days is turned off
-                sweep_idempotency(self.store, stamp(at))
-                sweep_mail(self.store, stamp(at))
-                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
-                sweep_tokens(self.store, stamp(at))            # finished runs' token rows keep a week (store.TOKEN_RETENTION_DAYS)
-                sweep_events(self.store, stamp(at))            # bookkeeping events keep 7 or 30 days (store.EVENT_NOISE_ACTIONS, EVENT_SWEEP_ACTIONS)
-                sweep_credential_uses(self.store, stamp(at))   # one-time: old credential use rows to one per USE_WINDOW (store.TRIM_MAX a pass)
-                reclaim_free_pages(self.store)                 # the pages those sweeps freed go back to the disk (store.VACUUM_PASS_MAX a pass)
-                from . import events
-                events.sweep(self.store, stamp(at))            # live events keep a day
-                from . import triggers
-                triggers.sweep(self.store, stamp(at))          # webhook bodies keep their trigger's days, delivery ids 30
-                from . import flight
-                flight.sweep(self.store, at.timestamp())       # the flight recorder's minutes become hours
-                from . import performance
-                performance.sweep(self.store, at.timestamp())  # computers' minutes become ten-minute points
+                    webhooks.auto_disable(c, stamp(at))           # an endpoint that failed every attempt for five days is off
+                try:
+                    from . import computers
+                    computers.sweep(self.store, stamp(at))       # replaced self-hosted computers retire only when unused
+                except Exception as exc:
+                    LOG.exception("Computer retirement failed")
+                    failures.append({"computer_retirement": type(exc).__name__})
                 from . import support_triage
-                support_triage.sweep(self.store, stamp(at))    # a support ticket waits here at most an hour
+                support_triage.sweep(self.store, stamp(at))      # a support ticket waits here at most an hour
                 from . import screening
-                screening.sweep(self.store, stamp(at))         # a screened item waits at most an hour; verdicts keep 30 days
-                run.did("Done")
+                screening.sweep(self.store, stamp(at))           # a screened item waits at most an hour
+            except Exception as exc:
+                failures.append({"deadlines": type(exc).__name__})
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).
@@ -679,8 +581,7 @@ class Scheduler:
                     strategy_bot.reconcile(c)
             except Exception as exc:
                 failures.append({"strategy_bot": type(exc).__name__})
-        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
-        # (hourly by default), Still wanted? (daily) and ask go-ahead.
+        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, ask go-ahead and reports.
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
@@ -800,10 +701,10 @@ class Scheduler:
                     ended = go_live.expire(c, at)
                 run.did(SR.words_of(ended, "go-live ended", "Nothing to end"), quiet=not ended)
         if self.stall_checked is None or at - self.stall_checked >= timedelta(minutes=1):
-            # Every minute: the checks that stay per minute. A stalled task no longer wakes its bot here; the daily
-            # task check does that (backend/task_roundup.py).
+            # Every minute: the checks that stay per minute. A stalled task no longer wakes its bot here; the task
+            # roundup lists it (backend/task_roundup.py).
             self.stall_checked = at
-            with SR.recording(self.store, "stall_checks") as run:
+            with SRC.writing_as("stuck-check"), SR.recording(self.store, "stall_checks") as run:
                 # Holds include person and approval waits that deliberately
                 # never enter the stall candidate list. Reconcile them independently,
                 # with one short transaction per task so runner writes can progress.
@@ -813,22 +714,6 @@ class Scheduler:
                 for task_id in blocked_ids:
                     with locked('blocked_check:' + task_id) as c:
                         task_blocked.sweep(c, stamp(at), task_ids=[task_id])
-                # Dev tickets long at a working step: the late ones go to their manager (backend/step_age.py).
-                aged = {}
-                try:
-                    from . import step_age
-                    with self.store.transaction() as c:
-                        aged = step_age.sweep(c, stamp(at))
-                except Exception as exc:
-                    failures.append({"step_age": type(exc).__name__})
-                # Work piling up at a step with a backlog setting: whoever it names hears of it (backend/step_backlog.py).
-                backlogged = []
-                try:
-                    from . import step_backlog
-                    with self.store.transaction() as c:
-                        backlogged = [f"{n} at {s}" + (f" for {o}" if o else "") for s, o, n, _ in step_backlog.sweep(c, stamp(at))]
-                except Exception as exc:
-                    failures.append({"step_backlog": type(exc).__name__})
                 # Tickets waiting at an assigning step go to the least busy bot of its pool (backend/task_allocator.py).
                 allocated = []
                 try:
@@ -845,10 +730,13 @@ class Scheduler:
                         timed_out = verdict_moves.timeouts(c, stamp(at))
                 except Exception as exc:
                     failures.append({"check_timeouts": type(exc).__name__})
-                acted = {"late tickets told": aged.get("late") or [],
-                         "checks timed out": timed_out, "tickets allocated": allocated, "backlogs reported": backlogged,
-                         "late tickets nobody told": aged.get("untold") or [],
-                         "tickets failed": aged.get("failed") or []}
+                retried = []
+                try:
+                    from . import check_pools
+                    retried = check_pools.retry(self.store, service=self.github_app)
+                except Exception as exc:
+                    failures.append({"check_pool_retry": type(exc).__name__})
+                acted = {"checks timed out": timed_out, "tickets allocated": allocated, "waiting checks filed": retried}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:
@@ -880,13 +768,7 @@ class Scheduler:
                 with self.store.transaction() as c:
                     moved = person_asks.migrate(c)
                 run.did(SR.words_of(moved, "plain ask made a task", "No plain asks to a person"))
-            # ...and bot tasks waiting on a person with no plain ask: their bot is asked once to restate it.
-            try:
-                from . import restate_asks
-                with self.store.transaction() as c:
-                    restate_asks.ask_restate(c)
-            except Exception as exc:
-                failures.append({"restate_asks": type(exc).__name__})
+
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at
             # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
@@ -909,11 +791,11 @@ class Scheduler:
                     finance.approvals_sweep(c, stamp(at))
             except Exception as exc:
                 failures.append({"finance_approvals": type(exc).__name__})
-            # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
-            # bot (backend/still_needed.py).
+            # ...and each weekday morning, questions unanswered two business days go back to their bots, as lines on
+            # their task roundup (backend/still_needed.py).
             with SR.recording(self.store, "still_needed", failures) as run:
                 from . import still_needed
                 with self.store.transaction() as c:
                     sent = still_needed.sweep(c, stamp(at))
-                run.did(SR.words_of(len(sent or {}), "bot reminded", "Nothing to send back"))
+                run.did(SR.words_of(len(sent or {}), "bot with questions back", "Nothing to send back"))
         return {"fired": fired, "failures": failures}

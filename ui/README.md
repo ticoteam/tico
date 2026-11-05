@@ -18,8 +18,9 @@ module system. Every script shares the page's globals (`S`, `$`, `esc`, `get`, `
 
 The many files are for editing. The server (`backend/ui_bundle.py`) concatenates the files listed between the
 markers, in that order, into `/tico/ui/app.bundle.js` and `/tico/ui/app.bundle.css` (each file after a
-`// file: app/name.js` comment), and serves index.html with each region replaced by one tag,
-`?v=<content hash>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
+`// file: app/name.js` comment), cut between files into parts of at most 512 KB (`app.bundle.2.js`, ...: WebKit's
+disk cache keeps nothing larger than an eighth of its size), and serves index.html with each region replaced by the
+parts' tags, each `?v=<hash of the whole bundle>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
 immutable`, strong ETag, gzip when the browser accepts it); index.html is revalidated on every load. It
 rebuilds when a listed file changes, so editing needs no step. index.html is the only list: adding a file to it
 adds it to the bundle.

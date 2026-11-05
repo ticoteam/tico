@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import automations
+from backend import automation_actions, automations, mailbox_access
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
@@ -34,8 +34,13 @@ def test_a_mail_trigger_is_its_owners_own_mailbox_on_save(api):
     assert "may not read ben@acme.example" in refused["error"]["detail"]
     post(api, "automations", flow(owner="person:ben", trigger=on_ben, steps=[
         {**WAKE, "args": {"bot": "cpo", "text": "{{message.subject}}"}}]), token="ben-test")
-    # A bot hears its operator's mail: ops is Ana's.
-    post(api, "automations", flow(owner="bot:ops", trigger={"type": "message", "inbox": "ana@acme.example"}))
+    # A bot hears a mailbox only with a grant on it: Ana's operator role gives ops nothing by itself.
+    on_ana = {"type": "message", "inbox": "ana@acme.example"}
+    post(api, "automations", flow(owner="bot:ops", trigger=on_ana), expected=403)
+    with api.app.state.store.transaction() as c:
+        mailbox_access.grant(c, "person:ana", mailbox_access.ensure_mailbox(c, "ana@acme.example")["id"],
+                             "bot", "ops", "read")
+    post(api, "automations", flow(owner="bot:ops", trigger=on_ana))
     post(api, "automations", flow(owner="bot:cpo", trigger={"type": "message", "inbox": "ana@acme.example"}),
          expected=403)
 
@@ -81,6 +86,26 @@ def test_a_manual_runs_input_names_only_what_the_owner_may_read(api):
     assert refused["error"]["code"] == "forbidden" and runs(api, aid)["runs"] == []
     post(api, f"automations/{aid}/run", {"input": {"message": {"mailbox": "ben@acme.example", "id": "m1"}}},
          expected=403)
+
+
+def test_a_test_run_s_sample_message_queues_its_archive_and_a_mailbox_the_owner_lacks_refuses_it(api):
+    """Automations > Run with a sample (no mailbox, as the editor fills it): the Filter's archive waits, as before
+    mailbox levels; the same on a mailbox the owner holds no level on is refused when queued, never waits."""
+    archive = {"id": "sort", "type": "filter", "rules": [{"when": [{"field": "message.from", "op": "contains",
+                                                                    "value": "promo"}], "match": "all",
+                                                           "then": [{"do": "archive", "args": {}}], "stop": True}]}
+    aid = post(api, "automations", flow(trigger={"type": "message", "inbox": "ana@acme.example"},
+                                        steps=[archive]))["id"]
+    run = post(api, f"automations/{aid}/run",
+               {"input": {"message": {"from": "promo@deals.example", "subject": "Sale", "body": "50% off"}}})["run"]
+    assert run["steps"][0]["status"] != "failed", run
+    with api.app.state.store.read() as c:
+        assert [r["state"] for r in c.execute("SELECT state FROM automation_mail_actions WHERE automation_id=?",
+                                              (aid,))] == ["queued"]
+    with api.app.state.store.transaction() as c:
+        auto = {"id": aid, "flow": {"owner": "person:ana"}}
+        refused = automation_actions._queue_mail(c, auto, "run_x", "archive", {"mailbox": "ben@acme.example", "id": "m9"}, {})
+        assert refused["ok"] is False and "may not organize ben@acme.example" in refused["detail"]
 
 
 def test_task_actions_act_as_the_owner_with_the_automation_as_via(api):
