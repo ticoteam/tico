@@ -691,7 +691,7 @@ def test_a_row_failed_before_this_release_is_not_stuck_on_its_old_wake(cloud):
     assert cloud.tick(20) == ["create"] and cloud.row()["machine_id"] != first
 
 
-def test_no_create_follows_a_refused_one_until_hq_is_listed(cloud):
+def test_an_ambiguous_create_waits_for_hq_within_its_hold_then_counts_listed_failures(cloud):
     adopt(cloud)
     work(cloud)
     made, listed = cloud.hq.create, cloud.hq.list
@@ -705,8 +705,8 @@ def test_no_create_follows_a_refused_one_until_hq_is_listed(cloud):
         raise CM.Refused("unreachable", 0)
     cloud.hq.create, cloud.hq.list = failed, down
     for _ in range(12):
-        cloud.tick(CM.BACKOFF_MAX)
-    assert cloud.hq.actions().count("create") == 1             # HQ's list never answered: never asked again
+        cloud.tick(CM.TICK)
+    assert cloud.hq.actions().count("create") == 1             # HQ's list has not answered within the bounded hold
     cloud.hq.list = listed
     for _ in range(40):
         cloud.tick(CM.BACKOFF_MAX)
@@ -1328,10 +1328,10 @@ def test_enrollment_has_a_hard_machine_cap_despite_lost_replies_and_unreadable_l
     monkeypatch.setattr(cloud.hq, "delete", lost_delete)
     monkeypatch.setattr(cloud.hq, "create", made)
     monkeypatch.setattr(cloud.hq, "list", unreliable_list)
-    # Restarts erase all in-memory retry guards. Every look also crosses an enrollment deadline.
+    # Restart on every look; expire known machines while allowing a readable list within an unknown create's hold.
     for _ in range(24):
         manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
-        cloud.at[0] += CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE + CM.BACKOFF_MAX
+        cloud.at[0] = max(cloud.at[0] + CM.TICK, cloud.row(target.key)["enroll_by"] or 0)
         manager.tick()
         assert cloud.hq.n <= CM.ENROLL_TRIES + 1
     current = cloud.row(target.key)
@@ -1372,25 +1372,108 @@ def test_expiry_is_counted_before_delete_and_old_settlement_cannot_spend_it_agai
         assert c.execute("SELECT count(*) FROM cloud_machine_enrollment_failures").fetchone()[0] == 1
 
 
-def test_an_unreadable_list_cannot_repeat_an_unknown_failed_create_after_restart(cloud, monkeypatch):
-    target = deletion_target(cloud, "replace")
+@pytest.mark.parametrize("kind", ["replace", "shared"])
+@pytest.mark.parametrize("recover", ["backoff", "replace"])
+def test_a_429_create_with_an_oversized_list_recovers_and_keeps_old_id_fences(cloud, monkeypatch, kind, recover):
+    target = deletion_target(cloud, kind)
+    old_id = cloud.row(target.key)["machine_id"]
     assert delete_target(cloud, target).status_code == 200
-    create = cloud.hq.create
+    creates = []
 
-    def lost(*args):
-        machine = create(*args)
-        cloud.hq.machines[machine["id"]]["state"] = "failed"
-        raise CM.Refused("unreachable")
+    def answer(request):
+        if request.method == "GET":
+            return httpx.Response(200, content=b" " * (CM.ANSWER_CAP + 1))
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"ok": True})
+        assert request.method == "POST" and request.url.path.endswith("/machines")
+        creates.append(json.loads(request.content))
+        if len(creates) == 1:
+            return httpx.Response(429, json={"error": "starts_full"})
+        return httpx.Response(200, json=cloud.hq.create(**creates[-1]))
 
-    monkeypatch.setattr(cloud.hq, "create", lost)
+    monkeypatch.setattr(CM, "TRANSPORT", httpx.MockTransport(answer))
+    hq = CM.HQ("test-key", "https://gateway.acme.example/v1/gateway")
+    monkeypatch.setattr(cloud.manager, "client", hq)
+    cloud.tick(CM.TICK)
+    refused = cloud.row(target.key)
+    assert cloud.manager.list_refused == "oversized"
+    assert refused["create_asked_at"] is None and refused["problem"] == "hq:starts_full"
+    assert refused["next_try_at"] == cloud.at[0] + CM.BACKOFF
+    cloud.tick(CM.BACKOFF - 1)
+    assert len(creates) == 1                                  # the refusal still backs off without a readable list
+    if recover == "replace":
+        # An upgrade can still have the marker the refused create left on an older server.
+        with cloud.store.transaction() as c:
+            CM.save(c, target.key, create_asked_at=cloud.at[0])
+        assert delete_target(cloud, target).status_code == 200
+        assert cloud.row(target.key)["create_asked_at"] is None
+    manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=hq)
+    cloud.at[0] += 1
+    manager.tick()
+    fresh = cloud.row(target.key)
+    assert len(creates) == 2 and fresh["machine_id"] != old_id and fresh["create_asked_at"] is None
+    code = creates[-1]["enroll_token"]
+    computer = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    ready(cloud.api, computer, ["ops"])
+    assert claim_on(cloud, computer, "ops")["attempt"]
+    with cloud.store.read() as c:
+        assert CM.deleting(c, old_id) and CM.held(c, target.computer["runner_id"])
+        assert not CM.held(c, computer["runner_id"])
+
+
+@pytest.mark.parametrize("kind", ["replace", "shared"])
+@pytest.mark.parametrize("recover,refusal", [
+    ("list", CM.Refused("unreachable")), ("timeout", CM.Refused("http_503", 503)),
+    ("timeout", CM.Refused("http_408", 408)), ("replace", CM.Refused("unreachable")),
+])
+def test_an_ambiguous_create_has_bounded_recovery_across_restarts(cloud, monkeypatch, kind, recover, refusal):
+    target = deletion_target(cloud, kind)
+    old_id = cloud.row(target.key)["machine_id"]
+    assert delete_target(cloud, target).status_code == 200
+    listed = cloud.hq.list
+    monkeypatch.setattr(cloud.hq, "delete", Mock(return_value={"ok": True}))
+    cloud.hq.fail["create"] = [refusal]
     monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
     cloud.tick(CM.TICK)
-    for _ in range(CM.ENROLL_TRIES + 2):
-        manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
-        cloud.at[0] += CM.BACKOFF_MAX
+    asked = cloud.row(target.key)["create_asked_at"]
+    assert asked == cloud.at[0]
+    manager = CM.Manager(cloud.store, cloud.store.settings, cloud.api.app.state.execution, client=cloud.hq)
+    cloud.at[0] = asked + CM.BACKOFF
+    manager.tick()
+    assert cloud.hq.actions().count("create") == 2 and cloud.row(target.key)["create_asked_at"] == asked
+    assert cloud.row(target.key)["problem"] == "hq:oversized"
+    if recover == "replace":
+        assert delete_target(cloud, target).status_code == 200
+        assert cloud.row(target.key)["create_asked_at"] is None
+    elif recover == "list":
+        monkeypatch.setattr(cloud.hq, "list", listed)
+        cloud.manager.synced = None
+    else:
+        cloud.at[0] = asked + CM.CREATE_HOLD - 1
         manager.tick()
-    assert cloud.hq.n == 2 and cloud.row()["create_asked_at"] is not None
-    assert cloud.row()["problem"] == "hq:oversized"
+        assert cloud.hq.actions().count("create") == 2 and cloud.row(target.key)["create_asked_at"] == asked
+        cloud.at[0] += 1
+    # The original manager also retains its process-wide hold; explicit recovery and the deadline release it too.
+    cloud.manager.tick()
+    assert cloud.hq.actions().count("create") == 3
+    assert cloud.row(target.key)["machine_id"] != old_id and cloud.row(target.key)["create_asked_at"] is None
+    if recover != "list":
+        with cloud.store.read() as c:
+            assert CM.deleting(c, old_id)
+
+
+def test_an_ambiguous_first_create_retries_at_the_deadline_without_a_readable_list(cloud, monkeypatch):
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("http_503", 503)]
+    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.tick()
+    asked = cloud.row()["create_asked_at"]
+    cloud.tick(CM.CREATE_HOLD - 1)
+    assert cloud.hq.actions().count("create") == 1 and cloud.row()["create_asked_at"] == asked
+    cloud.tick(1)
+    assert cloud.hq.actions().count("create") == 2 and cloud.row()["create_asked_at"] is None
+    assert cloud.row()["machine_id"] and cloud.row()["enroll_by"]
 
 
 def test_shared_settings_and_member_moves_keep_the_failure_limit_until_explicit_replacement(cloud):

@@ -136,9 +136,10 @@ extend an expired code: that machine is deleted and the next work makes a fresh 
 When a code expires unused or HQ reports a failed machine, the server counts that exact machine id once in
 `cloud_machine_enrollment_failures`. The count commits before DELETE or adoption of another id. Lost replies,
 old deletion retries, unreadable lists and server restarts cannot skip or repeat it. Cleanup and adoption keep
-the count, and every create checks the three-failure limit. An unanswered create is saved in `create_asked_at`;
-another create waits for a readable list, unless its fresh runner has already enrolled. This also holds after
-a restart, so a failed machine hidden by a lost create reply cannot cause repeated billed creates.
+the count, and every create checks the three-failure limit. A clear create refusal, such as 429 `starts_full`,
+clears `create_asked_at` and retries with backoff. A timeout or 5xx keeps that marker until a readable HQ list,
+fresh enrollment, or 16 minutes have passed. The wait survives restarts; an unreadable list cannot hold it forever.
+Explicit **Replace machine** (or replacing the shared machine) clears the marker at once and keeps all old-id fences.
 
 ## How a machine becomes the bot's runner
 

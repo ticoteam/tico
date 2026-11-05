@@ -146,6 +146,7 @@ STOPPING_RETRY = 5              # boat answers 409 sandbox_stopping to a resume 
 FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as HQ says the company is open
 ENROLL_MINUTES = 15
 ENROLL_GRACE = 60               # past its newest code's expiry, a machine not enrolled yet never will be
+CREATE_HOLD = ENROLL_MINUTES * 60 + ENROLL_GRACE  # give an unanswered create time to enroll before another request
 ENROLL_TRIES = 3                # machines made in a row that never enrolled before it waits for a person
 STOP_HOLD = 120                 # a stop's reservation lapses this late: a server that died mid-stop strands no work
 DEAD = ("deleted", "failed")     # HQ's word for a machine that is gone or never got a computer: a want makes a new one
@@ -975,7 +976,7 @@ class Manager:
         self.lock = threading.Lock()
         self.support_lock = threading.Lock()
         self.synced = None
-        self.relist = False             # a create was refused: no other create until HQ's list has been read
+        self.relist_until = 0            # an ambiguous create briefly holds other creates while HQ's list is unreadable
         self.list_refused = None        # the code of HQ's last refused list, None once one is read: a waiting create says it
 
     @property
@@ -1060,7 +1061,7 @@ class Manager:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             self.cleanup_deletions(hq, at)
             return None
-        self.relist = False
+        self.relist_until = 0
         self.list_refused = None
         with self.store.transaction() as c:
             # What a create waiting on the list said: an hq: problem with no refusal of its own (a refused create or
@@ -1287,11 +1288,13 @@ class Manager:
                 return                                      # a claim came first, or the facts changed: not now
         pending_create = False
         if action == "create" and current["create_asked_at"] is not None:
-            with self.store.read() as c:
-                pending_create = not replacement_runner(c, key, current["machine_id"])
-        if action == "create" and (self.relist and not replacing or pending_create):
-            # The last create was refused, and HQ's list not read since. A refused list is said on this row, so the
-            # bot's work says why; a list not yet asked for is waited on silently.
+            with self.store.transaction() as c:
+                pending_create = at < current["create_asked_at"] + CREATE_HOLD \
+                    and not replacement_runner(c, key, current["machine_id"])
+                if not pending_create:
+                    save(c, key, create_asked_at=None)
+        if action == "create" and (pending_create or at < self.relist_until and not replacing):
+            # An unreadable list cannot settle an unanswered create, but its hold has a deadline across restarts.
             if self.list_refused and current["problem"] != "hq:" + self.list_refused:
                 with self.store.transaction() as c:
                     save(c, key, problem="hq:" + self.list_refused, problem_at=H.now())
@@ -1410,8 +1413,12 @@ class Manager:
             fields = {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
-            if action == "create":
-                self.synced, self.relist = None, True       # HQ's list first: a machine it failed counts before a retry
+        if action == "create":
+            self.synced = None                             # read HQ's state before the next retry when possible
+            if 400 <= refused.status < 500 and refused.status != 408:
+                fields["create_asked_at"] = None            # HQ refused the create; a request timeout remains unknown
+            else:
+                self.relist_until = at + CREATE_HOLD
         if action == "stop":
             if stopped_unknown(refused):
                 # It may be stopping all the same: the fence holds for STOP_HOLD more, and the next look asks HQ's
@@ -1714,11 +1721,13 @@ def _remove(service, who, auth, key, request, mutate, replace):
                 raise Problem("gateway", "Connect Tico Gateway first", 409)
             hold = now() + STOP_HOLD
             save(c, key, stop_until=hold, problem="replacing",
-                 **({"enroll_fails": 0} if explicit else {}))
+                 **({"enroll_fails": 0, "create_asked_at": None} if explicit else {}))
             if send_delete:
                 intend_delete(c, current)
     if replay:
         return mutate(request, Empty(), lambda c: {"ok": True})
+    if explicit:
+        service.relist_until = 0
 
     def finish(c):
         from . import model_subscriptions as MS
