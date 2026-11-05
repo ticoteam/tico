@@ -25,6 +25,12 @@ def source_db(tmp_path):
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
+        c.execute("INSERT INTO alert_preferences(person_id,phone,phone_version,verified_at,call_consent,updated_at) "
+                  "VALUES('morgan','+14155550123','consent-1',?,1,?)", (now, now))
+        for state in ('pending', 'sending', 'accepted'):
+            c.execute("INSERT INTO personal_alerts(id,person_id,incident_key,kind,subject_id,phone_version,state,created_at) "
+                      "VALUES(?,'morgan',?,'test','','consent-1',?,?)", (state, state, state, now))
+        c.execute("UPDATE alert_company_settings SET monthly_cap=7 WHERE id=1")
         c.execute("INSERT INTO bots(id,slug,state) VALUES('sales','sales','active')")
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES('ch','morgan',?)", (now,))
@@ -74,9 +80,11 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     assert removed["task_rules"] == 1                                  # scheduled actions never enter the copy
     assert source.read_bytes() == before                                    # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
+    assert removed['alert_preferences'] == 1 and removed['personal_alerts'] == 3
     assert stat.S_IMODE(dest.stat().st_mode) == 0o600
     assert not any((dest.parent / name).exists() for name in ("credential.key", "github-app.key", "slack.key"))
     with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT monthly_cap FROM alert_company_settings WHERE id=1").fetchone() == (7,)
         for table in devcopy.emptied(c):
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]

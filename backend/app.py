@@ -334,6 +334,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
+                    app.state.personal_alerts.tick()
                     await asyncio.to_thread(scheduler.tick)
                     await asyncio.to_thread(recorded, "release_check", release_check)
                     await asyncio.to_thread(recorded, "repository_waits", repository_waits)
@@ -8674,6 +8675,8 @@ def create_app(settings=None):
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
     from .mail_settings import install as install_mail_settings
     install_mail_settings(app, store, auth, mutate)
+    from . import personal_alerts
+    personal_alerts.install(app, store, settings, auth, mutate)
     from .shared_bots import install as install_branches
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
