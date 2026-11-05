@@ -155,6 +155,103 @@ def test_failed_reply_text_never_becomes_list_reason(api):
     assert listed(api, a['id'])['end_reason'] == 'Process failed (no exit status reported)'
 
 
+def test_a_restart_report_on_an_expired_run_is_not_reported_as_a_lost_heartbeat(api):
+    machine, _, a = start(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='expired',finished_at=?,result=? WHERE id=?",
+                  (H.now(), json.dumps({'text': run_diagnostics.RESTART_TEXT}), a['id']))
+        run_diagnostics.finish(c, a['id'], 'interrupted')
+    assert listed(api, a['id'])['end_reason'] == run_diagnostics.RESTART_TEXT
+
+
+def test_a_planned_pause_reason_is_scrubbed_and_never_taken_from_reply_text(api):
+    machine, _, a = start(api)
+    secret = 'sk-test_abcdefghijklmnopqrstuvwxyz0123456789'
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused ' + secret + ' ' + 'x' * 600}}]}, machine['token'])
+    post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1,
+         'text': 'private partial reply'}, machine['token'])
+    reason = listed(api, a['id'])['end_reason']
+    assert reason.startswith('Paused ') and len(reason) <= 500
+    assert secret not in reason and 'private partial reply' not in reason
+
+
+@pytest.mark.parametrize('late', [False, True])
+def test_a_saved_pause_event_does_not_override_a_completion_that_cannot_resume(api, late):
+    machine, _, a = start(api)
+    line = "Paused at the computer's drain time limit; work and session saved, queued to continue"
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]}, machine['token'])
+    if late:
+        with api.app.state.store.transaction() as c:
+            c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+            api.app.state.execution.expire(c)
+        assert listed(api, a['id'])['end_reason'] == line
+        assert get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]['paused'] == line
+    post(api, f"attempts/{a['id']}/complete",
+         {'outcome': 'interrupted', 'yielded': False, 'fallback': 'claude', 'last_seq': 1}, machine['token'])
+    assert listed(api, a['id'])['end_reason'] == 'Process interrupted (no exit status reported)'
+    run = get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]
+    assert run['id'] == a['id'] and run['paused'] is None and run['job_state'] == 'uncertain'
+
+
+def test_a_late_update_hand_back_keeps_its_saved_pause_and_does_not_use_a_start_retry(api, monkeypatch):
+    from backend import execution
+
+    monkeypatch.setattr(execution, 'PRE_START_TRIES', 1)
+    machine, _, a = setup_attempt(api)
+    line = 'Handed back before starting because the computer is updating; queued to continue'
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+        api.app.state.execution.expire(c)
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'queued'
+    # The saved event proves the pause even before its completion reaches the hub.
+    assert listed(api, a['id'])['end_reason'] == line
+    result = post(api, f"attempts/{a['id']}/complete",
+                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
+    assert result['filed']
+    with api.app.state.store.read() as c:
+        row = c.execute('SELECT state,result FROM attempts WHERE id=?', (a['id'],)).fetchone()
+        assert row['state'] == 'expired' and json.loads(row['result'])['yielded']
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'queued'
+    turn = listed(api, a['id'])
+    assert turn['end_reason'] == line and turn['failure_reason'] == line
+
+
+def test_a_late_yield_report_without_a_pause_event_uses_the_pause_fallback(api):
+    from backend.login_waits import PAUSED
+
+    machine, _, a = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+        api.app.state.execution.expire(c)
+    result = post(api, f"attempts/{a['id']}/complete",
+                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 0}, machine['token'])
+    assert result['filed']
+    assert listed(api, a['id'])['end_reason'] == PAUSED
+
+
+def test_canceling_an_expired_run_takes_precedence_over_its_late_pause(api):
+    machine, _, a = start(api)
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused for the computer to update'}}]}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
+        api.app.state.execution.expire(c)
+    post(api, 'bots/ops/stop', {'run_id': a['id']})
+    result = post(api, f"attempts/{a['id']}/complete",
+                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
+    assert result['filed']
+    assert listed(api, a['id'])['end_reason'] == 'Canceled by human:ana'
+    run = get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]
+    assert run['id'] == a['id'] and run['paused'] is None
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'canceled'
+
+
 def silent_since(api, aid, started):
     """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:

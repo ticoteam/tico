@@ -1151,7 +1151,7 @@ preference: with none that can run, it runs on an author's own, and the subtask'
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
   goes on, on its own model, and the bot is not marked limited. Held 12 hours with every turn stopped on the limit,
-  it is a Health Monitor setup finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
+  it is a Check health finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on

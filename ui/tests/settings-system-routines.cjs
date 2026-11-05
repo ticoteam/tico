@@ -2,7 +2,7 @@
 // that matches name, trigger, action and department; each row reads WHEN ... THEN ... with one department tag, its
 // schedule, last run in words (a failure in red with its reason), next run, and for a Decide job the route that answered,
 // a fallback in words and this month's spend. Housekeeping says Tico needs it. An owner or admin gets a switch, a
-// schedule preset (no every 15 minutes for an AI job) and Run now on the six; Health scan only the owner; a member none.
+// schedule preset (no every 15 minutes for an AI job) and Run now on the six; a member none.
 // Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -18,7 +18,7 @@ const job = (key, name, extra = {}) => ({key, name, what: name + ' does a thing.
   then: ['do ' + name.toLowerCase()], department: {name: 'Engineering', in_chart: true}, switch: false, on: true,
   preset: null, at: null, presets: [], owner_only: false, can_change: false, search: '', ...extra});
 function system(role) {
-  const admin = ['owner', 'admin'].includes(role), owner = role === 'owner';
+  const admin = ['owner', 'admin'].includes(role);
   const ctl = (extra) => ({switch: true, controllable: true, can_change: admin, ...extra});
   const jobs = [
     job('stale_review', 'Stale ticket review', ctl({ai: true, route: 'Gateway', fallback: null, group: 'checks', preset: 'hourly', presets: AI,
@@ -26,7 +26,6 @@ function system(role) {
       spent_this_month_usd: 0.42, next: soon, last: {started_at: before, finished_at: before, ok: true, result: '9 checked, 2 suggestions', runs: 1}})),
     job('kpi_asks', 'KPI stale asks', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
       when: ['every day at 09:00'], last: {started_at: before, finished_at: before, ok: false, result: 'Failed: the database was busy', runs: 1}})),
-    job('health_scan', 'Health scan', ctl({group: 'checks', preset: 'hourly', presets: ALL, owner_only: true, can_change: owner})),
     job('memory_tidy', 'Nightly memory tidy', ctl({on: false, schedule: 'Nightly at 03:30', group: 'learning', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}], pilots: [], pilot_models: [{model: 'codex:gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high']}, {model: 'claude:claude-sonnet-5-5', label: 'Sonnet 5.5', efforts: ['low', 'high']}]})),
     job('learnings', 'Nightly learnings', ctl({ai: true, schedule: 'Nightly at 03:00', route: 'Company key', group: 'learning', preset: 'daily', at: '03:00',
       presets: [{key: 'daily', label: 'Daily at a time'}], when: ['nightly at 03:00'],
@@ -121,7 +120,7 @@ const saved = async (page, writes, count, key) => {
       assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
-      assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 10);
+      assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 9);
       assert.equal(await row(page, 'task_roundup').count(), 0, 'Task roundup controls moved to Maintenance Find stuck');
       // Each row: WHEN ... THEN ..., one department tag.
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-rule]').innerText(),
@@ -147,10 +146,11 @@ const saved = async (page, writes, count, key) => {
       await search.fill('fresh session');
       assert.deepEqual(await shown(), ['topic_fresh']);
       await search.fill('engineering');
-      assert.equal((await shown()).length, 10);
+      assert.equal((await shown()).length, 9);
       await search.fill('zzz');
       assert.match(await page.locator('[data-sysr-none]').innerText(), /No job matches/);
       await search.fill('');
+      assert.equal(await row(page, 'health_scan').count(), 0, 'Check health runs through Maintenance');
       if (role === 'member') {
         // A member reads the list: no switch, schedule choice or Run now anywhere.
         assert.equal(await page.locator('#set-system-card input:not([data-sysr-search]), #set-system-card select, #set-system-card button').count(), 0);
@@ -166,12 +166,6 @@ const saved = async (page, writes, count, key) => {
         assert.equal(await row(page, 'kpi_asks').locator('[data-sysr-at]').inputValue(), '09:00');
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-run]').count(), 0, 'a switch only');
-        // Health scan: the owner changes it; an admin reads it and is told why.
-        if (role === 'owner') assert.equal(await row(page, 'health_scan').locator('[data-sysr-on]').count(), 1);
-        else {
-          assert.equal(await row(page, 'health_scan').locator('input, select, button').count(), 0);
-          assert.equal(await row(page, 'health_scan').locator('[data-sysr-owner]').innerText(), 'Only the owner changes this');
-        }
         // Every 4 hours: saved, and the row reads it back.
         await row(page, 'stale_review').locator('[data-sysr-preset]').selectOption('4h');
         await saved(page, writes, 1, 'stale_review');

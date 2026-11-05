@@ -74,7 +74,7 @@
       out:
         alerts:
           - "Release v0.5.20 shipped at 23:00 UTC on Nov 2. Its docs task is done but still open."
-          - "Runner queue ping from Health Monitor failed twice on Nov 2."
+          - "Runner queue ping from Check health failed twice on Nov 2."
         waiting_on_you: {count: 8}
         bots_down: []
         what_bots_said: "Copywriter sent launch email draft 2 for your review. Release Manager is waiting on your v0.5.0 publish approval. CEO Bot has two goal questions for you."
@@ -452,7 +452,7 @@
         actor: "human:dana"
         messages:
           - {id: 6d2b8e17-6100-4000-8000-000000000001, kind: question, from_actor: "bot:botops", text: "Build the support inbox bot on the shared mailbox, live on Tuesday? Reply yes or no.", created: "2026-11-02T16:00:00Z"}
-          - {id: 3f0e9a52-6100-4000-8000-000000000002, kind: question, from_actor: "bot:health-monitor", text: "Pause the runner queue ping for a day? Yes or no.", created: "2026-11-02T18:05:00Z"}
+          - {id: 3f0e9a52-6100-4000-8000-000000000002, kind: question, from_actor: "bot:botops", text: "Pause the runner queue ping for a day? Yes or no.", created: "2026-11-02T18:05:00Z"}
         more_messages: false
         tasks: []
         notices: []
@@ -470,7 +470,7 @@
     - '^task create .*--owner (bot:)?botops'
   reply: |
     Answers BotOps's question about the support inbox bot with Dana's words (yes, go ahead), and says in one line that it is
-    answered. It does not answer the Health Monitor question, which Dana did not mention, and does not message BotOps separately.
+    answered. It does not answer the Check health question, which Dana did not mention, and does not message BotOps separately.
 
 - id: jobs2-ask-bot
   group: jobs2
@@ -638,10 +638,10 @@
       out:
         automations:
           - {id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: "daily at 02:00 UTC", enabled: true, runs_7d: 7, creates: "one tidy summary a night"}
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
       after:
-        - {when: '^automation update auto_keeper_nightly --file -', out: {automations: [{id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: "daily at 06:00 UTC", enabled: true, runs_7d: 7, creates: "one tidy summary a night"}, {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}], next: null}}
+        - {when: '^automation update auto_keeper_nightly --file -', out: {automations: [{id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: "daily at 06:00 UTC", enabled: true, runs_7d: 7, creates: "one tidy summary a night"}, {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}], next: null}}
     - match: '^automation show auto_keeper_nightly'
       out:
         automation:
@@ -670,7 +670,7 @@
   reply: |
     Changes only the schedule of Keeper's nightly tidy, to 06:00 UTC, through the automation's update, and leaves its steps
     and everything else as they were. It says so in one line and how to undo it. It does not disable it, does not touch the
-    Health Monitor automation, and does not message Keeper.
+    Check health automation, and does not message Keeper.
 
 - id: jobs2-undo-automation-change
   group: jobs2
@@ -725,7 +725,7 @@
       out:
         rules:
           - {id: rule_1182, text: "No per-release docs tasks for the owner", kind: internal, status: active, who: "human:dana", created: "2026-11-02"}
-          - {id: rule_1190, text: "Health Monitor test pings do not go into the owner's queue", kind: internal, status: active, who: "human:dana", created: "2026-11-02"}
+          - {id: rule_1190, text: "Check health test pings do not go into the owner's queue", kind: internal, status: active, who: "human:dana", created: "2026-11-02"}
         next: null
   must:
     - '^rules list\b'

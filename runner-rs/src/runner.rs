@@ -848,6 +848,7 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(crate::idle_load::run_loop(self.clone()));
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
