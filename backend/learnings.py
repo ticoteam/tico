@@ -403,10 +403,10 @@ def shared_item(c, item, bot):
     if item["source"] == "mail":
         return False              # Mailbox grants never establish a company-wide audience.
     if item["source"] == "meeting":
-        return bool(c.execute("SELECT 1 FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                              "WHERE m.id=? AND m.review_state='live' AND mc.deleted_at IS NULL "
-                              "AND json_extract(m.metadata,'$.kind')='meeting' "
-                              "AND coalesce(json_extract(m.metadata,'$.private'),0)=0", (ref.get("meeting"),)).fetchone())
+        row = c.execute("SELECT m.metadata FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+                        "WHERE m.id=? AND m.review_state='live' AND mc.deleted_at IS NULL "
+                        "AND json_extract(m.metadata,'$.kind')='meeting'", (ref.get("meeting"),)).fetchone()
+        return bool(row and effective_audience(H._json(row['metadata'], {})) == "team")
     return False
 
 
