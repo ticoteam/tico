@@ -1076,13 +1076,11 @@ fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
         corrected(vec![word(0, 1, "Hi", "")], "S1"),
         ("S1".into(), "Hi".into())
     );
-    // Streamed microphone words that repeat streamed meeting audio are echo.
-    assert!(
-        crate::transcript::without_echo(
-            &[word(1000, 1200, "Hello", "")],
-            &[word(1100, 1300, "hello,", "S1")]
-        )
-        .is_empty()
+    // One shared greeting is insufficient evidence to delete a genuine local reply.
+    let greeting = word(1000, 1200, "Hello", "");
+    assert_eq!(
+        crate::transcript::without_echo(&[greeting.clone()], &[word(1100, 1300, "hello,", "S1")]),
+        [greeting]
     );
     // A turn the finished transcript has no words for is emptied.
     assert_eq!(corrected(vec![], "S1"), ("S1".into(), String::new()));
@@ -1183,7 +1181,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
         requests[0].1["chunks"],
         json!([
             {"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"helo there"},
-            {"seq":2,"speaker":"S1","start_ms":1200,"end_ms":1750,"text":"hi all"},
+            {"seq":2,"speaker":"Speaker 1","start_ms":1200,"end_ms":1750,"text":"hi all"},
         ])
     );
     // Only new finals go next time; seq stays contiguous.
@@ -1201,8 +1199,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
         (json!(4), json!("and fiends"))
     );
     assert_eq!(chunks.as_array().unwrap().len(), 2);
-    // A final that arrives after a later one starts no earlier than it (Tico refuses that);
-    // a streamed word the finished transcript won't have still goes now.
+    // A late final retains its capture time locally and uses the shared delivery time frontier.
     streamed(&store, id, "them", 2_800, "late", "S2");
     streamed(&store, id, "me", 6_000, "uh", "");
     let (result, requests) = pass(vec![Some(json!({"accepted":[5,6]}))]);
@@ -1210,7 +1207,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":5,"speaker":"S2","start_ms":3000,"end_ms":3050,"text":"late"},
+            {"seq":5,"speaker":"Speaker 2","start_ms":3000,"end_ms":3050,"text":"late"},
             {"seq":6,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":"uh"},
         ])
     );
@@ -1234,7 +1231,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     assert!(result.is_err());
     assert_eq!(
         first[0].1["chunks"],
-        json!([{"seq":7,"speaker":"Me","start_ms":7000,"end_ms":8000,"text":"bye"}])
+        json!([{"seq":7,"speaker":"Me","start_ms":7000,"end_ms":7300,"text":"bye"}])
     );
     let (result, requests) = pass(vec![
         Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":true,"event_id":9})),
@@ -1320,7 +1317,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     assert_eq!(store.context(id).unwrap().live_state, "paused");
     assert_eq!(
         seen.lock().unwrap()[0].1["chunks"],
-        json!([{"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"}])
+        json!([{"seq":1,"speaker":"Me","start_ms":400,"end_ms":1000,"text":"Morning all"}])
     );
     // While paused nothing new goes, even with streamed words.
     streamed(&store, id, "me", 5_500, "still talking", "");
@@ -1352,7 +1349,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"[removed]"}
+            {"seq":1,"speaker":"Me","start_ms":400,"end_ms":1000,"text":"[removed]"}
         ])
     );
 }
@@ -1454,7 +1451,7 @@ fn edits_and_removals_of_shared_lines_go_up_as_revisions_and_win_over_automatic_
             ),
             (
                 "POST /api/v2/live-meetings/live-fixture/chunks/2/corrections HTTP/1.1".to_owned(),
-                json!({"revision":2,"speaker":"S1","start_ms":1200,"end_ms":1750,"text":"[removed]"})
+                json!({"revision":2,"speaker":"Speaker 1","start_ms":1200,"end_ms":1750,"text":"[removed]"})
             ),
         ]
     );
@@ -4384,5 +4381,679 @@ fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
             assert_eq!(receipt["items"]["a"]["text"], "Latest title");
             assert!(context.items[0].closed_draft.is_none());
         }
+    }
+}
+
+#[test]
+fn speaker_bleed_never_enters_the_live_outbox_when_microphone_finishes_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Speaker bleed ordering");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5000,
+        vec![
+            word(1020, 1200, "Ship", ""),
+            word(1320, 1500, "this", ""),
+            word(1620, 1800, "tomorrow", ""),
+        ],
+    );
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Meeting,
+            0,
+            5000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(seen.lock().unwrap().is_empty());
+    let count: i64 = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM live_sources WHERE recording_id=?",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "held microphone must not be marked as delivered");
+    let remote = store.claim_transcription().unwrap().unwrap();
+    let mut words = vec![
+        word(1000, 1200, "Ship", ""),
+        word(1300, 1500, "this", ""),
+        word(1600, 1800, "tomorrow", ""),
+    ];
+    for word in &mut words {
+        word.turn = "remote-4".into();
+    }
+    store
+        .transcription_words(&remote, "Ship this tomorrow", words, "", json!({}))
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let seen = seen.lock().unwrap();
+    let sent = seen[0].1["chunks"].as_array().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["text"], "Ship this tomorrow");
+    assert_ne!(sent[0]["speaker"], "Me");
+}
+
+#[test]
+fn held_microphone_and_remote_turn_share_one_frontier_and_keep_capture_timestamps() {
+    for release in ["reference", "failure", "stop", "timeout"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Ordered held turns");
+        let id = record.id.as_str();
+        store
+            .mutate(id, |r| {
+                r.meeting_audio = true;
+                Ok(())
+            })
+            .unwrap();
+        streamed(&store, id, "me", 1000, "I disagree", "");
+        streamed(&store, id, "them", 1500, "remote reply", "S1");
+        let (tico, seen, worker) = server(vec![]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "remote must wait behind Me: {release}"
+        );
+        match release {
+            "reference" => {
+                streamed(&store, id, "them", 5000, "later", "S1");
+            }
+            "failure" => {
+                store
+                    .save_audio(
+                        id,
+                        crate::audio::Channel::Meeting,
+                        0,
+                        5000,
+                        &[0.2; 1600],
+                        16000,
+                    )
+                    .unwrap();
+                store.db().unwrap().execute("UPDATE chunks SET document=json_set(document,'$.status','failed') WHERE recording_id=?", [id]).unwrap();
+            }
+            "stop" => {
+                store.state(id, "stopped").unwrap();
+            }
+            _ => {
+                store
+                    .mutate(id, |r| {
+                        r.started_at =
+                            (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
+        let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2,3]}))]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let sent = calls[0].1["chunks"].as_array().unwrap();
+        assert_eq!(sent[0]["text"], "I disagree", "{release}");
+        assert_eq!(sent[0]["start_ms"], 1000, "{release}");
+        assert_eq!(sent[1]["text"], "remote reply", "{release}");
+        assert_eq!(sent[1]["start_ms"], 1500, "{release}");
+    }
+}
+
+#[test]
+fn finished_inputs_share_word_turns_in_one_order_with_their_real_times() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Finished turn ordering");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(&store, id, 0, 5000, vec![word(1000, 1200, "My reply", "")]);
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Meeting,
+            0,
+            5000,
+            &[0.2; 1600],
+            16000,
+        )
+        .unwrap();
+    let remote = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &remote,
+            "Remote reply",
+            vec![word(1500, 1900, "Remote reply", "Speaker 1")],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let sent = calls[0].1["chunks"].as_array().unwrap();
+    assert_eq!(sent[0]["start_ms"], 1000);
+    assert_eq!(sent[0]["end_ms"], 1200);
+    assert_eq!(sent[1]["start_ms"], 1500);
+    assert_eq!(sent[1]["end_ms"], 1900);
+    assert_eq!(sent[1]["speaker"], "Speaker 1");
+}
+
+#[test]
+fn finished_microphone_reference_timeout_shares_without_any_meeting_chunks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Missing reference capture");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(14)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5000,
+        vec![word(1000, 1200, "My genuine reply", "")],
+    );
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[0].1["chunks"][0]["text"], "My genuine reply");
+    assert_eq!(calls[0].1["chunks"][0]["start_ms"], 1000);
+}
+
+/// Seconds of recording clock: chunks are 30-55 s long in the engine.
+const CHUNK_S: i64 = 45;
+/// Sets the recording clock to `seconds` since it started.
+fn recording_clock(store: &Store, id: &str, seconds: i64) {
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+}
+/// The pending chunk's hold has passed its bound, measured from the chunk's end.
+const PAST_PENDING_WAIT_S: i64 =
+    CHUNK_S + crate::transcript::PENDING_CHUNK_WAIT_MS as i64 / 1000 + 1;
+fn stopped_pending_chunk(
+    store: &Store,
+    pending_channel: crate::audio::Channel,
+) -> (String, crate::store::Chunk) {
+    use crate::audio::Channel;
+    let record = live_recording(store, "Stop with unfinished audio");
+    let id = &record.id;
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    let end = CHUNK_S as u64 * 1000;
+    store
+        .save_audio(id, pending_channel, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let pending = store.claim_transcription().unwrap().unwrap();
+    let other = if pending_channel == Channel::Microphone {
+        Channel::Meeting
+    } else {
+        Channel::Microphone
+    };
+    store
+        .save_audio(id, other, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let ready = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &ready,
+            "Later",
+            vec![word(1500, 1900, "Later", "")],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    store.state(id, "stopped").unwrap();
+    // Stop lands as the chunks end; the pending one is a few seconds into transcription.
+    recording_clock(store, id, CHUNK_S + 3);
+    (record.id, pending)
+}
+
+#[test]
+fn stop_holds_both_channels_behind_unfinished_chunks_until_completion_failure_or_timeout() {
+    use crate::audio::Channel;
+    for channel in [Channel::Microphone, Channel::Meeting] {
+        for release in ["completion", "failure", "timeout"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let (id, pending) = stopped_pending_chunk(&store, channel);
+            let (tico, seen, worker) = server(vec![]);
+            tico.push_live(&store, &id).unwrap();
+            worker.join().unwrap();
+            assert!(seen.lock().unwrap().is_empty(), "{channel:?}: {release}");
+            match release {
+                "completion" => store
+                    .transcription_words(
+                        &pending,
+                        "Earlier",
+                        vec![word(1000, 1200, "Earlier", "")],
+                        "",
+                        json!({}),
+                    )
+                    .unwrap(),
+                "failure" => {
+                    store.db().unwrap().execute("UPDATE chunks SET document=json_set(document,'$.status','failed') WHERE id=?", [&pending.id]).unwrap();
+                }
+                _ => {
+                    // Still held just inside the bound, released just past it.
+                    recording_clock(&store, &id, PAST_PENDING_WAIT_S - 5);
+                    let (tico, seen, worker) = server(vec![]);
+                    tico.push_live(&store, &id).unwrap();
+                    worker.join().unwrap();
+                    assert!(seen.lock().unwrap().is_empty(), "{channel:?}: bound");
+                    recording_clock(&store, &id, PAST_PENDING_WAIT_S);
+                }
+            }
+            let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+            tico.push_live(&store, &id).unwrap();
+            worker.join().unwrap();
+            let calls = seen.lock().unwrap();
+            let sent = calls[0].1["chunks"].as_array().unwrap();
+            assert_eq!(
+                sent[0]["start_ms"],
+                if release == "completion" { 1000 } else { 1500 }
+            );
+            if release == "completion" {
+                assert_eq!(sent[1]["start_ms"], 1500);
+            }
+            if release == "timeout" {
+                drop(calls);
+                store
+                    .transcription_words(
+                        &pending,
+                        "Earlier",
+                        vec![word(1000, 1200, "Earlier", "")],
+                        "",
+                        json!({}),
+                    )
+                    .unwrap();
+                let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+                tico.push_live(&store, &id).unwrap();
+                worker.join().unwrap();
+                assert_eq!(seen.lock().unwrap()[0].1["chunks"][0]["start_ms"], 1500);
+                assert!(
+                    store
+                        .get(&id)
+                        .unwrap()
+                        .chunks
+                        .iter()
+                        .flat_map(|c| &c.words)
+                        .any(|w| w.start_ms == 1000)
+                );
+            }
+        }
+    }
+}
+
+/// Real 45 s chunks on both inputs. After Stop the remote chunk is transcribed and the mic
+/// chunk is not; the mic reply must land between the remote question and the remote follow-up,
+/// not be re-timed after the follow-up once the remote turns went first.
+#[test]
+fn late_microphone_reply_after_stop_lands_after_the_remote_turn_it_answered() {
+    use crate::audio::Channel;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Late reply after Stop");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    let end = CHUNK_S as u64 * 1000;
+    store
+        .save_audio(id, Channel::Microphone, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let mic = store.claim_transcription().unwrap().unwrap();
+    store
+        .save_audio(id, Channel::Meeting, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let remote = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &remote,
+            "Can we ship Friday? Great, thanks",
+            vec![
+                word(30_000, 30_300, "Can", "Speaker 1"),
+                word(30_400, 30_700, "we", "Speaker 1"),
+                word(30_800, 31_100, "ship", "Speaker 1"),
+                word(31_200, 31_800, "Friday?", "Speaker 1"),
+                word(40_000, 40_500, "Great,", "Speaker 1"),
+                word(40_600, 41_000, "thanks", "Speaker 1"),
+            ],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    store.state(id, "stopped").unwrap();
+    for seconds in [CHUNK_S + 2, CHUNK_S + 30] {
+        recording_clock(&store, id, seconds);
+        let (tico, seen, worker) = server(vec![]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "remote turns must wait for the mic chunk at {seconds} s"
+        );
+    }
+    store
+        .transcription_words(
+            &mic,
+            "Yes that works",
+            vec![
+                word(34_000, 34_300, "Yes", ""),
+                word(34_400, 34_700, "that", ""),
+                word(34_800, 35_200, "works", ""),
+            ],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2,3]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let sent = calls[0].1["chunks"].as_array().unwrap();
+    let order: Vec<_> = sent
+        .iter()
+        .map(|c| (c["text"].as_str().unwrap(), c["start_ms"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("Can we ship Friday?", 30_000),
+            ("Yes that works", 34_000),
+            ("Great, thanks", 40_000),
+        ]
+    );
+    assert_eq!(sent[1]["speaker"], "Me");
+}
+
+#[test]
+fn any_chunk_422_reconciles_the_outbox_and_later_speech_still_delivers() {
+    for code in ["sequence_order", "validation", "request_failed"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Refused outbox");
+        streamed(&store, &record.id, "me", 1000, "Late words", "");
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"status":422,"error":{"code":code}})),
+            Some(json!({"state":"live","seq":0,"chunks":[]})),
+            Some(json!({"accepted":[1]})),
+            Some(json!({"accepted":[2]})),
+        ]);
+        tico.push_live(&store, &record.id).unwrap();
+        streamed(&store, &record.id, "me", 3000, "Later words", "");
+        tico.push_live(&store, &record.id).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[2].1["chunks"][0]["start_ms"], 1000);
+        assert_eq!(calls[3].1["chunks"][0]["text"], "Later words");
+        let pending: i64 = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM live_outbox WHERE acknowledged=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{code}");
+    }
+}
+
+/// Only Tico's timing refusal (`sequence_order`) is final for a correction; any other 422 on a
+/// non-empty correction retries with the sync's backoff. Neither blocks later live turns.
+#[test]
+fn only_a_timing_refusal_is_final_for_a_correction_and_neither_blocks_later_turns() {
+    for code in ["sequence_order", "validation"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Refused correction");
+        streamed(&store, &record.id, "me", 1000, "Helo", "");
+        let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+        tico.push_live(&store, &record.id).unwrap();
+        worker.join().unwrap();
+        finished_chunk(
+            &store,
+            &record.id,
+            0,
+            2000,
+            vec![word(1000, 1250, "Hello", "")],
+        );
+        let (tico, _, worker) = server(vec![Some(json!({"status":422,"error":{"code":code}}))]);
+        let result = tico.push_live(&store, &record.id);
+        worker.join().unwrap();
+        let state = |store: &Store| -> i64 {
+            store
+                .db()
+                .unwrap()
+                .query_row("SELECT state FROM live_corrections", [], |r| r.get(0))
+                .unwrap()
+        };
+        let correction = "/api/v2/live-meetings/live-fixture/chunks/1/corrections";
+        finished_chunk(
+            &store,
+            &record.id,
+            3000,
+            4000,
+            vec![word(3500, 3750, "Next", "")],
+        );
+        if code == "sequence_order" {
+            result.unwrap();
+            assert_eq!(state(&store), 2, "Tico keeps its revision");
+            let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+            tico.push_live(&store, &record.id).unwrap();
+            worker.join().unwrap();
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 1, "a final refusal is not sent again");
+            assert_eq!(seen[0].1["chunks"][0]["text"], "Next");
+        } else {
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(error.contains("HTTP 422 (validation)"), "{error}");
+            assert_eq!(state(&store), 0, "retried with the sync's backoff");
+            let (tico, seen, worker) = server(vec![
+                Some(json!({"accepted":[2]})),
+                Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":false})),
+            ]);
+            tico.push_live(&store, &record.id).unwrap();
+            worker.join().unwrap();
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen[0].1["chunks"][0]["text"], "Next");
+            assert_eq!(seen[1].0.split(' ').nth(1).unwrap(), correction);
+            assert_eq!(seen[1].1["text"], "Hello");
+            assert_eq!(state(&store), 1);
+        }
+    }
+}
+
+/// A chunk refusal the repair cannot fix reads Tico back and rewrites the outbox once per
+/// outbox state, not on every pass; new speech is a new state and gets one more repair.
+#[test]
+fn an_unfixable_chunk_422_repairs_once_per_outbox_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Refused twice");
+    let id = record.id.as_str();
+    let refused = || Some(json!({"status":422,"error":{"code":"validation"}}));
+    let view = || Some(json!({"state":"live","seq":0,"chunks":[]}));
+    let methods = |seen: &Arc<Mutex<Vec<(String, Value, String)>>>| -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .map(|(line, _, _)| line.split(' ').next().unwrap().to_owned())
+            .collect()
+    };
+    streamed(&store, id, "me", 1000, "Late words", "");
+    let (tico, seen, worker) = server(vec![refused(), view(), refused()]);
+    let error = format!("{:#}", tico.push_live(&store, id).unwrap_err());
+    worker.join().unwrap();
+    assert!(error.contains("HTTP 422 (validation)"), "{error}");
+    assert_eq!(methods(&seen), ["POST", "GET", "POST"]);
+    // Same outbox: refused without another read-back or rewrite.
+    let (tico, seen, worker) = server(vec![refused()]);
+    let error = format!("{:#}", tico.push_live(&store, id).unwrap_err());
+    worker.join().unwrap();
+    assert!(error.contains("HTTP 422 (validation)"), "{error}");
+    assert_eq!(methods(&seen), ["POST"]);
+    // New speech changes the outbox: one repair, then both turns go.
+    streamed(&store, id, "me", 3000, "Later words", "");
+    let (tico, seen, worker) = server(vec![refused(), view(), Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(methods(&seen), ["POST", "GET", "POST"]);
+    let seen = seen.lock().unwrap();
+    let texts: Vec<_> = seen[2].1["chunks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["Late words", "Later words"]);
+}
+
+/// Owns only the Python process this test starts, including when an assertion fails.
+struct BackendBridge(std::process::Child);
+impl Drop for BackendBridge {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn backend_bridge() -> (Tico, BackendBridge) {
+    use std::io::BufRead;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let child = std::process::Command::new("python3")
+        .args(["-u", "recorder/tests/live_backend.py"])
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut bridge = BackendBridge(child);
+    let mut url = String::new();
+    std::io::BufReader::new(bridge.0.stdout.take().unwrap())
+        .read_line(&mut url)
+        .unwrap();
+    let tico = Tico::new(
+        Destination {
+            id: "synthetic".into(),
+            name: "Fixture".into(),
+            base_url: url.trim().into(),
+            actor: "human:test".into(),
+        },
+        "synthetic-token".into(),
+    )
+    .unwrap();
+    (tico, bridge)
+}
+
+#[test]
+#[ignore = "requires Python backend dependencies; run on RunsOn with --ignored"]
+fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
+    for release in ["completion", "timeout", "legacy", "validation"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (id, pending) = stopped_pending_chunk(&store, crate::audio::Channel::Microphone);
+        let (tico, _bridge) = backend_bridge();
+        let path = "/api/v2/live-meetings/live-fixture";
+        tico.push_live(&store, &id).unwrap();
+        assert_eq!(tico.call(path, None, "").unwrap()["seq"], 0);
+        if release != "completion" {
+            recording_clock(&store, &id, PAST_PENDING_WAIT_S);
+            tico.push_live(&store, &id).unwrap();
+        }
+        store
+            .transcription_words(
+                &pending,
+                "Earlier",
+                vec![word(1000, 1200, "Earlier", "")],
+                "",
+                json!({}),
+            )
+            .unwrap();
+        if ["legacy", "validation"].contains(&release) {
+            // An old persisted outbox can still contain the reviewer's invalid sequence.
+            store.db().unwrap().execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json) VALUES(?,?,?,?,?)",
+                rusqlite::params![id,"synthetic",2,pending.id,json!({"seq":2,"speaker":"Me","start_ms":1000,"end_ms":if release == "validation" {0} else {1200},"text":"Earlier"}).to_string()],
+            ).unwrap();
+        }
+        tico.push_live(&store, &id).unwrap();
+        finished_chunk(
+            &store,
+            &id,
+            46_000,
+            47_000,
+            vec![word(46_200, 46_500, "Afterwards", "")],
+        );
+        tico.push_live(&store, &id).unwrap();
+        let view = tico.call(path, None, "").unwrap();
+        let chunks = view["chunks"].as_array().unwrap();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| c["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            if release == "completion" {
+                vec!["Earlier", "Later", "Afterwards"]
+            } else {
+                vec!["Later", "Earlier", "Afterwards"]
+            }
+        );
+        assert!(
+            chunks
+                .windows(2)
+                .all(|p| p[0]["start_ms"].as_u64() <= p[1]["start_ms"].as_u64())
+        );
+        let pending: i64 = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM live_outbox WHERE acknowledged=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{release}");
     }
 }

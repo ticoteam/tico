@@ -32,31 +32,45 @@ fn chunk(channel: &str, words: Vec<Word>) -> crate::store::Chunk {
         "status":"done","text":"speech","error":"","attempts":1,"provider":{},"words":words})).unwrap()
 }
 
+/// What the saved transcript shows for each meeting-audio word.
+fn shown(record: &Recording) -> Vec<String> {
+    crate::transcript::chunk_words(record)["them"]
+        .iter()
+        .map(|w| w.speaker.clone())
+        .collect()
+}
+fn voice(start_ms: u64, end_ms: u64, intervals: Vec<Interval>) -> Recording {
+    let mut record = record();
+    record.meeting_speakers.intervals = intervals;
+    record
+        .chunks
+        .push(chunk("them", vec![word(start_ms, end_ms, "Speaker 2")]));
+    record
+}
 #[test]
 fn lag_allowance_and_gaps_use_capture_time_not_transcription_arrival() {
-    let timeline = Timeline {
-        intervals: vec![interval(1300, 2300, "Ana Example")],
-        ..Default::default()
-    };
-    assert_eq!(timeline.at(1000, 1200).as_deref(), Some("Ana Example"));
-    assert_eq!(timeline.at(2100, 2200), None);
-    assert_eq!(timeline.at(3000, 3500), None);
-    assert_eq!(timeline.at(0, 500), None);
+    let ana = || vec![interval(1300, 2300, "Ana Example")];
+    // Meet shows speaking about a poll after the audio: 1000-2000 meets 1300-2300.
+    assert_eq!(shown(&voice(1000, 2000, ana())), ["Ana Example"]);
+    assert_eq!(shown(&voice(2100, 3100, ana())), ["Speaker 2"]);
+    assert_eq!(shown(&voice(0, 1000, ana())), ["Speaker 2"]);
 }
 #[test]
 fn overlap_needs_a_clear_duration_majority_and_local_names_are_excluded() {
-    let mut timeline = Timeline {
-        intervals: vec![
-            interval(1300, 2300, "Ana Example"),
-            interval(1800, 2800, "Ben Example"),
+    let mut record = voice(
+        1000,
+        2500,
+        vec![
+            interval(1300, 2800, "Ana Example"),
+            interval(1300, 2800, "Ben Example"),
         ],
-        ..Default::default()
-    };
-    assert_eq!(timeline.at(1500, 2000), None);
-    assert_eq!(timeline.at(1000, 1600).as_deref(), Some("Ana Example"));
-    timeline.self_names.push("ana example".into());
-    assert_eq!(timeline.at(1000, 1400), None);
-    assert_eq!(timeline.at(1500, 2000).as_deref(), Some("Ben Example"));
+    );
+    assert_eq!(shown(&record), ["Speaker 2"]);
+    record
+        .meeting_speakers
+        .self_names
+        .push("ana example".into());
+    assert_eq!(shown(&record), ["Ben Example"]);
 }
 #[test]
 fn missed_samples_and_no_speaker_close_the_evidence_instead_of_bridging_gaps() {
@@ -164,13 +178,7 @@ fn voice_cluster_uses_duration_votes_for_short_turns_overlap_and_gaps() {
     let mut local_word = word(0, 2000, "");
     local_word.text = "local".into();
     record.chunks.push(chunk("me", vec![local_word]));
-    let named = named(&record);
-    assert!(
-        named.chunks[0]
-            .words
-            .iter()
-            .all(|word| word.speaker == "Ana Example")
-    );
+    assert!(shown(&record).iter().all(|s| s == "Ana Example"));
     assert_eq!(
         crate::transcript::lines(&record)
             .iter()
@@ -185,7 +193,7 @@ fn voice_cluster_uses_duration_votes_for_short_turns_overlap_and_gaps() {
     );
 }
 #[test]
-fn provisional_stream_voices_are_scoped_away_from_offline_voice_numbers() {
+fn stream_and_offline_voices_keep_their_own_labels_and_names() {
     let mut record = record();
     record.state = "recording".into();
     record.meeting_speakers.intervals = vec![
@@ -195,18 +203,46 @@ fn provisional_stream_voices_are_scoped_away_from_offline_voice_numbers() {
     let mut offline = chunk("them", vec![word(0, 1000, "Speaker 1")]);
     offline.end_ms = 1000;
     record.chunks.push(offline);
-    let mut streamed = BTreeMap::from([(
+    // The streaming service numbers its voices separately from the offline diarizer.
+    let streamed = BTreeMap::from([(
         "them".into(),
-        vec![word(2000, 3000, "Speaker 1"), word(5000, 5100, "Speaker 1")],
+        vec![word(2000, 3000, "stream:S1"), word(3200, 3300, "stream:S1")],
     )]);
     let names = Names::new(&record, &streamed);
-    names.streamed("them", streamed.get_mut("them").unwrap());
-    assert!(
-        streamed["them"]
-            .iter()
-            .all(|word| word.speaker == "Ben Example")
-    );
-    assert_eq!(named(&record).chunks[0].words[0].speaker, "Ana Example");
+    assert_eq!(names.get("Speaker 1"), "Ana Example");
+    assert_eq!(names.get("Speaker 2"), "Ben Example");
+    let live: Vec<_> = crate::transcript::live_turns(&record, &streamed, &[])
+        .into_iter()
+        .map(|turn| turn.speaker)
+        .collect();
+    assert_eq!(live, ["Ana Example", "Ben Example"]);
+}
+#[test]
+fn one_stable_label_pools_its_stream_and_offline_evidence_into_one_name() {
+    let mut record = record();
+    record.state = "recording".into();
+    record.meeting_speakers.intervals = vec![
+        interval(300, 900, "Ana Example"),
+        interval(5300, 5900, "Ana Example"),
+    ];
+    // Recorder #2681: the stream voice and the offline voice were linked to one label.
+    record.speaker_labels = BTreeMap::from([
+        ("stream:S4".into(), "Speaker 2".into()),
+        ("Speaker 7".into(), "Speaker 2".into()),
+    ]);
+    let mut offline = chunk("them", vec![word(0, 600, "Speaker 7")]);
+    offline.end_ms = 1000;
+    record.chunks.push(offline);
+    let streamed = BTreeMap::from([("them".into(), vec![word(5000, 5600, "stream:S4")])]);
+    // 0.6 s each: neither is enough alone, together they name the label.
+    assert_eq!(shown(&record), ["Speaker 2"]);
+    let names = Names::new(&record, &streamed);
+    assert_eq!(names.get("Speaker 2"), "Ana Example");
+    let live: Vec<_> = crate::transcript::live_turns(&record, &streamed, &[])
+        .into_iter()
+        .map(|turn| turn.speaker)
+        .collect();
+    assert_eq!(live, ["Ana Example", "Ana Example"]);
 }
 #[test]
 fn each_voice_gets_one_name_only_after_enough_clear_evidence() {
@@ -234,14 +270,8 @@ fn each_voice_gets_one_name_only_after_enough_clear_evidence() {
             word(10_000, 12_200, "Speaker 4"),
         ],
     ));
-    let named = named(&record);
-    let speakers: Vec<_> = named.chunks[0]
-        .words
-        .iter()
-        .map(|w| w.speaker.as_str())
-        .collect();
     assert_eq!(
-        speakers,
+        shown(&record),
         [
             "Ana Example",
             "Ana Example",
@@ -263,26 +293,21 @@ fn a_tied_voice_cluster_stays_anonymous_instead_of_switching_identity_per_word()
         "them",
         vec![word(0, 1000, "Speaker 2"), word(2000, 3000, "Speaker 2")],
     ));
-    assert!(
-        named(&record).chunks[0]
-            .words
-            .iter()
-            .all(|word| word.speaker == "Speaker 2")
-    );
+    assert!(shown(&record).iter().all(|s| s == "Speaker 2"));
 }
 #[test]
 fn untimed_utterances_get_names_and_manual_edits_keep_the_chosen_speaker() {
     let mut record = record();
     record.meeting_speakers.intervals = vec![interval(300, 10_300, "Ana Example")];
     record.chunks.push(chunk("them", vec![]));
-    assert_eq!(named(&record).chunks[0].speaker, "Ana Example");
-    assert_eq!(
-        crate::transcript::chunk_words(&record)["them"][0].speaker,
-        "Ana Example"
-    );
+    assert_eq!(shown(&record), ["Ana Example"]);
+    // An edit is no evidence: its chunk alone names nobody.
     record.chunks[0].provider = json!({"source":"edit"});
+    assert_eq!(shown(&record), ["Speaker 1"]);
+    // A speaker a person typed is never renamed.
+    record.chunks[0].provider = json!({});
     record.chunks[0].speaker = "Chosen speaker".into();
-    assert_eq!(named(&record).chunks[0].speaker, "Chosen speaker");
+    assert_eq!(shown(&record), ["Chosen speaker"]);
 }
 fn row(name: &str, extra: Vec<serde_json::Value>, indicator: &[&str]) -> serde_json::Value {
     let mut children = vec![json!({"role":"AXStaticText","label":name})];

@@ -68,9 +68,6 @@ impl Timeline {
     fn remote(&self, name: &str) -> bool {
         !self.self_names.iter().any(|local| same(local, name))
     }
-    pub fn at(&self, start: u64, end: u64) -> Option<String> {
-        Evidence::new(self).at(start, end)
-    }
 }
 /// Prefix end times let each word visit just the overlapping observations, including
 /// overlapping speakers, instead of rescanning an entire long meeting's timeline.
@@ -96,11 +93,10 @@ impl<'a> Evidence<'a> {
             .collect();
         Self { intervals, ends }
     }
-    fn scores(&self, start: u64, end: u64) -> BTreeMap<&'a str, u64> {
+    fn add(&self, start: u64, end: u64, scores: &mut BTreeMap<String, u64>) {
         let start = start.saturating_add(LAG_MS);
         let end = end.saturating_add(LAG_MS).max(start.saturating_add(1));
         let first = self.ends.partition_point(|at| *at <= start);
-        let mut scores = BTreeMap::new();
         for interval in self
             .intervals
             .iter()
@@ -111,144 +107,84 @@ impl<'a> Evidence<'a> {
                 .min(interval.end_ms)
                 .saturating_sub(start.max(interval.start_ms));
             if overlap > 0 {
-                *scores.entry(interval.name.as_str()).or_default() += overlap;
+                *scores.entry(interval.name.clone()).or_default() += overlap;
             }
         }
-        scores
-    }
-    fn at(&self, start: u64, end: u64) -> Option<String> {
-        winner(self.scores(start, end), false).map(str::to_owned)
     }
 }
-/// Ambiguous overlap is evidence for neither person. A voice cluster needs enough overlap and
-/// two thirds of it for one name; then its short turns and words in AX gaps share that name.
-fn winner(scores: BTreeMap<&str, u64>, cluster: bool) -> Option<&str> {
+/// Ambiguous overlap is evidence for neither person: a voice needs enough overlap and two
+/// thirds of it for one name.
+fn winner(scores: BTreeMap<String, u64>) -> Option<String> {
     let total: u64 = scores.values().sum();
-    let mut scores: Vec<_> = scores.into_iter().collect();
-    scores.sort_by_key(|(_, weight)| std::cmp::Reverse(*weight));
-    let (name, weight) = *scores.first()?;
-    let runner_up = scores.get(1).map_or(0, |(_, n)| *n);
-    if cluster {
-        (weight >= MIN_EVIDENCE_MS && weight * 3 >= total * 2).then_some(name)
-    } else {
-        (weight > runner_up + runner_up / 4).then_some(name)
-    }
+    let (name, weight) = scores.into_iter().max_by_key(|(_, weight)| *weight)?;
+    (weight >= MIN_EVIDENCE_MS && weight * 3 >= total * 2).then_some(name)
+}
+/// A label the recorder chose itself. A speaker a person typed is never renamed.
+fn provisional(label: &str) -> bool {
+    label
+        .strip_prefix("Speaker ")
+        .is_some_and(|n| n.parse::<usize>().is_ok())
 }
 
-/// Provider turn labels are local to a chunk; diarized voice labels span the recording.
-fn cluster(chunk: &str, word: &Word) -> Option<String> {
-    if !word.speaker.is_empty() && chunk.starts_with("stream:") {
-        Some(format!("turn:{chunk}:{}", word.speaker))
-    } else if !word.speaker.is_empty() {
-        Some(format!("voice:{}", word.speaker))
-    } else if !word.turn.is_empty() {
-        Some(format!("turn:{chunk}:{}", word.turn))
-    } else {
-        None
-    }
-}
-pub struct Names<'a> {
-    evidence: Evidence<'a>,
-    voices: BTreeMap<String, Option<String>>,
-}
-impl<'a> Names<'a> {
-    pub fn new(record: &'a Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Self {
+/// Names for provisional speaker labels. A label is one stable voice across chunks and the
+/// live stream, so it gets at most one name, voted by all its speech; the stored voices and
+/// labels never change.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Names(BTreeMap<String, String>);
+impl Names {
+    pub fn new(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> Self {
+        if record.meeting_speakers.intervals.is_empty() {
+            return Self::default();
+        }
         let evidence = Evidence::new(&record.meeting_speakers);
-        let mut votes: BTreeMap<String, BTreeMap<&str, u64>> = BTreeMap::new();
-        let mut add = |chunk: &str, word: &Word| {
-            if let Some(key) = cluster(chunk, word) {
-                for (name, weight) in evidence.scores(word.start_ms, word.end_ms) {
-                    *votes
-                        .entry(key.clone())
-                        .or_default()
-                        .entry(name)
-                        .or_default() += weight;
-                }
+        let labels = crate::transcript::speaker_labels(record, streamed);
+        let mut votes: BTreeMap<&str, BTreeMap<String, u64>> = BTreeMap::new();
+        let mut add = |id: &str, start: u64, end: u64| {
+            if let Some(label) = labels.get(id).filter(|label| provisional(label)) {
+                evidence.add(start, end, votes.entry(label).or_default());
             }
         };
-        for chunk in record.chunks.iter().filter(|c| c.channel != "me") {
-            for word in &chunk.words {
-                add(&chunk.id, word);
+        // A person's edit replaced the automatic words; it is no evidence for the voice.
+        for chunk in record
+            .chunks
+            .iter()
+            .filter(|c| c.channel == "them" && c.provider["source"] != "edit")
+        {
+            if chunk.words.is_empty() {
+                let id = crate::transcript::speaker_identity(chunk, &Word::default());
+                add(&id, chunk.start_ms, chunk.end_ms);
             }
-        }
-        for (channel, words) in streamed.iter().filter(|(channel, _)| *channel != "me") {
-            for word in words
-                .iter()
-                .filter(|w| !crate::transcript::covered(record, channel, w.start_ms))
-            {
-                // Streaming service voices and offline voices have different numbering.
+            for word in &chunk.words {
                 add(
-                    &format!("stream:{channel}"),
-                    &Word {
-                        speaker: String::new(),
-                        turn: word.speaker.clone(),
-                        ..word.clone()
-                    },
+                    &crate::transcript::speaker_identity(chunk, word),
+                    word.start_ms,
+                    word.end_ms,
                 );
             }
         }
-        Self {
-            evidence,
-            voices: votes
+        let covered = crate::transcript::Covered::new(record, "them");
+        for word in streamed
+            .get("them")
+            .into_iter()
+            .flatten()
+            .filter(|w| !covered.contains(w.start_ms))
+        {
+            add(&word.speaker, word.start_ms, word.end_ms);
+        }
+        Self(
+            votes
                 .into_iter()
-                .map(|(voice, votes)| (voice, winner(votes, true).map(str::to_owned)))
+                .filter_map(|(label, votes)| Some((label.to_owned(), winner(votes)?)))
                 .collect(),
-        }
+        )
     }
-    pub fn word(&self, chunk: &str, word: &Word) -> String {
-        if let Some(named) = cluster(chunk, word).and_then(|key| self.voices.get(&key)) {
-            return named.clone().unwrap_or_else(|| word.speaker.clone());
-        }
-        self.evidence
-            .at(word.start_ms, word.end_ms)
-            .unwrap_or_else(|| word.speaker.clone())
+    /// The name for a shown label, or the label itself.
+    pub fn get<'a>(&'a self, label: &'a str) -> &'a str {
+        self.0.get(label).map_or(label, String::as_str)
     }
-    pub fn streamed(&self, channel: &str, words: &mut [Word]) {
-        for word in words {
-            word.speaker = if channel == "me" {
-                "Me".into()
-            } else {
-                let raw = Word {
-                    speaker: String::new(),
-                    turn: word.speaker.clone(),
-                    ..word.clone()
-                };
-                let named = self.word(&format!("stream:{channel}"), &raw);
-                if named.is_empty() {
-                    word.speaker.clone()
-                } else {
-                    named
-                }
-            };
-        }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
-}
-
-/// Project names without mutating stored provider/diarization evidence or user edits.
-pub fn named(record: &Recording) -> std::borrow::Cow<'_, Recording> {
-    if record.meeting_speakers.intervals.is_empty() {
-        return std::borrow::Cow::Borrowed(record);
-    }
-    let mut out = record.clone();
-    let names = Names::new(record, &BTreeMap::new());
-    for chunk in &mut out.chunks {
-        if chunk.channel == "me" {
-            continue;
-        }
-        if chunk.words.is_empty() {
-            // A manual edit deliberately replaces the automatic transcript.
-            if chunk.provider["source"] != "edit" {
-                if let Some(name) = record.meeting_speakers.at(chunk.start_ms, chunk.end_ms) {
-                    chunk.speaker = name;
-                }
-            }
-        } else {
-            for word in &mut chunk.words {
-                word.speaker = names.word(&chunk.id, word);
-            }
-        }
-    }
-    std::borrow::Cow::Owned(out)
 }
 
 /// Turn point observations into bounded intervals. A reading covers the time to the next poll;
