@@ -512,8 +512,19 @@ With Whole Workspace set, the `connectors` job on the runner reads the mailboxes
 
 ### Which mailboxes the sync covers
 
-The `connectors` job syncs the mailboxes the message bots manage, and nothing else. It does not go through every person on the
-roster. For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
+With **Whole Workspace**, the `connectors` job also syncs every known active personal mailbox linked to a person and
+every shared inbox on the key's domain, even without a message bot. Each has one sync computer: its message bot's
+non-revoked host, else the person's Assistant's online host, else an online isolated company server (owned by a
+company owner or admin), else the person's own online computer. Shared mailboxes
+without a message-bot host use only a company server. Among equally eligible computers, the lowest runner ID wins.
+An isolated server is a Linux Docker runner that supervises its own `connectors` job. Another member's personal
+computer is never chosen just because it is online. A fallback owner is replaced when it has not contacted Tico for
+60 seconds or is revoked. If no eligible computer is online, nothing syncs and Health says the mailbox has no sync computer.
+Stopped mailboxes and mailboxes awaiting a person are excluded from this fallback. A personal Connect Google grant
+keeps its existing ownership rule. Syncing grants no bot access: the person and their Assistant can read their copies;
+other bots still need an explicit mailbox grant, even on the syncing computer.
+
+For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
 identity of its `gmail` entry in `bot.yaml`, which BotOps fills from the `Mailbox: <email>` line in the bot's instructions
 (`{{mailbox}}` in the template). Only when a bot declares none does the sync use its person's email from the roster. A person
 who left, and an archived bot, are skipped.
