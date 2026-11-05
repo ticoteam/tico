@@ -1,6 +1,6 @@
-// Tico addresses and Texts in (ui/app/inboxes-texts.js) in Settings > Inboxes: external text cannot execute, an inbox's
+// Tico addresses and Texts in (ui/app/inboxes-texts.js) under Tools: external text cannot execute, an inbox's
 // recent messages ask for that inbox only, Reveal code, a released address listed as Not in use with its messages,
-// Inboxes > Messages (every inbox or the ones picked, kept through a redraw, by channel, sender, words, code and spam,
+// Tools › Messages (every inbox or the ones picked, kept through a redraw, by channel, sender, words, code and spam,
 // a page at a time, with each message's channel and inbox), joining a Tico company account with a code (explicit consent,
 // a changed code drops the shown company, a lost confirmation retries the same submission), asking for a number and
 // accepting or cancelling a quote through Tico's own confirm (never a page dialog), who reads an inbox, a member's
@@ -93,14 +93,14 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
       return json(unrouted(p));
     });
 
-    // The old Email & Phone address opens Inboxes; the Tico address's page shows external text as text.
+    // The old Email & Phone address opens Tools' mail; an old inbox address opens its page under Tools, which shows
+    // external text as text and reads its own messages only.
     await page.goto('https://tico-ui.test/#/settings/company-inbox');
-    // The list reads the newest message of every inbox; the page reads its own.
-    await page.locator('[data-ib-row="tico:ibx_a"]').waitFor();
+    await page.waitForFunction(() => location.hash === '#/tools?show=mail');
     const listed = calls.length;
-    await page.locator('[data-ib-row="tico:ibx_a"] .ib-name a').click();
+    await go(page, '#/settings/inboxes/tico/ibx_a');
     await page.locator('[data-inbound-read]').waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/tico/ibx_a');
+    assert.equal(await page.evaluate(() => location.hash), '#/tools/number/ibx_a');
     assert.match(await page.locator('#inbound-messages').innerText(), /onerror/);
     assert.equal(await page.locator('#inbound-messages img').count(), 0);
     const reads = () => calls.slice(listed).filter(c => c.p.endsWith('/messages') && c.method === 'GET').map(c => new URLSearchParams(c.query));
@@ -119,26 +119,20 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.locator('.inbound-dialog pre').filter({hasText: '123456'}).waitFor();
     await page.locator('.inbound-dialog [data-close]').click();
 
-    // A released address stays listed as Not in use, and its page keeps the messages it received.
-    await go(page, '#/settings/inboxes');
-    const old = page.locator('[data-ib-row="tico:ibx_old"]');
-    await old.waitFor();
-    assert.equal(await old.locator('[data-ib-status]').innerText(), 'Not in use');
-    await old.locator('.ib-name a').click();
+    // A released address is Not in use, and its page keeps the messages it received.
+    await go(page, '#/tools/number/ibx_old');
     await page.locator('#inbound-messages', {hasText: 'Old sign in'}).waitFor();
     assert.equal(await page.locator('#inbox-head [data-ib-status]').innerText(), 'Not in use');
     assert.equal(await page.locator('[data-inbound-release]').count(), 0, 'a released address is not released again');
     assert.ok(calls.some(c => c.p.endsWith('/messages') && new URLSearchParams(c.query).get('inbox_ids') === 'ibx_old'));
 
     // Messages: every inbox, or the ones picked, by channel, sender, words, code and spam, a page at a time.
-    await go(page, '#/settings/inboxes');
-    await page.locator('[data-ib-view-link="messages"]').waitFor();
     const mark = calls.length;
     const latest = () => calls.slice(mark).filter(c => c.p.endsWith('/messages') && c.method === 'GET').map(c => new URLSearchParams(c.query)).at(-1);
-    await page.locator('[data-ib-view-link="messages"]').click();
+    await go(page, '#/tools/messages');
     const messages = page.locator('#inbox-messages'), all = page.locator('#inbound-filter[data-in-all]');
     await messages.locator('[data-in-message="ses:test:ibx_old"]').waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/messages');
+    assert.equal(await page.evaluate(() => location.hash), '#/tools/messages');
     assert.equal(latest().get('inbox_ids'), null, 'no inbox picked reads every inbox');
     assert.match(await messages.locator('[data-in-message="ses:test:ibx_a"]').innerText(), /EMAIL\s+agent-acme-login@tico\.team\s+Account logins/);
     assert.deepEqual(await all.locator('select[name=inboxes] option').evaluateAll(os => os.map(o => o.value)), ['ibx_a', 'ibx_old'], 'released inboxes can be picked');
@@ -151,7 +145,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await all.locator('button[type=submit]').click();
     await page.waitForFunction(() => !GET_INFLIGHT.size);
     assert.deepEqual(Object.fromEntries(latest()), {limit: '50', inbox_ids: 'ibx_a,ibx_old', kind: 'sms', q: 'Sign', from: 'Login service', has_code: 'true', spam: 'true'});
-    await page.evaluate(() => renderSettingsInboxes());
+    await page.evaluate(() => inboxesRender());
     await page.waitForFunction(() => !GET_INFLIGHT.size);
     assert.deepEqual(await all.locator('select[name=inboxes]').evaluate(s => [...s.selectedOptions].map(o => o.value)), ['ibx_a', 'ibx_old'], 'a redraw keeps the inboxes picked');
     assert.equal(latest().get('inbox_ids'), 'ibx_a,ibx_old');
@@ -179,7 +173,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.setViewportSize({width: 1440, height: 1000});
 
     // Joining a Tico company account: consent first, a changed code drops the company, a lost answer retries the same operation.
-    await go(page, '#/settings/inboxes/settings/email');
+    await go(page, '#/tools/settings/email');
     await page.locator('#inbound-connection > summary').click();
     const codeInput = page.locator('#inbound-connection-form input[name=code]');
     const connectionTarget = page.locator('#inbound-connection-company');
@@ -224,19 +218,19 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     assert.ok(!await page.evaluate(code => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]).includes(code), connectionCode));
 
     // Asking for a number opens its request's page; cancelling it there and accepting a quote in Settings use Tico's confirm.
-    await go(page, '#/settings/inboxes/settings/texts');
+    await go(page, '#/tools/settings/texts');
     await page.locator('[data-in-phone-open]:not([disabled])').click();
     await page.locator('.wh-dialog input[name=name]').fill('Login number');
     await page.locator('#inbound-phone').click();
-    await page.locator('#inbox-head h2', {hasText: 'Login number'}).waitFor();
-    assert.equal(await page.evaluate(() => location.hash), '#/settings/inboxes/number/prq_new');
+    await page.locator('#inbox-head h1', {hasText: 'Login number'}).waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/tools/number/prq_new');
     assert.equal(await page.locator('#inbox-head [data-ib-status]').textContent(), 'Awaiting quote');
     assert.ok(calls.some(c => c.p.endsWith('/phone-requests') && c.method === 'POST' && c.body.name === 'Login number'));
     await page.locator('[data-inbound-phone-cancel=prq_new]').click();
     await page.locator('dialog.settings-confirm [data-confirm-ok]').click();
     await page.locator('#inbox-head [data-ib-status]', {hasText: 'Canceled'}).waitFor();
     assert.equal(await page.locator('[data-inbound-phone-cancel=prq_new]').count(), 0);
-    await go(page, '#/settings/inboxes/settings/texts');
+    await go(page, '#/tools/settings/texts');
     await page.locator('[data-inbound-phone-accept=prq_quoted]').click();
     await page.locator('dialog.settings-confirm [data-confirm-ok]').click();
     await page.waitForFunction(() => document.querySelector('[data-in-request=prq_quoted]') && !document.querySelector('[data-inbound-phone-accept=prq_quoted]'));
@@ -246,7 +240,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     assert.ok(!calls.some(c => c.p.endsWith('/phone-quote')));
 
     // Newest reads again; the page fits at desktop and phone width.
-    await go(page, '#/settings/inboxes/tico/ibx_a');
+    await go(page, '#/tools/number/ibx_a');
     await page.locator('[data-inbound-read]').waitFor();
     preview = 'Your verification code is ••••••.';
     await page.locator('#inbound-filter input[name=q]').fill('');
@@ -263,17 +257,17 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
 
     // Who reads it: an admin narrows it to a group; a member reads who reads it and has no admin controls.
     await page.waitForFunction(() => S.orgGroups?.length);
-    await page.evaluate(() => renderSettingsInboxes());
+    await page.evaluate(() => inboxesRender());
     await page.locator('[data-inbound-audience=ibx_a] option[value=sales]').waitFor({state: 'attached'});
     await page.locator('[data-inbound-audience=ibx_a]').selectOption('sales');
     await page.waitForFunction(() => document.querySelector('[data-inbound-audience=ibx_a]')?.value === 'sales' && !document.querySelector('[data-inbound-audience=ibx_a]').disabled);
     assert.deepEqual(calls.filter(c => c.p.endsWith('/audience')).map(c => [c.method, c.p, c.body]),
       [['PUT', '/api/v2/inbound/inboxes/ibx_a/audience', {audience: 'team', group_id: 'sales'}]]);
-    await page.evaluate(() => { S.me.role = 'human'; S.me.bot_admin = false; return renderSettingsInboxes(); });
+    await page.evaluate(() => { S.me.role = 'human'; S.me.bot_admin = false; return inboxesRender(); });
     await page.locator('[data-in-readers]', {hasText: 'Sales'}).waitFor();
     assert.equal(await page.locator('[data-inbound-audience]').count(), 0, 'a member reads who reads it');
     assert.equal(await page.locator('[data-inbound-release]').count(), 0);
-    await go(page, '#/settings/inboxes/settings');
+    await go(page, '#/tools/settings');
     await page.locator('#set-inbound #inbound-sync').waitFor();
     assert.equal(await page.locator('#inbound-phone-card').count(), 0);
     assert.equal(await page.locator('#inbound-connection-form').count(), 0);

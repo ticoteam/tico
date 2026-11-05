@@ -66,7 +66,8 @@ Every file in `app/` and every feature file starts with `'use strict'`, as the o
 | issues, hub-v2, needs-you, bot-tasks | shared request rows and tables, hub v2 helpers, Needs you, a bot's tasks |
 | chat, pill, bot-page, bot-conversation, person-page, assistant-page | bot chat and its live reply, the composer, the bot and human pages, your Assistant |
 | tasks, task-board, task-modal, task-code, task-runs, tasks-page, pull-refresh, decide, recurring | Tasks: rows and cards, dragging on the board and its folds, the modal and its conversation (the session as a chat), the modal's Code and Subtasks rail and the PR badge, its Runs section (checkpoint, attempts, subagents, background work), the page and its pull to refresh, Decide (one card at a time), routines |
-| meetings, mail, messaging, credentials, sql, integrations, help, computer-screen, computer-performance | one page each (computer-screen loads noVNC from `vendor/novnc/` with `import()`) |
+| tools, tools-api, inboxes, inboxes-* | Tools: the list and its router, one API tool, and the inbox kinds' pages under it (mailbox, numbers, addresses, letters out, their settings) |
+| meetings, mail, messaging, sql, integrations, help, computer-screen, computer-performance | one page each (computer-screen loads noVNC from `vendor/novnc/` with `import()`) |
 | settings, settings-*, subscriptions, vault, catalog | Settings: shell, one file per tab, the bot editor, access editor, subscriptions (computers, groups, a bot's), credential vault, template cards |
 | welcome, updates, goals, overview | setup, Updates, Goals, and the optional building overview |
 | company-page | the Company page for owners and admins: Overview's Company page tab and its share panel, and the section behind Manage with transparency, editions and approvals, audiences, disclosure, the stats board, readers, previews (`styles/company-page.css`; the reader's page itself is rendered by `backend/company_page/render.py`) |
