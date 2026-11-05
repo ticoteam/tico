@@ -1997,8 +1997,7 @@ def _post(c, principal, thread_id, body, *, kind, refs, parent_message_id, to_ac
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
-    H._writer(c, actor, task_id=thread.get("task_id"))
-    H._writer(c, actor, task_id=H.message_task_id({"refs": refs}, thread))
+    H._message_writer(c, actor, {"refs": refs}, thread)
     if origin and origin.get("origin_id"):
         duplicate = _duplicate(c, origin, thread)
         if duplicate is not None:
@@ -2201,6 +2200,7 @@ def _create_plan(c, principal, *, title="", audience="members", audience_group_i
     if audience == "task":
         if not task_id or (v is not None and not _task_readable(c, v, task_id)):
             raise Problem("not_found", "Task not found", 404)
+    H._writer(c, actor, task_id=task_id)
     if audience in ("company", "team") and v is not None and not v.is_person:
         raise Problem("forbidden", "A bot starts members threads; a person makes them public", 403)
     resolved = []
@@ -2499,6 +2499,7 @@ def sub_thread(c, principal, parent_message_id):
     found = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
     if found:
         return thread_row(c, found[0])
+    H._message_writer(c, actor, parent_message, parent)
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
@@ -2547,6 +2548,7 @@ def _reactable(c, principal, message_id):
     message = H.message(c, message_id)
     if not message or _carrier_message(message) or (v is not None and not message_readable(c, v, message)):
         raise Problem("not_found", "Message not found", 404)
+    H._message_writer(c, actor, message, thread_row(c, message["conversation_id"]))
     return actor, message
 
 
@@ -2609,6 +2611,7 @@ def _require_thread(c, principal, thread_id):
     row = require(c, v, thread_id) if v is not None else thread_row(c, thread_id)
     if row is None:
         raise Problem("not_found", "Thread not found", 404)
+    H._writer(c, actor, task_id=row.get("task_id"))
     return actor, v, row
 
 
@@ -2733,7 +2736,7 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
 
 def follow(c, v, thread_id, *, notify="live"):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     if notify not in NOTIFY:
         raise Problem("notify", "notify is live, mentions, digest or muted", 422)
     now = _now()
@@ -2748,7 +2751,7 @@ def follow(c, v, thread_id, *, notify="live"):
 
 def unfollow(c, v, thread_id):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     c.execute("UPDATE thread_followers SET following=0, updated_at=? WHERE thread_id=? AND actor=?",
               (_now(), row["id"], v.actor))
     _event(c, v.actor, "thread.unfollowed", row["id"], {})
@@ -2833,7 +2836,7 @@ def update(c, principal, thread_id, *, title=None, archived=None):
 def mark_read(c, v, thread_id, seq):
     """Advance the viewer's read mark in this thread (max wins: another device may be ahead)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    row = require(c, v, thread_id)
+    _, _, row = _require_thread(c, v, thread_id)
     seq = min(max(int(seq or 0), 0), int(row.get("last_seq") or 0))
     return {"thread_id": row["id"], "last_read_seq": _read_to(c, row, v.actor, seq)}
 
@@ -3022,8 +3025,7 @@ def _own_say(c, actor, v, message_id):
     if message.get("kind") not in EDITABLE_KINDS or (message.get("refs") or {}).get("carries"):
         raise Problem("kind", "Asks, answers and notices cannot be changed", 422)
     thread = thread_row(c, message["conversation_id"])
-    H._writer(c, actor, task_id=thread.get("task_id"))
-    H._writer(c, actor, task_id=H.message_task_id(message, thread))
+    H._message_writer(c, actor, message, thread)
     return message
 
 

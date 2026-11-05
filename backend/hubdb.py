@@ -2817,6 +2817,12 @@ def _writer(conn, actor, task_id=None, attempt_id=None):
     return actor
 
 
+def _message_writer(conn, actor, msg, conv):
+    """A message's task reference cannot mask its thread's own task association."""
+    _writer(conn, actor, task_id=(conv or {}).get("task_id"))
+    _writer(conn, actor, task_id=message_task_id(msg, conv))
+
+
 def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
@@ -3210,7 +3216,7 @@ def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, 
         conv = _pair_conversation(conn, actor, target,
                                   {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=True)
 
-    _writer(conn, actor, task_id=message_task_id({"refs": refs}, conv))
+    _message_writer(conn, actor, {"refs": refs}, conv)
 
     if kind == "ask":
         _botops_only(conn, actor, target)
@@ -3650,7 +3656,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     asked = message(conn, message_id)
     if not asked:
         refuse(conn, actor, "not-found", f"no message {message_id}")
-    _writer(conn, actor, task_id=message_task_id(asked, conversation(conn, asked["conversation_id"])))
+    _message_writer(conn, actor, asked, conversation(conn, asked["conversation_id"]))
     task_reply = bool(comment_refs and (asked.get("refs") or {}).get("questions")
                       and comment_refs.get("task") == (asked.get("refs") or {}).get("task"))
     if (asked.get("refs") or {}).get("questions") and asked["sender_id"] == actor:
@@ -6190,6 +6196,7 @@ def _own_comment(conn, actor, task_id, message_id):
                                     + ("; settle your open question with hub task ask-resolve" if msg.get("kind") == "ask" else ""))
     if msg["sender_id"] != actor:
         refuse(conn, actor, "identity", f"{actor_name(conn, msg['sender_id'])} wrote this comment; only they change it")
+    _message_writer(conn, actor, msg, conversation(conn, msg["conversation_id"]))
     return msg
 
 
@@ -6271,6 +6278,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
     asked = comment_on(conn, row, message_id)
     if not asked or asked.get("deleted_at") or asked.get("kind") != "ask":
         refuse(conn, actor, "not-found", f"no question {message_id} on task {task_id}")
+    _message_writer(conn, actor, asked, conversation(conn, asked["conversation_id"]))
     asker, person = asked["sender_id"], asked["recipient_id"]
     if quote is None and not task_represents(conn, actor, asker):
         refuse(conn, actor, "identity", f"{actor_name(conn, asker)} asked this question; only they or their managers withdraw it")
@@ -8646,6 +8654,10 @@ def note_cancel(conn, actor, note_id, human=False):
         refuse(conn, actor, "not-found", f"no note {note_id}")
     if actor != row["from_actor"] and not human and not is_human(actor):
         refuse(conn, actor, "note", f"{actor_name(conn, row['from_actor'])} left this note; only they or a person take it back")
+    if row.get("message_id"):
+        msg = message(conn, row["message_id"])
+        if msg:
+            _message_writer(conn, actor, msg, conversation(conn, msg["conversation_id"]))
     if row["canceled_at"]:
         return row
     if not note_waiting(conn, row):
@@ -8803,7 +8815,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
 
     A request replaces the asker's older undecided one it names (`supersedes`), and any it has open on the same task
     for the same target (APPROVAL_TARGET): a re-cut release or a redrafted email is the same decision, asked again."""
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     if kind not in APPROVAL_KINDS:
         refuse(conn, actor, "kind", f"an approval is {'|'.join(APPROVAL_KINDS)}, not {kind}")
     text = json.dumps(payload, sort_keys=True, default=str)
@@ -8826,6 +8838,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         named = approval(conn, supersedes)
         if not named or named["requested_by_id"] != actor:
             refuse(conn, actor, "not-found", f"you have no approval {supersedes} to replace")
+        _writer(conn, actor, task_id=named["task_id"])
         if named["decision"] == "approved" and not named["consumed_at"]:
             # Withdrawing only the undecided would leave the old yes spendable next to the new ask.
             refuse(conn, actor, "lint", f"{supersedes} is already approved and not spent; use it, or ask on its "
@@ -8916,6 +8929,7 @@ def approval_consume(conn, actor, approval_id):
     row = approval(conn, approval_id)
     if not row:
         refuse(conn, actor, "not-found", f"no approval {approval_id}")
+    _writer(conn, actor, task_id=row["task_id"])
     if row["decision"] != "approved":
         refuse(conn, actor, "kind", f"{approval_id} is {row['decision'] or 'undecided'}, not approved")
     if row["consumed_at"]:
@@ -8934,7 +8948,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     `state="active"` is how a human clears a quarantine (deviation 5): it sets `bots.state`
     and leaves the live status `idle`.
     """
-    _writer(conn, actor)
+    _writer(conn, actor, task_id=task_id)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if not bot(conn, slug):
         refuse(conn, actor, "not-found", f"no bot {slug}")
@@ -8963,6 +8977,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         focus = None
     ts = now()
     old = _one(conn, "SELECT * FROM bot_status WHERE bot=?", (slug,))
+    _writer(conn, actor, task_id=task_id if task_id is not None else (old or {}).get("task_id"))
     if old:
         conn.execute("INSERT INTO bot_status_history (id, bot, state, focus, task_id, started_at, ended_at, "
                      "reason, by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

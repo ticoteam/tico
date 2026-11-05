@@ -27,6 +27,11 @@ Its task-scoped validation refusals count against that task throughout the write
 Posts in the task's native thread and file uploads, imports and links also respect the task hold; publishing
 files from a held attempt stays refused even when the bot is active. Updating an existing file checks its stored
 task too, even if the request omits the task.
+Messages, replies, acknowledgements and reactions check both the message's stored task reference and its thread's
+own task; naming a different task cannot bypass either hold. Thread changes and read marks, task-linked pages,
+file reviews, and pins or cards on the task also respect the hold. Approval requests, replacement of an existing
+request and consumption of an approved request check the approval's task before changing it. A status update that
+keeps its stored task checks that task; the bot may still switch its status to unrelated work.
 Another run of the bot cannot change the held task either. Notes copied from messages on a held task or chat
 stay pending and unread until release; their task references use the same whitespace and list normalization
 as claims. Other tasks' runs carry only notes from sources that are free.

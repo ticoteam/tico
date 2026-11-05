@@ -321,6 +321,10 @@ keep running. Refusals from an already held source stay contained and do not cou
 bot-wide limit. Without a run token, an external agent's writes are fenced by the task being changed, and
 validation refusals throughout that mutation stay attributed to the task even when the write rolls back.
 Native thread posts and file publishing check the resolved task; files also check the publishing attempt's hold.
+Message mutations check the stored message and thread associations independently, so a reference to another task
+cannot mask the thread's own hold. Approvals check their task when requested or consumed, and replacement checks
+the older approval's stored task too. Thread metadata and read marks, task-backed note cancellation, page changes,
+file reviews, task pins and cards, and status updates that retain the held task follow the same fence.
 Two or more distinct tasks/chats in the remaining count, or any refusal with no attributable task/chat, still
 quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
 always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;

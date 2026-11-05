@@ -1247,6 +1247,8 @@ def create_app(settings=None):
                 tid = request.path_params.get("tid") if H.is_bot(request.state.identity.actor) else None
                 task_id = auth.resolve_task(c, request.state.identity, tid) if tid else None
                 with H.refusal_task(task_id):
+                    if task_id:
+                        H._writer(c, request.state.identity.actor, task_id=task_id)
                     return fn(c)
             except H.Refused as exc:
                 exc.private = getattr(exc, "private", False) or H.PRIVATE_WRITE.get()
@@ -6874,6 +6876,7 @@ def create_app(settings=None):
                 raise Problem("forbidden", "You may acknowledge only messages addressed to you", 403)
             auth.conversation(c, who, msg["conversation_id"])
             privacy.require_message(c, who, msg)
+            H._message_writer(c, who.actor, msg, H.conversation(c, msg["conversation_id"]))
             H.mark_read(c, who.actor, mid, recipient=who.actor)
             H.mark_delivered(c, who.actor, mid, recipient=who.actor)
             # A waiting CLI has already consumed the answer in its current turn.
