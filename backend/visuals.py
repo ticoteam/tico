@@ -280,6 +280,10 @@ def loading_references(data):
 # page has a width and reports again on every resize (ui/tests/visual-reporter.cjs runs the same file). It reports
 # the content's own height when the content fits the frame, not scrollHeight, which never goes below the frame: a
 # page measured once too tall (wrapped at a passing narrow width) could otherwise never come back down.
+# It also marks the page's view. A card frame names its view in the fragment, which never reaches the server:
+# `#tico-view=card&tico-size=small|medium|large`. The reporter sets `data-tico-view` ("card" or "full") and
+# `data-tico-size` on <html> from it, and again on hashchange, so a page's own CSS can show a compact layout under
+# `[data-tico-view=card]`. No fragment is the full view. It runs as the page's last script.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 REPORTER_HASH = "sha256-" + base64.b64encode(hashlib.sha256(REPORTER.encode()).digest()).decode()
 

@@ -6,19 +6,29 @@
 .pg-status a{color:var(--link-quiet)}
 .pg-box{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .page-frame{display:block;width:100%;border:0;background:#fff}
-.pg-tap{position:absolute;inset:0;border-radius:inherit}
-.pg-tap:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.pg-small .pg-box{max-height:180px}.pg-medium .pg-box{max-height:320px}.pg-large .pg-box{max-height:520px}
 .pg-open{display:flex;align-items:center;gap:10px;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
 a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-open .nav-icon{flex:none;color:var(--muted)}
 .pg-open-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .pg-open-title{min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* A card's status line is part of the card: a bar across a framed page's top, or under an Open card's title. */
-.pg-framed:not(.pg-full){gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
-.pg-framed:not(.pg-full)>.pg-status{padding:6px 10px;border-bottom:1px solid var(--line)}
-.pg-framed:not(.pg-full) .pg-box{border:0;border-radius:0}
+/* An Open card reads as a widget placeholder: one-line title, the status line at most two lines. */
+.pg-open .pg-status{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 .pg-open-btn{flex:none;color:var(--link-quiet);font-size:var(--t-sm)}
+/* A framed card is a widget: a one-line status bar, then the page's top at the size's fixed height with nothing
+   scrolling inside, a fade at the bottom when the page runs on (pg-cut, from its reported height), one tap target
+   over the whole card and an expand icon in its corner. */
+.pg-framed:not(.pg-full){position:relative;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.pg-framed:not(.pg-full)>.pg-status{padding:6px 40px 6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pg-framed:not(.pg-full) .pg-box{border:0;border-radius:0;height:var(--pg-h,320px)}
+.pg-small{--pg-h:180px}.pg-medium{--pg-h:320px}.pg-large{--pg-h:520px}
+.pg-box.pg-cut::after{content:"";position:absolute;left:0;right:0;bottom:0;height:48px;pointer-events:none;background:linear-gradient(transparent,var(--surface))}
+.pg-tap{position:absolute;inset:0;z-index:1;border-radius:inherit}
+.pg-tap:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-framed .pg-status a{position:relative;z-index:2}
+.pg-expand{position:absolute;top:2px;right:2px;z-index:2;display:inline-grid;place-items:center;width:30px;height:30px;border-radius:7px;color:var(--muted);text-decoration:none}
+.pg-expand .nav-icon{font-size:18px;width:18px;height:18px}
+.pg-expand:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+.pg-expand:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
 /* the full view */
 .pg-view{max-width:1100px;margin:0 auto;padding:12px 20px 48px}
