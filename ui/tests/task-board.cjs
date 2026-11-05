@@ -77,6 +77,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') {
+        // Needs you draws from this feed; held with the first task list so the first visit shows its skeleton.
+        if (!process.env.TICO_TAG_TEST_ONLY) await initialTasksGate;
         const actor = 'human:' + me.id;
         const items = tasks.filter(t => t.lane === 'company' && !['done', 'closed', 'declined'].includes(t.status)
           && (t.owner_id === actor || t.waiting_on === actor || t.ask?.recipient_id === actor))
