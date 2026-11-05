@@ -112,20 +112,20 @@ def test_person_forwards_a_chat_file_to_a_bot_task_and_only_readers_gain_it(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
     attempt = claim(api, machine, 'ops')
-    assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 404
+    assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 403
     ref = attachment['id'] + '@1'
     # A person who cannot open the file, and a bot, cannot attach it by its id.
     assert api.get(attachment['url'], headers=headers('ana-test')).status_code == 403
     post(api, f'tasks/{tid}/comments', {'text': 'Here', 'attachments': [ref]}, 'ana-test', expected=404)
     post(api, f'tasks/{tid}/comments', {'text': 'Here', 'attachments': [ref]}, attempt['token'], expected=404)
-    assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 404
+    assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 403
     comment = post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [ref]}, 'ben-test')['comment']
     forwarded = comment['refs']['attachments'][0]
     assert forwarded['id'] != attachment['id'] and forwarded['name'] == attachment['name']
     downloaded = api.get(forwarded['url'], headers=headers(attempt['token']))
     assert downloaded.status_code == 200 and downloaded.content == b'Chat bytes'
     # The task got a copy: the chat file itself is still closed to the task's bot.
-    assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 404
+    assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 403
     again = post(api, f'tasks/{tid}/comments', {'text': 'Again', 'attachments': [ref]}, 'ben-test')['comment']
     assert again['refs']['attachments'][0]['ref'] == forwarded['ref']
     # Sharing it is the point: whoever reads the task now opens it through the task.

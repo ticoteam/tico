@@ -226,3 +226,14 @@ def test_legacy_fallback_keeps_unrelated_labels_and_opaque_text(api):
     row = next(t for t in shown["tasks"] if t["id"] == other["id"])
     assert row["ask"]["refs"]["questions"][0]["options"][0]["label"] == "Restricted source"
     assert get(api, "messages/" + comment["id"], attempt["token"])["body"] == text
+
+
+def test_scoped_task_tools_bootstrap_update_and_read_context(api):
+    t, attempt = task_turn(api)
+    token = attempt["token"]
+    assert "credentials" in get(api, "credential-runtime", token)
+    result = post(api, "mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "hub_task_update", "arguments": {"id": t["id"], "status": "doing", "note": "Reviewing attached context"}}}, token)
+    assert not result.get("error") and not result["result"].get("isError"), result
+    assert get(api, "tasks/" + t["id"], token)["task"]["status"] == "doing"
+    assert get(api, "tasks/" + t["id"] + "/context", token) == {"pages": [], "meetings": []}
