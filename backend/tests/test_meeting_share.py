@@ -83,7 +83,7 @@ def test_nonowner_bot_and_added_people_read_participants_only_filed_meeting(live
     reads = (f"/api/v2/meetings/{rid}", f"/api/meetings/{rid}", f"/api/meetings/{rid}/versions",
              f"/api/v2/meetings/transcript?id={rid}", f"/api/v2/files/{bid}")
     for path in reads:
-        assert live.get(path, headers=headers("ops-live")).status_code == 404
+        assert live.get(path, headers=headers("ops-live")).status_code == (403 if "/files/" in path else 404)
     post(live, f"meetings/{rid}/review", {"action": "approve", "audience": "participants"})
     for token in ("ben-test", "cara-test", "ops-live"):
         detail = get(live, f"meetings/{rid}", token=token)
