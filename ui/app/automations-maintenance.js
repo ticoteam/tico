@@ -8,8 +8,6 @@
 
 const AU_MAINT = 'maintenance';
 const AU_MAINT_OWNER = 'tico';   // the list's Owner: Tico itself runs it
-// The system jobs the run replaced: an install converted before them keeps their read-only mirrors, which run nothing.
-const AU_MAINT_RETIRED = new Set(['auto_dream', 'cleanup', 'stall_triage'].map(k => 'tico.builtin.job.' + k));
 const AU_MAINT_SCHEDULES = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], ['3h', 'Every 3 hours'], ['6h', 'Every 6 hours'],
   ['12h', 'Every 12 hours'], ['daily', 'Once a day']];
 const AU_MAINT_OFTEN = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
@@ -43,10 +41,10 @@ function auMaintRow(m) {
     ...(last ? {last_run: {id: last.id, started_at: last.started_at, status: auMaintRunStatus(last)}} : {}),
     next_run: m.next_run_at || null};
 }
-// The list with Maintenance first and the retired mirrors left out; an older hub (no steps) leaves it as it is.
+// The list with Maintenance first; an older hub (no steps) leaves it as it is.
 function auMaintList(list, m) {
   if (!auMaintOk(m)) return list;
-  return [auMaintRow(m), ...list.filter(a => !(a.readonly && AU_MAINT_RETIRED.has(a.trigger?.name)) && a.id !== AU_MAINT)];
+  return [auMaintRow(m), ...list.filter(a => a.id !== AU_MAINT)];
 }
 // A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again. A follow's
 // refresh leaves Settings as it is while a field there is being edited, so a value not yet saved is not lost.
@@ -68,26 +66,6 @@ async function auMaintLoad(state, opts) {
     state.maintError = auMaintOk(m) ? '' : 'Maintenance needs a newer hub';
     if (auMaintOk(m)) auMaintAdopt(state, m, opts);
   } catch (e) { if (AU === state && state.mtGen === gen) state.maintError = [403, 404].includes(e.status) ? 'Maintenance needs a newer hub' : e.message; }
-}
-
-// The list's runs, failures and cost for the range, from its own run log: the pages back to the range's start.
-async function auMaintStats(range, n) {
-  const span = AU_RANGE_SECONDS[range] * 1000, now = Date.now(), since = now - span, width = span / n;
-  const out = {id: AU_MAINT, runs: 0, failed: 0, cost: 0, buckets: Array.from({length: n}, () => ({ok: 0, failed: 0}))};
-  let before = '';
-  for (let i = 0; i < 30; i++) {
-    const page = await get('/v2/maintenance/runs?limit=50' + (before ? '&before=' + encodeURIComponent(before) : ''));
-    for (const r of page.runs || []) {
-      const t = new Date(r.started_at).getTime();
-      if (isNaN(t) || t < since) continue;
-      const bad = !!r.finished_at && !r.ok, b = Math.max(0, Math.min(n - 1, Math.floor((t - since) / width)));
-      out.runs++; out.failed += bad; out.cost += Number(r.cost_usd) || 0; out.buckets[b][bad ? 'failed' : 'ok']++;
-    }
-    const oldest = (page.runs || []).at(-1)?.started_at;
-    if (!page.next || !oldest || new Date(oldest).getTime() < since) break;
-    before = page.next;
-  }
-  return out;
 }
 
 // -------------------------------------------------------------------------------------------- drawing
@@ -208,6 +186,8 @@ function auMaintRunsHTML() {
 
 async function auMaintRunsLoad(state, more = false) {
   const r = state.mtRuns ||= {rows: [], next: null, open: new Set(), loading: false, error: ''};
+  // A run tapped on the overview's Runs tab opens here (automations-overview.js sets mtOpenRun).
+  if (state.mtOpenRun) { r.open.add(state.mtOpenRun); state.mtOpenRun = null; }
   if (r.loading || (more && !r.next)) return;
   r.loading = true; r.error = '';
   if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
