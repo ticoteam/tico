@@ -117,12 +117,15 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
 def test_notice_provenance_never_changes_duplicate_identity(api):
     task = new_task(api, "assigned")
     body = "Unblocked: assigned\nThe migration is finished."
-    first = notice(api, task, body, blocker_done=task['id'])
+    first = notice(api, task, body, blocker_done=task['id'], answer={'text': 'Migration finished.'})
     second = notice(api, task, body, blocker_done=task['id'],
+                    answer={'text': 'Migration finished.', 'body_sources': [{'file': 'answer-source'}]},
                     body_sources=[{'file': 'older-source'}], sources=[{'file': 'newer-source'}])
+    changed = notice(api, task, body, blocker_done='different-blocker', answer={'text': 'Migration finished.'})
     rows = {j['id']: j for j in jobs(api)}
     assert rows[first['id']]['state'] == 'queued'
     assert (rows[second['id']]['state'], rows[second['id']]['wake_class']) == ('canceled', 'duplicate')
+    assert rows[changed['id']]['state'] == 'queued'
     assert second['refs']['sources'] == [{'file': 'newer-source'}]
     assert {'file': 'older-source'} in second['refs']['body_sources']
 
