@@ -325,6 +325,8 @@ and worked it after the reopening, the queued notice does not start duplicate wo
 `task_next_run` while a deferral or carrier holds it. The normal automatic-start switch and task cap
 still apply, and only the requester, a person or BotOps may choose **Run now** early.
 
+Closing, finishing or declining a task cancels every waiting deferred message and **Defer** comment on it. Reopening the task does not bring them back.
+
 The task shows where it stands, under **Deferred** on the task and as `deferred` in `hub task show`
 (`quiet`, its older name, is still sent for one release):
 
