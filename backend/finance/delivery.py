@@ -85,9 +85,7 @@ def issue(c: Any, decider: str, requester: str, *, to: Any, subject: str, text: 
     """Freeze an invoice email for its own preview and approval; the finance decision never approves unseen MIME."""
     if not tico.is_person(decider):
         raise FinanceError(DENIED, "an invoice email is approved by a person, not by a bot")
-    from connectors.mail.compose import build
-    raw = build(recipients(to), subject, text, from_addr=box)
-    return tico.queue_email(c, requester, raw, ref,
+    return tico.queue_email(c, requester, recipients(to), subject, text, ref,
                             {"mailbox": box, "document_sha256": document_digest(document), "ref": ref})
 
 

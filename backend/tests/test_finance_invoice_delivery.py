@@ -150,6 +150,18 @@ def test_no_bookkeeper_mailbox_refuses_the_reminder_at_planning_and_uses_no_stag
         assert act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7}).status == "committed"
 
 
+def test_finance_does_not_queue_email_when_the_requester_lacks_inbox_send_access(books):
+    with books.transaction() as c:
+        iid = _sent_invoice(c)
+        _mailbox(c)
+        row = c.execute("SELECT id FROM mailboxes WHERE address=?", (BOX,)).fetchone()
+        c.execute("DELETE FROM mailbox_accesses WHERE mailbox_id=? AND grantee_type='person'", (row[0],))
+        c.execute("UPDATE mailboxes SET kind='personal',person_id='ben' WHERE id=?", (row[0],))
+        refused = act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        assert refused.status == "failed" and "sender cannot send" in refused.reason
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+
+
 def test_a_failed_send_raises_one_needs_you_and_a_retry_that_delivers_clears_it(books):
     with books.transaction() as c:
         iid, send_id, _text = _approved_reminder(c)
