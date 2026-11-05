@@ -77,8 +77,9 @@ def recovery_prompt(c, task, bot):
         if detail.get('owner', task['owner_id']) != task['owner_id'] or not row['repo']:
             continue
         if row['state'] == 'retired' or detail.get('recovery') and row['state'] == 'pending':
+            command = 'setup' if detail.get('checkout_state') in ('setup_running', 'setup_failed') else 'add'
             notes.append(f"{RETIRED}: {row['repo']}, branch {row['branch']}. Before code work, run "
-                         f"`hub task worktree add {shlex.quote(row['repo'])} --task {task['id']}`. "
+                         f"`hub task worktree {command} {shlex.quote(row['repo'])} --task {task['id']}`. "
                          "This brings back published work on your current computer. Work that was not pushed "
                          "stayed on the retired computer; do not ask a person to restore this checkout first.")
     return notes
@@ -829,6 +830,9 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             for key in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch',
                         'size_mb', 'runner_report_at', 'wait_id', 'recovery_note', 'missing_since', 'stale_notified'):
                 detail.pop(key, None)
+        else:
+            # A recovered tree later released here follows the ordinary local reuse rules.
+            detail.pop('recovery', None)
         # This is a new allocation on the same link, not another attempt to release the retired tree.
         # A link released before the spelling changed holds `cancelled` in its stored detail.
         for key in (*REMOVAL, 'release_reason', 'removed_by', 'restore_on_reopen', 'canceled', 'cancelled',

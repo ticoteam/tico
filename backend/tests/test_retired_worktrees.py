@@ -142,3 +142,15 @@ def test_a_reserved_wait_on_a_retired_computer_is_prepared_again_instead_of_woke
         assert wait['state'] == 'reserved' and wait['link_id'] == old['link_id']
         assert row['computer_id'] == 'r1' and row['state'] == 'pending'
         assert json.loads(row['detail'])['wait_id'] == 'wait'
+
+
+def test_a_recovered_tree_released_on_the_current_computer_reuses_local_history(prepared):
+    api, tid, _ = prepared
+    old = leave_on_old_computer(api, tid)
+    moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='removed' WHERE id=?", (old['link_id'],))
+    reused = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert reused.status_code == 200, reused.text
+    assert reused.json()['branch'] == moved['branch'] and 'recovery' not in reused.json()
+    assert reused.json()['retired_worktree']['ahead'] == 2
