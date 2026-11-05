@@ -11,6 +11,7 @@ from backend.tests.test_files import turn
 from backend.tests.test_meeting_items import record
 from backend.tests.test_meeting_task_links import link, task
 from backend.tests.test_mcp import call
+from backend.tests.test_pages import page
 
 
 def pin(api, tid, fid):
@@ -62,7 +63,7 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     ready(api, machine, ['ops'])
     attempt = claim(api, machine, 'ops')
     assert attempt['task_context'] == result
-    assert get(api, 'tasks/' + str(t['number']) + '/context', attempt['token']) == result
+    assert get(api, 'tasks/' + t['id'][:8] + '/context', attempt['token']) == result
     error, mcp = call(api, 'hub_task_context', {'id': t['id']}, token=attempt['token'])
     assert not error and mcp == result
     with api.app.state.store.transaction() as c:
@@ -77,8 +78,10 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
     filed = seed_page(api, 'cpo', task=t['id'])
     limited = seed_page(api, 'cpo', task=t['id'])
     hidden = seed_page(api, 'cpo', task=t['id'])
+    personal = page(api, attempt).json()['page']['file_id']
+    post(api, 'pins', {'place': 'task:' + t['id'], 'item': 'page:' + personal}, token='ben-test')
     pinned = seed_page(api, 'ops')
-    private_task = task(api, owner='bot:ops', private=True)
+    private_task = task(api, title='Review the private budget', owner='bot:ops', private=True)
     private_page = seed_page(api, 'ops', task=private_task['id'])
     for fid in (pinned, private_page):
         pin(api, t['id'], fid)
@@ -87,8 +90,11 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
             c.execute('UPDATE pages SET audience=? WHERE file_id=?', (encode({'bots': bots}), fid))
     before = get(api, 'tasks/' + t['id'] + '/context', token)
     shown = {p['id']: p for p in before['pages']}
-    assert set(shown) == {filed, limited, pinned, private_page}
-    assert {fid for fid, p in shown.items() if p['limited']} == {limited, private_page}
+    assert set(shown) == {filed, limited, personal, pinned, private_page}
+    assert {fid for fid, p in shown.items() if p['limited']} == {limited, personal, private_page}
+    pin(api, private_task['id'], pinned)
+    private_context = get(api, 'tasks/' + private_task['id'] + '/context', token)
+    assert not next(p for p in private_context['pages'] if p['id'] == pinned)['limited']
     # A task reader cannot read this source, but the bot can; the task does not change either grant.
     get(api, 'pages/' + limited, 'cara-test', expected=404)
     get(api, 'pages/' + limited, token)
@@ -107,7 +113,7 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
         c.execute('UPDATE pages SET audience=? WHERE file_id=?', (encode({'bots': ['finance']}), limited))
         c.execute('UPDATE pages SET archived=1 WHERE file_id=?', (pinned,))
     after = get(api, 'tasks/' + t['id'] + '/context', token)
-    assert {p['id'] for p in after['pages']} == {filed, private_page}
+    assert {p['id'] for p in after['pages']} == {filed, personal, private_page}
     get(api, 'pages/' + limited, token, expected=404)
 
 
@@ -121,6 +127,7 @@ def test_attached_bot_reads_saved_meeting_in_every_turn_and_loses_revoked_grant(
         link(api, rid, [t['id']])
     token = attempt['token']
     assert get(api, 'meetings/transcript?id=' + mid, token)['notes'] == 'Owner decisions'
+    assert [m['id'] for m in get(api, 'meetings/search', token)['results']] == [mid]
     context = get(api, 'tasks/' + t['id'] + '/context', token)
     assert [m['id'] for m in context['meetings']] == [mid]
     assert context['meetings'][0]['limited']

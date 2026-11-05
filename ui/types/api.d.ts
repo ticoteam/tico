@@ -5447,6 +5447,26 @@ export type TaskComments = {
   comments: Array<Message>;
 };
 
+export type TaskContext = {
+  meetings: Array<TaskContextMeeting>;
+  pages: Array<TaskContextPage>;
+};
+
+export type TaskContextMeeting = {
+  date: string;
+  id: string;
+  limited: boolean;
+  title: string;
+};
+
+export type TaskContextPage = {
+  id: string;
+  limited: boolean;
+  title: string;
+  updated_at: string;
+  version: number;
+};
+
 export type TaskCreate = {
   acceptance_criteria?: Array<string>;
   blocker?: TaskBlocker | null;
@@ -8177,6 +8197,7 @@ export type GetMeetingReviewSettingsResponse = MeetingReviewPreferences;
 export type GetMeetingTranscriptParams = {
   id: string;
   limit?: number;
+  notes?: boolean;
   offset?: number;
 };
 export type GetMeetingTranscriptBody = never;
@@ -8425,6 +8446,13 @@ export type GetTaskResponse = TaskDetail;
 export type GetTaskCapsParams = Record<string, never>;
 export type GetTaskCapsBody = never;
 export type GetTaskCapsResponse = TaskCaps;
+
+/** GET /api/v2/tasks/{tid}/context */
+export type GetTaskContextParams = {
+  tid: string;
+};
+export type GetTaskContextBody = never;
+export type GetTaskContextResponse = TaskContext;
 
 /** GET /api/v2/task-manager */
 export type GetTaskManagerParams = Record<string, never>;

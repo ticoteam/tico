@@ -459,10 +459,10 @@ mod tests {
 
     #[test]
     fn task_context_is_bounded_metadata_for_twenty_sources() {
-        let pages: Vec<Value> = (0..10).map(|i| json!({"id": format!("file-{i:024}"),
+        let pages: Vec<Value> = (0..12).map(|i| json!({"id": format!("file-{i:024}"),
             "title": "Long title 🦀".repeat(40), "version": 123, "updated_at": "2026-11-04T10:00:00Z",
             "limited": i % 2 == 0, "content": "SECRET PAGE CONTENT"})).collect();
-        let meetings: Vec<Value> = (0..10).map(|i| json!({"id": format!("20261104-120000-{i:04}"),
+        let meetings: Vec<Value> = (0..12).map(|i| json!({"id": format!("20261104-120000-{i:04}"),
             "title": "Planning\nmeeting".repeat(40), "date": "2026-11-04T10:00:00Z",
             "limited": true, "transcript": "SECRET TRANSCRIPT", "notes": "SECRET NOTES"})).collect();
         let sources = json!({"pages": pages, "meetings": meetings});
