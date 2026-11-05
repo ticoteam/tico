@@ -82,9 +82,10 @@ Your yes counts only if it is your very next message after the read-back, with n
 nothing else from you after it, and within 30 minutes of the read-back. Any other reply saves nothing. Ask again, and the
 Assistant reads it back again.
 
-Colour, done or dropped and archive are not agreed in words. They stay your click on the Goals page, and the read-back
-says so and leaves them out. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
-clicks too.
+Colour, done or dropped and archive are not agreed in words. They stay your click on the Goals page. If a read-back would
+include one, Tico refuses the whole read-back and saves nothing, and the Assistant says why in one sentence and leaves
+that change for your click. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
+clicks too, and are refused the same way.
 
 A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
 its card. A message from you that opens with a no, such as "no" or "no, too high", turns down a Strategy Bot suggestion
