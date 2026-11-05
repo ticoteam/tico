@@ -144,7 +144,8 @@ Anyone who reads a thread can pin it for themselves. A manager can pin a thread 
 everyone** switch in [Thread settings](#thread-settings)), except a DM with one teammate, a Home, a task's thread or a
 meeting's; anyone can still unpin it for themselves. Pinned threads lead
 the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
-messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed. Details:
+messages. A group DM and every other new top-level thread need a name. A DM with one teammate and a task's thread
+may go unnamed. Details:
 [threads contract §10.1](dev/threads-contract.md).
 
 ## Editing and deleting
