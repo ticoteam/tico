@@ -1171,8 +1171,8 @@ notices, notes and replies go there, and the thread it was filed from gets one q
 (`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
 say or notice in its task's thread reaches a person only when it @-mentions them. To get someone's attention on a task,
 the bot @-mentions them; otherwise the comment stays on the task, with no Inbox row, digest or push. A bot's ask in its
-task's thread still puts the task in the requester's **Needs you**, with no Inbox row, digest or push unless it
-@-mentions them. A bot's open task filed into a thread before this moves to a thread of its own the next time a turn on
+task's thread still puts the task in the **Needs you** of the person it is addressed to (the requester, unless the ask
+names someone else), with no Inbox row, digest or push unless it @-mentions them. A bot's open task filed into a thread before this moves to a thread of its own the next time a turn on
 it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A person's own
 tasks, and the Assistant's (whose turns act for the person of the thread), keep their thread.
 A turn reads only its own lane's messages: the main session reads the Home, with no task traffic, and a task's
