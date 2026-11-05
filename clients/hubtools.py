@@ -7040,6 +7040,57 @@ def connections_list(api,args):
     return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
 
 
+# ----------------------------------------------------------------------------- letters out (backend/letters.py)
+LETTER_ADDRESS = {"type": "object", "additionalProperties": False,
+    "properties": {name: _s(name.replace('_', ' ')) for name in
+                   ("name", "line1", "line2", "city", "state", "postal_code")},
+    "required": ["name", "line1", "city", "state", "postal_code"]}
+
+
+@tool("hub_letter_quote", "Quote a physical US letter through Tico's Gateway (print and postage at cost + 25%). "
+      "Provide a PDF already uploaded with hub_file_publish (file_id), or text/markdown printed as clean US Letter text. "
+      "Returns id, page_count, total_micros (USD millionths) and a PDF proof link. Requires Letters out send access "
+      "and a return address. Quotes last 15 minutes. Next use hub_letter_send; quoting never prints a letter. "
+      "Coming soon / Not set up means the service is unavailable; do not retry in a loop.",
+      {"file_id": _s("Uploaded PDF file id"), "text": _s("Text or markdown; use instead of file_id"),
+       "recipient": LETTER_ADDRESS, "mail_class": _s("Postage", enum=["first_class", "certified", "certified_return_receipt"]),
+       "color": {"type": "boolean"}, "duplex": {"type": "boolean"}, "task_id": TASK_ID,
+       "thread_id": _s("The thread this letter belongs to")}, required=("recipient",), writes=True)
+def letter_quote(api, args):
+    return api.post("letters/quotes", {k: args[k] for k in
+        ("file_id", "text", "recipient", "mail_class", "color", "duplex", "task_id", "thread_id") if k in args}, key=_key(args))
+
+
+@tool("hub_letter_send", "Request sending the exact letter returned by hub_letter_quote. Ask first is the default: "
+      "waiting_for_ok means a person must approve the proof, both addresses, class and total in Needs you. "
+      "Approval automatically re-quotes and submits only an unchanged approval hash; a change asks again. "
+      "On their own still asks for certified mail, courts/agencies, uncertain classification and a new address. "
+      "Monthly company and bot caps apply. Retry with the SAME letter_id: never make a replacement after a timeout "
+      "or submission_unknown. Printing has no promised undo window.",
+      {"letter_id": _s("The id from hub_letter_quote")}, required=("letter_id",), writes=True)
+def letter_send(api, args):
+    return api.post("letters/" + quote(args["letter_id"], safe="") + "/send", {}, key=_key(args))
+
+
+@tool("hub_letter_list", "Letters out you may read, with status, tracking and proof. Follow next_before for older letters.",
+      {"before": _s("next_before from the previous page"), "limit": {"type": "integer", "minimum": 1, "maximum": 50}})
+def letter_list(api, args):
+    return api.get("letters", **{k: args[k] for k in ("before", "limit") if k in args})
+
+
+@tool("hub_letter_show", "One letter out: saved proof, addresses, approval, spend and the Gateway's honest status.",
+      {"letter_id": _s("Letter id")}, required=("letter_id",))
+def letter_show(api, args):
+    return api.get("letters/" + quote(args["letter_id"], safe=""))
+
+
+@tool("hub_letter_cancel", "Request cancellation of a letter. The provider may refuse, including User Credit jobs. "
+      "Cancellation and refunds are confirmed only by the Gateway's response; no undo window is promised.",
+      {"letter_id": _s("Letter id")}, required=("letter_id",), writes=True)
+def letter_cancel(api, args):
+    return api.post("letters/" + quote(args["letter_id"], safe="") + "/cancel", {}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- email (backend/mail.py)
 @tool('hub_email_mailboxes', 'The email mailboxes you may read, including shared mailboxes. Whole Workspace reads '
       'go live to Gmail. hub_mail is physical postal mail.', {})

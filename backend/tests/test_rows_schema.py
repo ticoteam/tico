@@ -12,6 +12,12 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.LetterOutboxRow: "letter_outboxes",
+    rows.LetterOutboxGrantRow: "letter_outbox_grants",
+    rows.LetterBotSettingRow: "letter_bot_settings",
+    rows.LetterRow: "letters",
+    rows.LetterProofRow: "letter_proofs",
+    rows.LetterSourceRow: "letter_sources",
     rows.PageIdentityRow: "page_identities",
     rows.AlertPreferenceRow: "alert_preferences",
     rows.AlertCompanySettingRow: "alert_company_settings",

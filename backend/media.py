@@ -434,11 +434,16 @@ def blob_for(c, auth, who, bid):
     row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
+    from . import letters
+    letter = letters.blob_access(c, auth, who, bid)
+    if letter is False:
+        raise Problem("forbidden", "You cannot read this letter's source or proof", 403)
     from .files import file_visible, page_blobs
     linked_pages = page_blobs(c, bid)
     if linked_pages:
         if not all(file_visible(c, auth, who, f, {}) for f in linked_pages):
             raise Problem("not_found", "File not found", 404)
+    if letter is not None or linked_pages:
         return row
     from . import task_privacy as privacy
     if not privacy.blob_readable(c, privacy.actor(who), bid):
