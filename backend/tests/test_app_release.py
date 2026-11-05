@@ -104,27 +104,27 @@ def test_a_new_version_drops_updates_signed_for_the_previous_one():
     assert again["platforms"] == value["platforms"]
 
 
-def test_recorder_notes_come_from_the_changes_section(tmp_path):
+def test_recorder_notes_come_from_the_newest_changes_section_once(tmp_path):
     from scripts.app_release import changes_note, main
-    text = ("# Tico Recorder changes\n\nIntro.\n\n## 0.5.180\n\nNewest line.\nMore.\n\n"
-            "## 0.5.178\n\n- Clearer task linking and @me.\n\n## 0.5.100\n\n### Fixed\n")
-    assert changes_note(text, "0.5.180") == "Newest line."
-    assert changes_note(text, "0.5.178") == "Clearer task linking and @me."
-    # No section for this version: absent, unless one landed after the previous release.
-    assert changes_note(text, "0.5.179") is None
-    assert changes_note(text, "0.5.179", since="0.5.177") == "Clearer task linking and @me."
-    assert changes_note(text, "0.5.185", since="0.5.180") is None
-    assert changes_note(text, "0.5.100") is None
+    text = ("# Tico Recorder changes\n\nIntro.\n\n## 0.5.181\n\n- Newest line.\nMore.\n\n"
+            "## 0.5.178\n\nClearer task linking and @me.\n")
+    assert changes_note(text) == "Newest line."
+    # The heading is only a label: what counts is whether the last shipped build already showed the line.
+    assert changes_note(text, shown="Built from abc1234") == "Newest line."
+    assert changes_note(text, shown="Newest line.") is None
+    assert changes_note("# Tico Recorder changes\n\n## 1.0\n\n### Fixed\n") is None
+    assert changes_note("no sections\n") is None
     for name in ["Tico-Recorder.app.tar.gz", "Tico-Recorder.dmg"]:
         (tmp_path / name).write_bytes(b"bundle")
     (tmp_path / "Tico-Recorder.app.tar.gz.sig").write_text("sig")
     changes = tmp_path / "CHANGES.md"
     changes.write_text(text)
     output = tmp_path / "recorder-latest.json"
-    base = ["--github", "--kind", "recorder", "--output", str(output), "--notes", "Built from abc1234"]
-    main([*base, "--version", "0.5.178", "--changes", str(changes), str(tmp_path)])
-    assert json.loads(output.read_text())["notes"] == "Clearer task linking and @me."
-    main([*base, "--version", "0.5.190", "--since", "0.5.189", "--changes", str(changes), str(tmp_path)])
+    base = ["--github", "--kind", "recorder", "--output", str(output), "--notes", "Built from abc1234",
+            "--version", "0.5.190"]
+    main([*base, "--changes", str(changes), "--shown", "Built from 2b9ab1e", str(tmp_path)])
+    assert json.loads(output.read_text())["notes"] == "Newest line."
+    main([*base, "--changes", str(changes), "--shown", "Newest line.", str(tmp_path)])
     assert json.loads(output.read_text())["notes"] == "Built from abc1234"
-    main([*base, "--version", "0.5.190", "--changes", str(tmp_path / "missing.md"), str(tmp_path)])
+    main([*base, "--changes", str(tmp_path / "missing.md"), str(tmp_path)])
     assert json.loads(output.read_text())["notes"] == "Built from abc1234"

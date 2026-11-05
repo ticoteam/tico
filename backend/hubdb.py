@@ -3236,9 +3236,17 @@ def _opener(conn, conversation_id):
 
 
 # ----------------------------------------------------------------------------- messages
+def check_message_refs(refs, *, make_page=False):
+    """Only the task Make page route mints the initiating marker."""
+    if refs and "make_page" in refs and not make_page:
+        from .store import Problem
+        raise Problem("forbidden", "Use the task’s Make page control", 403)
+
+
 def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None,
-        in_reply_to=None, wait_s=None):
+        in_reply_to=None, wait_s=None, *, make_page=False):
     """The one write every message goes through: rules 1, 2, 3, 4, 7 and 8 all live here."""
+    check_message_refs(refs, make_page=make_page)
     on_task = message_task_id({"refs": refs}, conversation(conn, conversation_id) if conversation_id else None)
     with refusal_task(on_task):
         return _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, wait_s)
@@ -6446,11 +6454,22 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
                                conversation(conn, asked["conversation_id"]), "answer", refs, message_id, None,
                                delivered_at=ts if own else None, read_at=ts if own else None)
     _task_event(conn, task_id, actor, "ask", message_id, "answered" if reply else "withdrawn")
-    if row["status"] == "waiting" and row.get("waiting_on") == person and not any(
+    waited_on = row.get("waiting_on")       # before the clear below: the wait on this person, if it was the one
+    if row["status"] == "waiting" and waited_on == person and not any(
             a["recipient_id"] == person for a in open_task_asks(conn, row)):
         # Nothing else on the task waits on them: the next move is the bot's, and it leaves their Needs you.
         conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
         _task_event(conn, task_id, actor, "waiting_on", person, None, "")
+    if quote is None:
+        # A withdrawal ends the question's hold, so the Blocked reason follows the holds (backend/task_holds.py), as an
+        # answer does (`_answered_holds`). The same rule as there: the asker's own question, or one a person or the
+        # wait on this person held, names what cleared; another bot's question on a bot's task changes only its words.
+        from . import task_holds
+        own = row["owner_id"] == asker
+        held = own or waited_on == person or is_human(row["owner_id"])
+        whose = "your" if own else f"{task_holds.name(conn, asker)}'s"
+        task_holds.refresh(conn, task_id, (f"{task_holds.name(conn, actor)} withdrew {whose} question to "
+                                           f"{task_holds.name(conn, person)}") if held else None)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     recount(conn, [row["owner_id"], row["requester_id"], asker])
     event(conn, actor, "ask.answered_elsewhere" if reply else "ask.withdrawn", message_id,

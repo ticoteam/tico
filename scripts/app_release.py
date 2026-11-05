@@ -17,8 +17,8 @@ OS can be released on its own. `--dry-run` prints the manifest and uploads nothi
 manifest using public GitHub asset URLs, without credentials or S3. `--tag` preserves a tag suffix.
 `--kind recorder` does the same for Tico Recorder (macOS only, so only the darwin platforms and the mac
 installer are required); its manifest is recorder-latest.json, read by the recorder's updater.
-`--changes FILE` fills `notes` with the first line of the file's "## <version>" section (or, with `--since PREV`, of
-the newest section after PREV up to this version); without one, `--notes` stays.
+`--changes FILE` fills `notes` with the first line of the file's newest "## " section, unless `--shown` (the notes of
+the last shipped build) already carried it; otherwise `--notes` stays.
 """
 import argparse
 import json
@@ -64,33 +64,21 @@ def classify(directory):
     return found
 
 
-def _version_key(text):
-    return tuple(int(part) if part.isdigit() else 0 for part in re.split(r"[-+]", text.strip().lstrip("v"))[0].split("."))
-
-
-def changes_note(text, version, since=None):
-    """The first line of the "## <version>" section in a CHANGES.md text, or None. With `since`, the newest
-    section after `since` and up to `version` counts too, so an entry written for a version that was cut
-    before it merged still reaches the next build."""
-    sections, heading = {}, None
+def changes_note(text, shown=None):
+    """The first line of the newest ("## ...", topmost) section in a CHANGES.md text, or None. None too when it
+    is `shown`, the note the last shipped build already carried, so a line shows once, with the next build after
+    it lands, whatever version numbers releases were cut at in between."""
+    heading = False
     for line in text.splitlines():
-        match = re.fullmatch(r"##\s+v?([0-9][0-9A-Za-z.+-]*)\s*", line)
-        if match:
-            heading = match.group(1)
-            sections.setdefault(heading, None)
-        elif heading and sections[heading] is None and line.strip():
+        if re.match(r"##\s", line):
+            if heading:
+                return None
+            heading = True
+        elif heading and line.strip():
             if line.startswith("#"):
-                heading = None
-                continue
-            sections[heading] = re.sub(r"^[-*]\s+", "", line.strip())
-    if sections.get(version):
-        return sections[version]
-    if since:
-        low, high = _version_key(since), _version_key(version)
-        found = sorted((_version_key(v), note) for v, note in sections.items()
-                       if note and low < _version_key(v) <= high)
-        if found:
-            return found[-1][1]
+                return None
+            note = re.sub(r"^[-*]\s+", "", line.strip())
+            return None if note == (shown or "").strip() else note
     return None
 
 
@@ -129,7 +117,7 @@ def main(argv):
     parser.add_argument("--output", default="latest.json", help="manifest path for --github")
     parser.add_argument("--notes", default="")
     parser.add_argument("--changes", help="a CHANGES.md whose section for this version gives the notes")
-    parser.add_argument("--since", help="with --changes: the previous release, so a section after it counts")
+    parser.add_argument("--shown", help="with --changes: the last shipped build's notes, so a line shows only once")
     parser.add_argument("--signed", action="store_true")
     parser.add_argument("--notarized", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -162,7 +150,7 @@ def main(argv):
             previous = None
     notes = args.notes
     if args.changes and Path(args.changes).is_file():
-        notes = changes_note(Path(args.changes).read_text(), args.version, args.since) or notes
+        notes = changes_note(Path(args.changes).read_text(), args.shown) or notes
     value = manifest(args.version, (args.base or "").rstrip("/"), scans, previous, notes, args.signed,
                      args.notarized, args.github, args.tag, args.kind)
     if args.kind == "recorder":

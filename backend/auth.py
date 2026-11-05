@@ -431,6 +431,31 @@ class Auth:
             touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
+    def runner_receipt_principal(self, c, who, aid):
+        """Read a runner's saved receipt as its original principal, even after the lease ends."""
+        from . import task_privacy as privacy
+        if who.role != "runner" or not aid:
+            return who
+        attempt = c.execute(
+            "SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+            "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
+            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
+            (aid, who.runner_id, who.runner_id)).fetchone()
+        if not attempt:
+            raise Problem("privacy", "This execution is no longer assigned to this computer", 403)
+        principal = Identity("bot:" + attempt["bot_id"], "bot", runner_id=who.runner_id, attempt_id=aid)
+        if attempt["acting_person"]:
+            person = self.chat_person(c, attempt["acting_person"], attempt["bot_id"], aid, who.runner_id)
+            if person is None:
+                raise Problem("privacy", "The person can no longer run this page request", 403)
+            principal = replace(person, task_actor="")
+        if not privacy.attempt_readable(c, privacy.actor(principal), aid):
+            raise Problem("privacy", "This execution is no longer available", 403)
+        if attempt["acting_person"]:
+            for task_id in privacy.attempt_tasks(c, aid):
+                self.task(c, principal, task_id)
+        return principal
+
     def assistant_principal(self, c, attempt):
         """The person an assistant chat turn acts for, as that person and nobody more, or None.
 
@@ -448,13 +473,17 @@ class Auth:
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
         row = c.execute(
-            "SELECT v.owner_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "SELECT v.owner_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
             "AND v.room_key=? AND m.sender_id=v.owner_id AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key)).fetchone()
         if not row:
             return None
-        return self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        person = self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
+        if person and isinstance((H._json(row["refs"], {}) or {}).get("make_page"), dict):
+            # The page request acts with the person's full rights; the attempt still identifies its Assistant.
+            return replace(person, task_actor="")
+        return person
 
     def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
         """The person a turn of their chat bot (`bot`: the Assistant) acts as, with their rights and nobody more, or

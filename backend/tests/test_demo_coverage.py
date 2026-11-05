@@ -157,6 +157,18 @@ def test_task_pages_have_demo_data(api):
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
 
 
+def test_a_demo_task_has_a_page_made_by_its_person(api):
+    pages = api.get("/api/v2/pages?bot=coo").json()["pages"]
+    made = next(p for p in pages if p["updated_by"] == "human:ana")
+    pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
+    assert any(p.get("page", {}).get("file_id") == made["file_id"] for p in pins)
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT v.attempt_id,m.refs FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
+                        "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE v.file_id=?",
+                        (made["file_id"],)).fetchone()
+        assert row and made["task_id"] in row["refs"]
+
+
 def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
     assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")

@@ -26263,6 +26263,47 @@
         ]
       }
     },
+    "/api/v2/meetings/recorder": {
+      "get": {
+        "summary": "Your most recently used Tico Recorder, the newest release's version and the download",
+        "operationId": "getMyRecorder",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyRecorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Meetings"
+        ]
+      }
+    },
     "/api/v2/meetings/review": {
       "post": {
         "summary": "Share or dismiss your Pending meetings",
@@ -39511,6 +39552,127 @@
                 ],
                 "title": "TaskFile",
                 "type": "object"
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
+    "/api/v2/tasks/{tid}/make-page": {
+      "post": {
+        "summary": "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins",
+        "operationId": "makeTaskPage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakePage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "get": {
+        "summary": "The caller's latest Make page request: making, made, failed or update_required",
+        "operationId": "getTaskMakePage",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskMakePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
               }
             }
           }
@@ -64010,6 +64172,22 @@
         "title": "MaintenanceUpdate",
         "description": "The schedule, the pause, the monthly judge spend cap and step changes (backend/maintenance.py save_settings and\nsave_step); only what is sent changes."
       },
+      "MakePage": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "MakePage"
+      },
       "MarketAnswers": {
         "properties": {
           "sell": {
@@ -65124,6 +65302,44 @@
           "action"
         ],
         "title": "Moderate"
+      },
+      "MyRecorder": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Your most recently used copy's version; empty when none was seen"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recent": {
+            "type": "boolean",
+            "description": "A copy was seen in the last 30 days"
+          },
+          "latest": {
+            "type": "string",
+            "description": "The newest release's version; empty when unknown"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "download_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url",
+          "last_seen_at",
+          "latest",
+          "recent",
+          "update_available",
+          "version"
+        ],
+        "additionalProperties": true
       },
       "NeedsSummary": {
         "type": "object",
@@ -74991,6 +75207,47 @@
           "cursor",
           "next_offset",
           "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "TaskMakePage": {
+        "type": "object",
+        "properties": {
+          "make_page": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "conversation_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "making",
+                      "made",
+                      "failed",
+                      "update_required"
+                    ]
+                  }
+                },
+                "required": [
+                  "conversation_id",
+                  "message_id",
+                  "state"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "make_page"
         ],
         "additionalProperties": true
       },
