@@ -239,3 +239,14 @@ def test_scoped_task_tools_bootstrap_update_and_read_context(api):
     assert not result.get("error") and not result["result"].get("isError"), result
     assert get(api, "tasks/" + t["id"], token)["task"]["status"] == "doing"
     assert get(api, "tasks/" + t["id"] + "/context", token) == {"pages": [], "meetings": []}
+
+
+def test_unknown_saved_file_ref_survives_the_real_message_writer(api):
+    t, attempt = task_turn(api)
+    unknown = "file-0123456789abcdef01234567@1"
+    with api.app.state.store.transaction() as c:
+        comment = H.task_comment(c, "human:ana", t["id"], "Keep this saved reference", wake=False,
+                                 extra_refs={"files": [unknown]})
+    shown = get(api, "messages/" + comment["id"], attempt["token"])
+    assert shown["refs"]["files"] == [unknown]
+    get(api, "files/" + unknown.split("@")[0], attempt["token"], expected=403)
