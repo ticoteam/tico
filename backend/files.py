@@ -472,7 +472,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
                     not value.get("source") and not value.get("file") and value.get("label") in hidden_titles(tid) or
                     parent in ("if_no_answer", "recommend") and not value.get("source") and
                     value.get("do") in hidden_titles(tid)):
-                return {"removed": True, "label": "A page you can't open"}
+                return None if parent == "recommend" else {"removed": True, "label": "A page you can't open"}
             direct = page_references({k: v for k, v in value.items() if isinstance(v, str) and not v.startswith(("{", "["))},
                                      c, file_ids=context) & denied.keys()
             if direct:
