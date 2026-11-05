@@ -17,6 +17,10 @@ software: a web frontend your team builds, a script, another service. This page 
   connection is safe. The same key with a different body is `409 idempotency_conflict`.
   Message receipts saved before an upgrade still accept the same request when the earlier server hashed its
   resolved Home. The retry uses the saved room and recipient, even if routing has since changed.
+- **Bot asks to people:** a task, handoff, wait or question that fails the person’s asking criteria returns
+  `422 ask_refused`, with the reason and fix in `error.detail`. Nothing is created or changed, and it counts toward
+  no quarantine or org-rule hold. A progress note is refused with instructions to post an update. Chores use the
+  main ask budget. Merged repeats and fail-open behavior are unchanged.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers

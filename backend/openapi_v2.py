@@ -2941,6 +2941,12 @@ def spec(app):
         if not path.startswith("/public/roadmaps/") and path not in ("/healthz", "/auth/login", "/auth/token"):
             responses["401"] = {"description": "Not signed in", **ERROR}
             responses["422"] = {"description": "Invalid request or rule: error.code and field-specific error.detail", **ERROR}
+        if method == "post" and path in (
+                "/api/v2/tasks", "/api/v2/tasks/{tid}", "/api/v2/tasks/{tid}/comments",
+                "/api/v2/messages", "/api/v2/conversations/{cid}/messages"):
+            responses["422"] = {**ERROR, "description": "ask_refused: a bot ask fails the person's asking criteria; "
+                                "detail gives the reason and fix. Nothing is created or changed; no quarantine "
+                                "or org-rule hold. Progress notes should be posted as updates."}
         if path == "/auth/token":
             op["requestBody"] = TOKEN_REQUEST
             op["security"] = []

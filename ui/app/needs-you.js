@@ -6,7 +6,7 @@
 // What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
 // NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
 const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Sign in or connect'], ['review', 'Review and send'],
-  ['hands', 'Hands needed'], ['do', 'Do']];
+  ['do', 'Do']];
 const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
@@ -391,57 +391,9 @@ async function staleDecide(button, path, body) {
     }
   }
 }
-// Filtered for you: what the ask filter kept off your plate today (backend/ask_ingest.py), folded at the foot of Needs
-// you. Let it through puts an item on your plate in one click and tells the bot that asked.
-const ASK_FILTER_WHY = {
-  status: 'A progress note: nothing to decide', covered: 'Same as one you already have open',
-  unclear: 'Doesn\u2019t say what to decide', own_work: 'Work a bot can do itself',
-  chores_full: 'Your hands-only chores were full', criteria: 'Over your budget and meets none of your lines',
-  recommends: 'Over your budget, without a recommendation or a reason it can\u2019t wait',
-  urgent_only: 'Your plate is full and it isn\u2019t urgent',
-};
-const ASK_FILTER_OUTCOME = {sent_back: 'Sent back', fyi: 'FYI', merged: 'Merged'};
-async function askFilteredLoad(state) {
-  const r = await v2Get('/v2/ask-ingest/filtered?hours=24');
-  if (TASKS_ST !== state) return;
-  const items = r?.items || [];
-  if (JSON.stringify(items) === JSON.stringify(state.filtered || [])) return;
-  state.filtered = items;
-  tasksRender(state);
-}
-function askFilteredRow(it) {
-  const done = !!it.let_through_at;
-  const what = ASK_FILTER_OUTCOME[it.would] || 'Filtered';
-  const title = it.task ? `<a href="#/task/${encodeURIComponent(it.task)}">${esc(it.title || 'Untitled')}</a>` : esc(it.title || 'A question');
-  const act = done ? '<span class="muted">Let through</span>'
-    : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
-  return `<div class="tl-filtered-row" role="listitem">
-    <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
-    <span class="tl-filtered-act">${act}</span></div>`;
-}
-function askFilteredHTML(state) {
-  const items = state?.filtered || [];
-  if (!items.length) return '';
-  return `<details class="tl-group tl-filtered" data-group="filtered"><summary class="tl-ghead"><span class="tl-gname">Filtered for you</span>
-      <span class="tl-gcount tnum">${items.length}</span><span class="spacer"></span>
-      <a class="tl-gchat" href="#/settings/tasks" data-ask-filter-settings>What bots may put on you</a></summary>
-    <div class="tl-rows" role="list" aria-label="Filtered for you">${items.map(askFilteredRow).join('')}</div></details>`;
-}
-document.addEventListener('click', async ev => {
-  const button = ev.target.closest?.('[data-let-through]');
-  if (!button) return;
-  button.disabled = true;
-  try {
-    await post(`/v2/ask-ingest/items/${encodeURIComponent(button.dataset.letThrough)}/let-through`);
-    toast('On your plate; the bot that asked is told');
-    await v2Refresh();
-    if (TASKS_ST && isTasksRoute(S.route)) { await tasksLoad(TASKS_ST); }
-  } catch (e) {
-    toast(e.message || 'Not let through', true);
-    button.disabled = false;
-  }
-});
+// The Tasks page still calls this loader; keep its entry point inert until that caller is retired.
+async function askFilteredLoad() {}
+
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.

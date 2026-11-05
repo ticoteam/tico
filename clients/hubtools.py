@@ -681,7 +681,8 @@ def tag_update(api, args):
       "no ids, hashes, file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool "
       "trial for Thursday? If yes, I'll send the invite.\" Details go below it (a ticket on a custom "
       "type's board is exempt; asks stay on General). `dry_run` reports the "
-      "checks a create would fail and writes nothing.",
+      "checks a create would fail and writes nothing. A person’s asking criteria can refuse the write as "
+      "ask_refused, with the reason and fix; no task is created. Post progress as an update.",
       {"owner": _s("Who does it: a bot slug, a person id, or `me`"),
        "title": _s("Task title: General uses plain words without reference numbers or all-caps; custom types keep board references"),
        "body": _s("The details", default=""),
@@ -932,7 +933,8 @@ def task_ask(api, args):
       "done. One decision per task; write the question so it makes sense on its own. Each option says what happens "
       "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and each option's "
       "label, description and then line carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
-      "refused with what to fix. One open question per topic: "
+      "refused with what to fix. The person’s asking criteria can also refuse it as ask_refused; nothing is created. "
+      "Post progress as an update. One open question per topic: "
       "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
       "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
       {"question": _s("The question, readable with no other context", maxLength=300),

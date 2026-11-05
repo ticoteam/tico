@@ -875,8 +875,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
         rc = rule_check(who, "task_question", question_text(body, review_text),
                         lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
-        # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
-        # withdrawn as soon as it is asked and the task does not wait on the person.
+        # Ask ingest (backend/ask_ingest.py): judged before the write. A refused question is
+        # rolled back with its task, attachments and wait.
         with store.read() as c:
             retry = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
         ingest = None if org_rule_check.holds(rc) or retry else question_ingest(who, body)

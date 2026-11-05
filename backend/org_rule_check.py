@@ -1916,7 +1916,9 @@ def install(app, store, auth, mutate):
                     ingest = prepare[hold["operation"]](store, ident, stored.get("replay") or {})
                 except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send
                     LOG.warning("Hold replay preflight failed: %s", type(exc).__name__)
-        return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience))
+        from . import ask_ingest
+        return ask_ingest.judged(store, ingest, lambda: mutate(
+            request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience)))
 
     @app.post("/api/v2/rule-holds/{hold_id}/appeal")
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):
