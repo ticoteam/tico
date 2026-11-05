@@ -102,7 +102,7 @@ def test_reparenting_cannot_turn_an_existing_blocker_into_an_ancestor(c):
 
 
 @pytest.mark.parametrize("state", ["waiting", "reserved"])
-def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
+def test_worktree_wait_is_visible_and_keeps_its_task_waiting(c, state):
     task = create(c, "Build task fix")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
     WW.ensure(c)
@@ -113,17 +113,17 @@ def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
     detail = H.wait_detail(c, row)
     assert detail and "worktree" in detail["why"] and "acme/product" in detail["why"]
     assert H.waiting_for(c, row) == detail["why"]
-    assert H.sweep_stranded(c, at=AT) == []
     assert H.task(c, task["id"])["status"] == "waiting"
     c.execute("UPDATE worktree_waits SET state='canceled' WHERE id='wait'")
     assert H.wait_detail(c, row) is None
 
 
 @pytest.mark.parametrize("status", ["done", "declined", "closed"])
-def test_finishing_bot_task_retires_only_its_generated_person_ask_cards(c, status):
+def test_finishing_bot_task_closes_subtasks_and_declining_retires_only_generated_asks(c, status):
     parent = create(c, "Prepare export")
     card = H._ask_in_subtask(c, "bot:cmo", parent, "human:ana", "Which format should the export use?")
-    ordinary = create(c, "Independently check export", owner="human:ana", parent_id=parent["id"])
+    ordinary = H.task_create(c, "bot:cmo", "Independently check export", "Synthetic regression fixture", "human:ana",
+                             parent_id=parent["id"], lint=False)
     assert card["id"] in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
     if status == "closed":
         H.task_close(c, "human:ana", parent["id"])
@@ -131,23 +131,26 @@ def test_finishing_bot_task_retires_only_its_generated_person_ask_cards(c, statu
         H.task_update(c, "bot:cmo", parent["id"], status=status)
     assert H.task(c, card["id"])["status"] == "closed"
     assert card["id"] not in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
-    assert H.task(c, ordinary["id"])["status"] == "open"
+    assert H.task(c, ordinary["id"])["status"] == ("open" if status == "declined" else "closed")
     assert not H.open_task_asks(c, H.task(c, card["id"]))
 
 
-def test_shared_person_card_stays_until_every_dependent_task_finishes(c):
+def test_finishing_parent_closes_shared_person_card_and_releases_other_dependents(c):
     root = create(c, "Prepare campaign")
     first = create(c, "Prepare campaign export", parent_id=root["id"])
     second = create(c, "Prepare campaign report", parent_id=root["id"])
     card = H._ask_in_subtask(c, "bot:cmo", first, "human:ana", "Which format should we use?")
     assert H._ask_in_subtask(c, "bot:cmo", second, "human:ana", "Confirm the report format?")["id"] == card["id"]
     H.task_update(c, "bot:cmo", first["id"], status="done")
-    assert H.task(c, card["id"])["status"] == "open"
+    assert H.task(c, card["id"])["status"] == "closed"
+    assert TR.parent_of(c, card["id"]) == first["id"]
+    assert H.task(c, second["id"])["status"] in H.ACTIVE_STATUSES
+    assert TR.blocker_ids(c, second["id"]) == []
     H.task_update(c, "bot:cmo", second["id"], status="done")
     assert H.task(c, card["id"])["status"] == "closed"
 
 
-def test_milestone_wake_resumes_waiter_without_later_stranded_wake(c):
+def test_milestone_wake_resumes_waiter_once(c):
     typ = H.type_create(c, "human:ana", "Delivery", [{"name": "Build", "status": "doing"}], mover=True)
     task = create(c, "Build after merge", type=typ["id"], step="Build")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
@@ -158,7 +161,6 @@ def test_milestone_wake_resumes_waiter_without_later_stranded_wake(c):
     assert row["status"] == "doing" and row["step_id"] == before["step_id"]
     assert row["version"] > before["version"]
     count = c.execute("SELECT count(*) FROM messages").fetchone()[0]
-    assert H.sweep_stranded(c, at=H.shift(AT, hours=3)) == []
     assert MW.happened(c, "pr_merged", "acme/product#1") == []
     assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == count
 
@@ -180,7 +182,6 @@ def test_milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
     assert row["status"] == "open" and row["step_id"] == typ["steps"][0]["id"]
     assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cmo'").fetchone()[0] == before + 1
     assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo'").fetchone()[0] == other + 1
-    assert H.sweep_stranded(c, at=H.shift(AT, hours=3)) == []
 
 
 def test_milestone_keeps_waiting_when_another_wait_remains(c):

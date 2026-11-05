@@ -51,8 +51,8 @@ const {unrouted} = require('./support/routes.cjs');
         calls.push({bot: null, what: 'shared', body: req.postDataJSON()});
         return json({size: 'default', always_on: false, bots: ['scout']});
       }
-      if (p === '/api/v2/cloud-machines') return json({offered: true, caps: {}, sizes: [['small', 1], ['default', 2], ['large', 4], ['xlarge', 8]]
-        .map(([name, cpu]) => ({name, cpu, memory_gb: cpu * 2, usd_per_hour: cpu * 0.05, start_usd: 0.04, idle_stop_s: 300}))});
+      if (p === '/api/v2/cloud-machines') return json({offered: true, caps: {}, sizes: [['small', 2, 0.0225], ['default', 4, 0.045], ['large', 8, 0.09], ['xlarge', 16, 0.25]]
+        .map(([name, cpu, usd_per_hour]) => ({name, cpu, memory_gb: cpu * 2, usd_per_hour, start_usd: 0.04, idle_stop_s: 300}))});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
       if (p === '/api/employees') return json(bots);
@@ -103,6 +103,9 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(o => o.value)), ['cloud-shared', 'cloud-own', 'r1']);
     // HQ's sizes come in with their prices; Size, Pause after and Always on wait for Save bot.
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-cloud-size] option')?.textContent.includes('CPU'));
+    assert.deepEqual(await editor.locator('[data-bot-cloud-size] option').evaluateAll(options =>
+      options.map(o => o.textContent.match(/\$([\d.]+)\/h/)[1])), ['0.0225', '0.045', '0.09', '0.25'],
+    'hourly rates keep fractions of a cent so the size choice shows the price HQ charges');
     await editor.locator('[data-bot-cloud-size]').selectOption('large');
     await editor.locator('[data-bot-cloud-pause]').fill('45');
     await editor.locator('[data-bot-cloud-pause]').dispatchEvent('change');

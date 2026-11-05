@@ -248,7 +248,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
                        "NOT LIKE 'computer-profiles:%'") == [
         "access", "access_bot_limit", "bot-chats-to-home", "bot_access", "ceo-bot", "company-turn-incident",
         "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
-        "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
+        "idempotency_messages.ready", "inbox-only-runners", "inbox_prompt_repair", "librarian_wording35",
+        "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text", "stale_review_repair", "strategy-bot", "task_session_default",
@@ -421,6 +422,11 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         (['unsupported'], False),
         ({'inputs': ['missing-fixture-message'], 'task': public}, True),
         ({'turn_id': world['attempt']['id']}, True),
+        ({'task': [public, public]}, True),
+        ({'task_id': [public, 7]}, False),
+        ({'task': [public, 'unknown-fixture-task']}, False),
+        ({'task': [public, hidden['id']]}, False),
+        ({'task': []}, False),
     ]
     with store.read() as c:
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -1125,3 +1131,44 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
         finally:
             conn.close()
     assert access_reads <= 1, access_reads
+
+
+def test_a_message_whose_task_ref_is_a_list_is_visible_only_when_every_listed_task_is_known_and_undenied(api, world):
+    """The SQL gate and ReadIndex refuse a list that names an unknown, denied or non-text id, or nothing at all, and
+    accept one whose every id is known and undenied, as a scalar is accepted."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden list source', '', 'bot:finance', private=True, lint=False)
+        public = world['coo_task']['id']
+        listed = {'known': [public], 'known-twice': [public, public], 'unknown-second': [public, 'unknown-fixture-task'],
+                  'denied-second': [public, hidden['id']], 'empty': [], 'non-text': [public, 7]}
+        ids = {name: H.say(c, 'bot:ops', 'human:ana', 'List ' + name, conversation_id=world['ana_room'],
+                           refs={'task': tasks})['id'] for name, tasks in listed.items()}
+    # Read as the bot whose granted room holds them: the private task is denied to it, the public one is not.
+    visible = column(api, "SELECT id FROM messages WHERE id IN (" + ",".join(f"'{i}'" for i in ids.values()) + ")",
+                     world["attempt"]["token"])
+    assert visible == sorted(ids[name] for name in ('known', 'known-twice'))
+
+
+def test_an_event_or_blob_on_a_message_whose_task_list_cannot_be_read_is_hidden_and_the_query_still_runs(api, world):
+    """A message whose task list is empty or names a missing task has no readable provenance. Its event and its
+    attachment are hidden, and the query returns the other rows instead of failing on the unreadable one."""
+    store = api.app.state.store
+    public = world['coo_task']['id']
+    with store.transaction() as c:
+        empty = H.say(c, 'bot:ops', 'human:ana', 'List empty', conversation_id=world['ana_room'], refs={'task': []})['id']
+        missing = H.say(c, 'bot:ops', 'human:ana', 'List missing', conversation_id=world['ana_room'],
+                        refs={'task': [public, 'unknown-fixture-task']})['id']
+        good = H.say(c, 'bot:ops', 'human:ana', 'Scalar', conversation_id=world['ana_room'], refs={'task': public})['id']
+        for mid in (empty, missing, good):
+            H.event(c, 'human:ana', 'fixture.note', mid, {'text': 'Note on ' + mid})
+        for bid, mid in (('blob-list-empty', empty), ('blob-list-missing', missing), ('blob-scalar', good)):
+            c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+                      (bid, 'human:ben', bid, 1, bid + '.txt', 'text/plain', '2026-11-04T00:00:00Z'))
+            c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (mid, bid))
+    # The owner reads the audit trail through the event gate; the three notes are the only fixture rows with that action.
+    assert column(api, "SELECT target FROM events WHERE action='fixture.note' AND target IN ('"
+                  + "','".join((empty, missing, good)) + "')") == [good]
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'") == ['blob-scalar']
+    # The bot reads the same rows through its own gate and reaches the scalar message's blob too.
+    assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'", world["attempt"]["token"]) == ['blob-scalar']

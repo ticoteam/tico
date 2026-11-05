@@ -287,3 +287,16 @@ def test_a_crash_after_the_reply_then_an_owner_change_keeps_the_reply_in_the_rec
     assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [
         ("draft_reply", "reply", True), ("create_task", "destination", True)]
     assert resumed["status"] == "ok"
+
+
+def test_the_answer_format_is_the_last_thing_a_choose_turn_is_asked_after_a_long_message():
+    """The format comes after the message's data blocks, never templated or clipped with them, so a long message
+    cannot push the one JSON answer out of the turn (`_choice_tail`)."""
+    long_body = "Board pack notes, line by line. " * 400
+    f = flow(llm(choosing()), destinations=DESTS)
+    services = Services()
+    run = E.execute(f, {"message": {**MESSAGE["message"], "body": long_body}}, services)
+    assert run["status"] == "waiting", run
+    prompt = services.turns[0]["prompt"]
+    assert prompt.endswith(E._choice_tail(f, choosing())) and prompt.count('"to": "<id>"') == 1
+    assert len(prompt) <= E.F.MAX_PROMPT + len(E._choice_tail(f, choosing()))

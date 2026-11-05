@@ -72,7 +72,7 @@ def close_tasks(c, row, reason):
     # the container first so deadline cancellation never starts an ordinary turn.
     for key in ('parent_task_id', 'check_task_id'):
         if row[key]:
-            H.task_close(c, H.KEEPER, row[key], note=reason, quiet=True)
+            H.task_close(c, H.KEEPER, row[key], note=reason, quiet=True, strict=False)
 
 
 def close_pass(c, row, reason):

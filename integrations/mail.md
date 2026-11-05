@@ -71,7 +71,7 @@ $HUB_DIR/scripts/mail.sh attachments 18f2... --format json           # reference
 $HUB_DIR/scripts/mail.sh attachment 18f2... a1 --out /private/dir/file.pdf
 $HUB_DIR/scripts/mail.sh label add 18f2... hub/needs-owner           # label remove, archive, mark-read, star, triaged
 $HUB_DIR/scripts/mail.sh draft --to person@example.org --subject "..." --body-file out/draft.txt --issue 128
-$HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128 --attach out/letter.pdf   # opt-in by policy; a file in the bot's folder; sending needs --approval-issue
+$HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128 --attach out/letter.pdf   # a file in the bot's folder; normal send permissions apply
 $HUB_DIR/scripts/mail.sh discard r-882... --issue 128                # only an unsent draft you made
 $HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131]
 $HUB_DIR/scripts/mail.sh reply --thread 18f2... --body-file out/reply.txt --issue 128   # draft, then send if allowed
@@ -114,8 +114,12 @@ policy refused you. Add `--json` for structured output.
   Tico message telling you to send). With the flag false every send is a draft unless that
   approval is a full yes.
 - Caps: sends per employee per day, a 14-day per-recipient cooldown, one external recipient per
-  message, no Cc or Bcc outside example.com, no attachments unless the policy allows them, and a
-  blocklist of addresses bots never email.
+  message, no Cc or Bcc outside example.com, and a blocklist of addresses bots never email.
+- Attachments use the same send permissions and approvals as the message without files. An owner's
+  Tico message telling you to send covers its files. Files must be in your own bot folder, exclude
+  secrets and total at most 25 MB; drafts with files are reviewed again at send time. Legacy registry
+  `allow_attachments` keys have no effect. If a Tico send approval names files, its draft id and exact
+  set of file names, sizes and sha256 hashes must still match; an approval naming no files does not constrain them.
 - Touch only the labels the hub owns (`hub/triaged/<slug>`, `hub/handled/<slug>`,
   `hub/drafted`, `hub/needs-owner`, `hub/marketing`, `hub/notification`, `hub/noise`) and
   Gmail's INBOX, UNREAD, STARRED. Everything else is the owner's filing.

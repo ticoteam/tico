@@ -502,8 +502,8 @@ def updating(c):
 def operation_issues(c, who, auth):
     """Human-facing failures derived from durable state; no external alarm service.
 
-    Every issue says whether a person has to act (`needs_person`). The UI opens those in front of
-    the person wherever they are; the rest stay in Settings for quieter diagnosis or review.
+    Every issue says whether a person has to act (`needs_person`); only those light the account's status dot.
+    Stopped runs and quarantined bots are BotOps's to review, so they say no, and Settings > Health lists them.
     """
     from .agents import still_reporting
     issues, seen = [], set()
@@ -546,10 +546,11 @@ def operation_issues(c, who, auth):
         location = machine(c, slug)
         mac_offline = bool(location.get("machine") and not location.get("online") and not location.get("agent"))
         status = privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}
+        # A quarantine is repeated refusals (backend/hubdb.py rule 8); BotOps gets the refused-writes review for it.
         if bot["state"] == "quarantined" or status.get("state") == "quarantined":
             add("bot", bot["display_name"] + " needs attention",
                 status.get("focus") or "The bot is " + (status.get("state") or bot["state"]),
-                bot=slug, needs_person=True,
+                bot=slug, needs_person=False,
                 action="Review the refused action and interrupted work, then resume the bot on its page.")
         elif status.get("state") == "crashed" and not mac_offline:
             add("bot", bot["display_name"] + " needs attention",
@@ -653,9 +654,9 @@ def operation_issues(c, who, auth):
                     "Tico's Docker runner, then review its stopped run.")
             elif waiting or left:
                 # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
-                # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
-                # One short line per run, with its own Try again / Don't retry, instead of a paragraph of quoted
-                # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
+                # it: only a review lets it go. BotOps holds that review (its held-run task), so the person's status
+                # dot stays out of it and Health lists it. One short line per run, with its own Try again / Don't
+                # retry: the detail says only why they stopped and what waits; the rows name them.
                 rows, run_count = stopped_rows(c, who, auth, slug)
                 count = run_count or uncertain
                 can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
@@ -682,11 +683,11 @@ def operation_issues(c, who, auth):
                            "timeout": f"Its computer stopped answering during {these}"}[cause]
                     why += ", not a bug. "
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
-                    why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
+                    why + behind, bot=slug, needs_person=False, action="review", held_back=waiting, held_tasks=waiting_on,
                     runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
             elif (late := unreviewed(c, who, slug))[0]:
-                # Two hours with no decision: a person's now, on Health and in its operator's Needs you, whoever else
-                # was asked (Dev 543). Others who read the bot still see it on Health, not in their Needs you.
+                # Two hours with no decision: Health lists it for whoever may read the bot, and BotOps's held-run review
+                # decides it. Nobody is interrupted for it, so only the operator's severity differs.
                 count, hours = late
                 them = "it" if count == 1 else "them"
                 newer = uncertain - count
@@ -700,7 +701,7 @@ def operation_issues(c, who, auth):
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped run{'' if count == 1 else 's'} "
                     f"waiting {hours} h",
                     f"Nobody has decided {them} yet.{more}{queued_note} Choose Try again or Don't retry.",
-                    bot=slug, severity="error" if operator else "warning", needs_person=operator, action="review",
+                    bot=slug, severity="error" if operator else "warning", needs_person=False, action="review",
                     waiting_hours=hours, runs=rows, more_runs=max(0, run_count - len(rows)), can_review=can_review)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
@@ -809,6 +810,14 @@ def operation_issues(c, who, auth):
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
                 needs_person=True, action="Check the key in Settings > Google.")
+        sync_owners = google_workspace.workspace_sync_owners(c)
+        for box in google_workspace.workspace_mailboxes(c):
+            if box["address"] not in sync_owners:
+                add("google_workspace", box["address"] + " has no sync computer",
+                    "Mail and calendar for " + box["address"] + " are not syncing because no eligible computer is online.",
+                    needs_person=False, severity="warning",
+                    action="Bring an isolated company server online." if box["kind"] == "shared" else
+                           "Bring the person's computer, their Assistant's host or an isolated company server online.")
         labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
         hosts = google_rights.inbox_hosts(c)
         for grant in c.execute("SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
@@ -1096,7 +1105,7 @@ KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "
              # mention or an unread DM is a person's to read.
              "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
-# for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
+# for the person to do on it until the bot restates it (its bot's task roundup lists the restate, backend/task_roundup.py).
 
 
 _VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
@@ -1963,6 +1972,20 @@ def needs_bots(items, me):
     return counts
 
 
+def needs_kinds(items):
+    """Whole-list counts by kind: Tasks leaves thread attention in Inbox, even before every page is read."""
+    counts = {}
+    for it in items:
+        counts[it["kind"]] = counts.get(it["kind"], 0) + 1
+    return counts
+
+
+def needs_folded_ids(items):
+    """Task ids represented by another card, including cards on unread pages, so Tasks counts each blocker once."""
+    return sorted({str(f["id"]) for it in items for f in it.get("folded", [])}
+                  | {str(tid) for it in items for tid in it.get("merged", [])})
+
+
 def needs_actor(it, me):
     """The teammate one Needs-you item goes with (needs_bots), or None."""
     actor = None
@@ -2262,7 +2285,7 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         from . import cloud_machines
         # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
-        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
+        cloud_rows = cloud_machines.visible_rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one attempts_bot_settled seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
             "SELECT b.id,(SELECT t.id FROM attempts t WHERE t.bot_id=b.id AND t.settled_at IS NOT NULL "
@@ -2599,7 +2622,7 @@ def install_views(app, store, auth, mutate, task_view):
             cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
                                          "shared": r["bot"] == cloud_machines.SHARED,
                                          "size": r["machine_size"] or r["size"], "state": r["state"]}
-                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
+                        for r in cloud_machines.visible_rows(c).values() if r["runner_id"]}
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
@@ -3004,7 +3027,9 @@ def install_views(app, store, auth, mutate, task_view):
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
-        each bot's count over the whole list; a cursor from an older version starts again from the top (`restart`).
+        each bot's count over the whole list; `by_kind` counts each kind and `folded_task_ids` names tasks represented
+        by other cards over the whole list, including unread pages.
+        A cursor from an older version starts again from the top (`restart`).
         Without either, the whole list. Every page is cut from the list built whole, so its `version` and each
         item's place are the same as the full read's and the live event's."""
         who = request.state.identity
@@ -3025,7 +3050,8 @@ def install_views(app, store, auth, mutate, task_view):
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
                         "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
-            out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
+            out = {"actor": who.actor, "count": len(items), "by_kind": needs_kinds(items),
+                   "folded_task_ids": needs_folded_ids(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)

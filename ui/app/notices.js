@@ -171,11 +171,22 @@ function renderFeedbackAsk() {
 }
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
 // moment the server stops asking for one. Everyone else never sees it. On the wizard itself the rest of the app's
-// pages and What's new are not shown until setup is done: a new install has nothing there yet (ui/styles/sidebar.css).
+// pages and What's new are not shown until setup is done: a new install has nothing there yet (html.in-setup,
+// ui/styles/sidebar.css). Until the config is read, both stay as ui/theme.js marked them from this browser's last
+// answer; the in-setup mark waits for the first route() too, since a new install's boot sends it to the wizard after
+// its config is read. route() marks it before Ask's button syncs, so a tap made before /me never opens Ask over the
+// wizard, and a change here syncs Ask (ask-panel.js askAway).
+function setupMark() {
+  if (!CONFIG_READ || !LAST_ROUTE) return;
+  const setup = !!S.config.onboarding_needed && S.route === WELCOME, root = document.documentElement;
+  if (root.classList.contains('in-setup') === setup) return;
+  root.classList.toggle('in-setup', setup);
+  askSync();
+}
 function renderOnboardingNav() {
-  const link = $('#nav-welcome');
-  if (link) link.hidden = !S.config.onboarding_needed;
-  document.body.classList.toggle('in-setup', !!S.config.onboarding_needed && S.route === WELCOME);
+  if (!CONFIG_READ) return;
+  rdNavShow('welcome', !!S.config.onboarding_needed);
+  setupMark();
   renderUsageNotice();
 }
 // The sidebar's one version row, shared with "Updated to v…" (ui/changelog.js): "Update to v…" while the server

@@ -335,6 +335,8 @@ REVIEWED = {
     "PUT /api/v2/access/rules": "refused by the keys on its body (credential and Assistant rules, in admits_on_turn); the walk sends no body",
     "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
     "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+    "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
+    "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
 
 
@@ -393,7 +395,9 @@ def _template_tools():
                 words.append(token)
             fn = fn_of(words)
             if fn:
-                tools.add(remotecli.tool_name(fn))
+                name = remotecli.tool_name(fn)
+                # The CLI's aliases dispatch to these tools, not to a tool named after the command's spelling.
+                tools.update(hubtools.CLI_TOOL_ALIASES.get(name, (name,)))
     return tools
 
 

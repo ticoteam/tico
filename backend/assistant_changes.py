@@ -347,6 +347,11 @@ def restore_automation(c, who, aid, before):
     if not current:
         raise Problem("not_found", "that automation no longer exists", 404)
     now_flow = json.loads(current["flow"])
+    from . import assistant_routines
+    if (who.via == "assistant" and not who.confirmed and before.get("enabled")
+            and (assistant_routines.message(before) or assistant_routines.message(now_flow))):
+        raise Problem("confirm_required", "Restoring an active inbox routine needs a Confirm card; propose its "
+                      "earlier flow with PATCH /api/v2/automations/" + aid, 403)
     if not (automations.may_change(c, who, now_flow) and automations.may_change(c, who, before)):
         raise Problem("forbidden", "you may not change this automation", 403)
     automations._save(c, who.actor, aid, before, now_flow, new_version=True)

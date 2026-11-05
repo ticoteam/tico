@@ -264,7 +264,8 @@ CREATE TABLE IF NOT EXISTS calendar_actions(
 CREATE INDEX IF NOT EXISTS calendar_actions_queue ON calendar_actions(status,created_at);
 CREATE TABLE IF NOT EXISTS mail_mailboxes(
  address TEXT PRIMARY KEY, person_id TEXT, runner_id TEXT, synced_at TEXT,
- message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT);
+ message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT,
+ watching_since_at TEXT);
 CREATE TABLE IF NOT EXISTS mail_agent_instructions(
  bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -1139,8 +1140,6 @@ class Store:
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history
             c.executescript(_memory_history.SCHEMA)
-            from . import learnings as _learnings
-            c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
@@ -1219,9 +1218,10 @@ class Store:
             c.executescript(_task_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
             c.executescript(_bookkeeper.SCHEMA)
-            from . import health_monitor as _health_monitor
-            c.executescript(_health_monitor.SCHEMA)
-            # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
+            from . import maintenance_health as _maintenance_health
+            c.executescript(_maintenance_health.SCHEMA)
+            # How bad a finding is (a rise is a change), and whether a noisy check has been seen once and waits for its
+            # confirmation run (backend/maintenance_steps/check_health.py). Only a filed finding is listed or reported.
             H.add_column(c, "health_findings", "last_woke_at", "TEXT NOT NULL DEFAULT ''")
             H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
             # The production checks' last answers and alert tasks (backend/invariants.py).
@@ -2067,6 +2067,13 @@ class Store:
                 # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
                 Redesign.repair_stale_review(c)
+                # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
+                # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
+                # failure here is logged, never raised: the repair is tried again at the next start.
+                try:
+                    Redesign.repair_inbox_prompts(c)
+                except Exception:  # noqa: BLE001 - startup goes on
+                    logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION

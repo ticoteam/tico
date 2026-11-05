@@ -184,7 +184,7 @@ def retry(store, service, row, detail):
             settings = getattr(service, "settings", None)
             H.task_update(c, H.KEEPER, row["id"], type=detail.get("type"), step=detail["step"], review_prs=snapshots,
                           review_reader=detail.get("by") or H.KEEPER,
-                          receipt_owner=Access.load_owner(c, settings)["email"] if settings else None)
+                          receipt_owner=Access.load_owner(c, settings)["email"] if settings else None, strict=False)
         except H.Refused as exc:
             c.execute("ROLLBACK TO move_retry")
             c.execute("RELEASE move_retry")

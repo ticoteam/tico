@@ -95,8 +95,7 @@ Never refused:
 - a held write (a message, note or task) a person chose to Send anyway: it passed reach before it was held;
 - built-in helpers off the chart, as sender or receiver: BotOps, Task Manager, Goal Manager, Librarian, the Assistant
   (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`) and the support helper. Anyone
-  reaches them. The Health Monitor is a built-in bot too, but it is checked like any bot: its tasks to people far from
-  it are what nearby reach is for.
+  reaches them.
 
 The refusal is a 409 the bot reads once and acts on, never a retry:
 

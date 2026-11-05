@@ -8,7 +8,6 @@ JOBS = {
                        "nothing is listed on the task roundup after a day."),
     "due_reminders": ("open", "Tell a bot its task is due. People get no reminder."),
     "snooze_ends": ("open", "Bring snoozed tasks back on their date."),
-    "still_wanted": ("open", "Ask the task's person once whether a task idle for a week is still wanted."),
     "ask_deadlines": ("open", "When a bot question passes its deadline, go ahead on its default answer, or let it expire."),
     "approval_expiry": ("open", "Remove approvals and asks nobody will act on from Needs you."),
     "still_needed": ("open", "Weekday mornings, send questions unanswered for 2 business days back to their bots."),
@@ -16,7 +15,6 @@ JOBS = {
     "repository_waits": ("open", "Finish tasks waiting on a repository or worktree."),
     "task_manager_report": ("open", "Task Manager: per department, list quiet tasks, overdue asks, review tickets without a PR and merged work whose step did not move."),
     "bookkeeper_check": ("open", "Bookkeeper: read its Finance work queue; open one Books check task only when something is new."),
-    "stall_triage": ("open", "Not run: stall checks no longer wake a bot about one quiet task, so Decide reads none."),
     "stale_review": ("after", "Suggest what to do with open tasks that look finished or forgotten."),
 }
 

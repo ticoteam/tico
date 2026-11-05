@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend import health_monitor, login_holds
+from backend import maintenance_health, login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
 from backend import bot_settings as BS
@@ -844,7 +844,7 @@ def test_a_model_at_capacity_holds_the_login_minutes_and_a_later_real_quota_is_s
         assert H.status(c, "ops")["focus"] == ("Primary fake temporary model capacity at 03:04; retrying after "
                                                "2026-10-23 03:06 UTC")
         # A busy moment is not a spent plan: Health does not say the bot stopped on a subscription limit for it.
-        assert not [f for f in health_monitor._bot_checks(c, api.app.state.store.settings)
+        assert not [f for f in maintenance_health._bot_checks(c, api.app.state.store.settings)
                     if f["check_id"] == "limited_no_fallback"]
     at(monkeypatch, "2026-10-23T03:06:46.000000Z", api)
     ready(api, machine, ["ops"])

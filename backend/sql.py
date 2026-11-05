@@ -390,17 +390,21 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
-    if owner:
-        meetings = "1"
-    elif bot or not who.email:
-        meetings = "0"
+    # A meeting saved "Participants only" (media.participants_only) is read only by the people it names, owner too.
+    audience = "coalesce(json_extract(metadata,'$.audience'),'')='participants'"
+    if bot or not who.email:
+        meetings = f"NOT ({audience})" if owner else "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
-                    "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
-                    f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
-                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
-                    f"WHERE lower(json_extract(value,'$.email'))={email})))")
+        named = (f"EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.audience_emails')) "
+                 f"WHERE lower(trim(value))={email})")
+        meetings = "1" if owner else (
+            f"json_extract(metadata,'$.kind')='meeting' AND ("
+            "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
+            f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
+            "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
+            f"WHERE lower(json_extract(value,'$.email'))={email}))")
+        meetings = f"lower(owner)={email} OR (CASE WHEN {audience} THEN {named} ELSE ({meetings}) END)"
     goals = f"owner_id NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
     admin = who.role == "owner" or auth.bot_admin(who)
@@ -437,7 +441,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
+                      ("1" if owner else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
         "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_settings": bots_visible("bot_id"),
@@ -585,7 +589,7 @@ class Gates:
 
     Where SQLite and Python could read the same JSON differently the clause declines and Python decides: a backslash
     (an escaped string), a repeated key (SQLite reads the first, Python the last), a task given as anything but one
-    string, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
+    string or a list of strings, a string that is itself JSON, a meeting reference, a moved input, and long provenance.
     """
     KEYS = ("task", "task_id", "turn_id", "run", "attempt_id", "answers", "inputs")
 
@@ -606,11 +610,16 @@ class Gates:
                 f"AND substr(s.value,6) IN (SELECT id FROM {self.denied_tasks}))))")
 
     def task(self, refs, key):
-        """`refs.<key>` is absent, or one string naming a task that exists and is not denied."""
+        """`refs.<key>` is absent, one string naming a task that exists and is not denied, or a non-empty array in which
+        every element is such a string. ReadIndex.listed_tasks_known reads a list the same way: any other element, an
+        empty list, or a list naming one unknown or denied task is refused."""
         path = f"'$.{key}'"
+        listed = (f"SELECT 1 FROM json_each({refs},{path}) element WHERE element.type<>'text' OR "
+                  f"element.value NOT IN (SELECT id FROM {self.tasks}) OR element.value IN (SELECT id FROM {self.denied_tasks})")
         return (f"(json_type({refs},{path}) IS NULL OR (json_type({refs},{path})='text' AND "
                 f"json_extract({refs},{path}) IN (SELECT id FROM {self.tasks}) AND "
-                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})))")
+                f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
+                f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))")
 
     def refs(self, refs, top):
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.

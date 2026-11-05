@@ -16,14 +16,20 @@ adds the secret, calls Google and answers the computer that holds the grant; it 
 token it relays on the exchange and receives on a refresh is never written down or logged. It keeps only the
 grant's SHA-256 fingerprint (`grant_hash`), which can refresh nothing: a refresh must match a mailbox this
 computer holds and the grant this server issued for it, so the secret is never added to a token from anywhere
-else. A refreshed token carries only the read-only scopes of one service (SERVICE_SCOPES).
+else. A refreshed token carries only the scopes of one service that its grant was given (`grant_scopes`,
+refresh_scopes).
 
 Only the person connects or disconnects their own mailbox: the mailbox their message bot reads, else their email.
 Not a bot, not BotOps or the Assistant acting for them, not an admin for someone else. Disconnect is queued the
 same way; the computer revokes the grant at Google and forgets it.
 
-The scopes are read only (READ_SCOPES): there is no switch here to widen them. A Workspace whose admin blocks
-Tico is named as that ("admin_policy"), never answered with a broader request or a service account.
+The scopes depend on the Google app that signs the person in. Tico's shared app (the server's environment) asks for
+read only (READ_SCOPES). The company's own app, set in Settings > Google, also asks for the act scopes (ACT_SCOPES:
+gmail.modify, which labels, archives and drafts mail, and calendar.events), since an Internal app needs no Google review
+for them. The grant keeps only the scopes Google gave the exchange (`grant_scopes`, never more than the app may grant),
+and a refresh asks Google for no scope the grant lacks: a read-only grant stays read only until its person connects
+again. A Workspace whose admin blocks Tico is named as that ("admin_policy"), never answered with a broader request or
+a service account.
 """
 
 import base64
@@ -43,7 +49,7 @@ from typing import Literal
 from . import google_rights
 from . import models as M
 from . import routines
-from .google_workspace import oauth_client
+from .google_workspace import acts as acts_allowed, oauth_client, permissions
 from .store import H, P, Problem
 
 SCHEMA = """
@@ -54,9 +60,11 @@ CREATE TABLE IF NOT EXISTS google_connects(
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
 """
-# The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
-# connected (`grant_hash`, once the computer says connected). A fingerprint, never the token.
-COLUMNS = {"pending_hash": "TEXT", "grant_hash": "TEXT"}
+# A grant's refresh token is kept only as its SHA-256 fingerprint, never the token: the one being connected
+# (`pending_hash`, from the exchange) and the one connected (`grant_hash`, once the computer says connected). The scopes
+# Google gave the same exchange are kept the same way (`pending_scopes`, then `grant_scopes`), as a JSON list. A NULL
+# `grant_scopes` is a grant from before they were recorded: read only, as it was made.
+COLUMNS = {"pending_hash": "TEXT", "grant_hash": "TEXT", "pending_scopes": "TEXT", "grant_scopes": "TEXT"}
 
 
 def ensure_schema(c):
@@ -72,14 +80,24 @@ def fingerprint(refresh_token):
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
+REVOKE_URI = "https://oauth2.googleapis.com/revoke"
 G = "https://www.googleapis.com/auth/"
 # The same list as connectors/mail/oauth.py IDENTITY_SCOPES + READ_SCOPES (backend/tests/test_google_connect.py).
 READ_SCOPES = ["openid", "email", G + "gmail.readonly", G + "calendar.events.readonly", G + "calendar.freebusy",
                G + "calendar.calendarlist.readonly"]
-# What a refreshed token may carry: one service's read-only scopes, never both and never a write.
+# The act scopes, asked only with the company's own app: gmail.modify covers the labels, archive and drafts that
+# connectors/mail/oauth.py NEEDS gates, and calendar.events the calendar writes. Tico's shared app never asks for them.
+ACT_SCOPES = [G + "gmail.modify", G + "calendar.events"]
+# What one service's refreshed token may carry: its read-only scopes, and its act scope when its grant has it.
 SERVICE_SCOPES = {"gmail": {G + "gmail.readonly"},
                   "calendar": {G + "calendar.events.readonly", G + "calendar.freebusy",
                                G + "calendar.calendarlist.readonly"}}
+SERVICE_ACT_SCOPES = {"gmail": {G + "gmail.modify"}, "calendar": {G + "calendar.events"}}
+READ_SERVICE_SCOPES = sorted(set().union(*SERVICE_SCOPES.values()))     # a grant from before scopes were recorded
+# Google names the identity scopes in an answer by their full address, whatever was asked (`email` comes back as
+# userinfo.email). They are not mail or calendar access, so an answer carrying them is not wider than the app's grant.
+IDENTITY_NAMES = {G + "userinfo.email", G + "userinfo.profile"}
+APPS = {"settings": "own", "env": "shared"}     # the Google app a connect signs in with, as the person is told it
 GOOGLE_SECONDS = 20
 CALLBACK = "/api/v2/mail/google/callback"
 INBOX = "/#/settings/inbox"    # Settings > Inbox (ui/app/router.js), which reads the outcome itself
@@ -124,6 +142,22 @@ MESSAGES = {
     "reconnect": ("Tico's Google app was changed on this server, so this connection has to be made again.",
                   "Connect again."),
 }
+# Offered to a connection made with the company's own app that lacks some of its write access, keyed by what is
+# missing: "both", "mail" (labels, archive and drafts) or "calendar" (events). Connecting again is the person's choice:
+# nothing is asked for without it.
+UPGRADE = {
+    "both": ("This connection only reads your mail and calendar.",
+             "Connect Google again to let Tico also label, archive and draft mail, and add calendar events."),
+    # One missing while the other is not in use either (held but turned off, or never given).
+    "mail_only": ("This connection only reads your mail.",
+                  "Connect Google again to let Tico also label, archive and draft mail."),
+    "calendar_only": ("This connection only reads your calendar.",
+                      "Connect Google again to let Tico also add calendar events."),
+    "mail": ("This connection can add calendar events, but only reads your mail.",
+             "Connect Google again to let Tico also label, archive and draft mail."),
+    "calendar": ("This connection can label, archive and draft mail, but only reads your calendar.",
+                 "Connect Google again to let Tico also add calendar events."),
+}
 
 
 class ConnectorResult(M.Contract):
@@ -145,22 +179,73 @@ class TokenRequest(M.Contract):
     scopes: list[str] = Field(min_length=1, max_length=4)
 
 
-def configured(c, settings):
-    """Whether Connect Google has an OAuth client: the server's environment, else the one an admin set."""
-    return oauth_client(c, settings) is not None
+def app_source(c, settings):
+    """The OAuth client a connect signs in with now: 'settings' (the company's own app), 'env' (Tico's shared app, the
+    server's environment) or None when there is none."""
+    client = oauth_client(c, settings)
+    return client[2] if client else None
+
+
+def grantable(source, may=None):
+    """The scopes a sign-in asks Google for with this OAuth client: read only with the shared app, and with the
+    company's own app also each act scope What Tico may do allows (Settings > Google; `may` None is all of them, the
+    most this app may ever be given)."""
+    if source != "settings":
+        return READ_SCOPES
+    allowed = acts_allowed(may)
+    return READ_SCOPES + [scope for scope, service in zip(ACT_SCOPES, ("gmail", "calendar"), strict=True) if allowed[service]]
+
+
+def overbroad(answer, source):
+    """The scopes in the exchange's answer that this app may not grant, empty when there are none. An answer with no
+    scope list has none."""
+    told = set(str(answer.get("scope") or "").split())
+    return told - set(grantable(source)) - IDENTITY_NAMES
+
+
+def granted_scopes(answer, source):
+    """The scopes Google gave in the exchange's answer, never more than `grantable` allows that app. An answer with no
+    scope list keeps read only: the grant holds only what Google confirmed. (An answer wider than the app may grant is
+    refused before this, see `overbroad`.)"""
+    told = str(answer.get("scope") or "").split()
+    if not told:
+        return READ_SERVICE_SCOPES
+    return sorted(set(told) & set(grantable(source)))
+
+
+def refresh_scopes(service, recorded, may=None):
+    """The scopes a refresh for `service` may ask Google for, on a grant holding `recorded` (the JSON list that
+    `granted_scopes` stored), and with `may` (What Tico may do) only the act scope it allows. NULL is a grant from
+    before scopes were recorded, which was read only. The grant keeps what Google gave: a box turned back on needs no
+    new sign-in."""
+    given = set(json.loads(recorded)) if recorded is not None else set(READ_SERVICE_SCOPES)
+    acts = SERVICE_ACT_SCOPES[service] if acts_allowed(may)[service] else set()
+    return given & (SERVICE_SCOPES[service] | acts)
 
 
 def redirect_uri(settings):
     return settings.public_url.rstrip("/") + CALLBACK
 
 
-def post_token(fields):
-    """Google's token endpoint answer for `fields`. Raises urllib.error.HTTPError on a refusal, OSError when
-    Google can't be reached."""
-    request = urllib.request.Request(TOKEN_URI, data=urllib.parse.urlencode(fields).encode(),
+def post_token(fields, uri=TOKEN_URI):
+    """Google's answer to a form post to one of its OAuth endpoints: the token endpoint, or revoke (REVOKE_URI). Raises
+    urllib.error.HTTPError on a refusal, OSError when Google can't be reached."""
+    request = urllib.request.Request(uri, data=urllib.parse.urlencode(fields).encode(),
                                      headers={"Content-Type": "application/x-www-form-urlencoded"})
     with urllib.request.urlopen(request, timeout=GOOGLE_SECONDS) as answer:
         return json.loads(answer.read().decode() or "{}")
+
+
+def revoke_at_google(token):
+    """Ask Google to revoke a token this server was just given and must not keep, best effort: whether Google confirmed
+    it is returned, and the token is never logged or stored."""
+    if not token:
+        return False
+    try:
+        post_token({"token": token}, REVOKE_URI)
+        return True
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return False
 
 
 def google_token(client, fields):
@@ -220,13 +305,33 @@ def expire(c):
               "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?", (H.now(), now - CLAIM_SECONDS))
 
 
-def view(row, mailbox, syncing, configured_now):
+def view(row, mailbox, syncing, source, may=None):
+    """What the person sees. `source` is the OAuth client a connect would use now (see app_source), `may` What Tico may
+    do. A connected grant shows the scopes Google gave it, and `acts` says, per service, whether Tico uses that
+    service's write access now (mail: labels, archive and drafts; calendar: events): the grant has it and What Tico may
+    do allows it. A connection made with the company's own app that lacks one What Tico may do allows is told what a
+    reconnect would add; nothing changes until the person reconnects."""
     status = row["status"] if row else "none"
-    out = {"configured": configured_now, "mailbox": mailbox, "syncing": syncing, "status": status,
-           "scopes": READ_SCOPES, "can": [], "updated_at": row["updated_at"] if row else None,
-           "kind": None, "message": None, "hint": None}
+    wanted = acts_allowed(may)
+    wanted = {"mail": wanted["gmail"], "calendar": wanted["calendar"]}
+    out = {"configured": source is not None, "app": APPS.get(source), "mailbox": mailbox, "syncing": syncing,
+           "status": status, "scopes": grantable(source, may) if source else READ_SCOPES, "can": [],
+           "acts": {"mail": False, "calendar": False},
+           "updated_at": row["updated_at"] if row else None, "kind": None, "message": None, "hint": None}
     if row and status == "connected":
-        out["can"] = json.loads(row["can"] or "[]")
+        given = set(json.loads(row["grant_scopes"]) if row["grant_scopes"] is not None else READ_SERVICE_SCOPES)
+        held = {"mail": bool(given & SERVICE_ACT_SCOPES["gmail"]),
+                "calendar": bool(given & SERVICE_ACT_SCOPES["calendar"])}
+        acts = {name: held[name] and wanted[name] for name in held}
+        out.update(can=json.loads(row["can"] or "[]"), scopes=sorted(given), acts=acts)
+        missing = [name for name in ("mail", "calendar") if wanted[name] and not held[name]]
+        if source == "settings" and missing:
+            if len(missing) == 2:
+                lacks = "both"
+            else:
+                other = "calendar" if missing[0] == "mail" else "mail"
+                lacks = missing[0] if acts[other] else missing[0] + "_only"
+            out.update(message=UPGRADE[lacks][0], hint=UPGRADE[lacks][1])
     if row and status == "failed":
         kind = row["kind"] or "error"
         message, hint = (policy_message(mailbox) if kind == "admin_policy" else MESSAGES.get(kind)
@@ -293,7 +398,7 @@ def install(app, store, member, mutate):
         row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (pid,)).fetchone()
         if row and row["mailbox"] != mailbox:
             row = None                  # their mailbox changed since: the old connection says nothing about this one
-        return view(row, mailbox, syncing, configured(c, settings))
+        return view(row, mailbox, syncing, app_source(c, settings), permissions(c))
 
     @app.get("/api/v2/mail/google")
     def google_status(request: Request):
@@ -320,7 +425,7 @@ def install(app, store, member, mutate):
             verifier = secrets.token_urlsafe(64)
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
             query = {"client_id": client[0], "redirect_uri": redirect_uri(settings),
-                     "response_type": "code", "scope": " ".join(READ_SCOPES), "access_type": "offline",
+                     "response_type": "code", "scope": " ".join(grantable(client[2], permissions(c))), "access_type": "offline",
                      "prompt": "consent", "login_hint": mailbox, "state": state, "code_challenge": challenge,
                      "code_challenge_method": "S256"}
             now = H.now()
@@ -416,7 +521,8 @@ def install(app, store, member, mutate):
     @app.post("/api/v2/connectors/mail/google/{person_id}/exchange")
     def google_exchange(person_id: str, request: Request, body: M.Empty | None = None):
         """Trade a claimed connect's code for its grant, for the computer that claimed it, once. The code and the
-        verifier are cleared before Google is asked; the answer goes to that computer and is not kept here."""
+        verifier are cleared before Google is asked; the answer goes to that computer and is not kept here. An answer
+        with more scopes than this app may grant is refused: its grant is revoked at Google and nothing is passed on."""
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
             row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
@@ -436,10 +542,20 @@ def install(app, store, member, mutate):
                           extra={"kind": "app_config"})
         answer = google_token(client, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
                                        "redirect_uri": redirect_uri(settings)})
+        if overbroad(answer, client[2]):
+            # Google gave more access than this app may grant. Nothing is passed on or kept: the grant is revoked at
+            # Google (best effort), and the sign-in fails with no token for the computer.
+            revoke_at_google(answer.get("refresh_token") or answer.get("access_token"))
+            raise Problem("google_refused", "Google granted more access than Tico asks for, so nothing was connected",
+                          409, extra={"kind": "scope"})
         if answer.get("refresh_token"):
+            # The scopes Google gave this grant, never more than this app may grant (granted_scopes), kept with its
+            # fingerprint.
             with store.transaction() as c:
-                c.execute("UPDATE google_connects SET pending_hash=? WHERE person_id=? AND runner_id=? AND "
-                          "status='finishing'", (fingerprint(answer["refresh_token"]), person_id, runner["id"]))
+                c.execute("UPDATE google_connects SET pending_hash=?,pending_scopes=? WHERE person_id=? "
+                          "AND runner_id=? AND status='finishing'",
+                          (fingerprint(answer["refresh_token"]), json.dumps(granted_scopes(answer, client[2])),
+                           person_id, runner["id"]))
         return {k: answer[k] for k in ("access_token", "refresh_token", "expires_in", "scope") if k in answer}
 
     @app.post("/api/v2/connectors/mail/google/token")
@@ -448,8 +564,9 @@ def install(app, store, member, mutate):
         one this server issued for that mailbox and this computer (its fingerprint); nothing about the request is
         stored."""
         wanted = set(body.scopes)
-        if not wanted <= SERVICE_SCOPES[body.service]:
-            raise Problem("scope", f"A {body.service} token from Connect Google carries only its read-only scopes", 422)
+        if not wanted <= SERVICE_SCOPES[body.service] | SERVICE_ACT_SCOPES[body.service]:
+            raise Problem("scope", f"A {body.service} token from Connect Google carries only its {body.service} "
+                                   "scopes", 422)
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
             held = c.execute("SELECT * FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
@@ -467,6 +584,16 @@ def install(app, store, member, mutate):
                 raise Problem("not_this_grant", "This computer no longer runs the message bot for that mailbox, so it does "
                                                 "not refresh its Connect Google grant. Reconnect it in Settings > Google.",
                               403)
+            # The grant's own scopes bound the refresh: a read-only grant is refused here, with no call to Google.
+            if not wanted <= refresh_scopes(body.service, held["grant_scopes"]):
+                raise Problem("scope", f"This Connect Google grant does not hold all the {body.service} scopes asked "
+                                       "for. Connect Google again in Settings > Google to add them.", 422)
+            # What Tico may do narrows the token, not the grant: a write turned off is left out of what Google is
+            # asked for, and the computer reads the narrower list back (`scopes`), so it refuses that write itself.
+            wanted &= refresh_scopes(body.service, held["grant_scopes"], permissions(c))
+            if not wanted:
+                raise Problem("scope", f"What Tico may do (Settings > Google) leaves none of the {body.service} "
+                                       "scopes asked for", 422)
         with store.read() as c:
             client = oauth_client(c, settings)
         if client is None:
@@ -504,17 +631,20 @@ def install(app, store, member, mutate):
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
+            # And the scopes that grant holds, from the exchange the same way: what Google gave it, then none once revoked.
+            grant_scopes = {"connected": row["pending_scopes"],
+                            "disconnected": None}.get(body.status, row["grant_scopes"])
             # The client it is recorded with: this server's now, for a connect that succeeded. A failed reconnect keeps
             # the earlier grant's client, and a revoked grant has none to keep.
             client = oauth_client(c, settings) if body.status == "connected" else None
             client_id = client[0] if client else row["client_id"]
             c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
-                      "client_id=?,pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? "
-                      "WHERE person_id=?",
+                      "grant_scopes=?,client_id=?,pending_hash=NULL,pending_scopes=NULL,"
+                      "oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
                        json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,
-                       client_id, H.now(), person_id))
+                       grant_scopes, client_id, H.now(), person_id))
             H.event(c, "human:" + person_id, "mail.google." + body.status, row["mailbox"],
                     {"kind": kind} if body.status == "failed" else {})
             if body.status == "connected" and row["mailbox"]:

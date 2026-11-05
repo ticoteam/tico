@@ -25,7 +25,7 @@ import re
 import sys
 from urllib.parse import quote
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from clients import s3links
@@ -71,6 +71,7 @@ CLI_TOOL_ALIASES = {
     "hub_task_manager_status": ("hub_task_manager",), "hub_task_manager_on": ("hub_task_manager_set",),
     "hub_task_manager_off": ("hub_task_manager_set",), "hub_task_manager_schedule": ("hub_task_manager_set",),
     "hub_task_manager_bot": ("hub_task_manager_set",),
+    "hub_maintenance_status": ("hub_maintenance",),
     "hub_task_show": ("hub_task_show", "hub_task_show_many"),      # `hub task show a b c` is one read
     "hub_market_size_accept": ("hub_market_size_decide",), "hub_market_size_reject": ("hub_market_size_decide",),
     "hub_market_size_params": ("hub_market_size_decide",),
@@ -511,6 +512,28 @@ def answer(api, args):
 
 
 # ----------------------------------------------------------------------------- meetings
+@tool("hub_meeting_link", "Link existing tasks to a saved meeting. Links preserve each resource's access.",
+      {"id": _s("Meeting id"), "task_ids": {"type": "array", "items": TASK_ID, "minItems": 1, "maxItems": 20},
+       "kind": _s("linked (default), or sent for tasks you requested", enum=["linked", "sent"])},
+      required=("id", "task_ids"), writes=True)
+def meeting_link(api, args):
+    return _as_person(api).post(f"meetings/{args['id']}/tasks",
+                                {"task_ids": args['task_ids'], "kind": args.get('kind', 'linked')}, key=_key(args))
+
+
+@tool("hub_meeting_unlink", "Remove a meeting's task link.",
+      {"id": _s("Meeting id"), "task": TASK_ID}, required=("id", "task"), writes=True)
+def meeting_unlink(api, args):
+    return _as_person(api).call("DELETE", f"meetings/{args['id']}/tasks/{args['task']}", key=_key(args))
+
+
+@tool("hub_task_meetings", "Linked meetings you may open, newest first. Follow next_cursor for more.",
+      {"id": TASK_ID, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("Previous next_cursor")},
+      required=("id",))
+def task_meetings(api, args):
+    return _as_person(api).get(f"tasks/{args['id']}/meetings", **{k: args[k] for k in ('limit', 'cursor') if k in args})
+
+
 @tool("hub_meeting_pending", "List your own Pending meetings, before sharing with the Team.", {})
 def meeting_pending(api, args):
     return _as_person(api).get("meetings", review="pending")
@@ -800,7 +823,7 @@ def task_check_back(api, args):
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
-      "wakes its bot about it (no stall wake, Still wanted? or Due reminder; a person's comment still does) until "
+      "wakes its bot about it (no Due reminder; a person's comment still does) until "
       "then, when it is back and its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover. "
       "Snoozing again moves the date. `note` says what to check when the snooze ends: it comes back in the wake "
       "(at most 500 characters).",
@@ -849,6 +872,7 @@ def task_unsnooze(api, args):
       "answer, no open blocker, no run queued).",
       {"owner": _s("Owner: a bot slug, a human id, or `me`"),
        "requester": _s("Requester: a bot slug, a human id, or `me`"),
+       "q": _s("Title words or #N"),
        "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)},
                   "description": "Only these statuses"},
        "lane": {"type": "string", "enum": ["company", "product"]},
@@ -872,7 +896,7 @@ def task_unsnooze(api, args):
 def task_list(api, args):
     if args.get("stuck"):
         return api.get("tasks/stuck", hours=args.get("hours") or 24)["tasks"]
-    more = {name: args[name] for name in ("type", "step", "sort", "number", "updated_since", "snoozed") if args.get(name)}
+    more = {name: args[name] for name in ("type", "step", "sort", "number", "updated_since", "snoozed", "q") if args.get(name)}
     if args.get("member"):
         more["member"] = _target(api, args["member"])
         if args.get("role"):
@@ -1084,7 +1108,7 @@ def task_update(api, args):
 
 @tool("hub_task_done", "Finish a task you own with its result. A review or QA subtask adds its verdict and the pull "
       "request head it judged, and the task that asked for it is woken with both (the same as hub_task_update with "
-      "status done).",
+      "status done). Its open subtasks close with it, recursively.",
       {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
@@ -2305,6 +2329,19 @@ def market_resolve(api, args):
                      "applied_events": args.get("applied_events") or []}, key=_key(args))
 
 
+def market_day(value):
+    """last_verified_at takes a real calendar date as YYYY-MM-DD. A timestamp is refused, never cut down to its
+    date, and so is a day the calendar does not have (2026-02-31): the server keeps either as written."""
+    text = str(value)
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            date.fromisoformat(text)
+            return text
+    except ValueError:
+        pass
+    raise ValueError("last_verified_at must be a date (YYYY-MM-DD)")
+
+
 @tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
       {"id": _s("Insight id"), "source_url": _s("Source URL", default=""),
        "source_kind": _s("reddit, x, news, site, other", default="other"),
@@ -2313,10 +2350,12 @@ def market_resolve(api, args):
        "entity_id": _s("Existing entity to update"), "summary": _s("New summary"),
        "tier": _s("core, lookalike, phrase-stealer or secondary, for a new company", default=""),
        "new_id": _s("Id for a new entity when type/name-slug is wrong, e.g. company/self", default=""),
+       "last_verified_at": _s("Date the entity was last checked, YYYY-MM-DD: set on entity_id, or on a new entity", default=""),
        "edge_src": _s("Edge source entity"), "edge_rel": _s("One of the sixteen relations"),
        "edge_dst": _s("Edge destination entity")},
       required=("id",), writes=True)
 def market_apply(api, args):
+    verified = market_day(args["last_verified_at"]) if args.get("last_verified_at") else None
     body = {"evidence": {"source_url": args.get("source_url") or "", "source_kind": args.get("source_kind") or "other",
                          "quote": args.get("quote") or "", "our_read": args.get("our_read") or ""}}
     if args.get("entity_type") and args.get("entity_name"):
@@ -2325,10 +2364,16 @@ def market_apply(api, args):
             body["entity"]["tier"] = args["tier"]
         if args.get("new_id"):
             body["entity"]["id"] = args["new_id"]
+        if verified:
+            body["entity"]["last_verified_at"] = verified
     if args.get("entity_id"):
         body["entity_id"] = args["entity_id"]
         if args.get("summary") is not None:
             body["summary"] = args["summary"]
+        if verified:
+            body["last_verified_at"] = verified
+    if verified and "entity" not in body and "entity_id" not in body:
+        raise ValueError("last_verified_at needs entity_id, or entity_type and entity_name for a new entity")
     if args.get("edge_src") and args.get("edge_rel") and args.get("edge_dst"):
         body["edge"] = {"src": args["edge_src"], "rel": args["edge_rel"], "dst": args["edge_dst"]}
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))
@@ -2879,9 +2924,10 @@ def pin_remove(api, args):
 
 @tool("hub_file_search", "Search the files you may read, every bot's and people's uploads alike, by title and text "
       "(Markdown, text, a page's words, a CSV's header and first rows): best first, each with an excerpt.",
-      {"q": _s("Words to find"), "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=("q",))
+      {"q": _s("Words to find"), "kind": {"enum": ["page", "document", "image", "data", "media", "other"]},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=("q",))
 def files_search(api, args):
-    return api.get("files/search", q=args["q"], limit=args.get("limit"))
+    return api.get("files/search", q=args["q"], limit=args.get("limit"), kind=args.get("kind"))
 
 
 @tool("hub_file_read", "Read one version of a file you may read, in full, as text (Markdown, text, HTML, CSV): the "
@@ -3025,7 +3071,7 @@ def pages_publish(api, args):
 
 @tool("hub_page_list", "Pages you may read, newest first: title, bot, version, when updated, cadence, data date, and "
       "whether one is out of date or replaced.",
-      {"bot": _s("Only this bot's pages"), "task": _s("Only this task's pages"),
+      {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
        "archived": {"type": "boolean", "description": "Archived pages instead"},
        "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("next_cursor from the previous page")})
 def pages_list(api, args):
@@ -3179,7 +3225,8 @@ def docs_links(api, args):
 
 @tool("hub_task_close", "A human may close a task they can edit (its requester or owner, a party to a task above it, "
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
-      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
+      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done. "
+      "Its open subtasks close with it, recursively; one you may not close refuses the whole action.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
        "wake": {"type": "boolean", "default": True,
                 "description": "false: its bots read the close on their next run instead of being woken for it"},
@@ -3633,6 +3680,9 @@ def automation_template(api, args):
 
 
 @tool("hub_automation_create", "Save a new automation (version 1). Checked on save: a bad flow is refused with why. "
+      "In Assistant chat a Message routine saves off and returns an approval action card; only the person's click "
+      "turns it on. Omit enabled or set false. Choose defaults to Draft; use Reply only when the person explicitly "
+      "asks to send replies and the inbox permits sending. "
       "BotOps saves it off unless `enabled` is sent. A bot without rights to it saves a proposal: off, its first "
       "version pending, for a person to turn on.",
       {k: v for k, v in _AUTO_FIELDS.items()}, required=("name", "owner", "trigger"), writes=True)
@@ -3641,7 +3691,9 @@ def automation_create(api, args):
     return _as_person(api).post("automations", {"steps": [], **body}, key=_key(args))
 
 
-@tool("hub_automation_update", "Change an automation. A new trigger, steps or batch times is a new version; a bot "
+@tool("hub_automation_update", "Change an automation. A new trigger, steps or batch times is a new version. "
+      "The Assistant must propose Message routine edits with hub_assistant_propose (PATCH "
+      "/api/v2/automations/<id>); pausing with enabled:false is direct. A bot "
       "without edit rights gets back `pending` (a proposal a person restores). Action args are named in `steps`. Then check `problems`.",
       {"id": _s("auto_..."), **_AUTO_FIELDS, "summary": _s("A few words on the change")},
       required=("id",), writes=True)
@@ -4416,7 +4468,7 @@ _PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "cus
        "sweep_seconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "Least time between two runs of a sweep"},
        "digest_hour": {"type": "integer", "minimum": 0, "maximum": 23, "description": "Hour of a lead's daily digest, team time"},
        "pulls": {"type": "string", "enum": ["all", "review", "none"], "description": "Custom: which open tasks it starts by itself"},
-       "sweeps": {"type": "boolean", "description": "Custom: whether stall checks and automations may wake it"},
+       "sweeps": {"type": "boolean", "description": "Custom: whether the task roundup lists it its task sweep lines (late, backlog, assigned, restate, quiet tasks)"},
        "takes": {"type": "string", "enum": ["all", "review", "watcher", "none"], "description": "Custom: which tasks it may be given"},
        "confirm_drop_rules": {"type": "boolean", "description": "Leaving custom: delete the rules it copied"}},
       ("bot",), writes=True)
@@ -5235,27 +5287,22 @@ def support_send(api, args):
     return api.post("support/tickets/from-approval", {"approval": args["approval"]}, key=_key(args))
 
 
-@tool("hub_health_monitor_findings", "The Health Monitor: what the last hourly scan of this install found, and the report "
-      "filed for each signature.", {})
-def health_monitor_findings(api, args):
-    return api.get("health-monitor")
+@tool("hub_health_findings", "What Check health found on this install: each open problem with its count, last seen time and "
+      "Tico-bug report, whether BotOps is there to take findings, and whether bug reports go without asking.", {})
+def health_findings(api, args):
+    return api.get("health/findings")
 
 
-@tool("hub_health_monitor_report", "The Health Monitor: report a finding as a Tico bug. The server writes the report from the "
-      "finding and attaches the redacted diagnostics bundle; one ticket per signature, a message on it when it happens again. "
-      "With the team rule off it drafts a support approval instead.",
-      {"key": _s("The finding's key or signature, from its task"),
-       "process": _s("Instead of a key: what the watcher saw busy, process:<name> or container:<name>"),
-       "cpu": {"type": "number"}, "mb": {"type": "number"}}, writes=True)
-def health_monitor_report(api, args):
+@tool("hub_health_report", "Report a health finding as a Tico bug. The server writes the report from the finding and attaches the "
+      "redacted diagnostics bundle: one ticket per problem, and a message on it when it happens again. With the team rule "
+      "off it drafts a support approval instead.",
+      {"key": _s("The finding's key or signature, from its task")}, writes=True)
+def health_report(api, args):
     key = args.get("key") or ""
-    if args.get("process"):
-        key = api.post("health-monitor/local-findings", {"process": args["process"], "cpu": args.get("cpu") or 0,
-                                                         "mb": args.get("mb") or 0}, key=_key(args))["key"]
     if not key:
-        raise ValueError("name a finding's key, or --process")
+        raise ValueError("name a finding's key")
     from urllib.parse import quote
-    return api.post("health-monitor/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
+    return api.post("health/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
 
 
 @tool("hub_task_manager", "The Task Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
@@ -5289,14 +5336,56 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-@tool("hub_stall_triage", "Stalled task check: before a stall check stays silent on a stalled task nothing has changed on, Tico "
-      "Decide reads its last six messages and sets the wait they name, closes the task if it is finished, or lets one wake "
-      "through if it is stuck. On by default; the owner or an admin switches it. Omit `on` to read the switch.",
-      {"on": {"type": "boolean", "description": "true switches it on, false off; leave out to read"}}, writes=True)
-def stall_triage(api, args):
-    if args.get("on") is None:
-        return {"job": next(job for job in _as_person(api).get("system-routines")["jobs"] if job["key"] == "stall_triage")}
-    return _as_person(api).call("PUT", "system-routines/stall_triage", {"on": bool(args["on"])}, _key(args))
+MAINTENANCE_STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+
+
+@tool("hub_maintenance", "Maintenance: the schedule, the pause switch and the monthly judge spend cap, then each step's switch, "
+      "how often it runs, its bot limit and its last run. A live run comes with them.", {})
+def maintenance_status(api, args):
+    return _as_person(api).get("maintenance")
+
+
+@tool("hub_maintenance_set", "Maintenance: set the schedule (hourly, 2h, 3h, 6h, 12h or daily), pause or resume it, or set the "
+      "monthly judge spend cap in dollars. With `step`, change that step: `enabled` on or off, `frequency` (run = every run, "
+      "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for find_stuck and dream. "
+      "The owner or an admin.",
+      {"schedule": {"type": "string", "enum": ["hourly", "2h", "3h", "6h", "12h", "daily"]},
+       "paused": {"type": "boolean", "description": "true pauses the schedule, false resumes it"},
+       "monthly_cap_usd": {"type": "number", "minimum": 0, "maximum": 100000},
+       "step": {"type": "string", "enum": MAINTENANCE_STEPS},
+       "enabled": {"type": "boolean", "description": "The step on or off"},
+       "frequency": {"type": "string", "enum": ["run", "day", "week", "custom"]},
+       "custom_every": {"type": "integer", "minimum": 1, "maximum": 999},
+       "custom_unit": {"type": "string", "enum": ["hours", "days"]},
+       "max_bots": {"type": "integer", "minimum": 1, "maximum": 20}}, writes=True)
+def maintenance_set(api, args):
+    body = {k: args[k] for k in ("schedule", "paused", "monthly_cap_usd") if args.get(k) is not None}
+    change = {k: args[k] for k in ("enabled", "frequency", "custom_every", "custom_unit", "max_bots") if args.get(k) is not None}
+    if change:
+        if not args.get("step"):
+            raise ValueError("name the step: --step KEY with --on/--off, --frequency, --every, --unit or --max-bots")
+        body["steps"] = [{"key": args["step"], **change}]
+    if not body:
+        raise ValueError("name something to change: --schedule, --pause/--resume, --cap or a step's switch")
+    return _as_person(api).call("PATCH", "maintenance", body, _key(args))
+
+
+@tool("hub_maintenance_runs", "Maintenance: recent runs, newest first: when each started, what started it (the schedule or Run now), "
+      "whether it finished, and each step's status, reason, counts and cost. Page with `before` from `next`.",
+      {"limit": {"type": "integer", "minimum": 1, "maximum": 200}, "before": _s("`next` from the page before")})
+def maintenance_runs(api, args):
+    query = {k: args[k] for k in ("limit", "before") if args.get(k) not in (None, "")}
+    return _as_person(api).call("GET", "maintenance/runs", query=query)
+
+
+@tool("hub_maintenance_run", "Maintenance: run now, all steps or only `step`. A plain run is claimed and due by the same rules as the "
+      "schedule, so a step runs only when it is due and its switch is on; `step` runs that step even when it is not due. "
+      "A run already going is returned, not a second one. "
+      "The owner or an admin.",
+      {"step": {"type": "string", "enum": MAINTENANCE_STEPS}}, writes=True)
+def maintenance_run(api, args):
+    body = {"step": args["step"]} if args.get("step") else {}
+    return _as_person(api).call("POST", "maintenance/run", body, _key(args))
 
 
 @tool("hub_audit", "Who changed what in the caps, spend, groups, automations and inboxes, newest first. "
@@ -5507,14 +5596,22 @@ _SLIDES = {
 
 
 @tool("hub_update_create", "Post your daily update (or, on Friday, your week in review) when Tico asks "
-      "for it. A daily is `body`: one to five markdown bullets in plain English and nothing else, no title, "
-      "headings or task ids, at most 25 words a bullet and 90 in all. A week in review is `slides`: goal, "
+      "for it. A daily is `body`: three markdown bullets of work in plain English and nothing else, no title, "
+      "headings or task ids, at most 25 words a bullet and 90 in all, plus a `Blocked:` bullet for each blocker "
+      "and a `Suggestion:` bullet for each suggestion you acted on. A week in review is `slides`: goal, "
       "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
-      "rules is posted with a `warning` saying how to write the next one; an empty one is refused.",
-      {"body": _s("A daily: one to five lines, each starting with '- '"),
+      "rules is posted with a `warning` saying how to write the next one; an empty one is refused. A delivery "
+      "turn (learnings or suggestions only) posts nothing: report `learnings_saved`, `suggestions_seen` and "
+      "`delivery_batch_id` only if you post.",
+      {"body": _s("A daily: three lines, each starting with '- ', plus any `Blocked:` or `Suggestion:` lines"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),
-       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day")},
+       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day"),
+       "learnings_saved": {"type": "integer", "minimum": 0, "maximum": 15,
+                           "description": "How many of the learnings Tico handed you you kept"},
+       "suggestions_seen": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
+                            "description": "The suggestions you acted on, one line each"},
+       "delivery_batch_id": _s("The delivery this post answers, when Tico named one")},
       writes=True)
 def update_post(api, args):
     slides = args.get("slides")
@@ -5522,7 +5619,9 @@ def update_post(api, args):
         slides = json.loads(Path(args["slides_file"]).read_text())
     if isinstance(slides, str):
         slides = json.loads(slides)
-    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")))
+    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")),
+              ("learnings_saved", args.get("learnings_saved")), ("suggestions_seen", args.get("suggestions_seen")),
+              ("delivery_batch_id", args.get("delivery_batch_id")))
     out = api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))
     if "update" not in out:
         return out                  # held by an org rule: the hold, and whom to appeal to
@@ -7565,6 +7664,9 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
+    "hub_meeting_link": REQUESTER + ("assistant",),
+    "hub_meeting_unlink": REQUESTER + ("assistant",),
+    "hub_task_meetings": REQUESTER + ("assistant",),
     "hub_task_caps": REQUESTER_READ, "hub_task_cap_set": PEOPLE + BOTS,
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
@@ -7577,6 +7679,9 @@ AUDIENCE = {
     "hub_api": REQUESTER, "hub_credential_request": ("bot", "botops"),
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
+    # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
+    "hub_maintenance": REQUESTER_READ, "hub_maintenance_runs": REQUESTER_READ,
+    "hub_maintenance_set": REQUESTER, "hub_maintenance_run": REQUESTER,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
     "hub_repo_review": ("bot", "botops"),
@@ -7586,7 +7691,7 @@ AUDIENCE = {
                                     "hub_computer_turns_at_once", "hub_agent_pair_show", "hub_agent_pair_approve",
                                     "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live",
                                     "hub_task_model",
-                                    "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
+                                    "hub_bot_keep_tasks_going", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
                                     "hub_bot_resume", "hub_bot_access", "hub_human_access", "hub_group_access",
@@ -7702,6 +7807,7 @@ ASSISTANT_TOOLS = frozenset({
     "hub_rules_retire", "hub_task_bulk",
     # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
     "hub_automation_create", "hub_bot_access", "hub_bot_owners", "hub_finance_act", "hub_inbound_audience",
+    "hub_automation_guide", "hub_automation_templates", "hub_automation_template", "hub_inbox_send",
     "hub_meeting_approve", "hub_meeting_pending",
 })
 

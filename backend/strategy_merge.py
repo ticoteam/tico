@@ -220,5 +220,5 @@ def on_reply(c, actor, row, text):
             _settle(c, row["id"], link["original"], "answered", "")
             passed += 1
     note = f"Answered; passed to {passed} bot(s)." + (f" {len(back)} could not be: {'; '.join(back)}." if back else "")
-    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True)
+    H.task_update(c, STRATEGY_BOT, row["id"], status="done", note=note[:1000], quiet=True, strict=False)
     H.recount(c, [link["asker"] for link in links])

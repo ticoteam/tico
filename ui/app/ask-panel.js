@@ -27,7 +27,7 @@ function askPage() {
   return {path: path.slice(0, 300), title: heading.slice(0, 200)};
 }
 // The Assistant page is this chat already, and setup has no room for it.
-const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.contains('in-setup');
+const askAway = () => !S.me || S.route === ASSISTANT || document.documentElement.classList.contains('in-setup');
 // Open or closed is a class, never `hidden`: the app's `:has(… :not([hidden]))` rules make any change of a `hidden`
 // attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
 // (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
@@ -36,11 +36,16 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
+// The row is there from the first paint (index.html); a click before /me answers opens Ask once the first page is
+// drawn (router.js calls askSync), and boot that never gets a person hides the row (boot.js).
+let ASK_EARLY = false;
 function askSync() {
   const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');
   if (!row || !panel) return;
+  if (ASK_EARLY && S.me) { ASK_EARLY = false; if (!askAway()) { askToggle(true); return; } }
   const name = askName(), away = askAway(), open = !!ASK?.open && !away;
   askSet(row, 'hidden', away);
+  document.documentElement.classList.toggle('ask-away', away);   // ui/theme.js set it for the first paint
   if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
   askSet(row, 'title', name + ' (⌘J)');
@@ -405,8 +410,8 @@ function askRowsIn(thread, seen, animate) {
       {duration: 260, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards'});
   }
 }
-$('#ask-row')?.addEventListener('click', () => askToggle());
-$('#mobile-ask')?.addEventListener('click', () => askToggle());
+$('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
+$('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('change', ev => {
   const choose = ev.target.closest('[data-ask-choose]');

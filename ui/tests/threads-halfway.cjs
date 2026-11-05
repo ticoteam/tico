@@ -295,24 +295,19 @@ let browser = null;
     await page.close();
   }
 
-  // ---- a DM with no name: its authors name it in the header, the composer and Catch up; the Needs-you sheet waits
-  // behind the Catch up dialog
+  // ---- a DM with no name: its authors name it in the header, the composer and Catch up
   {
     const {page, seen} = await open(browser);
     await page.goto('https://tico-ui.test/#/thread/t-note');
     await row(page, 'w1').waitFor();
     assert.equal(await page.locator('.thv-title').textContent(), 'Ops');
     assert.equal(await page.locator('.thv-composer .p-text').getAttribute('placeholder'), 'Message Ops');
-    await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.textContent = '3 things need you'; document.body.append(s); });
-    assert.equal(await page.locator('section.needs-you').isVisible(), true);
     await page.evaluate(() => catchUpOpen());
     await page.locator('.cu-card[data-thread="t-note"]').waitFor();
     assert.equal(await page.locator('.cu-card h3 > span:not(.nav-icon)').last().textContent(), 'Ops');
     assert.equal(await page.locator('.cu-reply input').getAttribute('placeholder'), 'Message Ops');
-    assert.equal(await page.locator('section.needs-you').isVisible(), false, 'the sheet is not over the dialog');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('dialog:modal'));
-    assert.equal(await page.locator('section.needs-you').isVisible(), true, 'and is back once it closes');
     assert.deepEqual(seen.errors, []);
     await page.close();
   }

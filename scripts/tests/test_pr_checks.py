@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -130,6 +131,62 @@ def test_selected_attempt_contention_file_runs_its_slow_acceptance_serially(tmp_
     assert "-s" in command and "-m" in command
     assert checks.ATTEMPT_CONTENTION_TEST in command
     assert options["env"]["PYTEST_ADDOPTS"] == ""
+
+
+def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_too(tmp_path):
+    # A new tool, response field or command reference can change the contract without a Python import edge.
+    graph = SimpleNamespace(files=[], unparsed=set(), affected=lambda *args: set())
+    for name in ("backend/routes/tasks.py", "clients/hubtools.py", "clients/hubcli.py", "templates/bot/role.md",
+                 "skills/sample/SKILL.md", "backend/company_file/roles.json", "e2e/goldens/events.json",
+                 "roles/ops.md", "company/about.md", "companies/acme.yaml"):
+        source(tmp_path, name, "")
+        graph.files.append(name)
+        assert checks.selection([name], root=tmp_path, graph=graph, core=[])["contracts"], name
+    # Removing a template must still catch refusal entries that have become stale.
+    (tmp_path / "templates/bot/role.md").unlink()
+    assert checks.selection(["templates/bot/role.md"], root=tmp_path)["contracts"]
+    source(tmp_path, "ui/app/unrelated.js", "")
+    graph.files.append("ui/app/unrelated.js")
+    assert not checks.selection(["ui/app/unrelated.js"], root=tmp_path, graph=graph, core=[])["contracts"]
+    assert not checks.selection(["README.md"], root=tmp_path)["contracts"]
+    assert checks.selection([], root=tmp_path)["contracts"]
+    assert checks.selection(["README.md"], event="push", root=tmp_path)["contracts"]
+
+
+def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parallel(tmp_path, monkeypatch):
+    # Default collection has one fast MCP test and no CLI/golden tests. The contracts job must bypass that filter.
+    picked = {"python": list(checks.CONTRACT_TESTS), "browser": [], "caddy": True, "conformance": False,
+              "rust": [], "contracts": True}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", lambda: Counter({checks.CONTRACT_TESTS[0]: 1}))
+    target = tmp_path / "plan.json"
+    plan = checks.prepare("pull_request", "base", target)
+    jobs = plan["matrix"]["include"]
+    assert plan["python"] == [checks.CONTRACT_TESTS[0]]
+    assert jobs == [{"suite": "python-1", "files": [checks.CONTRACT_TESTS[0]]},
+                    {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)}]
+    # Even a plan with no default tests must retain the contracts job.
+    monkeypatch.setattr(checks, "collect", Counter)
+    assert checks.prepare("pull_request", "base", target)["matrix"]["include"] == [jobs[1]]
+    for name in checks.CONTRACT_TESTS:
+        source(tmp_path, name, "")
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(checks.subprocess, "run",
+                        lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1))
+    assert checks.run(target, "contracts") == 1  # A red contract fails the matrix and the required timings gate.
+    assert calls == [[sys.executable, "-m", "pytest", "-q", "-n", str(checks.WORKERS),
+                      "-o", "junit_family=xunit1", "--junitxml=ci-results/contracts.xml", "-m", "slow",
+                      *checks.CONTRACT_TESTS]]
+    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
+    report = tmp_path / "ci-results/contracts.xml"
+    report.write_text("<testsuite><testcase><skipped/></testcase></testsuite>")
+    with pytest.raises(RuntimeError, match="skip every test"):
+        checks.run(target, "contracts")
+    report.write_text("<testsuite><testcase/></testsuite>")
+    assert checks.run(target, "contracts") == 0
 
 
 def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fails_the_job(tmp_path, monkeypatch, mapped):
@@ -491,3 +548,59 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
     checks.prepare("pull_request", stale, tmp_path / "plan.json")
+
+
+def receipt_job(name, url, status="completed", conclusion="success"):
+    return {"name": name, "html_url": url, "status": status, "conclusion": conclusion,
+            "started_at": "2026-11-04T17:00:00Z", "completed_at": "2026-11-04T17:01:30Z"}
+
+
+def run_receipt(stdin):
+    """The receipt action as the timings job runs it: gh's output on stdin, the summary and exit code back."""
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "pr_checks.py"), "receipt"], input=stdin,
+                            capture_output=True, timeout=60)
+    return result.returncode, result.stdout.decode()
+
+
+JOBS = [receipt_job("tests (1)", "https://github.com/ticoteam/tico/actions/runs/1/job/11"),
+        receipt_job("static", "https://github.com/ticoteam/tico/actions/runs/1/job/12", conclusion="failure")]
+ERROR_PAGE = {"message": "Server Error", "documentation_url": "https://docs.github.com/rest"}
+
+
+def test_a_receipt_of_jobs_pages_is_the_table_without_a_note():
+    code, out = run_receipt(json.dumps([{"total_count": 2, "jobs": JOBS}]).encode())
+    assert code == 0
+    assert out == checks.receipt(JOBS) + "\n" and checks.RECEIPT_INCOMPLETE not in out
+
+
+def test_an_error_page_beside_a_jobs_page_keeps_the_jobs_and_says_the_receipt_is_incomplete():
+    code, out = run_receipt(json.dumps([ERROR_PAGE, {"total_count": 2, "jobs": JOBS}]).encode())
+    assert code == 0
+    assert "| [tests (1)](https://github.com/ticoteam/tico/actions/runs/1/job/11) | success | 90.0 |" in out
+    assert "| [static](https://github.com/ticoteam/tico/actions/runs/1/job/12) | failure | 90.0 |" in out
+    assert "Server Error" not in out and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
+
+
+@pytest.mark.parametrize("stdin", [
+    json.dumps([ERROR_PAGE]).encode(),                    # an error-only response
+    b'[{"total_count": 2, "jobs": [',                     # invalid JSON
+    b"",                                                  # no output at all
+    b"\xff",                                              # not UTF-8
+    json.dumps(ERROR_PAGE).encode(),                      # a top level that is not a list
+    json.dumps([{"jobs": "not a list"}]).encode(),        # jobs that are not a list
+    json.dumps([{"jobs": [{"name": "half"}]}]).encode(),  # a job without its fields
+])
+def test_a_receipt_that_cannot_read_its_pages_exits_zero_and_says_so(stdin):
+    code, out = run_receipt(stdin)
+    assert code == 0
+    assert out.startswith("| Job | Result | Seconds |") and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
+
+
+def test_the_receipt_step_cannot_fail_or_cancel_the_timings_gate():
+    import yaml
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["timings"]
+    steps = {step.get("name"): step for step in job["steps"]}
+    receipt_step = steps["Per-job timings linked from the PR check"]
+    assert receipt_step["continue-on-error"] is True
+    assert receipt_step["timeout-minutes"] * 2 <= job["timeout-minutes"]
+    assert steps["Required checks passed"]["if"] == "always()"

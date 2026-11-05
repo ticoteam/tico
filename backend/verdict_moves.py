@@ -113,7 +113,7 @@ def move(c, row, target, why):
     c.execute("SAVEPOINT verdict_move")
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
-        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],))
+        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), strict=False)
         H._task_event(c, row["id"], H.KEEPER, "verdict_move", None, target["name"], why)
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
@@ -478,7 +478,7 @@ def timeouts(c, at=None):
             for check in _checks(c, ticket, step):
                 if check["status"] in H.ACTIVE_STATUSES:
                     H.task_close(c, H.KEEPER, check["id"],
-                                 note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.")
+                                 note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.", strict=False)
             if verdict:
                 note = f"{step['name']}: {verdict} at head {head[:12]}; round closed after {hours:g} h"
             else:

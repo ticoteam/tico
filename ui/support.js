@@ -155,6 +155,7 @@
   const POLL_FAILED = 'Could not check for replies just now. Tico will try again.';
   async function refresh() {
     if (busyRefresh) return busyRefresh;
+    own();
     busyRefresh = (async () => {
       const revision = stateRevision;
       try {
@@ -708,10 +709,18 @@
     if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
     else if (!pop.contains(document.activeElement) || document.activeElement === pop) pop.querySelector('[data-close]').focus();
   }
+  // Whose chat this is: someone else signed in, and everything kept for the last person goes. Every read of the list
+  // asks first, so a reply the check at load announced is not news again to the chat's own load (it re-opened the chat
+  // when Escape came before that load answered).
+  function own() {
+    const actor = (typeof S === 'undefined' ? '' : S.me?.id) || '';
+    if (owner === actor) return;
+    stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null;
+    state = {enabled: null, tickets: [], unread: 0}; lastUnread = 0; announceWaiting = false;
+  }
   // Loads this person's conversation and the reply email a new ticket carries; a failure keeps what was loaded before.
   async function load() {
-    const actor = typeof S === 'undefined' ? '' : S.me?.id;
-    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; draft = newDraft(); compose = null; state = {enabled: null, tickets: [], unread: 0}; lastUnread = 0; announceWaiting = false; }
+    own();
     try {
       const revision = stateRevision;
       const data = await call('GET', '/support/tickets');
@@ -757,7 +766,9 @@
   document.addEventListener('focusout', () => { if (announceWaiting) setTimeout(announceReply, 0); });
   document.addEventListener('close', () => { if (announceWaiting) setTimeout(announceReply, 0); }, true);
   window.addEventListener('load', () => setTimeout(async () => {
-    if (typeof S === 'undefined' || !S.me || state.enabled !== null) return;
+    if (typeof S === 'undefined' || !S.me) return;
+    own();
+    if (state.enabled !== null) return;
     const revision = stateRevision;
     try { const data = await call('GET', '/support/tickets'); if (revision === stateRevision) accept(data); schedule(); } catch (_) { /* opening the chat tries again */ }
   }, 3000));

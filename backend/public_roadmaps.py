@@ -233,9 +233,9 @@ def output(c, row):
 
 def comments(c, row, limit=100, offset=0):
     rows = c.execute('SELECT id,body,sender_id,created_at FROM messages WHERE conversation_id=? '
-                     "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.comment')=1 "
+                     f"AND {H.task_ref_sql('refs')} AND json_extract(refs,'$.comment')=1 "
                      'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?',
-                     (row['conversation_id'], row['id'], limit + 1, offset))
+                     (row['conversation_id'], row['id'], row['id'], limit + 1, offset))
     items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['sender_id']) or
                H.is_bot(r['sender_id']) else 'Visitor', 'created_at': r['created_at']} for r in rows)
     items, after = R.page(items, limit, offset, max_bytes=196608)

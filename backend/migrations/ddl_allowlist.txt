@@ -32,14 +32,13 @@ backend/finance/store/tico.py:1
 backend/flight.py:7
 backend/github_app.py:2
 backend/google_connect.py:4
-backend/health_monitor.py:2
+backend/maintenance_health.py:2
 backend/hook_relay_schema.py:3
 backend/hubdb.py:265
 backend/idempotency_messages.py:6
 backend/inbound.py:5
 backend/invariants.py:2
 backend/learned.py:2
-backend/learnings.py:4
 backend/lenses.py:2
 backend/lifecycle.py:7
 backend/listening.py:1

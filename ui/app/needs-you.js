@@ -11,13 +11,14 @@ const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
 function needsIndex() {
-  const list = S.v2?.needs || [];
-  if (NEEDS_MEMO?.list !== list) {
+  const list = S.v2?.needs || [], foldedIds = S.v2?.needsFoldedIds;
+  if (NEEDS_MEMO?.list !== list || NEEDS_MEMO?.foldedIds !== foldedIds) {
     const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
     // A bot's task folded into the card that asks the person the same thing is not listed again, nor a task the
     // Strategy Bot merged into an item of its own (backend/strategy_merge.py): the server leaves both out of Needs you.
-    const folded = new Set(list.flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
-    NEEDS_MEMO = {list, byId, folded};
+    // The whole-list ids also cover unread cards; their titles and asks stay on their own pages.
+    const folded = new Set((foldedIds || list.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])])).map(String));
+    NEEDS_MEMO = {list, byId, folded, foldedIds};
   }
   return NEEDS_MEMO;
 }
@@ -101,7 +102,16 @@ function needRowHTML(it, ctx = {}) {
 // thread's items (a mention or question in a thread, a person's DM, a held message) are Inbox's (threads.js), not the
 // Tasks page's: each thing that waits on someone is in one place. A bot's question outside any task stays here: its
 // card is where it is answered.
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy'].includes(it.kind) && !decideGone(decideItemKey(it)));
+const NEEDS_EXTRA_KINDS = ['approval', 'stale', 'ask', 'memory_tidy'];
+const needsExtras = () => (S.v2?.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && !decideGone(decideItemKey(it)));
+// The Tasks count includes these on unread pages too, less cards just answered here. The whole attention count also
+// includes Inbox's items and other task types; switching to it while paging makes the number depend on scrolling.
+function needsExtrasCount() {
+  const counts = S.v2?.needsByKind;
+  if (!counts) return needsExtras().length;
+  const gone = (S.v2.needs || []).filter(it => NEEDS_EXTRA_KINDS.includes(it.kind) && decideGone(decideItemKey(it))).length;
+  return Math.max(0, NEEDS_EXTRA_KINDS.reduce((n, kind) => n + (counts[kind] || 0), 0) - gone);
+}
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.
@@ -204,6 +214,7 @@ function approvalTitle(it) {
   if (it?.kind !== 'approval') return it?.title || '';
   if (it.what === 'task_cap' && p.sender) return `Task cap: ${approvalWho(p.sender)} → ${approvalWho(p.receiver)}`;
   if (it.what === 'spend_limit') return `Spend limit: ${p.pool ? String(p.pool) : approvalWho(p.bot)}`;
+  if (it.what === 'mail_alert') return `Mail sending: ${approvalWho(p.bot)}`;
   return it.title || '';
 }
 function approvalFacts(what, p, it = {}) {
@@ -238,6 +249,11 @@ function approvalFacts(what, p, it = {}) {
     rows = [['For', p.pool ? shown(p.pool) : approvalWho(p.bot)], ['30 min', approvalUsd(p.per_30m_usd)], ['Day', approvalUsd(p.daily_usd)],
       ['Week', approvalUsd(p.weekly_usd)], ['Month', approvalUsd(p.monthly_usd)]];
     named = ['bot', 'pool', 'per_30m_usd', 'daily_usd', 'weekly_usd', 'monthly_usd'];
+  } else if (what === 'mail_alert') {
+    // A bot's mail sending, as it asks for it now (backend/maintenance_steps/check_health.py _mail_payload). Approving turns it on.
+    rows = [['Bot', approvalWho(p.bot)], ['Sends mail', p.outbound_send ? 'Yes' : 'No'],
+      ['Forward to', Array.isArray(p.forward_to) && p.forward_to.length ? p.forward_to.map(String).join(', ') : 'Nobody']];
+    named = ['bot', 'outbound_send', 'forward_to'];
   } else if (what === 'finance') {
     // A Finance action waiting on this person (backend/finance/actions.py): its summary, and for a budget change that
     // needs room above it, which budget is raised and to what (backend/finance/handlers.py _raise_note).

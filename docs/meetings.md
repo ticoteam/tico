@@ -1,5 +1,30 @@
 # Meetings
 
+## Linked tasks
+
+`hub meeting link <meeting> <task>...` links existing tasks. `hub meeting unlink <meeting> <task>` removes a link;
+`hub task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
+`hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
+
+`GET /api/v2/meetings/{id}/tasks` returns `{tasks, next_cursor}`; `POST` on that path takes
+`{task_ids: [id, ...], kind: "linked"}` (up to 20). `kind: "sent"` is only for tasks you requested.
+`DELETE /api/v2/meetings/{id}/tasks/{task_id}` removes the pair. The linker, meeting owner, task owner or requester,
+or org owner may remove it. Writes require an `Idempotency-Key`.
+`GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
+normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
+Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
+
+The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
+its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
+(or `hub task list --q ...`), under the task list's existing filters and access checks.
+
+Both sections apply link changes from task events without rereading the list or collapsing expanded pages.
+The meeting's task rows also follow title and status changes. Link events carry `kind: "meetings"` in `kind` or
+`kinds`, with `meeting_links` containing each changed `meeting_id`, its current `link` and meeting summary (both
+null after unlink). Delivery checks access to both resources for each viewer, so hidden meeting activity sends
+no link event or meeting reference. An ordinary task change carries no hidden link kinds or references.
+
 **Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
 have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools
 produce, keeps it in one list, and turns it into work. How the pieces fit:
@@ -55,6 +80,12 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
   Omit `private` to keep its source default: Granola is private by default; other sources are team
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
+  `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
+  person it is filed for and the people added to or joined in the live meeting it came from; the company
+  owner is held to that too. `"audience": "team"` opens it to the Team. The import route takes
+  `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
+- `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
+  removes its transcript, chat and events from Tico; the recording stays on their computer.
 - The same route with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a

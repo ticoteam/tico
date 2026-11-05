@@ -577,7 +577,6 @@ def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
         assert H.waiting_for(c, H.task(c, task['id'])) == 'GitHub on tico#412'
         H.task_update(c, 'bot:cpo', task['id'], status='waiting', note='Waiting on CI for tico#412')
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
-        assert H.sweep_stranded(c) == []
     hook(api, 'pull_request', pr_event('closed'))             # a closed PR has nothing left to wait for
     with api.app.state.store.transaction() as c:
         assert H.waiting_for(c, H.task(c, task['id'])) is None
