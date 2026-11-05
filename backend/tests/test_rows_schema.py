@@ -13,6 +13,7 @@ from backend.store import Store
 
 TABLES = {
     rows.MeetingTaskLinkRow: "meeting_task_links",
+    rows.SuggestionRow: "suggestions",
     rows.TaskRow: "tasks",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.TaskHoldRow: "task_holds",
