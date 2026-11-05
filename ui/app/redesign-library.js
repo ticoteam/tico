@@ -229,9 +229,10 @@ async function lcDrawDetail() {
   const back = `<a class="lc-back" href="${TOOLS_KEYS + lcQuery()}" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>`;
   if (key.startsWith('credentials/')) { lcDrawCredential(key.slice(12), back); return; }
   detail.innerHTML = skelRows(4, {card: true});
-  const service = key;
+  // The page's facts come from this visit's list: a page that answers after the reader left (LC gone) still draws.
+  const service = key, state = LC;
   await integrationDetail(service, ++INT_LOAD, {base: TOOLS_KEYS, head: back,
-    facts: () => lcFactsHTML(LC.items.find(i => i.key === service)),
+    facts: () => lcFactsHTML(state.items.find(i => i.key === service)),
     after: page => { lcWireFacts(); lcMountConnect(page.service); }});
 }
 
@@ -397,7 +398,7 @@ async function pageToolService(service) {
   if (LC !== state) return;
   state.items = lcModel(state.rows);
   await integrationDetail(service, ++INT_LOAD, {base: TOOLS_ROUTE,
-    facts: () => lcFactsHTML(LC.items.find(i => i.key === service)),
+    facts: () => lcFactsHTML(state.items.find(i => i.key === service)),
     after: page => {
       const crumb = state.root.querySelector('[data-tl-crumb]');
       if (crumb) crumb.textContent = page.title;
