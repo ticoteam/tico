@@ -486,11 +486,11 @@ decides from the answers, your settings and your open items (snoozed ones left o
 | Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also meets one of your lines and recommends something. 10B or more: only something that can't wait at all. |
 
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
-note: that is refused however urgent, and a repeat still joins your open item when the bot may read it in full. A refusal fails the bot's write with
-`422 ask_refused`: the error gives the reason and a plain fix, including the bot's manager where relevant. No task,
-wait, question or message is created. An existing task keeps its owner, status and note. A refusal counts toward no
-quarantine and creates no org-rule hold. A bulk handoff reports each refused item under skipped and continues with
-the rest.
+note: that is refused however urgent, and a repeat still joins your open item when the bot may read it in full. A
+refusal fails the bot's write with `422 ask_refused`: the error gives the reason and a plain fix, including the
+bot's manager where relevant. No task, wait, question or message is created. An existing task keeps its owner,
+status and note. A refusal counts toward no quarantine and creates no org-rule hold. A bulk handoff reports each
+refused item under skipped and continues with the rest.
 Anything Tico can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
 its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text. Each judged
 item, including a refusal, has an `ask_ingest_items` audit row; a refusal's ref is empty because nothing was created.
