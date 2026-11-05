@@ -439,6 +439,59 @@ def test_roadmap_automatic_completion_closes_ordinary_descendants(api):
         assert any(e["kind"] == "children" and child["title"] in e["new"] for e in history(c, parent))
 
 
+@pytest.mark.parametrize("blocked_by_sibling", [True, False])
+def test_nested_roadmap_completion_unblocks_an_outside_task_once_per_write(api, blocked_by_sibling):
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, ANA, "Improve exports", "", "bot:cpo",
+                               type="Product roadmap", step="Approved", lint=False)
+        engineering = H.task_create(c, ANA, "Build exports", "", "bot:ops",
+                                    type="Engineering", parent_id=parent["id"], lint=False)
+        child = make(c, "bot:cpo", "Review the export guide", "bot:ops", parent)
+        outside = make(c, ANA, "Publish the export guide", "bot:cpo")
+        TR.add_blocker(c, ANA, outside["id"], engineering["id"])
+        if blocked_by_sibling:
+            TR.add_blocker(c, ANA, outside["id"], child["id"])
+        before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+        H.task_close(c, ANA, engineering["id"])
+        assert H.task(c, parent["id"])["status"] == "done"
+        assert all(H.task(c, t["id"])["status"] == "closed" for t in (engineering, child))
+        assert not TR.blocker_ids(c, outside["id"])
+        notices = [dict(r) for r in c.execute(
+            "SELECT * FROM messages WHERE rowid>? AND body LIKE 'Unblocked: %' AND json_extract(refs,'$.task')=?",
+            (before, outside["id"]))]
+        assert len(notices) == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE message_id=? AND state='queued'",
+                         (notices[0]["id"],)).fetchone()[0] == 1
+        # A later completion in the same transaction can unblock this task again.
+        later = make(c, ANA, "Check the export release", "bot:ops")
+        TR.add_blocker(c, ANA, outside["id"], later["id"])
+        H.task_close(c, ANA, later["id"])
+        assert c.execute("SELECT count(*) FROM messages WHERE rowid>? AND body LIKE 'Unblocked: %' "
+                         "AND json_extract(refs,'$.task')=?", (before, outside["id"])).fetchone()[0] == 2
+
+
+def test_rolled_back_completion_does_not_suppress_a_later_unblock_in_the_same_write(api):
+    from backend import task_trigger_rules
+
+    with api.app.state.store.transaction() as c:
+        blocker = make(c, ANA, "Check the export guide", "bot:ops")
+        outside = make(c, ANA, "Publish the export guide", "bot:cpo")
+        TR.add_blocker(c, ANA, outside["id"], blocker["id"])
+        before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+        with task_trigger_rules.pending(c):
+            with pytest.raises(RuntimeError, match="Close hook failed"):
+                with task_trigger_rules.savepoint(c):
+                    H.task_close(c, ANA, blocker["id"])
+                    raise RuntimeError("Close hook failed")
+            H.task_close(c, ANA, blocker["id"])
+        notices = [dict(r) for r in c.execute(
+            "SELECT * FROM messages WHERE rowid>? AND body LIKE 'Unblocked: %' AND json_extract(refs,'$.task')=?",
+            (before, outside["id"]))]
+        assert len(notices) == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE message_id=? AND state='queued'",
+                         (notices[0]["id"],)).fetchone()[0] == 1
+
+
 @pytest.mark.parametrize("error", [H.Refused("close", "State changed after preflight"), RuntimeError("Close hook failed")])
 def test_automatic_finish_rolls_back_a_failed_descendant_and_its_queued_triggers(api, monkeypatch, error):
     from backend.tests.test_task_trigger_rules import rule

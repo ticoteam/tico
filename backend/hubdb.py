@@ -4874,6 +4874,8 @@ def _unblock(conn, done_task, told=()):
     """A finished task frees whatever waited on it; a bot owner hears about it once nothing else
     blocks the task. `told` are the tasks already woken about it (_answered)."""
     from .roadmap_flow import delivers
+    from .task_trigger_rules import unblocked
+    notified = unblocked(conn)
     # A quiet task a run deferred until this one is done gets its run (backend/quiet_work.py).
     from . import quiet_work
     quiet_work.finished(conn, done_task)
@@ -4895,7 +4897,8 @@ def _unblock(conn, done_task, told=()):
             conn, "SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                   "AND json_extract(refs,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
-        if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
+        if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told and row["id"] not in notified:
+            notified.add(row["id"])
             outcome = "was declined" if done_task["status"] == "declined" else "is finished"
             _wake(conn, row, row["owner_id"], f"Unblocked: {row['title']}\n{done_task['title']} {outcome}.",
                   refs={"blocker_done": done_task["id"], "blocker_status": done_task["status"]}, source=done_task["id"])
