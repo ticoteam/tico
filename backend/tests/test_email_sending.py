@@ -146,7 +146,7 @@ def test_a_github_issue_number_asks_for_a_normal_tico_approval(inbox):
     assert "github_approval_needs_tico" in queued["decision"]["reasons"]
 
 
-def test_undo_pending_restart_cancel_and_no_recall(inbox):
+def test_undo_pending_restart_cancel_and_no_recall(inbox, tmp_path):
     autonomous(inbox, undo_seconds=120)
     queued = queue(inbox)
     machine = runner(inbox)
@@ -154,6 +154,16 @@ def test_undo_pending_restart_cancel_and_no_recall(inbox):
     # A fresh database connection sees the durable queue, without any worker memory.
     with sqlite3.connect(inbox.app.state.store.settings.db_path) as c:
         assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+        with sqlite3.connect(tmp_path / "restarted.db") as target:
+            c.backup(target)
+    from dataclasses import replace
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    restarted = create_app(replace(inbox.app.state.store.settings, db_path=tmp_path / "restarted.db"))
+    with TestClient(restarted) as client:
+        recovered = client.get("/api/v2/email/sends", params={"mailbox": BOX, "pending": True}, headers=headers())
+        assert recovered.status_code == 200
+        assert recovered.json()["sends"][0]["id"] == queued["id"]
     response = post(inbox, "email/sends/" + queued["id"] + "/cancel", {})
     assert response["send"]["state"] == "canceled"
     assert claim(inbox, machine["token"]) is None

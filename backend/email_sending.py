@@ -415,11 +415,11 @@ def decision(c, auth, row, *, dispatch=False):
                                       ("mailbox_daily_cap", "mailbox=?", (row["mailbox"],)),
                                       ("company_daily_cap", "1=1", ())):
             count = c.execute("SELECT count(*) FROM email_sends WHERE " + clause + " AND id<>? "
-                              "AND state IN ('sent','dispatching','unknown') AND substr(coalesce(claimed_at,created_at),1,10)=?",
+                              "AND state IN ('sent','dispatching','unknown') AND substr(coalesce(provider_attempted_at,claimed_at,created_at),1,10)=?",
                               (*params, row["id"], day)).fetchone()[0]
             if count >= policy[field]:
                 blocked.append(field)
-        last = c.execute("SELECT max(claimed_at) FROM email_sends WHERE mailbox=? AND id<>? "
+        last = c.execute("SELECT max(coalesce(provider_attempted_at,claimed_at)) FROM email_sends WHERE mailbox=? AND id<>? "
                          "AND state IN ('sent','dispatching','unknown')", (row["mailbox"], row["id"])).fetchone()[0]
         if last and last > H.shift(H.now(), seconds=-policy["pacing_seconds"]):
             blocked.append("pacing")

@@ -96,7 +96,7 @@ function ibSendAccessColumn(host, inbox, rows, effective) {
     let cell = tr.querySelector('[data-send-access]');
     if (!cell) { cell = document.createElement('td'); cell.dataset.sendAccess = ''; tr.insertBefore(cell, tr.lastElementChild); }
     const bot = rows.find(row => row.id === grant.grantee_id);
-    cell.textContent = grant.level !== 'read_write' ? 'Never · Read only' : grant.grantee_type === 'bot' ?
+    cell.textContent = grant.level !== 'read_write' ? 'Never · Read only' : inbox.may?.send === false ? 'Never · Send mail off' : grant.grantee_type === 'bot' ?
       (bot ? ibSendEffective(bot.d.effective) : 'Unknown') : ibSendEffective(effective);
   }
 }
@@ -112,7 +112,7 @@ inboxesSetting('email.sending', {section: 'email', order: 40, render: async (hos
 
 inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (host, inbox, ctx) => {
   const address = inbox.address || inbox.mailbox?.address;
-  if (!address) return;
+  if (!address || inbox.mailbox?.level === 'none' || inbox.may?.read === false) return;
   const [document, pending] = await Promise.all([get(ibSendPath(address), {fresh: true}), get(`/v2/email/sends?mailbox=${encodeURIComponent(address)}&pending=true`, {fresh: true})]);
   if (!ctx.live()) return;
   const editable = !!inbox.can_manage;
