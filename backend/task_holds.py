@@ -62,7 +62,7 @@ def _shared(conn, row, ask):
     return not any(r is None or H.task_private(conn, r) for r in TP._task_rows(conn, others).values())
 
 
-def holds(conn, row):
+def holds(conn, row, *, who=None, auth=None):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
     actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
@@ -73,7 +73,10 @@ def holds(conn, row):
         "ORDER BY m.created_at", (row["owner_id"], row["id"])))
     if asks:
         answered = H.answers_to(conn, [a["id"] for a in asks])
-        out += [{"kind": "ask", "on": a["recipient_id"], "what": _line(a["body"]) if _shared(conn, row, a) else "a question"}
+        from .turn_scope import message_view
+        out += [{"kind": "ask", "on": a["recipient_id"],
+                 "what": (_line((message_view(conn, a, who=who, auth=auth) or {}).get("body")) or "a question")
+                 if _shared(conn, row, a) else "a question"}
                 for a in asks if a["id"] not in answered]
     engineering = review_gate.engineering(conn, row)
     check = None
@@ -88,9 +91,9 @@ def holds(conn, row):
                 if check:
                     out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why"))})
             continue
-        out.append(_task_hold(conn, row, "child", child))
+        out.append(_task_hold(conn, row, "child", child, who=who, auth=auth))
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
-    out += [_task_hold(conn, row, "blocker", b)
+    out += [_task_hold(conn, row, "blocker", b, who=who, auth=auth)
             for b in TR.live_blockers(conn, row["id"], H.ACTIVE_STATUSES) if b["id"] not in own]
     for a in H._rows(conn.execute("SELECT * FROM approvals WHERE task_id=? AND decision IS NULL ORDER BY created_at",
                                   (row["id"],))):
@@ -109,13 +112,15 @@ def holds(conn, row):
     return out
 
 
-def _task_hold(conn, row, kind, other):
+def _task_hold(conn, row, kind, other, *, who=None, auth=None):
     """A child or blocker as a hold. A private one is named by neither title nor owner: the reason is shown to everyone
     who reads the task (its guest and its parties' managers too), and not all of them read the other task."""
     from . import hubdb as H
     if H.task_private(conn, other):
         return {"kind": "private", "on": None, "what": "a private task"}
-    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
+    from . import turn_scope
+    shown = turn_scope.project(conn, turn_scope.scope(conn, who), {'id': other['id'], 'title': other['title']}, auth=auth)
+    return {"kind": kind, "on": other["owner_id"], "what": _line((shown or {}).get('title'))}
 
 
 def words(conn, found):
@@ -132,10 +137,28 @@ def words(conn, found):
     return text + (f" (and {more} more)" if more else "")
 
 
+def text_sources(conn, row):
+    """The questions and tasks whose words enter a cached dependency reason."""
+    from . import hubdb as H, task_relations as TR
+    from .scope_projection import body_sources
+    sources = []
+    for ask in conn.execute(f"SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                            f"WHERE m.sender_id=? AND m.kind='ask' AND m.superseded_at IS NULL AND {H.MESSAGE_TASK_SQL}=?",
+                            (row['owner_id'], row['id'])):
+        sources.extend([{'message': ask['id']}, body_sources(H._json(ask['refs'], {}))])
+    sources.extend({'task': tid} for (tid,) in conn.execute(TR.CHILD_IDS, (row['id'],)))
+    sources.extend({'task': other['id']} for other in TR.live_blockers(conn, row['id'], H.ACTIVE_STATUSES))
+    return [source for source in sources if source]
+
+
 def reason(conn, row):
     """The reason a task entering a wait shows (task_blocked.transition), or None to keep the caller's own."""
     found = holds(conn, row)
-    return (words(conn, found), "dependency") if found else (NOTHING, "stranded")
+    if found:
+        from . import hubdb as H
+        text = H.remember_sourced_text(conn, 'task', row['id'], 'blocked_reason', words(conn, found), text_sources(conn, row))
+        return text, "dependency"
+    return NOTHING, "stranded"
 
 
 def _applies(conn, row):
@@ -159,7 +182,7 @@ def refresh(conn, task_id, cleared=None, at=None):
     at = at or H.now()
     found = holds(conn, row)
     if found:
-        text = words(conn, found)
+        text = H.remember_sourced_text(conn, 'task', row['id'], 'blocked_reason', words(conn, found), text_sources(conn, row))
         if (row.get("blocked_reason"), row.get("blocked_kind")) != (text, "dependency") or row.get("holds_cleared_at"):
             change(conn, task_id, "blocked", reason=text[:1000], cause="dependency", cleared_at=None)
             task_blocked.bump(conn, row)

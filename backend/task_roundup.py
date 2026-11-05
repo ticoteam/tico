@@ -173,11 +173,15 @@ def send_detail(c, plan, skip_tasks=(), *, allowed=None):
     if not text:
         return 0, []
     actor = H.bot_actor(slug)
+    sources = [source for item in shown if item['tid'] for source in
+               ({'task': item['tid']}, *H.sourced_record_sources(c, 'task', item['tid']))]
+    text, refs = H.sourced_text(text, sources,
+                               RT.stamp({"wake": WAKE, "no_mentions": True}, WAKE))
     with isolated(c, WAKE, slug):
         try:
             # no_mentions: a task's title may say "@ana", which is text in the list, not a mention, so no person is delivered it.
             message = H._write_message(c, H.KEEPER, actor, text, _room(c, slug), "notice",
-                                       RT.stamp({"wake": WAKE, "no_mentions": True}, WAKE), None, None)
+                                       refs, None, None)
         except H.Refused:
             return 0, []               # not told this run: a later run may try again
         if not _delivered(c, slug, message):

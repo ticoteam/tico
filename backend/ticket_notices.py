@@ -94,7 +94,12 @@ def post(conn, kind, row, actor=None, blocker=None):
             # Its name and step are in the text, so the comment is read only by who may read the blocker too, then
             # and later (task_privacy.message_tasks): not a guest of the ticket, nor anyone after the blocker narrows.
             refs['blocker'] = blocker['id']
-        msg = H._write_message(conn, H.KEEPER, to, text(conn, kind, row, blocker, reader=to), conv, 'say', refs,
+        from .scope_projection import body_sources
+        sources = [body_sources(refs), *H.sourced_record_sources(conn, 'task', row['id'])]
+        if _names_blocker(conn, kind, blocker, to):
+            sources.extend(H.sourced_record_sources(conn, 'task', blocker['id']))
+        said, refs = H.sourced_text(text(conn, kind, row, blocker, reader=to), sources, refs)
+        msg = H._write_message(conn, H.KEEPER, to, said, conv, 'say', refs,
                                None, None)
         sent.append(msg['id'])
     if sent:

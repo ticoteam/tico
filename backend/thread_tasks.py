@@ -66,7 +66,13 @@ def install(app, store, auth, create_task, public_url=""):
         create = M.TaskCreate(title=body.title.strip(), body=text, owner=body.owner,
                               private=True if keep_private else None, links=links)
         try:
-            return create_task(request, create)
+            result = create_task(request, create)
+            if isinstance(result, dict) and isinstance(result.get("task"), dict):
+                from .scope_projection import body_sources
+                with store.transaction() as c:
+                    H.remember_sourced_text(c, "task", result["task"]["id"], "body", text,
+                                           [{"message": message_id}, body_sources(message.get("refs") or {})])
+            return result
         except Problem as refused:
             # The refusal's words name the task it repeats, when the viewer may know it: Make task links to it.
             twin = re.match(r"(\S+) already asks ", refused.detail) if refused.code == "duplicate" else None

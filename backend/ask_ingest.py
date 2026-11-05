@@ -684,7 +684,8 @@ def on_reply(c, actor, task_id, text, *, text_sources=()):
         if not source_readable(c, row["asker"], item):
             continue
         on = f' on \u201c{item.get("title") or ""}\u201d' if item.get("title") else ""
-        said, refs = H.sourced_text(f'{name} answered this{on}: "{answer}"', text_sources)
+        said, refs = H.sourced_text(f'{name} answered this{on}: "{answer}"',
+                                   [*text_sources, {'task': task_id}, *H.sourced_record_sources(c, 'task', task_id)])
         if row["kind"] == "loose":
             H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={**refs, "ask_ingest": row["id"]})
         else:

@@ -53,6 +53,20 @@ def project(c, scoped, payload, *, auth=None):
     if auth is None or scoped.who is None:
         raise Problem("privacy", "Source projection requires a scoped principal", 403)
 
+    def notes(value):
+        if isinstance(value, dict):
+            value = {key: notes(item) for key, item in value.items()}
+            if value.get("message_id") and {"body", "from_actor", "to_actor"}.issubset(value):
+                source = H.message(c, value["message_id"])
+                shown = turn_scope.message_view(c, source, who=scoped.who, auth=auth)
+                value["body"], value["refs"] = H.sourced_text(
+                    value["body"] if source and shown and source.get("body") == shown.get("body") else "",
+                    [body_sources((source or {}).get("refs") or {})], {"message": value["message_id"]})
+            return value
+        return [notes(item) for item in value] if isinstance(value, (list, tuple)) else value
+
+    payload = notes(payload)
+
     def reference(value):
         if not isinstance(value, str):
             return None
@@ -90,6 +104,16 @@ def project(c, scoped, payload, *, auth=None):
                         names.add(ref)
                 collect(item, parent)
     collect(payload)
+    stored_text, checked_text = {}, set()
+    while pending := (names | task_ids) - checked_text:
+        checked_text.update(pending)
+        for chunk in H.chunks(sorted(pending)):
+            marks = ','.join('?' * len(chunk))
+            for row in c.execute(f"SELECT record_id,field,refs FROM sourced_text_records WHERE kind='task' "
+                                 f"AND record_id IN ({marks})", chunk):
+                refs = H._json(row['refs'], {})
+                stored_text.setdefault(row['record_id'], {})[row['field']] = refs
+                collect(refs)
     # Task history omits its stored data column. Resolve only those event ids, never parse display text.
     for chunk in H.chunks(sorted(event_ids)):
         marks = ','.join('?' * len(chunk))
@@ -243,17 +267,18 @@ def project(c, scoped, payload, *, auth=None):
 
     gone = object()
 
-    def rejected(value):
-        return reference(value) in denied
+    def rejected(value, seen=frozenset()):
+        ref = reference(value)
+        return ref in denied or ref in stored_text and ref not in seen and has_denied(stored_text[ref], seen | {ref})
 
-    def has_denied(value):
+    def has_denied(value, seen=frozenset()):
         if isinstance(value, str):
-            return rejected(value)
+            return rejected(value, seen)
         if isinstance(value, list):
-            return any(has_denied(item) for item in value)
+            return any(has_denied(item, seen) for item in value)
         if isinstance(value, dict):
-            return (any(has_denied(item) for _, item in object_refs(value)) or
-                    any(has_denied(item) for item in value.values() if isinstance(item, (dict, list))))
+            return (any(has_denied(item, seen) for _, item in object_refs(value)) or
+                    any(has_denied(item, seen) for item in value.values() if isinstance(item, (dict, list))))
         return False
 
     def walk(value, parent='', legacy_titles=None):
@@ -276,8 +301,8 @@ def project(c, scoped, payload, *, auth=None):
                 return gone
             alias = scan_alias(value)
             direct_denied = {reference(item) for key, item in object_refs(value)
-                             if not (alias and key == 'file_id')} & denied
-            if direct_denied - content_denied:
+                             if not (alias and key == 'file_id') and rejected(item)}
+            if direct_denied - content_denied - stored_text.keys():
                 return gone
             if has_denied(value.get('source')) or has_denied(value.get('ref')):
                 return gone
@@ -304,6 +329,26 @@ def project(c, scoped, payload, *, auth=None):
                             out[key][qid] = [label for label in picks if not (
                                 has_denied(labels.get(label)) or label not in labels and label in legacy_titles)]
             H.clear_sourced_text(value, out, has_denied, hidden=bool(direct_denied))
+            dependency = value.get('blocked_kind') == 'dependency' or any(
+                hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency' for hold in value.get('holds') or [])
+            if dependency and value.get('id') in tasks:
+                from . import task_holds
+                row = H.task(c, value['id'])
+                reason = task_holds.words(c, task_holds.holds(c, row, who=scoped.who, auth=auth))
+                if 'blocked_reason' in out:
+                    out['blocked_reason'] = reason
+                for hold in out.get('holds') or []:
+                    if hold.get('kind') == 'blocked' and hold.get('cause') == 'dependency':
+                        hold['reason'] = reason
+            for field, provenance in stored_text.get(value.get('id'), {}).items():
+                if field in out:
+                    copied = {field: out[field], **provenance}
+                    out[field] = H.clear_sourced_text(copied, dict(copied), has_denied)[field]
+                if field == 'blocked_reason':
+                    for hold in out.get('holds') or []:
+                        if hold.get('kind') == 'blocked':
+                            copied = {**hold, **provenance}
+                            hold.update(H.clear_sourced_text(copied, dict(copied), has_denied))
             refs = value.get('refs') if isinstance(value.get('refs'), dict) else {}
             shown_refs = out.get('refs') if isinstance(out.get('refs'), dict) else {}
             if 'refs_json' in value:

@@ -442,6 +442,9 @@ def _propose(c, reason, left):
         # person who reads the owner's work may not be allowed to open. The Strategy Bot stays its requester, so the 5 a
         # day and a repeated proposal are still counted (strategy_bot.asked_today).
         made = H.task_create(c, STRATEGY_BOT, title, body, owner, lint=False, private=True)
+        for field, text in (('title', title), ('body', body)):
+            H.remember_sourced_text(c, 'task', made['id'], field, text,
+                                   [{'task': _task_of(item)} for item in left if _task_of(item)])
     except H.Refused as exc:
         c.execute("ROLLBACK TO strategy_propose")
         c.execute("RELEASE strategy_propose")

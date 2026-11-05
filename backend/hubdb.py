@@ -234,6 +234,9 @@ NOTICE_DAYS = 14                # how long a notice stays in the inbox
 
 # ----------------------------------------------------------------------------- schema
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS sourced_text_records (
+ kind TEXT NOT NULL, record_id TEXT NOT NULL, field TEXT NOT NULL, refs TEXT NOT NULL,
+ PRIMARY KEY(kind,record_id,field));
 CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
@@ -1110,7 +1113,8 @@ def _dump(value):
 
 
 SOURCED_TEXT_FIELDS = ("title", "name", "filename", "label", "text", "body", "other", "summary", "description",
-                       "preview", "note", "old", "new", "field", "recommend", "question", "original_summary", "error")
+                       "preview", "note", "old", "new", "field", "recommend", "question", "original_summary", "error",
+                       "subject", "reason", "blocked_reason", "payload", "answer", "ask")
 SOURCED_TEXT_SOURCES = ("body_sources", "sources")
 
 
@@ -1141,7 +1145,7 @@ def clear_sourced_text(value, shown, rejected, *, hidden=False, replacement=""):
         for container in (shown, shown.get("answer"), shown_answer):
             if isinstance(container, dict):
                 for key in SOURCED_TEXT_FIELDS:
-                    if key in container:
+                    if key in container and (key not in ('answer', 'ask') or isinstance(container[key], str)):
                         container[key] = replacement
         # Generated asks carry their wording in both the body and the structured question.
         for container in (shown_refs, shown.get("ask")):
@@ -1165,6 +1169,27 @@ def sourced_text(text, sources=(), refs=None):
     if kept:
         refs["body_sources"] = kept
     return text, refs
+
+
+def remember_sourced_text(conn, kind, record_id, field, text, sources):
+    """Keep provenance beside copied scalar columns whose record has no message refs."""
+    sources = list(sources)
+    for source in list(sources):
+        task_id = source.get('task') if isinstance(source, dict) else None
+        if task_id and not (kind == 'task' and task_id == record_id):
+            sources.extend(sourced_record_sources(conn, 'task', task_id))
+    text, refs = sourced_text(text, sources)
+    conn.execute("INSERT INTO sourced_text_records(kind,record_id,field,refs) VALUES(?,?,?,?) "
+                 "ON CONFLICT(kind,record_id,field) DO UPDATE SET refs=excluded.refs",
+                 (kind, record_id, field, _dump(refs)))
+    return text
+
+
+def sourced_record_sources(conn, kind, record_id):
+    """Snapshot transitive sources when copying a record, so later edits cannot erase their identities."""
+    return [source for row in conn.execute("SELECT refs FROM sourced_text_records WHERE kind=? AND record_id=?",
+                                           (kind, record_id))
+            for source in _json(row['refs'], {}).get('body_sources', [])]
 
 
 def answer_question(conn, target):
@@ -8928,6 +8953,9 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
         from .reconnects import fold_into as reconnects_fold
         body, refs = reconnects_fold(conn, task_row, body, refs)
     message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
+    from .scope_projection import body_sources
+    body, message_refs = sourced_text(body, [body_sources(message_refs),
+                                            *sourced_record_sources(conn, 'task', task_row['id'])], message_refs)
     return _write_message(conn, KEEPER, target, body,
                           conversation(conn, task_row["conversation_id"]), "notice",
                           message_refs, None, None)

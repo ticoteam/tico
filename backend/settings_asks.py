@@ -107,6 +107,7 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
     # Filed as the asker, who is then its requester: the request is theirs, BotOps or the Assistant only carried it.
     task = H.task_create(c, asker.actor, f"{asker_name} asks you to change {what}"[:200], body, chosen.actor,
                          lint=False)
+    H.remember_sourced_text(c, "task", task["id"], "body", body, (action.get("refs") or {}).get("body_sources", []))
     ask = {"task": task["id"], "asker": asker.actor, "room": room["id"], "bot": bot, "key": e.key, "target": on,
            "what": what}
     c.execute("UPDATE assistant_actions SET ask=? WHERE id=?", (json.dumps(ask), action["id"]))

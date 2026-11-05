@@ -11,6 +11,13 @@ converts the row first (`dict(row)`) or annotates the parameter and lets callers
 from typing import TypedDict
 
 
+class SourcedTextRecordRow(TypedDict):
+    kind: str
+    record_id: str
+    field: str
+    refs: str
+
+
 class PageIdentityRow(TypedDict):
     """An alias keeps its page's read provenance after the bytes are purged."""
     identity: str

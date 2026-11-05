@@ -348,12 +348,13 @@ def _open_report(c, name):
                   (ACTOR, H.KEEPER, like))
 
 
-def deliver(c, auth, name, body, count):
+def deliver(c, auth, name, body, count, sources=()):
     """Open the department's Task check task, or hand a still-open one the new report. Returns (task id, what happened)."""
     from . import rooms
     title = f"Task check: {name} ({count})"
     open_task = _open_report(c, name)
     if open_task:
+        H.remember_sourced_text(c, 'task', open_task['id'], 'body', body, sources)
         if open_task["body"] == body:
             return open_task["id"], "unchanged"
         H.task_update(c, H.KEEPER, open_task["id"], title=title, body=body)
@@ -363,6 +364,7 @@ def deliver(c, auth, name, body, count):
     conversation = rooms.task_conversation_id(c, auth, ACTOR, H.KEEPER) if auth is not None else None
     made = H.task_create(c, H.KEEPER, title, body, ACTOR, deduplicate=False, conversation_id=conversation, lint=False,
                          private=False, wake_refs={"wake": EVENT}, trigger="schedule", trigger_source=EVENT)
+    H.remember_sourced_text(c, 'task', made['id'], 'body', body, sources)
     return made["id"], "opened"
 
 
@@ -389,7 +391,8 @@ def report(c, auth, settings, at):
         task_id, state = None, ""
         if items:
             shown, more = items[:PER_DEPARTMENT], max(0, len(items) - PER_DEPARTMENT)
-            task_id, state = deliver(c, auth, name, render(c, name, shown, more), len(items))
+            task_id, state = deliver(c, auth, name, render(c, name, shown, more), len(items),
+                                     [{'task': item['task']} for item in shown if item['task']])
             for item in shown:
                 c.execute("INSERT INTO task_manager_seen(key,department,stamp,seen_at) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE "
                           "SET stamp=excluded.stamp, seen_at=excluded.seen_at, department=excluded.department",
