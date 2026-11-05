@@ -117,7 +117,7 @@ const gate = () => { let resolve; const promise = new Promise(r => { resolve = r
    const bodyWrite = gate(); hold = bodyWrite;
    await details.fill('Only my details changed');
    await a.waitForFunction(() => !!taskModal().taskLive.draft.flight);
-   await title.evaluate(el => { el.focus(); getSelection().setBaseAndExtent(el.firstChild, 2, el.firstChild, 5); });
+   await title.evaluate(el => { el.click(); el.focus(); getSelection().setBaseAndExtent(el.firstChild, 2, el.firstChild, 5); });
    task.title = 'Remote title now'; task.version++;
    await update();
    await a.waitForFunction(() => taskModal().taskLive.draft.base.title === 'Remote title now');
