@@ -3534,8 +3534,6 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
     written = message(conn, row["id"])
-    if kind == "ask" and (rerouted := ask_routing.notice(conn, written)):
-        written = {**written, "rerouted": rerouted}
     return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 
@@ -9359,6 +9357,9 @@ def message_view(conn, row):
     if row:
         row = dict(row)
         row["refs"] = _json(row.get("refs"), {}) or {}
+        if row["kind"] == "ask" and row["refs"].get("rerouted_from"):
+            from . import ask_routing
+            row["rerouted"] = ask_routing.notice(conn, row)
         if row["kind"] == "ask" and row["refs"].get("questions"):
             row["ask"] = {k: row["refs"].get(k) for k in ("questions", "who")}
             row["answers"] = review_answers(conn, row["id"])

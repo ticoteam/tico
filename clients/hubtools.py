@@ -464,12 +464,12 @@ def ask_create(api, bots, text, wait, args):
             else:
                 failed[bot] = {"error": f"The question was not delivered: {exc.detail}. Retry, or put it in the task note."}
             continue
-        if msg.get("warning"):          # over its spend limit: delivered, but no answer comes before it resets
-            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"]}
-            continue
-        pending[msg["id"]] = bot
         if msg.get("rerouted"):
             pending.routed[bot] = {"recipient_id": msg["recipient_id"], "rerouted": msg["rerouted"]}
+        if msg.get("warning"):          # over its spend limit: delivered, but no answer comes before it resets
+            failed[bot] = {"warning": msg["warning"], "message_id": msg["id"], **pending.routed.get(bot, {})}
+            continue
+        pending[msg["id"]] = bot
     if failed and not pending and not any("warning" in v for v in failed.values()):
         raise APIError("not_delivered", " ".join(v["error"] for v in failed.values()),
                        retryable=any(v.get("retryable") for v in failed.values()))

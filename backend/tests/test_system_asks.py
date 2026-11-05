@@ -46,9 +46,10 @@ def test_structured_comment_routes_the_system_requester_or_explicit_keeper(api, 
     token = bot_token(api)
     with api.app.state.store.transaction() as c:
         task = system_task(c)
-    post(api, f"tasks/{task['id']}/comments", {"text": "Should this cover the beta?", "ask": {
+    result = post(api, f"tasks/{task['id']}/comments", {"text": "Should this cover the beta?", "ask": {
         "who": recipient, "questions": [{"id": "scope", "header": "Scope", "question": "Should this cover the beta?",
                                          "options": []}]}}, token=token)
+    assert result["comment"]["rerouted"].startswith("keeper is the system; sent to ")
     with api.app.state.store.read() as c:
         msg, = H.open_task_asks(c, H.task(c, task["id"]))
         assert msg["recipient_id"] == "human:ben" and msg["refs"]["rerouted_from"] == H.KEEPER
