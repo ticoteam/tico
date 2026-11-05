@@ -197,7 +197,10 @@ function sessionReturn() {
   try { kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null'); } catch {}
   if (!identity || !kept || kept.identity !== identity || !(Date.now() - kept.at < 86400000)) { try { sessionStorage.removeItem(SESSION_RETURN); } catch {} return; }
   // A proxy's login sends the browser back to the address without its #, which never reached the server.
-  if (kept.hash && (!location.hash || location.hash === '#')) history.replaceState(null, '', location.pathname + location.search + kept.hash);
+  if (kept.hash && (!location.hash || location.hash === '#' || BOOT_DEFAULT_ROUTE)) {
+    history.replaceState(null, '', location.pathname + location.search + kept.hash);
+    BOOT_DEFAULT_ROUTE = false;
+  }
   if (kept.task && typeof kept.task.id === 'string') SESSION.reopen = kept.task;
   kept = {identity, at: kept.at, hash: '', task: null,
     fields: (kept.fields || []).filter(f => f && typeof f.scope === 'string' && typeof f.key === 'string' && typeof f.value === 'string')};

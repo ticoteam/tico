@@ -16,7 +16,9 @@ const init = () => {
  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined});
  try {
   for (const width of [390, 1440]) {
-   const {page, data, errors} = await open(browser, {viewport: {width, height: 900}});
+   const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: width <= 390, serviceWorkers: 'block'});
+   const sharedBrowser = {newPage: async options => { const page = await context.newPage(); await page.setViewportSize(options.viewport); return page; }};
+   const {page, data, errors} = await open(sharedBrowser, {viewport: {width, height: 900}});
    const task = {...data.tasks[0], title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
    const writes = []; let hold, offline = false;
    let me = {id: 'ana', name: 'Ana', role: 'owner', mover: true, cloud: true, registered: true, config: {environment_id: 'acme-org'}};
@@ -164,9 +166,7 @@ const init = () => {
    pending.resolve(); await idle();
    assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().taskLive.id) === taskModal().taskLive.draft), true, 'late success cannot evict the reopened draft');
    // B opens clean before A edits; both actual pages share localStorage in one browser context.
-   const clean = await open({newPage: async options => {
-    const second = await page.context().newPage(); await second.setViewportSize(options.viewport); return second;
-   }}, {viewport: {width, height: 900}});
+   const clean = await open(sharedBrowser, {viewport: {width, height: 900}});
    await clean.page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
    await clean.page.evaluate(async task => { taskLiveStop(taskModal()); S.config.environment_id = 'acme-org'; sessionReturn(); await taskModalShow(task); }, task);
    assert.equal(await clean.page.evaluate(() => taskModal().taskLive.identity), await page.evaluate(() => taskModal().taskLive.identity));
@@ -268,7 +268,7 @@ const init = () => {
    assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.deepEqual(errors, []);
-   await page.close();
+   await page.close(); await context.close();
   }
   console.log('Task draft regressions: phone/desktop stale revision, Add forms, refresh/presence, ownership, offline reload, publication/property revisions, shared storage, debounce and identity-safe sign-in passed');
  } finally { await browser.close(); }
