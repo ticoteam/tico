@@ -397,3 +397,19 @@ def test_make_page_does_not_fall_back_to_bot_rights_after_person_loses_sign_in(a
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=?",
                              (request["id"],)).fetchone()
+
+
+def test_people_sharing_the_assistant_do_not_overwrite_each_others_page(api):
+    t = task(api, private=False)
+    machine, first, _ = start(api, t["id"], person="ben-test")
+    original = page(api, first, task=t["id"], data=b"<h1>Ben's plan</h1>")
+    assert original.status_code == 200, original.text
+    fid = original.json()["page"]["file_id"]
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    _, second, _ = start(api, t["id"], person="cara-test", machine=machine)
+    other = page(api, second, task=t["id"], data=b"<h1>Cara's plan</h1>")
+    assert other.status_code == 200, other.text
+    assert other.json()["page"]["file_id"] != fid
+    assert get(api, "pages/" + fid, "ben-test")["page"]["version"] == 1
+    content = api.get("/api/v2/files/" + fid, headers=headers("ben-test"))
+    assert b"Ben's plan" in content.content and b"Cara's plan" not in content.content

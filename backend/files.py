@@ -841,6 +841,9 @@ class Files:
             else:
                 name = str(fields.get("name") or relative.rsplit("/", 1)[-1])
                 identity = series(bot, relative or name)
+                if who.via == "assistant":
+                    # A filename must not overwrite another person’s page from the shared Assistant.
+                    identity += ":person:" + who.actor
             name, mime = BF.check_name(name)
             # A streamed video or audio file was checked against the server's limit when it was spooled.
             if not failed and not staged:
