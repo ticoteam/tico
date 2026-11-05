@@ -51,6 +51,8 @@ pub struct Runner {
     pub active: Mutex<HashSet<String>>,
     /// Workers preparing or running, including one whose lease lapsed while its process still runs.
     pub places: Mutex<HashSet<String>>,
+    /// Fresh Linux memory readings hold preparation at 85% until below 80%, independently of diagnostics.
+    pub(crate) memory_hold: Mutex<bool>,
     /// One push or history publish at a time on this computer.
     pub push_lock: tokio::sync::Mutex<()>,
     pub sign_in: crate::signin::SignIn,
@@ -156,6 +158,7 @@ impl Runner {
             socket: None,
             active: Mutex::new(HashSet::new()),
             places: Mutex::new(HashSet::new()),
+            memory_hold: Mutex::new(false),
             push_lock: tokio::sync::Mutex::new(()),
             sign_in: crate::signin::SignIn::new(&projects_dir),
             publish_notes: Mutex::new(HashMap::new()),
@@ -997,6 +1000,7 @@ impl Runner {
             if follower.blocks_claims(!workers.is_empty()).await {
                 return Ok(()); // an update is due or under way: the updater restarts this runner once nothing runs
             }
+            if !follower.draining() { self.drain.end(); } // a timed-out drain can release claims in this tick
         }
         // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
         let assignments = self.assignments_seen();

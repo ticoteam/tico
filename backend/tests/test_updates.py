@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend import updates
+from backend import threads, updates
+from backend.auth import Identity
 from backend.store import H, Problem, digest
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
@@ -81,6 +82,38 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
         second = updates.dispatch(c, MORNING)
         assert second and second != first
         assert c.execute("SELECT state FROM update_queue WHERE bot=? AND day='2026-09-29'", (first,)).fetchone()[0] == "posted"
+
+
+@pytest.mark.parametrize("delivery", [False, True])
+def test_update_requests_keep_their_readers_through_thread_migration(api, delivery):
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        recipient = bot_id(c, "ops")
+        updates.build_queue(c, "2026-09-29", "daily")
+        row = c.execute("SELECT * FROM update_queue WHERE bot=?", (recipient,)).fetchone()
+        message = updates.send_request(c, row, delivery=delivery)
+        owner = auth.owner_identity(c)
+        people = [owner, Identity("human:ben", "human", "ben@acme.example"),
+                  Identity("human:cara", "human", "cara@acme.example")]
+        bots = [Identity(H.bot_actor(bot["id"]), "bot", agent="standing") for bot in H.bots(c)]
+        expected = {owner.actor, H.bot_actor(recipient)}
+
+        # A request can carry Learn's sources and task facts. Read access to another bot's activity must not
+        # turn its request into a company conversation, either before or after the migration.
+        before = set()
+        for who in people + bots:
+            try:
+                auth.conversation(c, who, message["conversation_id"])
+                before.add(who.actor)
+            except Problem:
+                pass
+        assert before == expected
+        c.execute("DELETE FROM registry_metadata WHERE key IN (?,?)",
+                  (threads.MIGRATION_KEY, threads.MIGRATION_PROGRESS_KEY))
+        assert threads.migrate(c)
+        for target in (message["conversation_id"], H.message(c, message["id"])):
+            after = {who.actor for who in people + bots if threads.readable(c, threads.viewer(auth, who), target)}
+            assert after == expected
 
 
 def test_a_bot_posts_once_a_day_and_each_person_has_their_own_read_state(api, monkeypatch):

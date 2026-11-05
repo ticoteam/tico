@@ -77,7 +77,7 @@ def test_no_haiku_in_options_duplicate_refused_empty_clears(api):
     put(api, PATH, {'pilots': [entry(), entry()]}, expected=422)
     put(api, PATH, {'pilots': [entry()]})
     assert put(api, PATH, {'pilots': []})['job']['pilots'] == []
-    put(api, 'system-routines/learnings', {'pilots': []}, expected=422)
+    put(api, 'system-routines/kpi_asks', {'pilots': []}, expected=422)
 
 
 def test_members_cannot_change_or_run_or_read_private_pilot_list(api):

@@ -10,6 +10,14 @@ even while a runner still checks in. Enrollment and subsequent heartbeats finish
 pending `starting` transition, so the next heartbeat repairs an old record too. A heartbeat does not cancel a stop
 already reserved by the scheduler.
 
+A stopped machine stays asleep while its queued tasks wait for a person, a snooze, a prerequisite or a check.
+Health and Computers show those waits. With no other reason, Computers says **asleep; starts when work can run**.
+Samples and load from the last boot do not mean an asleep machine is failing to report. They still hold new starts
+once it is running, but raise no load warning after a planned stop, even with recent runner contact. Last-boot
+readiness can wake the machine for a fresh report too; stale samples and memory holds do not block that wake.
+Health ages the next job that can run past those last-boot holds, so old task waits do not age newly queued work.
+Work that can run but has waited over 15 minutes for the machine to start is a Health problem.
+
 ## Shared or own
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
@@ -48,6 +56,27 @@ cloud machine" under Computer).
   separate CPU accounting.
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
   number of bots on it.
+
+## Tico support
+
+Each cloud machine comes with a support helper, on by default. Tico staff and the Support Agent can use it to read
+and change files and run commands, including through the machine user's `sudo`. That can reach bot workspaces and
+credentials on the disk. Each machine keeps an owner log of support actions and who acted.
+
+The owner can turn **Tico support can reach our cloud machines** off or back on in **Settings > People**. HQ holds
+the switch for all of the company's cloud machines; a failed call leaves no saved local choice. Changes appear in
+Tico's audit log under the owner's name. **Settings > Computers** shows each machine's helper state. See
+[Tico support on cloud machines](support.md#tico-support-on-cloud-machines) for how it differs from app support access.
+
+HQ registers the helper on machine creation and start. Its one-time enrollment code travels in
+`TICO_SUPPORT_ENROLL_CODE`, with `TICO_SUPPORT_HQ_URL`, as sandbox environment variables, never in command text.
+On the machine, HQ's install command downloads the helper's signed release, checks its signature and checksum,
+enrolls it through standard input and starts its service. A failed helper install leaves the runner working. Existing
+machines receive it on their next start, even from an old base snapshot. With the company switch off, HQ supplies no
+helper enrollment code.
+
+The helper is never installed on a shared host serving several companies. The shared cloud machine described above
+belongs to one company, so it can have the helper.
 
 ## A stop never lands under a turn
 

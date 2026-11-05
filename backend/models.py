@@ -195,6 +195,7 @@ class TaskBlocker(Contract):
 
 
 class TaskCreate(Contract):
+    live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
     public_title: str | None = Field(default=None, max_length=300)
@@ -229,7 +230,7 @@ class TaskCreate(Contract):
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
-    # A bot's own subtask run on another model, `<runtime>[:<model>]`, as a review or a check (backend/check_models.py).
+    # With a model, the bot's own check session; review alone is a normal review child.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
     # The model a bot-owned task's runs use, with its effort and harness (backend/task_run_models.py). No model is the
@@ -239,6 +240,15 @@ class TaskCreate(Contract):
     harness: ID | None = None
     # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
     from_private: StrictBool = False
+
+    @model_validator(mode="after")
+    def review_child(self):
+        if self.check_role == "review" and self.check_model is None:
+            if not any(r.kind == "parent" for r in self.relations):
+                raise ValueError("A review is a child task: choose its parent")
+            if not re.match(r"^review\s+[12](?:\s*:|$)", self.title.strip(), re.I):
+                self.title = "Review 1: " + self.title
+        return self
 
 
 class TaskRunModel(Contract):
@@ -1325,6 +1335,7 @@ class StructuredReadiness(Contract):
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
     worktree_waits: bool | None = None
+    worktree_recovery: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
@@ -1442,8 +1453,8 @@ class Heartbeat(Contract):
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
         "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
-        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1"]] = Field(
-        default_factory=list, max_length=20)
+        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1",
+        "harness_allocation_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2089,6 +2100,11 @@ class UsageCount(Contract):
     enabled: bool
 
 
+class SuggestionSettings(Contract):
+    share_stats_for_suggestions: StrictBool | None = None
+    report_suggestion_outcomes: StrictBool | None = None
+
+
 class StrategyBotChecks(Contract):
     on: bool
 
@@ -2309,12 +2325,16 @@ class LoadSnapshot(Contract):
 
 
 class StartPlace(Contract):
+    # A real process allocated to this turn stays admitted even if its own memory raises the computer's load.
+    harness_allocated: bool = False
     # The reasons runner-rs reports while a claimed turn gives its computer place back (execute.rs wait_before_start).
-    waiting: Literal["", "shared login", "pre-start requirements", "Docker turn user"] = ""
+    waiting: str = Field(default="", max_length=40,
+                         pattern=r"^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$")
 
 
 class Started(Contract):
     thread_id: ID
+    harness_allocated: bool = False
     load_snapshot: LoadSnapshot | None = None
 
 
@@ -2871,6 +2891,11 @@ class UpdatePost(Contract):
     slides: UpdateSlides | None = None                                 # a week in review
     day: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None   # only a day Tico asked to redo
     replace_draft: bool = False                                        # a person's own words over their Assistant draft
+    # What a bot's turn reports back (a learning or suggestion delivery): how many learnings it kept (at most 15),
+    # the suggestions it acted on, and the delivery this post answers.
+    learnings_saved: Annotated[int, Field(ge=0, le=15)] | None = None
+    suggestions_seen: list[Annotated[str, Field(max_length=300)]] | None = Field(default=None, max_length=10)
+    delivery_batch_id: Annotated[str, Field(max_length=80)] | None = None
 
 
 class UpdateRedo(Contract):
@@ -3140,7 +3165,7 @@ class GrowthSettingsUpdate(Contract):
     margin_pct: float | None = Field(default=None, ge=0, le=100)
 
 
-# Settings > Mailboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
+# Settings > Inboxes (backend/mailboxes.py): connect a mailbox, and who can use it.
 MailboxLevel = Literal["read", "read_write"]
 
 

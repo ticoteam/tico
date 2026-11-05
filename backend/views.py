@@ -809,7 +809,7 @@ def operation_issues(c, who, auth):
         if key and key["status"] == "failing":
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
-                needs_person=True, action="Check the key in Settings > Google.")
+                needs_person=True, action="Check the key in Settings > Inboxes.")
         sync_owners = google_workspace.workspace_sync_owners(c)
         for box in google_workspace.workspace_mailboxes(c):
             if box["address"] not in sync_owners:
@@ -827,9 +827,9 @@ def operation_issues(c, who, auth):
                 holder = labels.get(grant["holder"]) or "another computer"
                 bot_computer = labels.get(host) or "the computer that runs their message bot"
                 add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Google to move it "
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Inboxes to move it "
                     "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
-                    action="Open Settings > Google")
+                    action="Open Settings > Inboxes")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
@@ -905,7 +905,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
     from .start_places import computer_hold
+    from .cloud_machines import resting
     from . import org_turns
+    asleep = (location.get("machine") or {}).get("runner_id") in resting(c)
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -920,7 +922,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
-    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+    elif (not location["online"] or asleep) and (cloud := cloud_machine_wait(c, bot)):
         # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
         label = "Saved — " + cloud
     elif not location["online"]:
@@ -931,9 +933,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and (
-            hold := computer_hold(c, location["machine"]["runner_id"])):
-        # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
+    elif (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"], person=human)):
+        # On Linux, a person's priority cannot make memory available for another process.
         label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
@@ -1015,7 +1017,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
     far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
-    A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
+    A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
     person = H.person_sent_sql()
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
@@ -1023,9 +1025,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
     # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
     job = c.execute(f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,"
-                    "a.stop_requested_at,a.started_at AS attempt_started_at "
+                    "a.stop_requested_at,a.started_at AS attempt_started_at,p.wait_reason AS start_wait_reason "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
+                    "LEFT JOIN attempts a ON a.id=j.attempt_id LEFT JOIN start_places p ON p.attempt_id=a.id "
+                    "WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
                     "AND NOT (j.state='canceled' AND coalesce(j.wake_class,'')='duplicate') "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
@@ -1054,6 +1057,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             # Before it starts, or after: a fallback hop takes its own login once the turn has started.
             from .login_waits import waiting as login_wait
             waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
+            if state == "leased" and (job["start_wait_reason"] or "").startswith(start_places.MEMORY_HOLD):
+                waiting = "Waiting: " + job["start_wait_reason"]
             label = waiting or label
         readiness_reason = ""
         if state == "queued":
@@ -1235,7 +1240,9 @@ def checkout_issue(add, row, busy=0):
         add("runner_checkout", row["label"] + " can't update itself",
             f"{behind} commit{'s' if behind != 1 else ''} behind main: {checkout['blocked']}.",
             machine=row["id"], since=checkout.get("checked_at"), severity="warning",
-            action="On that computer: commit or stash the changes (or run pip install and scripts/tico update "
+            action="Tico repairs these links on the next update. No local work needs a decision."
+                   if str(checkout["blocked"]).startswith("only flattened Tico links:") else
+                   "On that computer: commit or stash the changes (or run pip install and scripts/tico update "
                    "for a dependency change); the runner then updates itself.")
     elif behind:
         stamp = checkout.get("behind_since") or checkout.get("checked_at") or ""
@@ -1339,7 +1346,9 @@ def recommendation(ask, me):
     if len(questions) == 1 and not questions[0].get("multi"):
         option = next((o["label"] for o in questions[0].get("options") or []
                        if str(o.get("label") or "").strip().casefold() == do.casefold()), None)
-    return {"do": do, "ask": ask["id"], "option": option, "kind": default.get("kind")}
+    source = default.get("source")
+    return {"do": do, "ask": ask["id"], "option": option, "kind": default.get("kind"),
+            **({"source": source} if source else {})}
 
 
 def _whole_card(c, task, asked, me):
@@ -1381,7 +1390,8 @@ def take_recommendation(c, auth, who, asked, version=None):
         raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
     if not c.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}", (asked["id"],)).fetchone():
         raise Problem("answered", "This question was already answered", 409)
-    text = "Yes, do what you recommend: " + rec["do"]
+    text, text_refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
+    state_text = "Accepted the recommendation." if rec.get("source") else text
     task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
     task = H.task(c, task_id) if task_id else None
     if task and version is not None and task["version"] != version:
@@ -1394,20 +1404,21 @@ def take_recommendation(c, auth, who, asked, version=None):
         answer_task(c, auth, who, task_id, M.TaskAnswer(target=target,
                                                         answers={question["id"]: [rec["option"]]}), wake=True)
     else:
-        H.answer(c, who.actor, asked["id"], text)
+        H.answer(c, who.actor, asked["id"], text, comment_refs=text_refs)
     task = H.task(c, task_id) if task_id else None
     if task and task["status"] in H.ACTIVE_STATUSES:
         if finish:
-            H.task_update(c, who.actor, task_id, status="done", note=text)
+            H.task_update(c, who.actor, task_id, status="done", note=state_text)
         waits = [t for t in [task, *(H.task(c, a) for a in TR.ancestors(c, task_id))]
                  if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
                  and (t is task or t["owner_id"] == asked["sender_id"] and not _another_card_under(c, t, task_id, who.actor))]
         for t in waits:
             c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
-            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, text)
+            H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, state_text)
         if waits:
             H._recount(c, who.actor)
-    return {"did": rec["do"], "task": task_id, "done": finish}
+    return {"did": rec["do"], "task": task_id, "done": finish,
+            **({"source": rec["source"]} if rec.get("source") else {})}
 
 
 def _quoted(text, n=90):
@@ -1833,6 +1844,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
+        if row["kind"] == "letter":
+            try:
+                auth.approval(c, who, row["id"])
+            except Problem:
+                continue
         msg = H.message(c, row["message_id"])
         if msg and msg["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
@@ -1899,7 +1915,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         if item["kind"] in ("question", "ask"):
             item["why"] = card_why(item)
         item["tier"] = decide_tier(item, at, own)
-    return sorted(items, key=needs_key)
+    from .files import readable_page_refs
+    return sorted(readable_page_refs(c, auth, who, items), key=needs_key)
 
 
 def _readable(auth, c, who, task_id):
@@ -2152,6 +2169,8 @@ def pending_rows(c, auth, who, task_view):
         if not row or not msg or msg["recipient_id"] != who.actor:
             continue
         try:
+            if row["kind"] == "letter":
+                auth.approval(c, who, aid)
             privacy.require_payload(c, who, row)
             privacy.require_message(c, who, msg)
         except Problem:
@@ -2213,6 +2232,8 @@ def history_rows(c, auth, who, status, from_actor, before, since, need):
                    "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
                    "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
             try:
+                if row["kind"] == "letter":
+                    auth.approval(c, who, row["id"])
                 if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
                     continue
                 privacy.require_payload(c, who, row)

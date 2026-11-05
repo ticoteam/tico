@@ -65,6 +65,57 @@ def connected(api, hq):
     return r.json()
 
 
+def test_administration_follows_the_company_connection_for_members_too(api, hq):
+    assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
+    connected(api, hq)
+    calls = len(hq.seen)
+    config = api.get('/api/v2/config', headers=headers('cara-test')).json()
+    assert config['administration_url'] == 'https://app.tico.dev/servers'
+    assert 'company' not in config and 'server_key' not in config and SERVER_KEY not in json.dumps(config)
+    assert api.get(PATH, headers=headers('cara-test')).status_code == 403
+    assert len(hq.seen) == calls                  # naming the portal needs no HQ call or manager permission
+    assert api.get('/api/me', headers=headers()).json()['config']['administration_url'] == config['administration_url']
+    hq.answers[('DELETE', '/v1/portal/server')] = lambda request: reply(204)
+    assert api.delete(PATH, headers=headers()).status_code == 200
+    assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
+
+
+def test_administration_requires_a_tico_account_not_just_hosting_or_oidc(api, monkeypatch):
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, 'hosted', 'own')
+    monkeypatch.setattr(settings, 'auth_proxy', 'oidc')
+    monkeypatch.setattr(settings, 'oidc_client_id', 'synthetic-client')
+    monkeypatch.setattr(settings, 'oidc_issuer', 'https://accounts.google.com')
+    read = lambda: api.get('/api/v2/config', headers=headers()).json()['administration_url']
+    assert read() == ''
+    monkeypatch.setattr(settings, 'oidc_issuer', 'https://accounts.tico.dev/')
+    assert read() == CS.PORTAL_HOME
+    monkeypatch.setattr(settings, 'oidc_issuer', 'https://accounts.tico.dev.acme.example')
+    assert read() == ''
+
+
+def test_administration_uses_the_cloud_company_page_and_hides_in_rehearsal(api, monkeypatch):
+    from backend import cloud_access
+    store = api.app.state.store
+    portal = 'https://app.tico.dev/billing/acme'
+    with store.transaction() as c:
+        c.execute('INSERT INTO registry_metadata VALUES(?,?)',
+                  (cloud_access.KEY, json.dumps({'access': 'open', 'billing_url': portal})))
+    assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == portal
+    monkeypatch.setattr(store.settings, 'rehearsal', True)
+    assert api.get('/api/v2/config', headers=headers()).json()['administration_url'] == ''
+
+
+def test_administration_opens_only_portal_pages_and_drops_queries():
+    """A custom Gateway can name any https address, and a query or fragment could carry a token."""
+    assert CS._admin_destination('https://app.tico.dev/billing/acme') == 'https://app.tico.dev/billing/acme'
+    for value in ('https://login.acme.example/admin', 'http://app.tico.dev/billing', 'https://app.tico.dev.acme.example/',
+                  'https://user@app.tico.dev/', 'https://app.tico.dev:8443/', None, '', 42):
+        assert CS._admin_destination(value) == CS.PORTAL_HOME, value
+    assert CS._admin_destination('https://app.tico.dev/billing?token=synthetic-secret#access_token=x') == \
+        'https://app.tico.dev/billing'
+
+
 def test_preview_then_connect_proves_the_address_and_seals_the_key(api, hq):
     assert api.get(CS.PROOF_PATH).status_code == 404       # nothing pending: no proof, and no sign-in asked
     hq.answers[("POST", "/v1/portal/server-connection")] = lambda request: (

@@ -198,7 +198,7 @@ class BotSetup:
                 log(f"Tico runner: {bot} took {len(changed)} updated file{'s' if len(changed) != 1 else ''} from the {template} template")
             return changed
         except Exception as exc:
-            log(f"Tico runner: could not refresh {bot} from its template ({type(exc).__name__})")
+            log(f"Tico runner: could not refresh {bot} from its template: {exc}")
             return []
 
 

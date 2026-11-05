@@ -151,12 +151,23 @@ def batch_waiters(c, bot):
             wake_presets._release(c, bot, jobs)
 
 
-def github_read(c, prs, snapshots):
-    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+def github_recoveries(c, prs, snapshots):
+    """Repositories whose complete read can clear an open access outage, without taking a writer."""
     repos = {}
     for pr in prs:
         if pr.get('repo'):
             repos.setdefault(pr['repo'].lower(), []).append(snapshots.get(pr['id']))
+    restored = []
     for repo, results in repos.items():
         if results and all(r and not r.get('error') and r.get('head_sha') for r in results):
-            observe(c, 'github:' + repo, 'GitHub checks access', active=False)
+            key = PREFIX + hashlib.sha256(('github:' + repo).encode()).hexdigest()[:32]
+            saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
+            if saved and (H._json(saved[0], {}) or {}).get('active'):
+                restored.append(repo)
+    return restored
+
+
+def github_read(c, prs, snapshots):
+    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+    for repo in github_recoveries(c, prs, snapshots):
+        observe(c, 'github:' + repo, 'GitHub checks access', active=False)

@@ -50,6 +50,26 @@ def test_a_calls_cost_is_the_providers_own_figure_else_its_tokens_at_list_price(
     assert B.cost_usd(settings, "a-model-with-no-price", {"output_tokens": 1_000_000}) == 50.0
 
 
+def test_a_terra_call_at_272000_prompt_tokens_is_priced_at_the_long_tier_as_one_request(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    # The long-prompt tier starts at 272,000 prompt tokens: 271,999 is still the standard rate.
+    assert B.cost_usd(settings, "gpt-6.1-terra", {"input_tokens": 271_999, "output_tokens": 1_000}) == \
+        round((271_999 * 1.25 + 1_000 * 6.25) / 1_000_000, 6)
+    assert B.cost_usd(settings, "gpt-6.1-terra", {"input_tokens": 272_000, "output_tokens": 1_000}) == \
+        round((272_000 * 2.5 + 1_000 * 9.375) / 1_000_000, 6)
+    # Fresh and cached input together make the prompt; each part is billed at the long tier's own rate.
+    assert B.cost_usd(settings, "gpt-6.1-terra",
+                      {"input_tokens": 200_000, "cache_read_input_tokens": 72_000, "output_tokens": 1_000}) == \
+        round((200_000 * 2.5 + 72_000 * 0.125 + 1_000 * 9.375) / 1_000_000, 6)
+
+
+def test_a_haiku_judge_call_over_its_long_tier_keeps_the_standard_price(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    # Claude Haiku 5.5's long-prompt tier (over 100,000 prompt tokens) stays off judge calls until its rate is approved.
+    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == \
+        round((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000, 6)
+
+
 def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallback_answered(api, monkeypatch):
     priced(api.app.state.store.settings)
     jev = fake(api)
@@ -360,11 +380,13 @@ def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provid
     assert field == J.MAX_OUTPUT_TOKENS == B.MAX_OUTPUT_TOKENS
     if provider == "openai":
         assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
-    # The draft writer is not a decision call and keeps its own length: only Anthropic, which requires one, is capped.
+    # The draft writer is metered too, so it carries the same cap in the same field.
     J.llm_writer(provider, "synthetic", model, opener=lambda request, timeout=None: seen.append(
         json.loads(request.data)) or WholeAllowance(provider)(request))("Draft it.", "Ana's facts")
-    assert provider == "anthropic" or not ({"max_tokens", "max_completion_tokens"} & set(seen[-1])
-                                           or "maxOutputTokens" in (seen[-1].get("generationConfig") or {}))
+    body = seen[-1]
+    assert {"anthropic": body.get("max_tokens"), "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
+            "openai": body.get("max_completion_tokens"), "xai": body.get("max_tokens"),
+            "openrouter": body.get("max_tokens")}[provider] == J.MAX_OUTPUT_TOKENS
 
 
 @pytest.mark.parametrize("provider,model", COMPANY_MODELS)

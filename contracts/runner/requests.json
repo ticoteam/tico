@@ -932,7 +932,8 @@
        "model_subscription_activation_v1",
        "model_connect_v1",
        "threads_v1",
-       "memory_tidy_packets_v1"
+       "memory_tidy_packets_v1",
+       "harness_allocation_v1"
       ],
       "type": "string"
      },
@@ -2236,14 +2237,15 @@
   "StartPlace": {
    "additionalProperties": false,
    "properties": {
+    "harness_allocated": {
+     "default": false,
+     "title": "Harness Allocated",
+     "type": "boolean"
+    },
     "waiting": {
      "default": "",
-     "enum": [
-      "",
-      "shared login",
-      "pre-start requirements",
-      "Docker turn user"
-     ],
+     "maxLength": 40,
+     "pattern": "^(?:|shared login|pre-start requirements|Docker turn user|computer busy: memory (?:100|[1-9]?[0-9])%)$",
      "title": "Waiting",
      "type": "string"
     }
@@ -2254,6 +2256,11 @@
   "Started": {
    "additionalProperties": false,
    "properties": {
+    "harness_allocated": {
+     "default": false,
+     "title": "Harness Allocated",
+     "type": "boolean"
+    },
     "load_snapshot": {
      "anyOf": [
       {
@@ -2458,6 +2465,18 @@
      ],
      "default": null,
      "title": "Trust"
+    },
+    "worktree_recovery": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Worktree Recovery"
     },
     "worktree_waits": {
      "anyOf": [

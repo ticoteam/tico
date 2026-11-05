@@ -49,6 +49,10 @@ def inline(store, auth, run_id, only, wait):
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
     assert M.ORDER == ("collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
+    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "update")["old_timer"] is False
+    assert next(s for s in get(api, "maintenance")["steps"] if s["key"] == "learn")["old_timer"] is False
+    suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
+    assert suggest["old_timer"] is False and suggest["consent"] is False, "Suggest is live and waits for consent"
 
 
 def test_each_frequency_is_due_on_its_own_clock():
@@ -89,7 +93,7 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "ran"
-    assert steps["suggest"]["reason"] == "on its old timer"
+    assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in ("Needs Tico Gateway", "Privacy consent is off")
     assert steps["dream"]["status"] in ("ran", "skipped")
     assert run["finished_at"] and run["ok"] == 1, run
 
@@ -339,7 +343,8 @@ def test_a_step_only_run_now_runs_that_step_even_when_it_is_not_due(api, monkeyp
     assert run["steps"][0]["status"] == "ran" and run["steps"][0]["reason"] == "stubbed", "not due, but Run now runs it"
     run, _ = M.run_now(store, auth, "human:ana", step="learn", wait=True)
     assert run["steps"][0]["status"] == "off", "a step switched off stays off"
-    run, _ = M.run_now(store, auth, "human:ana", step="suggest", wait=True)
+    monkeypatch.setattr(M, "OLD_TIMER", ("check_health",))
+    run, _ = M.run_now(store, auth, "human:ana", step="check_health", wait=True)
     assert run["steps"][0]["status"] == "skipped" and run["steps"][0]["reason"] == "on its old timer"
 
 

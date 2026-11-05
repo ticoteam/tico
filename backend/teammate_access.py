@@ -123,6 +123,8 @@ def forget_group(c, actor, gid):
     """A deleted group's access goes with it, and no other teammate's audience names it any more: a group made later
     with the same id starts from the defaults. What it was stays in the audit log."""
     from . import audit_log
+    from . import pages
+    pages.forget_audience_member(c, actor, "teams", gid)
     for row in list(stored_rows(c).values()):
         kind, ident = row["target_type"], row["target_id"]
         before = _complete(row["access"], kind, ident)
@@ -243,6 +245,8 @@ class _Context:
 
     def names(self, level):
         if self.role == "bot":
+            if self.me in self.archived:
+                return False
             return A.names(level, bot=self.me, team=self.chain)
         return A.names(level, person=self.me, team=self.chain)
 
@@ -257,6 +261,21 @@ class _Context:
                     out |= P.group_and_below(gid, self.roster)
             self._leads = out
         return self._leads
+
+
+def in_audience(c, viewer, level, auth=None):
+    """Whether an audience names this viewer, including their nested groups, without management exceptions."""
+    return _Context(c, viewer, auth).names(A.audience(level))
+
+
+def parse_audience(c, value):
+    """One audience checked with the same shape and known teammates as the access editor."""
+    from . import views
+    roster = views.roster(c, shared=True)
+    people = {p["id"] for p in roster.get("people") or []} | {h["id"] for h in H.humans(c)}
+    groups = set(roster.get("org_groups") or {})
+    bots = {r["id"] for r in H.bots(c)}
+    return A.parse({level: value for level in AUDIENCE_LEVELS}, people, groups, bots)["read"]
 
 
 def _lead_actor(ref):
@@ -501,16 +520,19 @@ def readers(c, target, level="read", auth=None):
 
 def _viewer_for(c, actor):
     """An identity for an actor, without elevating it: the owner when it is the owner's address."""
-    from .auth import Identity
-    if actor.startswith("bot:"):
-        return Identity(actor, "bot")
-    human = H.human(c, H.actor_id(actor))
-    if not human:
-        return None
-    from . import access
-    email = str(human.get("email") or "").lower()
-    owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
-    return Identity(actor, "owner" if email and email == owner else "human", email=email)
+    from . import read_cache
+    def build():
+        from .auth import Identity
+        if actor.startswith("bot:"):
+            return Identity(actor, "bot")
+        human = H.human(c, H.actor_id(actor))
+        if not human:
+            return None
+        from . import access
+        email = str(human.get("email") or "").lower()
+        owner = str((access._load_json(c, access.OWNER) or {}).get("email") or "").lower()
+        return Identity(actor, "owner" if email and email == owner else "human", email=email)
+    return read_cache.value(c, ("teammate_viewer", actor), build, shared=True)
 
 
 def hidden(c, viewer, level="see", kinds=KINDS, auth=None):
@@ -832,6 +854,9 @@ class Known:
         return [a for a in actors if a not in self.strangers]
 
     def message(self, message):
+        if isinstance(message, dict):
+            from .files import readable_page_refs
+            message = readable_page_refs(self.c, self.auth, self.viewer, message)
         if not self.people or not isinstance(message, dict):
             return message
         named = [key for key in ("sender_id", "recipient_id") if message.get(key) in self.people]
@@ -840,7 +865,7 @@ class Known:
         return {**message, **{key: "" for key in named}}
 
     def messages(self, messages):
-        return [self.message(m) for m in messages] if self.people else messages
+        return [self.message(m) for m in messages]
 
     def conversation(self, conversation):
         if not self.people or not isinstance(conversation, dict) or self.me in (conversation.get("participants") or []):

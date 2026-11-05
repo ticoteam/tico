@@ -419,7 +419,8 @@ def refused(c, identity, exc, savepoint="domain_write"):
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
-        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None))
+        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None),
+                 scope=getattr(exc, 'scope', None))
     except H.Refused:
         pass
     finally:
@@ -1077,6 +1078,8 @@ class Store:
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
+        # Requests in another app must neither drain this store's runs nor consume its pending wakeup.
+        self.automation_bell = threading.Event()
         from .provenance_clock import Cache
         self.provenance_cache = Cache()
         self.roster_rows = {}       # {statement: (roster_clock count, rows)}, shared by this store's connections
@@ -1140,8 +1143,6 @@ class Store:
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history
             c.executescript(_memory_history.SCHEMA)
-            from . import learnings as _learnings
-            c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
@@ -2181,6 +2182,7 @@ class Store:
         c.row_cache = self.row_cache
         c.write_transaction = False
         c.after_commit = []
+        c.automation_bell = self.automation_bell
         c.provenance_changes = c.total_changes
         c.provenance_start = None
         c.settings = self.settings      # the server's own settings, for work that holds only the connection
@@ -2315,7 +2317,7 @@ class Store:
             "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
@@ -2331,9 +2333,11 @@ class Store:
             row = c.execute("SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                             (principal, operation, key)).fetchone()
             if row:
-                if row["request_hash"] != hashed:
-                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 result = json.loads(row["response"])
+                if row["request_hash"] != hashed:
+                    legacy = retry_body(c, result) if retry_body else None
+                    if legacy is None or row["request_hash"] != digest(encode(legacy)):
+                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 from .auth import Auth, Identity
                 from . import task_privacy as privacy
                 replay_auth = Auth(self)
@@ -2378,7 +2382,11 @@ class Store:
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
-                return result
+                if '/meetings/' in operation or operation.endswith('/meetings'):
+                    from .meeting_items import redact
+                    result = redact(c, replay_principal, replay_auth, result)
+                from .files import readable_page_refs
+                return readable_page_refs(c, replay_auth, replay_principal, result)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
             c.execute("SAVEPOINT domain_write")
