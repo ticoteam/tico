@@ -7,8 +7,8 @@
 //    shows its tab's own, picking another tab follows without a history step, a reload reopens it, and a redraw
 //    (route() called again, as a status change does) keeps Settings and the tab; old Rules and Routines addresses open
 //    Automations with a note that their retired filters did not carry over;
-//  - Mailboxes: the old Google and Inbox addresses (Google's sign-in returns to #/settings/inbox) open it, and one
-//    mailbox's page has its own address (#/settings/mailboxes/<id>) that a redraw keeps and the tab leaves;
+//  - Inboxes: the old Google and Inbox addresses still open Email settings, and mailbox detail addresses
+//    (#/settings/inboxes/mailbox/<id>) survive a redraw until the Connections group is selected;
 //  - a first visit opens General; a tab this person can't see opens General with "That page is for admins", and an
 //    unknown one opens General without it.
 const {chromium} = require('playwright');
@@ -185,24 +185,26 @@ const address = page => page.evaluate(() => location.hash);
       await context.close();
     }
     {
-      // Mailboxes: the old addresses open it, and one mailbox's page keeps its own address until the tab is picked.
+      // Inboxes: legacy Google and Inbox links open Email settings; details keep their new address across redraws.
       const {page, context, errors} = await open(browser, {hash: '#/settings/inbox'});
-      await page.waitForFunction(() => SETTINGS_TAB === 'connections' && location.hash === '#/settings/connections');
+      await page.waitForFunction(() => SETTINGS_TAB === 'connections' && location.hash === '#/settings/inboxes/settings/email');
       await go(page, '#/settings/google');
-      assert.equal(await address(page), '#/settings/connections');
-      await page.locator('#set-mailboxes a[href="#/settings/mailboxes/mb1"]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/mailboxes/mb1' && SETTINGS_TAB === 'connections');
-      await page.locator('#set-mailbox h2', {hasText: 'support@acme.example'}).waitFor();
-      assert.equal(await selected(page), 'connections');
-      await page.evaluate(() => route());
-      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'connections', '#/settings/mailboxes/mb1']);
-      await page.reload();
-      await page.locator('#set-mailbox h2', {hasText: 'support@acme.example'}).waitFor();
-      assert.equal(await address(page), '#/settings/mailboxes/mb1', 'a reload reopens the mailbox');
+      assert.equal(await address(page), '#/settings/inboxes/settings/email');
       await page.locator('#settings-tabs [data-settings-tab=connections]').click();
       await page.waitForFunction(() => location.hash === '#/settings/connections');
-      await page.locator('#set-mailboxes [data-mb-list]:not([hidden])').waitFor();
-      assert.equal(await page.locator('#set-mailbox').isHidden(), true);
+      await page.locator('#set-inboxes .ib-name a[href="#/settings/inboxes/mailbox/mb1"]').click();
+      await page.waitForFunction(() => location.hash === '#/settings/inboxes/mailbox/mb1' && SETTINGS_TAB === 'connections');
+      await page.locator('#inbox-head h2', {hasText: 'support@acme.example'}).waitFor();
+      assert.equal(await selected(page), 'connections');
+      await page.evaluate(() => route());
+      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'connections', '#/settings/inboxes/mailbox/mb1']);
+      await page.reload();
+      await page.locator('#inbox-head h2', {hasText: 'support@acme.example'}).waitFor();
+      assert.equal(await address(page), '#/settings/inboxes/mailbox/mb1', 'a reload reopens the mailbox');
+      await page.locator('#settings-tabs [data-settings-tab=connections]').click();
+      await page.waitForFunction(() => location.hash === '#/settings/connections');
+      await page.locator('#set-inboxes [data-ib-table]').waitFor();
+      assert.equal(await page.locator('#inbox-head').count(), 0);
       assert.deepEqual(errors, []);
       await context.close();
     }

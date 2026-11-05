@@ -1,6 +1,7 @@
-// Offline browser regression: Settings > Mailboxes, Connect Google for your own mailbox (ui/google-connect.js). A member
-// connects their own mailbox (read only with Tico's shared app) and sees no setup; a Workspace policy denial is shown as
-// the admin's; only Google's own sign-in page is opened, and its return address (#/settings/inbox) opens Mailboxes.
+// Offline browser regression: Settings > Inboxes > Settings > Email, Connect Google for your own mailbox
+// (ui/google-connect.js). A member connects their own mailbox (read only with Tico's shared app) and sees no setup; a
+// Workspace policy denial is shown as the admin's; only Google's own sign-in page is opened, and its return address
+// (#/settings/inbox) opens Inboxes > Settings > Email.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -50,6 +51,7 @@ const {unrouted} = require('./support/routes.cjs');
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=connections]').click();
+    await page.locator('[data-ib-settings]').click();
     const pane = page.locator('#set-google');
     await pane.locator('[role=alert]').waitFor();
     // A member is never asked how to connect Google and never sees its setup or the team: only their own account.
@@ -64,16 +66,16 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => /Unexpected sign-in address/.test(document.querySelector('[data-google-status]')?.textContent || ''));
     assert.equal(new URL(page.url()).hostname, 'tico-ui.test');
 
-    // Google's sign-in opens in this tab, and Settings comes back on Mailboxes.
+    // Google's sign-in opens in this tab, and Settings comes back on Inboxes > Settings > Email.
     authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x&login_hint=cara%40acme.example';
     await pane.locator('[data-google-connect]').click();
     await page.waitForURL(u => new URL(u).hostname === 'accounts.google.com');
 
-    // Connected: back on Settings > Mailboxes (Google returns to #/settings/inbox), read only, with Disconnect, which revokes.
+    // Connected: back on Inboxes > Settings > Email (Google returns to #/settings/inbox), read only, with Disconnect, which revokes.
     google = {...google, status: 'connected', kind: null, message: null, hint: null, can: ['read']};
     await page.goto('https://tico-ui.test/#/settings/inbox');
     await page.locator('[data-settings-tab=connections][aria-selected=true]').waitFor();
-    await page.waitForFunction(() => location.hash === '#/settings/connections');
+    await page.waitForFunction(() => location.hash === '#/settings/inboxes/settings/email');
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /Connected: Tico reads cara@acme\.example's mail and calendar, read only/);
 
@@ -99,7 +101,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
     assert.equal((await page.locator('#set-google').innerText()).includes(calendarUpgrade), false);
     await page.locator('#set-google [data-google-disconnect]').click();
-    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();   // Disconnect is confirmed in the app, not the browser
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);
 
@@ -115,7 +117,7 @@ const {unrouted} = require('./support/routes.cjs');
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
-    await page.waitForFunction(() => /Ask an admin to connect Google in Settings > Mailboxes/.test(document.querySelector('#set-google')?.textContent || ''));
+    await page.waitForFunction(() => /Ask an admin to connect Google in Settings > Inboxes/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 0);
     assert.deepEqual(errors, []);
   } finally {

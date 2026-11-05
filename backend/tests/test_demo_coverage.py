@@ -63,6 +63,7 @@ PAGES = {
     "settings": page("bots"),
     # History reuses the runs, task changes and decisions the existing demo sections record.
     "settings-history": page("history", "items"),
+    "settings-alerts": page("alerts/me"),
     # Not a nav row: its seats show in the Team chart and open from there.
     "recruit": page("seats", "seats"),
 }
@@ -127,3 +128,9 @@ def test_task_pages_have_demo_data(api):
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
+
+
+def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
+    grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
+    assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
+    assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None

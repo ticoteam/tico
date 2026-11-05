@@ -1,4 +1,4 @@
-"""Settings > Google > What Tico may do (backend/google_workspace.py `permissions`): the company's own say over what
+"""Settings > Inboxes > Settings > What Tico may do (backend/google_workspace.py `permissions`): the company's own say over what
 Tico does in Google beyond reading. Organize mail and Send mail need gmail.modify, Change calendar needs calendar
 events; reading is always on. Connect Google with the company's own app asks only for what is ticked, a refresh and a
 Workspace mint are narrowed to it on the next token, and Send mail off stops every bot's sends whatever its own switch

@@ -110,7 +110,7 @@ const saved = async (page, writes, count, key) => {
     for (const role of ['owner', 'admin', 'member']) {
       const {page, errors, asked, writes} = await open(browser, role);
       // One flat list, no wake rules or bot routines: no group headings, a search box on top.
-      const headings = await page.locator('#settings-system h2:visible').allInnerTexts();
+      const headings = await page.locator('#set-system-card h2:visible').allInnerTexts();
       assert.equal(headings[0].trim(), 'What Tico runs on its own', role);
       assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
@@ -149,7 +149,7 @@ const saved = async (page, writes, count, key) => {
       assert.equal(await row(page, 'health_scan').count(), 0, 'Check health runs through Maintenance');
       if (role === 'member') {
         // A member reads the list: no switch, schedule choice or Run now anywhere.
-        assert.equal(await page.locator('#set-system-card input:not([data-sysr-search]), #set-system-card select, #set-system-card button').count(), 0);
+        assert.equal(await page.locator('#set-system-card input:not([data-sysr-search]), #set-system-card select, #set-system-card button:not([data-settings-ask])').count(), 0);
         assert.match(await row(page, 'stale_review').locator('[data-sysr-state]').innerText(), /On/);
         assert.equal(await page.locator('[data-sysr-owner]').count(), 0);
       } else {
@@ -174,9 +174,10 @@ const saved = async (page, writes, count, key) => {
         // The daily time saves once, when the box is left, not after the hour alone.
         const at = row(page, 'kpi_asks').locator('[data-sysr-at]');
         await at.click();
-        await page.keyboard.type('1030');
-        await page.keyboard.type('AM');
-        assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while typing');
+        await at.fill('10:30');
+        assert.equal(await at.inputValue(), '10:30');
+        assert.equal(writes.length, 3, 'the daily time is saved when editing ends');
+        assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while editing');
         await page.keyboard.press('Enter');
         await saved(page, writes, 4, 'kpi_asks');
         assert.deepEqual(writes, [{method: 'PUT', key: 'stale_review', body: {preset: '4h'}},

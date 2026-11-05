@@ -809,7 +809,7 @@ def operation_issues(c, who, auth):
         if key and key["status"] == "failing":
             add("google_workspace", "The Google Workspace key is failing",
                 key["last_error"] or "Google has refused the Workspace key for too long.",
-                needs_person=True, action="Check the key in Settings > Google.")
+                needs_person=True, action="Check the key in Settings > Inboxes.")
         sync_owners = google_workspace.workspace_sync_owners(c)
         for box in google_workspace.workspace_mailboxes(c):
             if box["address"] not in sync_owners:
@@ -827,9 +827,9 @@ def operation_issues(c, who, auth):
                 holder = labels.get(grant["holder"]) or "another computer"
                 bot_computer = labels.get(host) or "the computer that runs their message bot"
                 add("google_grant", grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Google to move it "
+                    grant["mailbox"] + "'s Google grant is on " + holder + ". Reconnect in Settings > Inboxes to move it "
                     "to " + bot_computer + ", where their message bot runs.", machine=grant["holder"], needs_person=True,
-                    action="Open Settings > Google")
+                    action="Open Settings > Inboxes")
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
@@ -905,7 +905,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
     from .start_places import computer_hold
+    from .cloud_machines import resting
     from . import org_turns
+    asleep = (location.get("machine") or {}).get("runner_id") in resting(c)
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -920,7 +922,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
-    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+    elif (not location["online"] or asleep) and (cloud := cloud_machine_wait(c, bot)):
         # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
         label = "Saved — " + cloud
     elif not location["online"]:

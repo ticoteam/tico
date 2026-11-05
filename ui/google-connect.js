@@ -1,10 +1,10 @@
-/* The Connection card of Settings > Mailboxes (ui/app/mailboxes.js), from GET /v2/google. An admin picks one of two
+/* The Connection card of Inboxes > Settings > Email (ui/app/inboxes-email.js), from GET /v2/google. An admin picks one of two
    ways: Whole company (a service-account key connects every mailbox of the domain, docs/mail.md) or Each person signs
    in (Google sign-in for the server once, then each person connects their own mailbox). The way already set up is
    picked; with nothing set up, neither is. Each way's setup is a prompt for the person's own coding agent by default,
    or the steps by hand. Everyone else sees only Connect Google for their own mailbox (read only with Tico's shared app;
    the company's own app can also label, archive and draft), and nothing when the company's key covers it. Who can use
-   each mailbox and What Tico may do are the Mailboxes page's. Google's sign-in opens in this tab and comes back to the
+   each mailbox and What Tico may do are Settings > Inboxes'. Google's sign-in opens in this tab and comes back to the
    server; the computer that syncs mail keeps the grant. No token, key or client secret stays in the browser once it
    is sent, and nothing here messages anyone. */
 'use strict';
@@ -30,7 +30,7 @@
   const defaultDomain = g => domainOf(g.me?.mailbox) || domainOf((typeof S === 'object' && S?.me?.email) || '');
   const watchable = host => host.isConnected && !host.closest('[hidden]');
   // This tab's address on the server's public URL, for a teammate or an agent to open.
-  const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/settings/mailboxes`;
+  const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/settings/inboxes/settings/email`;
   const unchecked = row => (row ? {...row, checked_at: null} : null);
   // The active row (connected or failing) and the one pending row, which is a replacement while a key is active.
   const rowsOf = g => {
@@ -87,7 +87,7 @@
       <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button>${more}</div></div>`;
 
   // The Workspace prompt holds the setup command, so it lives exactly as long as the command does (only in this page).
-  // What Tico asks Google for follows What Tico may do (the Mailboxes page's card, the company's one setting).
+  // What Tico asks Google for follows What Tico may do (its card in Inboxes > Settings > Email, the company's one setting).
   const MAY = [['organize_mail', 'Organize mail'], ['send_mail', 'Send mail'], ['change_calendar', 'Create and change calendar events']];
   const allows = (g, name) => g?.permissions?.[name] !== false;
   const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
@@ -305,7 +305,7 @@
   }
 
   // Each person signs in, for an admin: Google sign-in for the server once, then your own mailbox. Everyone else's is
-  // on the Mailboxes table.
+  // in the Inboxes list.
   function accountsCard(host, g, personal) {
     const oauth = g.oauth || {};
     let first;
@@ -323,10 +323,10 @@
   }
 
   // Everyone who isn't an admin: Connect Google for their own mailbox, never the setup; nothing when the company's
-  // key covers it (the Mailboxes page says so).
+  // key covers it (Inboxes > Settings > Email says so).
   function memberCard(g, personal) {
     if (g.me?.covered_by_workspace) return '';
-    const body = g.oauth?.configured ? yourAccount(g, personal) : '<p>Ask an admin to connect Google in Settings &gt; Mailboxes.</p>';
+    const body = g.oauth?.configured ? yourAccount(g, personal) : '<p>Ask an admin to connect Google in Settings &gt; Inboxes.</p>';
     return `<section class="google-card" data-google-card="account">${body}
       <p role="status" data-google-status></p></section>`;
   }
@@ -629,7 +629,7 @@
   }
 
   // Loads GET /v2/google (and the person's own state when Connect Google is set up), then paints. A render that
-  // changes nothing is skipped, so typed values and the open confirm stay put. The Mailboxes page calls this on every
+  // changes nothing is skipped, so typed values and the open confirm stay put. Inboxes calls this on every
   // visit to the tab; it never makes a setup code.
   async function mountGoogleConnect(host, {force = false} = {}) {
     if (!host) return;

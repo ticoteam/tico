@@ -2201,7 +2201,7 @@ STABLE.extend([
 ])
 TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
 STABLE.extend([
-    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Tico addresses and numbers, meeting '
      'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
      'company\'s they may read. Paged with cursor','ConnectionList'),
 ])
@@ -3182,7 +3182,7 @@ STABLE.extend([
 ])
 
 
-# Settings > Mailboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
+# Settings > Inboxes (backend/mailboxes.py): which inboxes Tico uses and who may use each.
 TAGS["Mailboxes"] = "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
 _MAILBOX_LEVEL = {"enum": ["none", "read", "read_write"]}
 _MAILBOX_REF = obj({"id": "s", "name": "s"})
@@ -3191,7 +3191,10 @@ SCHEMAS.update({
                     "person_id": "n", "person_name": "s", "connection": {"enum": ["workspace", "personal"]},
                     "status": {"enum": ["active", "stopped"]},
                     "state": {"enum": ["connected", "not_connected", "awaiting_person", "stopped"]},
-                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF)}),
+                    "level": _MAILBOX_LEVEL, "routines": items(_MAILBOX_REF),
+                    "used_by": obj({"people": "i", "bots": "i", "names": items({"type": "string"})}),
+                    "synced_at": "n", "newest_epoch": {"type": ["integer", "null"]},
+                    "sync": {"enum": ["", "signin", "failed"]}, "sync_error": "s"}),
     "MailboxMay": obj({"read": "b", "organize": "b", "send": "b", "change_calendar": "b"}),
     "MailboxList": obj({"admin": "b", "domain": "s", "may": ref("MailboxMay"), "mine": {"anyOf": [ref("Mailbox"), {"type": "null"}]},
                         "shared": items(ref("Mailbox")), "mailboxes": items(ref("Mailbox"))}),
@@ -3221,6 +3224,59 @@ STABLE.extend([
      "Change one access between Read and Read and write", "MailboxDetail"),
     ("/api/v2/mailboxes/{mid}/accesses/{access_id}", "delete", "Mailboxes", "removeMailboxAccess",
      "Take one person's or bot's access away", "MailboxDetail"),
+])
+
+TAGS["Physical mail"] = "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
+SCHEMAS.update({
+    "PostalMailGrant": obj({"id": "s", "address_id": "s", "grantee_type": {"enum": ["person", "bot"]},
+                            "grantee_id": "s", "level": {"enum": ["read"]}, "granted_by_id": "s",
+                            "created_at": "s", "updated_at": "s"}),
+    "PostalMailGrants": obj({"address_id": "s", "grants": items(ref("PostalMailGrant")), "next": "n"}),
+    "PostalMailGrantResult": obj({"grant": ref("PostalMailGrant")}),
+    "PostalMailRevoked": obj({"ok": "b"}),
+    "PostalMailBots": obj({"bots": items(obj({"id": "s", "slug": "s", "display_name": "s", "state": "s",
+                                            "read_error": "n", "routing_error": "n"})), "next": "n"}),
+    "PostalMailSettings": obj({"settings": obj({"id": "i", "legal_bot_id": "n", "updated_by_id": "n",
+                                               "created_at": "s", "updated_at": "s"})}),
+})
+STABLE.extend([
+    ("/api/v2/postal/bots", "get", "Physical mail", "listPostalMailBots",
+     "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin", "PostalMailBots"),
+    ("/api/v2/postal/addresses/{address_id}/grants", "get", "Physical mail", "listPostalMailGrants",
+     "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin", "PostalMailGrants"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "put", "Physical mail", "grantPostalMailRead",
+     "Give one person or bot Read, including private letters and scans; owner or admin", "PostalMailGrantResult"),
+    ("/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}", "delete", "Physical mail", "revokePostalMailRead",
+     "Revoke one Read grant; owner or admin", "PostalMailRevoked"),
+    ("/api/v2/postal/settings", "get", "Physical mail", "getPostalMailSettings",
+     "Legal mail routing; null legal_bot_id means owner", "PostalMailSettings"),
+    ("/api/v2/postal/settings", "put", "Physical mail", "setPostalMailSettings",
+     "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin", "PostalMailSettings"),
+])
+
+
+TAGS["Alerts"] = "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
+SCHEMAS.update({
+    "PersonalAlerts": obj({"phone": "n", "status": "s", "verified_at": "n", "call_consent": "b",
+                            "preferences": obj({"urgent_needs": "b", "legal_mail": "b", "bot_stuck": "b",
+                                                "urgent_calls": "b", "timezone": "s", "quiet_start": "s",
+                                                "quiet_end": "s", "emergency_exception": "b", "monthly_cap": "i"}),
+                            "monthly_spend": "i", "company_monthly_cap": "i", "company_monthly_spend": "i",
+                            "price_usd": "i", "paid_by": "s", "recent": items(obj(
+                                {"id": "s", "kind": "s", "state": "s", "error": "s", "created_at": "s"}))}),
+    "AlertPhoneCode": obj({"status": "s", "expires_in": "i"}),
+    "AlertTest": obj({"id": "s", "status": "s"}, required=["id", "status"], price_usd=_t("i"), paid_by=_t("s")),
+    "AlertCompanyCap": obj({"monthly_cap": "i", "monthly_spend": "i", "price_usd": "i"}),
+})
+STABLE.extend([
+    ("/api/v2/alerts/me", "get", "Alerts", "getMyAlerts", "Your phone, consent, preferences and last ten alert outcomes; people acting as themselves only", "PersonalAlerts"),
+    ("/api/v2/alerts/me", "put", "Alerts", "setMyAlerts", "Choose overdue-task, legal-mail and managed-bot stall alerts, quiet hours, timezone, emergency exception and monthly cap", "PersonalAlerts"),
+    ("/api/v2/alerts/me/phone", "post", "Alerts", "verifyMyAlertPhone", "Send a free verification code to your own US/Canada phone with SMS and optional call consent", "AlertPhoneCode"),
+    ("/api/v2/alerts/me/phone/confirm", "post", "Alerts", "confirmMyAlertPhone", "Confirm your own phone using its six-digit code", "PersonalAlerts"),
+    ("/api/v2/alerts/me/phone", "delete", "Alerts", "removeMyAlertPhone", "Revoke your phone and stop queued alerts; retry removal if HQ is unavailable", "PersonalAlerts"),
+    ("/api/v2/alerts/me/test", "post", "Alerts", "testMyAlerts", "Send a test for $1 paid by the company; accept_charge and a stable Idempotency-Key required; the monthly caps apply", "AlertTest"),
+    ("/api/v2/alerts/company", "get", "Alerts", "getAlertCompanyCap", "Company monthly alert cap and accepted/reserved spend, in USD; owner/admin", "AlertCompanyCap"),
+    ("/api/v2/alerts/company", "put", "Alerts", "setAlertCompanyCap", "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin", "AlertCompanyCap"),
 ])
 
 def generate():

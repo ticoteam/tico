@@ -80,13 +80,15 @@ EMPTY = (
     "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "mailboxes", "mailbox_accesses", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
-    # Settings > Google: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
+    # Settings > Inboxes: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
     # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
     "google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
     "inbound_inboxes", "inbound_messages", "inbound_sync",
+    # Personal phone consent and paid dispatch queues belong to the source install.
+    "alert_preferences", "personal_alerts",
     "bills_inbound",     # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
@@ -128,6 +130,8 @@ HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_
            "maintenance_run_steps": "started_at", "maintenance_runs": "started_at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "alert_company_settings",   # the company's spend cap is safe without phones or queued alerts
+    "postal_mail_grants", "postal_mail_settings",   # access and routing settings cannot send in rehearsal mode
     "maintenance_steps",   # each step's switch, "How often" and cursor: a copy keeps the team's settings
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",

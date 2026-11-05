@@ -904,7 +904,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .settings-denied{margin:0 0 12px;padding:8px 12px;border-radius:6px;background:var(--surface2);color:var(--ink)}
 .bot-editor-pending{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
 .settings-confirm{max-width:min(440px,calc(100vw - 32px))}
-/* Settings > Mail (ui/app/settings-mail.js) */
+/* Letters in, in Settings > Inboxes (ui/app/inboxes-letters.js) */
 .pm-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
 .pm-table td,.pm-table th{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 .pm-table th{color:var(--muted);font-weight:500}
@@ -1006,7 +1006,7 @@ section.card>header .settings-head-act{margin-left:auto}
   .models-row select,.models-row input[type=text],.models-row input[type=url],.models-row input[type=password]{max-width:none}
   .subs-pick{max-width:160px}
 }
-/* Settings > Mailboxes' Connection card (ui/google-connect.js): Whole company or Each person signs in. */
+/* The Connection card in Inboxes > Settings > Email (ui/google-connect.js): Whole company or Each person signs in. */
 .google-card{display:grid;gap:10px;min-width:0;padding:0 0 16px}
 .google-card+.google-card{border-top:1px solid var(--line);padding-top:16px}
 .google-card h3{margin:0;font-size:var(--t-base);font-weight:600}
@@ -1039,7 +1039,7 @@ section.card>header .settings-head-act{margin-left:auto}
 .google-may-always{flex:none;width:13px}
 .google-mode{align-self:flex-start;margin-bottom:12px;max-width:100%;flex-wrap:wrap}
 .google-connected{margin:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-/* Settings > Mailboxes (ui/app/mailboxes.js) and one mailbox (ui/app/mailbox.js). */
+/* Google mailboxes in Settings > Inboxes (ui/app/inboxes-email.js). */
 #mailboxes-top header{flex-wrap:wrap;gap:4px 12px}
 .mb-mine p{margin:0 0 6px;overflow-wrap:anywhere}
 .mb-form{display:grid;gap:8px;min-width:0;margin-bottom:12px}

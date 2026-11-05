@@ -77,8 +77,8 @@ const shots = process.env.TICO_SHOTS || '';
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
     await page.setViewportSize({width: 1280, height: 800});
 
-    page.once('dialog', dialog => dialog.accept());
     await card.locator('[data-company-disconnect]').click();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await card.locator('[data-company-form]').waitFor();
     assert.ok(asked.includes('DELETE'));
     assert.equal(await page.locator('#account-administration').getAttribute('href'), null);

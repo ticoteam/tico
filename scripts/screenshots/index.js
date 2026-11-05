@@ -89,7 +89,7 @@ const PAGES = [
   {name: 'threads', route: '#/threads', ready: 'Threads'},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
     (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post'},
-  {name: 'settings-email-phone', route: '#/settings', tab: 'inbound', ready: 'Email & Phone'},
+  {name: 'settings-inboxes', route: '#/settings', tab: 'inboxes', ready: 'Customer care'},
 ];
 
 function argument(name, fallback = '') {

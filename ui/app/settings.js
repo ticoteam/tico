@@ -81,8 +81,7 @@ const SETTINGS_TAB_KEY = 'tico.settings.tab';
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'you'; } catch { return 'you'; } })();
 // The address the shown group writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
 let SETTINGS_ADDRESS = '';
-// The mailbox Settings > Mailboxes shows on its own page (#/settings/mailboxes/<id>, ui/app/mailbox.js); '' is the list.
-let MAILBOX_OPEN = '';
+// Inboxes keeps its own list, settings sections and detail addresses within the Connections group (ui/app/inboxes.js).
 // The groups, in the list's order (settings stage 2, spec Appendix C): You is personal and sits above a divider, then
 // the company's ten. `shown` is who sees the group; its address is #/settings/<key>.
 const SETTINGS_GROUPS = [
@@ -104,7 +103,7 @@ const settingsGroupShown = key => { const g = SETTINGS_GROUPS.find(x => x.key ==
 // the settings catalogue's links and the manual keep opening what they opened.
 const SETTINGS_PLACES = {
   general: ['you'], assistant: ['you', '#settings-assistant-pane'],
-  inbox: ['connections', '#settings-mailboxes'], google: ['connections', '#settings-mailboxes'], mailboxes: ['connections', '#settings-mailboxes'],
+  inbox: ['connections'], google: ['connections'], mailboxes: ['connections'], inboxes: ['connections'],
   humans: ['people'],
   ceo: ['bots', '#set-strategy-bot-card'], 'strategy-bot': ['bots', '#set-strategy-bot-card'],
   devices: ['computers'], subscriptions: ['models', '#settings-subs'],
@@ -113,9 +112,9 @@ const SETTINGS_PLACES = {
   billing: ['limits', '#settings-billing'],
   system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation'],
   tags: ['tasks', '#settings-tags'], types: ['tasks', '#settings-types'],
-  mail: ['connections', '#settings-mail'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
-  inbound: ['connections', '#settings-inbound'], 'email-phone': ['connections', '#settings-inbound'],
-  'company-inbox': ['connections', '#settings-inbound'],
+  mail: ['connections'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
+  inbound: ['connections'], 'email-phone': ['connections'],
+  'company-inbox': ['connections'],
   webhooks: ['connections', '#settings-webhooks'], triggers: ['connections', '#settings-webhooks'],
   team: ['policies', '#settings-team'], company: ['policies', '#settings-company'],
   privacy: ['policies', '#settings-privacy'], storage: ['policies', '#settings-storage'],
@@ -295,14 +294,12 @@ function pageSettings() {
       <section class="card" id="settings-roadmaps"></section>
       <section class="card" id="settings-tags-card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>`)}
-    ${pane('connections', `<div id="settings-mailboxes"><section class="card" id="set-mailboxes-card"><header><h2>Mailboxes</h2></header><div id="set-mailboxes">${skelRows(3, {card: true, dot: false})}</div></section></div>
+    ${pane('connections', `<div id="settings-inboxes"><div id="set-inboxes">${skelRows(4, {card: true, dot: false})}</div></div>
       <div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
-      <div id="settings-inbound"><section class="card" id="set-inbound"></section></div>
       <div id="settings-webhooks"><section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
         `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
         <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section></div>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
-      <div id="settings-mail"><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
       <section class="card" id="settings-tools-link"><header><h2>Tools &amp; Credentials</h2></header>
         <p class="settings-card-line">The tools bots use and the credentials they sign in with have their own page. <a href="${INTEGRATIONS}">Open Tools &amp; Credentials</a></p></section>`)}
     ${settingsIsAdmin() ? pane('policies', `<section class="card" id="settings-team"><header><h2>Team</h2></header>
@@ -346,9 +343,9 @@ function pageSettings() {
   // A group picked in the list (desktop) or the picker (phone) opens at its top: no old card to scroll to.
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) { SETTINGS_REVEAL = ''; MAILBOX_OPEN = ''; settingsShow(button.dataset.settingsTab, {group: true}); }
+    if (button) { SETTINGS_REVEAL = ''; INBOXES_VIEW = ''; settingsShow(button.dataset.settingsTab, {group: true}); }
   };
-  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; settingsShow(event.target.value, {group: true}); };
+  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; INBOXES_VIEW = ''; settingsShow(event.target.value, {group: true}); };
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
@@ -441,7 +438,7 @@ function settingsShow(tab, {group: picked = false} = {}) {
     load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard());
   }
   if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
-  if (on('connections')) load(!formBusy($('#set-mailboxes')) && renderSettingsMailboxes(), !formBusy($('#settings-repos')) && renderSettingsRepos(), inboundMount(), !formBusy($('#settings-mail')) && renderSettingsMail(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
+  if (on('connections')) load(renderSettingsInboxes(), !formBusy($('#settings-repos')) && renderSettingsRepos(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
   if (on('policies')) {
     const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
     load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),
@@ -455,9 +452,9 @@ function settingsShow(tab, {group: picked = false} = {}) {
 // It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  // A mailbox open on Connections keeps its own address (#/settings/mailboxes/<id>), as the Mailboxes page does.
-  const mailbox = SETTINGS_TAB === 'connections' && MAILBOX_OPEN;
-  SETTINGS_ADDRESS = mailbox ? `${SETTINGS}/mailboxes/${MAILBOX_OPEN}`
+  // Inboxes keeps its page address while Connections remains the selected Settings group.
+  const inbox = SETTINGS_TAB === 'connections' && INBOXES_VIEW;
+  SETTINGS_ADDRESS = inbox ? `${SETTINGS}/inboxes${inboxesAddress()}`
     : `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }

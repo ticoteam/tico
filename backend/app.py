@@ -334,6 +334,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
+                    app.state.personal_alerts.tick()
                     await asyncio.to_thread(scheduler.tick)
                     await asyncio.to_thread(recorded, "release_check", release_check)
                     await asyncio.to_thread(recorded, "repository_waits", repository_waits)
@@ -352,7 +353,7 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("calls_sweep", exc)
                 try:
-                    # Settings > Google's pending and failing Workspace key is checked again (backend/google_workspace.py).
+                    # Settings > Inboxes' pending and failing Workspace key is checked again (backend/google_workspace.py).
                     from . import google_workspace as workspace_checks
                     await asyncio.to_thread(workspace_checks.tick, store)
                 except Exception as exc:
@@ -717,7 +718,7 @@ def create_app(settings=None):
                 return await call_next(request)
             # A Hermes profile with no credential pairs itself (backend/agents.py): it asks for a code, polls with its own
             # secret, and fetches the source-available connector it runs. The person's approval is the authenticated step.
-            # Settings > Google's setup command (backend/google_workspace.py): the script, and the key upload and its keep
+            # Settings > Inboxes' setup command (backend/google_workspace.py): the script, and the key upload and its keep
             # check when they carry the command's code. Nothing else passes without a session. The body is read here,
             # bounded, the way the relay's is, and the route reads it again from the buffer.
             from . import google_workspace as workspace_setup
@@ -8674,6 +8675,8 @@ def create_app(settings=None):
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
     from .mail_settings import install as install_mail_settings
     install_mail_settings(app, store, auth, mutate)
+    from . import personal_alerts
+    personal_alerts.install(app, store, settings, auth, mutate)
     from .shared_bots import install as install_branches
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy

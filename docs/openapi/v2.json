@@ -189,9 +189,433 @@
     {
       "name": "Mailboxes",
       "description": "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows)."
+    },
+    {
+      "name": "Physical mail",
+      "description": "Company letters, explicit Read grants and legal mail routing (docs/physical-mail.md)."
+    },
+    {
+      "name": "Alerts",
+      "description": "Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert."
     }
   ],
   "paths": {
+    "/api/v2/alerts/company": {
+      "get": {
+        "summary": "Company monthly alert cap and accepted/reserved spend, in USD; owner/admin",
+        "operationId": "getAlertCompanyCap",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertCompanyCap"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ]
+      },
+      "put": {
+        "summary": "Set the company monthly alert cap in USD (zero disables paid alerts); owner/admin",
+        "operationId": "setAlertCompanyCap",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyCap"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertCompanyCap"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ]
+      }
+    },
+    "/api/v2/alerts/me": {
+      "get": {
+        "summary": "Your phone, consent, preferences and last ten alert outcomes; people acting as themselves only",
+        "operationId": "getMyAlerts",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ]
+      },
+      "put": {
+        "summary": "Choose overdue-task, legal-mail and managed-bot stall alerts, quiet hours, timezone, emergency exception and monthly cap",
+        "operationId": "setMyAlerts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Preferences"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ]
+      }
+    },
+    "/api/v2/alerts/me/phone": {
+      "post": {
+        "summary": "Send a free verification code to your own US/Canada phone with SMS and optional call consent",
+        "operationId": "verifyMyAlertPhone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Phone"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertPhoneCode"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Revoke your phone and stop queued alerts; retry removal if HQ is unavailable",
+        "operationId": "removeMyAlertPhone",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/alerts/me/phone/confirm": {
+      "post": {
+        "summary": "Confirm your own phone using its six-digit code",
+        "operationId": "confirmMyAlertPhone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Confirmation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/alerts/me/test": {
+      "post": {
+        "summary": "Send a test for $1 paid by the company; accept_charge and a stable Idempotency-Key required; the monthly caps apply",
+        "operationId": "testMyAlerts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestAlert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertTest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Alerts"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/approvals": {
       "get": {
         "summary": "The approvals addressed to you: pending (what Needs you counts), approved or declined",
@@ -8465,7 +8889,7 @@
     },
     "/api/v2/connections": {
       "get": {
-        "summary": "Slack, GitHub, mail bots, Email & Phone inboxes, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
+        "summary": "Slack, GitHub, mail bots, Tico addresses and numbers, meeting importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the company's they may read. Paged with cursor",
         "operationId": "listConnections",
         "parameters": [
           {
@@ -27269,6 +27693,406 @@
         ]
       }
     },
+    "/api/v2/postal/addresses/{address_id}/grants": {
+      "get": {
+        "summary": "Read grants for one assignment, or all addresses (`all`); paged and 64 KB capped; owner or admin",
+        "operationId": "listPostalMailGrants",
+        "parameters": [
+          {
+            "name": "address_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "title": "Address Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostalMailGrants"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Physical mail"
+        ]
+      }
+    },
+    "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}": {
+      "put": {
+        "summary": "Give one person or bot Read, including private letters and scans; owner or admin",
+        "operationId": "grantPostalMailRead",
+        "parameters": [
+          {
+            "name": "address_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "title": "Address Id"
+            }
+          },
+          {
+            "name": "grantee_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(person|bot)$",
+              "title": "Grantee Type"
+            }
+          },
+          {
+            "name": "grantee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Grantee Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostalReadGrant"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostalMailGrantResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Physical mail"
+        ]
+      },
+      "delete": {
+        "summary": "Revoke one Read grant; owner or admin",
+        "operationId": "revokePostalMailRead",
+        "parameters": [
+          {
+            "name": "address_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "title": "Address Id"
+            }
+          },
+          {
+            "name": "grantee_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(person|bot)$",
+              "title": "Grantee Type"
+            }
+          },
+          {
+            "name": "grantee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Grantee Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostalMailRevoked"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Physical mail"
+        ]
+      }
+    },
+    "/api/v2/postal/bots": {
+      "get": {
+        "summary": "Mail picker bots and read/routing restrictions; paged and 64 KB capped; owner or admin",
+        "operationId": "listPostalMailBots",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostalMailBots"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Physical mail"
+        ]
+      }
+    },
+    "/api/v2/postal/settings": {
+      "get": {
+        "summary": "Legal mail routing; null legal_bot_id means owner",
+        "operationId": "getPostalMailSettings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostalMailSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Physical mail"
+        ]
+      },
+      "put": {
+        "summary": "Route future legal mail to an active bot or the owner (null), keeping the owner informed; owner or admin",
+        "operationId": "setPostalMailSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostalLegalRouting"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostalMailSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Physical mail"
+        ]
+      }
+    },
     "/api/v2/presence": {
       "get": {
         "summary": "Current actors aggregated across unexpired sessions at an authorized place",
@@ -43606,6 +44430,64 @@
         "title": "AccessAudience",
         "description": "One level of a bot's access: everyone, or these people, teams and bots."
       },
+      "AlertCompanyCap": {
+        "type": "object",
+        "properties": {
+          "monthly_cap": {
+            "type": "integer"
+          },
+          "monthly_spend": {
+            "type": "integer"
+          },
+          "price_usd": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "monthly_cap",
+          "monthly_spend",
+          "price_usd"
+        ],
+        "additionalProperties": true
+      },
+      "AlertPhoneCode": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expires_in",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "AlertTest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "price_usd": {
+            "type": "integer"
+          },
+          "paid_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": true
+      },
       "Answer": {
         "properties": {
           "text": {
@@ -48048,6 +48930,22 @@
         ],
         "additionalProperties": true
       },
+      "CompanyCap": {
+        "properties": {
+          "monthly_cap": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Monthly Cap"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "monthly_cap"
+        ],
+        "title": "CompanyCap"
+      },
       "CompanyHistory": {
         "type": "object",
         "properties": {
@@ -48358,6 +49256,21 @@
           "version"
         ],
         "additionalProperties": true
+      },
+      "Confirmation": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "Confirmation"
       },
       "Connection": {
         "type": "object",
@@ -59287,6 +60200,51 @@
               ],
               "additionalProperties": true
             }
+          },
+          "used_by": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "integer"
+              },
+              "bots": {
+                "type": "integer"
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "bots",
+              "names",
+              "people"
+            ],
+            "additionalProperties": true
+          },
+          "synced_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "newest_epoch": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sync": {
+            "enum": [
+              "",
+              "signin",
+              "failed"
+            ]
+          },
+          "sync_error": {
+            "type": "string"
           }
         },
         "required": [
@@ -59295,12 +60253,17 @@
           "id",
           "kind",
           "level",
+          "newest_epoch",
           "person_id",
           "person_name",
           "provider",
           "routines",
           "state",
-          "status"
+          "status",
+          "sync",
+          "sync_error",
+          "synced_at",
+          "used_by"
         ],
         "additionalProperties": true
       },
@@ -61790,6 +62753,133 @@
         "type": "object",
         "title": "PersonUpdate"
       },
+      "PersonalAlerts": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "call_consent": {
+            "type": "boolean"
+          },
+          "preferences": {
+            "type": "object",
+            "properties": {
+              "urgent_needs": {
+                "type": "boolean"
+              },
+              "legal_mail": {
+                "type": "boolean"
+              },
+              "bot_stuck": {
+                "type": "boolean"
+              },
+              "urgent_calls": {
+                "type": "boolean"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "quiet_start": {
+                "type": "string"
+              },
+              "quiet_end": {
+                "type": "string"
+              },
+              "emergency_exception": {
+                "type": "boolean"
+              },
+              "monthly_cap": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "bot_stuck",
+              "emergency_exception",
+              "legal_mail",
+              "monthly_cap",
+              "quiet_end",
+              "quiet_start",
+              "timezone",
+              "urgent_calls",
+              "urgent_needs"
+            ],
+            "additionalProperties": true
+          },
+          "monthly_spend": {
+            "type": "integer"
+          },
+          "company_monthly_cap": {
+            "type": "integer"
+          },
+          "company_monthly_spend": {
+            "type": "integer"
+          },
+          "price_usd": {
+            "type": "integer"
+          },
+          "paid_by": {
+            "type": "string"
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "created_at",
+                "error",
+                "id",
+                "kind",
+                "state"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "call_consent",
+          "company_monthly_cap",
+          "company_monthly_spend",
+          "monthly_spend",
+          "paid_by",
+          "phone",
+          "preferences",
+          "price_usd",
+          "recent",
+          "status",
+          "verified_at"
+        ],
+        "additionalProperties": true
+      },
       "PersonalTokenCreate": {
         "properties": {
           "label": {
@@ -61813,6 +62903,32 @@
         ],
         "title": "PersonalTokenCreate",
         "description": "A personal API token (backend/personal_tokens.py): a label to tell it apart in the list\nand how long it lives; 90 days unless asked, never more than a year."
+      },
+      "Phone": {
+        "properties": {
+          "phone": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 10,
+            "title": "Phone"
+          },
+          "sms_consent": {
+            "type": "boolean",
+            "title": "Sms Consent"
+          },
+          "call_consent": {
+            "type": "boolean",
+            "title": "Call Consent",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "phone",
+          "sms_consent"
+        ],
+        "title": "Phone"
       },
       "PhoneRequest": {
         "properties": {
@@ -62099,6 +63215,347 @@
         "additionalProperties": false,
         "type": "object",
         "title": "PlaceSave"
+      },
+      "PostalLegalRouting": {
+        "properties": {
+          "legal_bot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Bot Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "legal_bot_id"
+        ],
+        "title": "PostalLegalRouting"
+      },
+      "PostalMailBots": {
+        "type": "object",
+        "properties": {
+          "bots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "read_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "routing_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "display_name",
+                "id",
+                "read_error",
+                "routing_error",
+                "slug",
+                "state"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bots",
+          "next"
+        ],
+        "additionalProperties": true
+      },
+      "PostalMailGrant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "address_id": {
+            "type": "string"
+          },
+          "grantee_type": {
+            "enum": [
+              "person",
+              "bot"
+            ]
+          },
+          "grantee_id": {
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "read"
+            ]
+          },
+          "granted_by_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "address_id",
+          "created_at",
+          "granted_by_id",
+          "grantee_id",
+          "grantee_type",
+          "id",
+          "level",
+          "updated_at"
+        ],
+        "additionalProperties": true
+      },
+      "PostalMailGrantResult": {
+        "type": "object",
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/PostalMailGrant"
+          }
+        },
+        "required": [
+          "grant"
+        ],
+        "additionalProperties": true
+      },
+      "PostalMailGrants": {
+        "type": "object",
+        "properties": {
+          "address_id": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PostalMailGrant"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "address_id",
+          "grants",
+          "next"
+        ],
+        "additionalProperties": true
+      },
+      "PostalMailRevoked": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "PostalMailSettings": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "legal_bot_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updated_by_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "created_at",
+              "id",
+              "legal_bot_id",
+              "updated_at",
+              "updated_by_id"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "additionalProperties": true
+      },
+      "PostalReadGrant": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "pattern": "^read$",
+            "title": "Level",
+            "default": "read"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PostalReadGrant"
+      },
+      "Preferences": {
+        "properties": {
+          "urgent_needs": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urgent Needs"
+          },
+          "legal_mail": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Mail"
+          },
+          "bot_stuck": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Stuck"
+          },
+          "urgent_calls": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urgent Calls"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "quiet_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quiet Start"
+          },
+          "quiet_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quiet End"
+          },
+          "emergency_exception": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emergency Exception"
+          },
+          "monthly_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Preferences"
       },
       "Preset": {
         "properties": {
@@ -71030,6 +72487,20 @@
           "write"
         ],
         "additionalProperties": true
+      },
+      "TestAlert": {
+        "properties": {
+          "accept_charge": {
+            "type": "boolean",
+            "title": "Accept Charge"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "accept_charge"
+        ],
+        "title": "TestAlert"
       },
       "ThreadBotStatus": {
         "type": "object",

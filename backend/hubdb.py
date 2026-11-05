@@ -5355,7 +5355,8 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
     if not have:
         refuse(conn, actor, "not-found", f"no link {link_id} on {task_id}")
     _task_link_allowed(conn, actor, row, mover, have["kind"])
-    if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail' in have:
+    from .worktrees import retired
+    if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail' in have and not retired(conn, have.get('computer_id')):
         detail = json.loads(have.get('detail') or '{}')
         detail['delete_requested'] = True
         detail.pop('restore_on_reopen', None)
@@ -5747,7 +5748,8 @@ def _private_followups(conn, task_id):
 
 
 def task_links(conn, task_id):
-    return [_with_thread(link) for link in _rows(conn.execute(
+    from .worktrees import statuses
+    return [_with_thread(link) for link in statuses(conn, conn.execute(
         "SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))]
 
 
@@ -6415,8 +6417,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if visibility == 'public' and not public_title and not private:
         refuse(conn, actor, 'lint', 'Write a public title to publish this task; its internal title and body stay private')
     if requester_actor is not None:
-        # Only the server supplies a verified human origin for a bot's own work.
-        if not is_human(requester_actor) or target != actor or not human(conn, requester_actor):
+        # The keeper may attribute server-filed work to a person; a bot may attribute only its own verified work.
+        if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
     title = str(title or "").strip()
