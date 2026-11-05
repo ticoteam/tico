@@ -7700,6 +7700,148 @@
         ]
       }
     },
+    "/api/v2/cloud-machines/support": {
+      "get": {
+        "summary": "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+        "operationId": "getCloudMachineSupport",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSupportView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ],
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+      },
+      "put": {
+        "summary": "Let Tico support reach the company's cloud machines, or stop it; owner only",
+        "operationId": "setCloudMachineSupport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudSupportChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudSupportView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
+        ],
+        "description": "HQ is the source of the switch and helper states; no local copy is kept. GET returns available false, on null and an empty machines list off Tico Cloud or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. PUT accepts a boolean on, needs the owner and refuses support sessions. Core assigns an increasing revision and keeps it for retries of the same Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+      }
+    },
     "/api/v2/company": {
       "get": {
         "summary": "The team's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them. The Vision is the strategy's: the draft's for the owner, the published one for everyone else",
@@ -49825,6 +49967,100 @@
         "additionalProperties": false,
         "type": "object",
         "title": "CloudAgentRequest"
+      },
+      "CloudSupportChange": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "CloudSupportChange"
+      },
+      "CloudSupportMachine": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "helper": {
+            "type": "string",
+            "enum": [
+              "on",
+              "off",
+              "offline",
+              "none"
+            ],
+            "title": "Helper"
+          },
+          "seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "helper",
+          "seen"
+        ],
+        "title": "CloudSupportMachine"
+      },
+      "CloudSupportView": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
+          },
+          "machines": {
+            "items": {
+              "$ref": "#/components/schemas/CloudSupportMachine"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Machines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "on",
+          "machines"
+        ],
+        "title": "CloudSupportView"
       },
       "CommentDelivery": {
         "type": "object",

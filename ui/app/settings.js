@@ -358,6 +358,9 @@ function settingsShow(tab) {
   // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
   SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
   SETTINGS_TAB = shown ? tab : 'general';
+  // HQ may have changed while Settings was closed, or a previous read may have failed.
+  if (['people', 'devices'].includes(SETTINGS_TAB))
+    void cloudSupportRead({fresh: true}).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   const denied = $('#settings-denied');
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }

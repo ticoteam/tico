@@ -89,6 +89,10 @@ EVENTS_DESCRIPTION = (
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
+    ("/api/v2/cloud-machines/support", "get", "Computers", "getCloudMachineSupport",
+     "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud", None),
+    ("/api/v2/cloud-machines/support", "put", "Computers", "setCloudMachineSupport",
+     "Let Tico support reach the company's cloud machines, or stop it; owner only", None),
     ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Subscription logins reported by each Computer", "SubscriptionList"),
     ("/api/v2/subscriptions/name", "put", "Subscriptions", "renameSubscription", "Rename a subscription without changing its local login", "SubscriptionIdentity"),
     ("/api/v2/subscriptions/weekly", "put", "Subscriptions", "recordSubscriptionWeekly", "Record or clear a manual weekly allowance observation", "SubscriptionWeeklyResult"),
@@ -2897,6 +2901,18 @@ def spec(app):
             responses["200"] = {"description": EVENTS_DESCRIPTION,
                                 "x-task-event-schema": ref("TaskEvent"),
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
+        if path == "/api/v2/cloud-machines/support":
+            op["description"] = ("HQ is the source of the switch and helper states; no local copy is kept. "
+                                 "GET returns available false, on null and an empty machines list off Tico Cloud "
+                                 "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+                                 "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+                                 "Core assigns an increasing revision and keeps it for retries of the same "
+                                 "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+                                 "on in the error. After an uncertain PUT, read HQ again before showing a saved state.")
+            responses["403"] = {"description": "People only; changing the switch needs the owner", **ERROR}
+            responses["502"] = {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR}
+            if method == "put":
+                responses["404"] = {"description": "not_cloud: cloud-machine support is not available", **ERROR}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
                                 "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
